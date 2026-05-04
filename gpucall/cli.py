@@ -297,6 +297,15 @@ def build_launch_report(config_dir: Path, *, url: str | None = None, api_key: st
     secrets = checks["secrets_present"]
     live_artifact = _latest_live_validation_artifact()
     production = profile == "production"
+    checks["launch_gates"] = {
+        "static_config_valid": checks["config_valid"],
+        "auth_required": bool(gateway_smoke and gateway_smoke.get("auth_required") is True),
+        "object_store_required": production,
+        "object_store_configured": config.object_store is not None and bool(secrets["object_store"]),
+        "gateway_live_smoke_passed": bool(gateway_smoke and gateway_smoke.get("ok") is True),
+        "provider_live_validation_passed": live_artifact is not None,
+        "audit_chain_valid": checks["audit_chain_valid"],
+    }
     if production:
         if not secrets["gateway_auth"]:
             blockers.append({"check": "gateway_auth", "configured": False})
@@ -467,18 +476,31 @@ def _gateway_smoke_summary(url: str, *, api_key: str | None, recipe: str | None 
             timeout=30.0,
         )
         summary["auth_required"] = unauth.status_code == 401
+        sync_payload = {
+            "task": "infer",
+            "mode": "sync",
+            "messages": [{"role": "user", "content": "Reply with exactly: gpucall smoke"}],
+            "max_tokens": 16,
+            "metadata": {"smoke": "true"},
+        }
+        if recipe:
+            sync_payload["recipe"] = recipe
         sync = client.post(
             "/v2/tasks/sync",
-            json={
-                "task": "infer",
-                "mode": "sync",
-                "messages": [{"role": "user", "content": "Reply with exactly: gpucall smoke"}],
-                "max_tokens": 16,
-                "metadata": {"smoke": "true"},
-            },
+            json=sync_payload,
         )
         sync.raise_for_status()
-        summary["sync"] = sync.json()
+        sync_body = sync.json()
+        result = sync_body.get("result", {})
+        value = result.get("value") if isinstance(result, dict) else None
+        plan = sync_body.get("plan", {})
+        summary["sync"] = {
+            **sync_body,
+            "output_non_empty": bool(str(value or "").strip()),
+            "selected_provider": plan.get("selected_provider") if isinstance(plan, dict) else None,
+            "recipe_name": plan.get("recipe_name") if isinstance(plan, dict) else None,
+            "output_kind": result.get("kind") if isinstance(result, dict) else None,
+        }
         if ready_payload.get("object_store"):
             body = b"gpucall smoke\n"
             digest = hashlib.sha256(body).hexdigest()
