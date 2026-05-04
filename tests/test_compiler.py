@@ -330,11 +330,11 @@ def test_compiler_rejects_large_inline_payload() -> None:
         compiler.compile(request)
 
 
-def test_compiler_rejects_unsupported_mvp_task() -> None:
+def test_compiler_rejects_unconfigured_train_recipe() -> None:
     compiler = build_compiler()
     request = TaskRequest(task="train", mode="sync", recipe="r1")
 
-    with pytest.raises(GovernanceError, match="unsupported task"):
+    with pytest.raises(GovernanceError, match="does not match recipe task"):
         compiler.compile(request)
 
 

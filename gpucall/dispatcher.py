@@ -9,7 +9,9 @@ from typing import Callable
 from uuid import uuid4
 
 from gpucall.audit import AuditTrail, redacted_plan_for_audit
+from gpucall.artifacts import SQLiteArtifactRegistry
 from gpucall.domain import (
+    ArtifactManifest,
     CompiledPlan,
     JobRecord,
     JobState,
@@ -57,12 +59,14 @@ class Dispatcher:
         audit: AuditTrail,
         jobs: JobStore,
         provider_costs: dict[str, float] | None = None,
+        artifact_registry: SQLiteArtifactRegistry | None = None,
     ) -> None:
         self.adapters = adapters
         self.registry = registry
         self.audit = audit
         self.jobs = jobs
         self.provider_costs = provider_costs or {}
+        self.artifact_registry = artifact_registry
         self._job_tasks: dict[str, asyncio.Task[None]] = {}
         self._job_plans: dict[str, CompiledPlan] = {}
 
@@ -80,13 +84,14 @@ class Dispatcher:
                 started = monotonic()
                 handle: RemoteHandle | None = None
                 try:
+                    _enforce_pre_execution_security_gate(plan)
                     handle = await adapter.start(plan)
                     self.audit.append(
                         "lease.started",
                         {"plan_id": plan.plan_id, "provider": provider, "remote_id": handle.remote_id, "attempt": attempt},
                     )
                     result = await asyncio.wait_for(adapter.wait(handle, plan), timeout=plan.timeout_seconds)
-                    result = _validate_provider_output(plan, result)
+                    result = _validate_and_register_provider_output(self, plan, result)
                     self.registry.record(
                         self._observation(provider, started, success=True)
                     )
@@ -314,6 +319,21 @@ def _output_validation_attempts(plan: CompiledPlan) -> int:
     return max(int(getattr(plan, "output_validation_attempts", 1) or 1), 1)
 
 
+def _enforce_pre_execution_security_gate(plan: CompiledPlan) -> None:
+    attestations = plan.attestations or {}
+    security_gate = attestations.get("security_gate")
+    if isinstance(security_gate, dict) and security_gate.get("attestation_required") is True:
+        evidence = attestations.get("attestation_evidence")
+        if not isinstance(evidence, dict) or evidence.get("verified") is not True:
+            raise ProviderError("verified attestation evidence is required before execution", retryable=False, status_code=412, code="ATTESTATION_REQUIRED")
+    key_release = attestations.get("key_release_requirement")
+    if isinstance(key_release, dict) and key_release.get("required") is True:
+        grant = attestations.get("key_release_grant")
+        if not isinstance(grant, dict):
+            raise ProviderError("key release grant is required before execution", retryable=False, status_code=412, code="KEY_RELEASE_REQUIRED")
+        if grant.get("key_id") != key_release.get("key_id"):
+            raise ProviderError("key release grant does not match required key_id", retryable=False, status_code=412, code="KEY_RELEASE_REQUIRED")
+
 def _validate_provider_output(plan: CompiledPlan, result: ProviderResult) -> ProviderResult:
     if _requires_checked_inline_output(plan) and result.kind == "inline":
         if result.value is None or not result.value.strip():
@@ -342,6 +362,52 @@ def _validate_provider_output(plan: CompiledPlan, result: ProviderResult) -> Pro
         except Exception as exc:
             raise ProviderError("structured output does not match JSON schema", retryable=True, code="MALFORMED_OUTPUT", raw_output=result.value) from exc
     return result.model_copy(update={"output_validated": True})
+
+
+def _validate_and_register_provider_output(dispatcher: Dispatcher, plan: CompiledPlan, result: ProviderResult) -> ProviderResult:
+    result = _validate_provider_output(plan, result)
+    if result.kind == "artifact_manifest":
+        manifest = _artifact_manifest_from_result(result)
+        _validate_artifact_manifest(plan, manifest)
+        if dispatcher.artifact_registry is not None:
+            dispatcher.artifact_registry.append(manifest)
+            dispatcher.audit.append(
+                "artifact.registered",
+                {
+                    "plan_id": plan.plan_id,
+                    "artifact_id": manifest.artifact_id,
+                    "artifact_chain_id": manifest.artifact_chain_id,
+                    "version": manifest.version,
+                    "classification": manifest.classification.value,
+                },
+            )
+        return result.model_copy(update={"artifact_manifest": manifest, "output_validated": True})
+    return result
+
+
+def _artifact_manifest_from_result(result: ProviderResult) -> ArtifactManifest:
+    if result.artifact_manifest is not None:
+        return result.artifact_manifest
+    if result.value is not None:
+        try:
+            return ArtifactManifest.model_validate_json(result.value)
+        except Exception as exc:
+            raise ProviderError("artifact manifest output is malformed", retryable=True, status_code=502, code="MALFORMED_ARTIFACT") from exc
+    raise ProviderError("artifact manifest result is missing manifest", retryable=True, status_code=502, code="MALFORMED_ARTIFACT")
+
+
+def _validate_artifact_manifest(plan: CompiledPlan, manifest: ArtifactManifest) -> None:
+    expected_hash = (plan.attestations or {}).get("governance_hash")
+    if expected_hash and manifest.producer_plan_hash != expected_hash:
+        raise ProviderError("artifact manifest producer_plan_hash does not match plan", retryable=False, status_code=502, code="ARTIFACT_POLICY_VIOLATION")
+    if plan.artifact_export is not None:
+        export = plan.artifact_export
+        if manifest.artifact_chain_id != export.artifact_chain_id or manifest.version != export.version:
+            raise ProviderError("artifact manifest does not match requested artifact export", retryable=False, status_code=502, code="ARTIFACT_POLICY_VIOLATION")
+        if manifest.key_id != export.key_id:
+            raise ProviderError("artifact manifest key_id does not match key release requirement", retryable=False, status_code=502, code="ARTIFACT_POLICY_VIOLATION")
+    if manifest.classification != plan.data_classification:
+        raise ProviderError("artifact manifest classification must inherit task classification", retryable=False, status_code=502, code="ARTIFACT_POLICY_VIOLATION")
 
 
 class LeaseReaper:

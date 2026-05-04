@@ -6,9 +6,13 @@ import json
 import pytest
 
 from gpucall.audit import AuditTrail
+from gpucall.artifacts import SQLiteArtifactRegistry
 from gpucall.dispatcher import Dispatcher, JobStore, _storage_safe_plan
 from gpucall.domain import (
+    ArtifactManifest,
+    ArtifactExportSpec,
     CompiledPlan,
+    DataClassification,
     DataRef,
     ExecutionMode,
     InlineValue,
@@ -58,6 +62,15 @@ class BadStreamProvider(EchoProvider):
         yield "not-sse"
 
 
+class ArtifactProvider(EchoProvider):
+    def __init__(self, name: str, manifest: ArtifactManifest) -> None:
+        super().__init__(name=name)
+        self.manifest = manifest
+
+    async def wait(self, handle: RemoteHandle, plan: CompiledPlan) -> ProviderResult:
+        return ProviderResult(kind="artifact_manifest", artifact_manifest=self.manifest)
+
+
 def plan(chain: list[str]) -> CompiledPlan:
     return CompiledPlan(
         policy_version="test",
@@ -82,6 +95,17 @@ def json_plan(chain: list[str]) -> CompiledPlan:
 
 def checked_plan(chain: list[str]) -> CompiledPlan:
     return plan(chain).model_copy(update={"output_validation_attempts": 2})
+
+
+def artifact_plan(chain: list[str]) -> CompiledPlan:
+    return plan(chain).model_copy(
+        update={
+            "task": "fine-tune",
+            "data_classification": DataClassification.RESTRICTED,
+            "artifact_export": ArtifactExportSpec(artifact_chain_id="chain-1", version="0001", key_id="tenant-key"),
+            "attestations": {"governance_hash": "c" * 64},
+        }
+    )
 
 
 def sensitive_plan(chain: list[str]) -> CompiledPlan:
@@ -226,6 +250,57 @@ async def test_dispatcher_records_untyped_provider_exception(tmp_path) -> None:
     assert dispatcher.registry.score("bad").samples == 1
     assert bad.cancelled
     assert "sdk exploded" not in (tmp_path / "audit.jsonl").read_text(encoding="utf-8")
+
+
+@pytest.mark.asyncio
+async def test_dispatcher_registers_valid_artifact_manifest(tmp_path) -> None:
+    manifest = ArtifactManifest(
+        artifact_id="artifact-1",
+        artifact_chain_id="chain-1",
+        version="0001",
+        classification=DataClassification.RESTRICTED,
+        ciphertext_uri="s3://bucket/artifact-1",
+        ciphertext_sha256="a" * 64,
+        key_id="tenant-key",
+        producer_plan_hash="c" * 64,
+    )
+    registry = SQLiteArtifactRegistry(tmp_path / "artifacts.db")
+    dispatcher = Dispatcher(
+        adapters={"artifact": ArtifactProvider("artifact", manifest)},
+        registry=ObservedRegistry(),
+        audit=AuditTrail(tmp_path / "audit.jsonl"),
+        jobs=JobStore(),
+        artifact_registry=registry,
+    )
+
+    result = await dispatcher.execute_sync(artifact_plan(["artifact"]))
+
+    assert result.output_validated is True
+    assert registry.get("artifact-1") == manifest
+    assert "artifact.registered" in (tmp_path / "audit.jsonl").read_text(encoding="utf-8")
+
+
+@pytest.mark.asyncio
+async def test_dispatcher_rejects_artifact_manifest_that_breaks_lineage(tmp_path) -> None:
+    manifest = ArtifactManifest(
+        artifact_id="artifact-1",
+        artifact_chain_id="chain-1",
+        version="0002",
+        classification=DataClassification.RESTRICTED,
+        ciphertext_uri="s3://bucket/artifact-1",
+        ciphertext_sha256="a" * 64,
+        key_id="tenant-key",
+        producer_plan_hash="c" * 64,
+    )
+    dispatcher = Dispatcher(
+        adapters={"artifact": ArtifactProvider("artifact", manifest)},
+        registry=ObservedRegistry(),
+        audit=AuditTrail(tmp_path / "audit.jsonl"),
+        jobs=JobStore(),
+    )
+
+    with pytest.raises(ProviderError, match="artifact manifest"):
+        await dispatcher.execute_sync(artifact_plan(["artifact"]))
 
 
 @pytest.mark.asyncio

@@ -4,7 +4,18 @@ import hashlib
 import json
 from datetime import datetime, timezone
 
-from gpucall.domain import CompileArtifact, CompiledPlan, ExecutionMode, Policy, ProviderSpec, Recipe, TaskRequest
+from gpucall.domain import (
+    CompileArtifact,
+    CompiledPlan,
+    DataClassification,
+    ExecutionMode,
+    KeyReleaseRequirement,
+    Policy,
+    ProviderSpec,
+    Recipe,
+    SecurityTier,
+    TaskRequest,
+)
 from gpucall.domain import ChatMessage, ResponseFormatType
 from gpucall.registry import ObservedRegistry
 from gpucall.routing import classification_rank, is_production_route_candidate, provider_route_rejection_reason, required_model_len, token_budget
@@ -18,7 +29,7 @@ class GovernanceError(ValueError):
 
 
 class GovernanceCompiler:
-    SUPPORTED_TASKS = {"infer", "vision"}
+    SUPPORTED_TASKS = {"infer", "vision", "train", "fine-tune", "split-infer"}
     def __init__(
         self,
         *,
@@ -70,6 +81,7 @@ class GovernanceCompiler:
             recipe_name=recipe.name,
             task=recipe.task,
             mode=request.mode,
+            data_classification=recipe.data_classification,
             provider_chain=provider_chain,
             timeout_seconds=timeout,
             lease_ttl_seconds=ttl,
@@ -81,6 +93,8 @@ class GovernanceCompiler:
             inline_inputs=request.inline_inputs,
             messages=compiled_messages,
             response_format=request.response_format,
+            artifact_export=request.artifact_export,
+            split_learning=request.split_learning,
             system_prompt=effective_system_prompt,
             stop_tokens=recipe.stop_tokens,
             repetition_penalty=recipe.repetition_penalty,
@@ -96,6 +110,14 @@ class GovernanceCompiler:
             "required_model_len": compiled_required_model_len,
             "token_budget": compiled_token_budget,
         }
+        selected_provider = self.providers[provider_chain[0]]
+        plan.attestations["security_gate"] = self._security_gate(recipe, selected_provider)
+        if request.artifact_export is not None or recipe.requires_key_release:
+            plan.attestations["key_release_requirement"] = self._key_release_requirement(
+                request=request,
+                recipe=recipe,
+                provider=selected_provider,
+            ).model_dump(mode="json")
         governance_hash = self._stable_hash(self._governance_material(plan))
         plan.attestations["governance_hash"] = governance_hash
         plan.attestations["compile_artifact"] = self._compile_artifact(
@@ -108,7 +130,7 @@ class GovernanceCompiler:
 
     def _recipe_for(self, request: TaskRequest) -> Recipe:
         if request.task not in self.SUPPORTED_TASKS:
-            raise GovernanceError(f"unsupported task for v2.0 MVP: {request.task}")
+            raise GovernanceError(f"unsupported task: {request.task}")
         if request.recipe is None:
             return self._select_recipe(request)
         recipe = self.recipes.get(request.recipe)
@@ -185,6 +207,26 @@ class GovernanceCompiler:
             raise GovernanceError("messages cannot be combined with inline_inputs or input_refs in v2.0")
         if recipe.task == "vision" and not _has_image_ref(request):
             raise GovernanceError("vision requires an image data_ref")
+        if recipe.task in {"train", "fine-tune"}:
+            if not request.input_refs:
+                raise GovernanceError(f"{recipe.task} requires data_ref training inputs")
+            if request.inline_inputs or request.messages:
+                raise GovernanceError(f"{recipe.task} accepts DataRef inputs only")
+            if request.artifact_export is None:
+                raise GovernanceError(f"{recipe.task} requires artifact_export")
+        if recipe.task == "split-infer":
+            if request.split_learning is None:
+                raise GovernanceError("split-infer requires split_learning")
+            if request.inline_inputs or request.messages:
+                raise GovernanceError("split-infer accepts activation DataRef inputs only")
+            if request.split_learning.activation_ref.sha256 is None:
+                raise GovernanceError("split_learning activation_ref requires sha256")
+            if request.split_learning.irreversibility_claim != "not_claimed" and request.split_learning.dp_epsilon is None:
+                raise GovernanceError("split_learning empirical irreversibility claims require dp_epsilon")
+        if self.policy.security.require_data_ref_sha256:
+            for ref in request.input_refs:
+                if ref.sha256 is None:
+                    raise GovernanceError("data_ref sha256 is required by security policy")
         inline_bytes = sum(len(item.value.encode("utf-8")) for item in request.inline_inputs.values())
         if inline_bytes > self.policy.inline_bytes_limit:
             raise GovernanceError("inline input exceeds policy limit; use signed object references")
@@ -330,6 +372,10 @@ class GovernanceCompiler:
             required.add("text")
         if request.input_refs:
             required.add("data_refs")
+        if request.artifact_export is not None:
+            required.add("artifact_refs")
+        if request.split_learning is not None:
+            required.add("activation_refs")
         if not required:
             required.add("text")
         return required
@@ -359,6 +405,37 @@ class GovernanceCompiler:
                 {name: self.providers[name].model_dump(mode="json") for name in provider_chain if name in self.providers}
             ),
             governance_hash=governance_hash,
+        )
+
+    def _security_gate(self, recipe: Recipe, provider: ProviderSpec) -> dict[str, object]:
+        profile = provider.trust_profile
+        attestation_required = bool(profile.requires_attestation or profile.security_tier is SecurityTier.CONFIDENTIAL_TEE)
+        return {
+            "provider": provider.name,
+            "data_classification": recipe.data_classification.value,
+            "security_tier": profile.security_tier.value,
+            "dedicated_gpu": profile.dedicated_gpu,
+            "attestation_required": attestation_required,
+            "key_release_supported": profile.supports_key_release,
+        }
+
+    def _key_release_requirement(
+        self,
+        *,
+        request: TaskRequest,
+        recipe: Recipe,
+        provider: ProviderSpec,
+    ) -> KeyReleaseRequirement:
+        if request.artifact_export is None:
+            raise GovernanceError(f"recipe {recipe.name} requires artifact_export key_id")
+        if provider.trust_profile.security_tier is SecurityTier.CONFIDENTIAL_TEE and not provider.trust_profile.supports_key_release:
+            raise GovernanceError("confidential TEE artifact export requires provider key-release support")
+        policy_hash = self._stable_hash(self.policy.model_dump(mode="json"))
+        return KeyReleaseRequirement(
+            key_id=request.artifact_export.key_id,
+            policy_hash=policy_hash,
+            attestation_required=recipe.data_classification is DataClassification.RESTRICTED,
+            gateway_may_generate_dek=False,
         )
 
     @staticmethod

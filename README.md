@@ -97,6 +97,8 @@ Provider definitions declare a `trust_profile` separate from recipe compute requ
 
 Workers consume gateway-presigned HTTP(S) DataRefs by default. Ambient `s3://` worker credentials are disabled unless explicitly opted in for a non-default worker environment. Chained artifacts are recorded as encrypted `ArtifactManifest` entries in the append-only Artifact Registry; the gateway stores lineage, version, checksums, key ids, and attestation references, not plaintext artifact bytes.
 
+Provider-independent v2.1 control-plane contracts are implemented for `train`, `fine-tune`, and `split-infer`: explicit artifact export versions, key-release requirements, attestation-bound execution gates, split-learning activation refs, and artifact manifest validation. Provider adapters for Azure/GCP sovereign TEE and split-learning workers remain separate implementation work.
+
 ## Object Lifecycle
 
 For Cloudflare R2 or S3-compatible buckets, configure lifecycle expiration for the gpucall prefix. A conservative MVP setting is:

@@ -103,6 +103,16 @@ class KeyReleaseGrant(BaseModel):
     expires_at: datetime
 
 
+class KeyReleaseRequirement(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    key_id: str
+    policy_hash: str
+    required: bool = True
+    attestation_required: bool = True
+    gateway_may_generate_dek: bool = False
+
+
 class ArtifactManifest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -119,6 +129,33 @@ class ArtifactManifest(BaseModel):
     legal_hold: bool = False
     retention_until: datetime | None = None
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+
+
+class ArtifactExportSpec(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    artifact_chain_id: str
+    version: str
+    key_id: str
+    parent_artifact_ids: list[str] = Field(default_factory=list)
+    retention_until: datetime | None = None
+    legal_hold: bool = False
+
+    @model_validator(mode="after")
+    def reject_ambiguous_latest(self) -> "ArtifactExportSpec":
+        if self.version.strip().lower() == "latest":
+            raise ValueError("artifact export version must be explicit; 'latest' is not allowed")
+        return self
+
+
+class SplitLearningSpec(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    activation_ref: DataRef
+    encoder_hash: str = Field(min_length=64, max_length=64)
+    dp_epsilon: NonNegativeFloat | None = None
+    dp_delta: NonNegativeFloat | None = None
+    irreversibility_claim: Literal["not_claimed", "empirical"] = "not_claimed"
 
 
 class CompileArtifact(BaseModel):
@@ -188,6 +225,8 @@ class TaskRequest(BaseModel):
     timeout_seconds: PositiveInt | None = None
     lease_ttl_seconds: PositiveInt | None = None
     response_format: ResponseFormat | None = None
+    artifact_export: ArtifactExportSpec | None = None
+    split_learning: SplitLearningSpec | None = None
     webhook_url: AnyHttpUrl | None = None
     idempotency_key: str | None = Field(default=None, max_length=128)
     metadata: dict[str, str] = Field(default_factory=dict)
@@ -248,6 +287,8 @@ class Recipe(BaseModel):
     repetition_penalty: NonNegativeFloat | None = None
     guided_decoding: bool = False
     output_validation_attempts: PositiveInt = 1
+    artifact_export: bool = False
+    requires_key_release: bool = False
 
 
 class ProviderSpec(BaseModel):
@@ -272,8 +313,16 @@ class ProviderSpec(BaseModel):
         "modal-function",
         "ollama-generate",
     ] | None = None
-    input_contracts: list[Literal["text", "chat_messages", "data_refs", "image"]] = Field(default_factory=list)
-    output_contract: Literal["gpucall-provider-result", "plain-text", "openai-chat-completions", "ollama-generate"] | None = None
+    input_contracts: list[Literal["text", "chat_messages", "data_refs", "image", "activation_refs", "artifact_refs"]] = Field(
+        default_factory=list
+    )
+    output_contract: Literal[
+        "gpucall-provider-result",
+        "plain-text",
+        "openai-chat-completions",
+        "ollama-generate",
+        "artifact-manifest",
+    ] | None = None
     stream_contract: Literal["none", "token-incremental", "sse"] = "none"
     supports_vision: bool = False
     model: str | None = None
@@ -344,6 +393,7 @@ class CompiledPlan(BaseModel):
     recipe_name: str
     task: str
     mode: ExecutionMode
+    data_classification: DataClassification = DataClassification.CONFIDENTIAL
     provider_chain: list[str]
     timeout_seconds: PositiveInt
     lease_ttl_seconds: PositiveInt
@@ -355,6 +405,8 @@ class CompiledPlan(BaseModel):
     inline_inputs: dict[str, InlineValue]
     messages: list[ChatMessage] = Field(default_factory=list)
     response_format: ResponseFormat | None = None
+    artifact_export: ArtifactExportSpec | None = None
+    split_learning: SplitLearningSpec | None = None
     system_prompt: str | None = None
     stop_tokens: list[str] = Field(default_factory=list)
     repetition_penalty: NonNegativeFloat | None = None
@@ -383,13 +435,14 @@ class ProviderError(Exception):
         self.raw_output = raw_output
 
 
-ProviderResultKind = Literal["inline", "ref"]
+ProviderResultKind = Literal["inline", "ref", "artifact_manifest"]
 
 
 class ProviderResult(BaseModel):
     kind: ProviderResultKind
     value: str | None = None
     ref: DataRef | None = None
+    artifact_manifest: ArtifactManifest | None = None
     usage: dict[str, int] = Field(default_factory=dict)
     output_validated: bool | None = None
 

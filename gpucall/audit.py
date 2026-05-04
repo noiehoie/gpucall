@@ -208,6 +208,8 @@ def redacted_plan_for_audit(plan: Any) -> dict[str, Any]:
         "output_validation_attempts": getattr(plan, "output_validation_attempts", None),
         "messages": [_message_audit_summary(message) for message in getattr(plan, "messages", []) or []],
         "response_format": _response_format_summary(response_format),
+        "artifact_export": _artifact_export_summary(getattr(plan, "artifact_export", None)),
+        "split_learning": _split_learning_summary(getattr(plan, "split_learning", None)),
         "input_refs": [_data_ref_audit_summary(ref) for ref in getattr(plan, "input_refs", []) or []],
         "inline_inputs": {
             name: _inline_audit_summary(value) for name, value in (getattr(plan, "inline_inputs", {}) or {}).items()
@@ -269,6 +271,34 @@ def _text_audit_summary(value: Any) -> dict[str, Any] | None:
         return None
     text = str(value)
     return {"redacted": True, "bytes": len(text.encode("utf-8")), "sha256": _sha256(text)}
+
+
+def _artifact_export_summary(value: Any) -> dict[str, Any] | None:
+    if value is None:
+        return None
+    return {
+        "artifact_chain_id": getattr(value, "artifact_chain_id", None),
+        "version": getattr(value, "version", None),
+        "key_id": _fingerprint("key_id", str(getattr(value, "key_id", ""))),
+        "parent_artifact_ids": list(getattr(value, "parent_artifact_ids", []) or []),
+        "legal_hold": getattr(value, "legal_hold", None),
+        "retention_until": getattr(value, "retention_until", None).isoformat()
+        if getattr(value, "retention_until", None)
+        else None,
+    }
+
+
+def _split_learning_summary(value: Any) -> dict[str, Any] | None:
+    if value is None:
+        return None
+    activation_ref = getattr(value, "activation_ref", None)
+    return {
+        "activation_ref": _data_ref_audit_summary(activation_ref) if activation_ref is not None else None,
+        "encoder_hash_prefix": str(getattr(value, "encoder_hash", ""))[:12],
+        "dp_epsilon": getattr(value, "dp_epsilon", None),
+        "dp_delta": getattr(value, "dp_delta", None),
+        "irreversibility_claim": getattr(value, "irreversibility_claim", None),
+    }
 
 
 def _attestation_audit_summary(value: dict[str, Any]) -> dict[str, Any]:

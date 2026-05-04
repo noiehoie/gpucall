@@ -15,6 +15,8 @@ class SQLiteArtifactRegistry:
         self._init_db()
 
     def append(self, manifest: ArtifactManifest) -> ArtifactManifest:
+        if manifest.version.strip().lower() == "latest":
+            raise ValueError("artifact version must be explicit; 'latest' is not allowed")
         payload = json.dumps(manifest.model_dump(mode="json"), sort_keys=True, separators=(",", ":"))
         with sqlite3.connect(self.path) as conn:
             conn.execute("PRAGMA journal_mode=WAL")
@@ -32,6 +34,34 @@ class SQLiteArtifactRegistry:
                 ),
             )
         return manifest
+
+    def compare_and_set_latest(self, artifact_chain_id: str, *, expected_version: str | None, new_version: str) -> bool:
+        if new_version.strip().lower() == "latest":
+            raise ValueError("latest pointer target must be an explicit version")
+        with sqlite3.connect(self.path) as conn:
+            conn.execute("PRAGMA journal_mode=WAL")
+            current = conn.execute(
+                "SELECT version FROM artifact_latest WHERE artifact_chain_id = ?", (artifact_chain_id,)
+            ).fetchone()
+            current_version = current[0] if current else None
+            if current_version != expected_version:
+                return False
+            conn.execute(
+                """
+                INSERT INTO artifact_latest (artifact_chain_id, version)
+                VALUES (?, ?)
+                ON CONFLICT(artifact_chain_id) DO UPDATE SET version = excluded.version
+                """,
+                (artifact_chain_id, new_version),
+            )
+            return True
+
+    def latest_version(self, artifact_chain_id: str) -> str | None:
+        with sqlite3.connect(self.path) as conn:
+            row = conn.execute(
+                "SELECT version FROM artifact_latest WHERE artifact_chain_id = ?", (artifact_chain_id,)
+            ).fetchone()
+        return row[0] if row else None
 
     def get(self, artifact_id: str) -> ArtifactManifest | None:
         with sqlite3.connect(self.path) as conn:
@@ -69,5 +99,16 @@ class SQLiteArtifactRegistry:
                 """
             )
             conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS artifact_latest (
+                    artifact_chain_id TEXT PRIMARY KEY,
+                    version TEXT NOT NULL
+                )
+                """
+            )
+            conn.execute(
                 "CREATE INDEX IF NOT EXISTS idx_artifacts_chain ON artifacts(artifact_chain_id, created_at, version)"
+            )
+            conn.execute(
+                "CREATE UNIQUE INDEX IF NOT EXISTS idx_artifacts_chain_version ON artifacts(artifact_chain_id, version)"
             )

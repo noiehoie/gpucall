@@ -16,6 +16,7 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel, Field
 
+from gpucall.artifacts import SQLiteArtifactRegistry
 from gpucall.audit import AuditTrail
 from gpucall.compiler import GovernanceCompiler, GovernanceError
 from gpucall.config import ConfigError, default_config_dir, default_state_dir, load_config
@@ -38,6 +39,7 @@ class Runtime(BaseModel):
     jobs: Any
     reaper: LeaseReaper
     reconciler: ProviderReconciler
+    artifact_registry: SQLiteArtifactRegistry
     object_store: ObjectStore | None = None
     metrics: dict[str, Any] = {}
 
@@ -66,6 +68,7 @@ def build_runtime(config_dir: Path) -> Runtime:
     providers = config.providers
     registry = ObservedRegistry(path=state_dir / "registry.db")
     audit = AuditTrail(state_dir / "audit" / "trail.jsonl")
+    artifact_registry = SQLiteArtifactRegistry(state_dir / "artifacts.db")
     object_store = ObjectStore(config.object_store) if config.object_store is not None else None
     jobs = SQLiteJobStore(state_dir / "state.db")
     adapters = build_adapters(providers)
@@ -76,6 +79,7 @@ def build_runtime(config_dir: Path) -> Runtime:
         audit=audit,
         jobs=jobs,
         provider_costs={name: float(provider.cost_per_second) for name, provider in providers.items()},
+        artifact_registry=artifact_registry,
     )
     reaper = LeaseReaper(jobs=jobs, audit=audit, cancel_job=dispatcher.cancel_job)
     reconciler = ProviderReconciler(adapters=adapters, audit=audit)
@@ -85,6 +89,7 @@ def build_runtime(config_dir: Path) -> Runtime:
         jobs=jobs,
         reaper=reaper,
         reconciler=reconciler,
+        artifact_registry=artifact_registry,
         object_store=object_store,
         metrics={"requests": {}, "latency_ms": []},
     )
@@ -242,7 +247,7 @@ def create_app(config_dir: Path | None = None) -> FastAPI:
             if cached is not None:
                 return JSONResponse(status_code=cached[0], content=cached[1], headers=cached[2])
             request = worker_readable_request(request, runtime)
-            plan = plan_with_worker_refs(plan, request.input_refs)
+            plan = plan_with_worker_refs(plan, request.input_refs, split_learning=request.split_learning)
             result = await runtime.dispatcher.execute_sync(plan)
             headers = warning_headers(plan, runtime.compiler.providers)
             content = {
@@ -351,7 +356,7 @@ def create_app(config_dir: Path | None = None) -> FastAPI:
             if cached is not None:
                 return JSONResponse(status_code=cached[0], content=cached[1], headers=cached[2])
             request = worker_readable_request(request, runtime)
-            plan = plan_with_worker_refs(plan, request.input_refs)
+            plan = plan_with_worker_refs(plan, request.input_refs, split_learning=request.split_learning)
             owner_identity = idempotency_identity(http_request)
             job = await runtime.dispatcher.submit_async(plan, owner_identity=owner_identity)
             headers = warning_headers(plan, runtime.compiler.providers)
@@ -389,7 +394,7 @@ def create_app(config_dir: Path | None = None) -> FastAPI:
             enforce_gateway_owned_routing(request)
             plan = runtime.compiler.compile(request)
             request = worker_readable_request(request, runtime)
-            plan = plan_with_worker_refs(plan, request.input_refs)
+            plan = plan_with_worker_refs(plan, request.input_refs, split_learning=request.split_learning)
         except GovernanceError as exc:
             raise HTTPException(status_code=governance_status_code(exc), detail=str(exc)) from exc
         except ValueError as exc:
@@ -509,15 +514,23 @@ def governance_error_response(exc: GovernanceError) -> JSONResponse:
 
 
 def worker_readable_request(request: TaskRequest, runtime: Runtime) -> TaskRequest:
-    if not request.input_refs:
+    split_ref = request.split_learning.activation_ref if request.split_learning is not None else None
+    refs = list(request.input_refs)
+    if split_ref is not None:
+        refs.append(split_ref)
+    if not refs:
         return request
-    for ref in request.input_refs:
+    for ref in refs:
         if not str(ref.uri).startswith("s3://"):
             raise ValueError("input data_ref must be an object-store s3:// reference")
     if runtime.object_store is None:
         raise ValueError("object store is required for data_ref worker access")
     converted = [_worker_readable_ref(ref, runtime) for ref in request.input_refs]
-    return request.model_copy(update={"input_refs": converted})
+    updates: dict[str, Any] = {"input_refs": converted}
+    if request.split_learning is not None:
+        converted_activation = _worker_readable_ref(request.split_learning.activation_ref, runtime)
+        updates["split_learning"] = request.split_learning.model_copy(update={"activation_ref": converted_activation})
+    return request.model_copy(update=updates)
 
 
 def _worker_readable_ref(ref: DataRef, runtime: Runtime) -> DataRef:
@@ -528,10 +541,13 @@ def _worker_readable_ref(ref: DataRef, runtime: Runtime) -> DataRef:
     return runtime.object_store.presign_get(PresignGetRequest(data_ref=ref)).data_ref
 
 
-def plan_with_worker_refs(plan: Any, refs: list[DataRef]) -> Any:
-    if not refs:
+def plan_with_worker_refs(plan: Any, refs: list[DataRef], *, split_learning: Any = None) -> Any:
+    if not refs and split_learning is None:
         return plan
-    updated = plan.model_copy(update={"input_refs": refs})
+    updates: dict[str, Any] = {"input_refs": refs}
+    if split_learning is not None:
+        updates["split_learning"] = split_learning
+    updated = plan.model_copy(update=updates)
     attestations = dict(getattr(updated, "attestations", {}) or {})
     original_hash = attestations.get("governance_hash")
     if original_hash is not None:
