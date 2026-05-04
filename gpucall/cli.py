@@ -243,7 +243,8 @@ def build_launch_report(config_dir: Path, *, url: str | None = None, api_key: st
     gateway_smoke: dict[str, object] | None = None
     if url:
         try:
-            gateway_smoke = _gateway_smoke_summary(url, api_key=api_key)
+            smoke_recipe = os.getenv("GPUCALL_LAUNCH_SMOKE_RECIPE", "text-infer-standard")
+            gateway_smoke = _gateway_smoke_summary(url, api_key=api_key, recipe=smoke_recipe)
         except Exception as exc:
             gateway_smoke = {"ok": False, "error": str(exc)}
     checks = {
