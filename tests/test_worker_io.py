@@ -62,7 +62,24 @@ def test_worker_rejects_untrusted_https_data_ref(monkeypatch) -> None:
         prompt_from_payload(payload)
 
 
-def test_worker_fetches_s3_data_ref(monkeypatch) -> None:
+def test_worker_rejects_raw_s3_data_ref_by_default() -> None:
+    payload = {
+        "inline_inputs": {},
+        "input_refs": [
+            {
+                "uri": "s3://bucket/path/to/prompt.txt",
+                "sha256": "a" * 64,
+                "bytes": 10,
+                "content_type": "text/plain",
+            }
+        ],
+    }
+
+    with pytest.raises(ValueError, match="gateway-presigned worker capability"):
+        prompt_from_payload(payload)
+
+
+def test_worker_fetches_s3_data_ref_when_ambient_credentials_are_explicitly_enabled(monkeypatch) -> None:
     body = b"s3 secret payload"
 
     class FakeBody:
@@ -83,6 +100,7 @@ def test_worker_fetches_s3_data_ref(monkeypatch) -> None:
 
     fake_boto3 = types.SimpleNamespace(client=lambda service, **kwargs: FakeClient())
     monkeypatch.setitem(sys.modules, "boto3", fake_boto3)
+    monkeypatch.setenv("GPUCALL_WORKER_ALLOW_AMBIENT_S3", "1")
     payload = {
         "inline_inputs": {},
         "input_refs": [

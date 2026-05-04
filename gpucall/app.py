@@ -275,8 +275,13 @@ def create_app(config_dir: Path | None = None) -> FastAPI:
     ) -> JSONResponse:
         if request.stream:
             return openai_error_response(400, "stream is not supported by the gpucall OpenAI facade in v2.0 MVP")
-        if request.model != "gpucall:auto":
-            return openai_error_response(400, "OpenAI facade model must be gpucall:auto in v2.0", code="unsupported_model")
+        allowed_models = {"gpucall:auto", "gpucall:chat"}
+        if request.model not in allowed_models:
+            return openai_error_response(
+                400,
+                "OpenAI facade model must be one of: gpucall:auto, gpucall:chat",
+                code="unsupported_model",
+            )
         messages = [_openai_message_to_chat_message(message) for message in request.messages]
         message_bytes = sum(len(message.content.encode("utf-8")) for message in messages)
         if message_bytes > runtime.compiler.policy.inline_bytes_limit:
@@ -304,7 +309,7 @@ def create_app(config_dir: Path | None = None) -> FastAPI:
                 status_code=200,
                 headers=headers,
                 content=openai_chat_response(
-                    "gpucall:auto",
+                    request.model,
                     result.value or "",
                     result.usage,
                     gpucall=public_plan_summary(plan, runtime.compiler.providers),
@@ -536,7 +541,7 @@ def plan_with_worker_refs(plan: Any, refs: list[DataRef]) -> Any:
 
 
 def compiled_plan_hash(plan: Any) -> str:
-    material = plan.model_dump(mode="json", exclude={"attestations"})
+    material = plan.model_dump(mode="json", exclude={"attestations", "plan_id"})
     encoded = json.dumps(material, sort_keys=True, separators=(",", ":")).encode("utf-8")
     return hashlib.sha256(encoded).hexdigest()
 

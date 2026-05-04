@@ -67,6 +67,7 @@ def main() -> None:
     provider_smoke.add_argument("--config-dir", type=Path, default=default_config_dir())
     provider_smoke.add_argument("--recipe", default="text-infer-standard")
     provider_smoke.add_argument("--mode", choices=["sync", "async", "stream"], default="sync")
+    provider_smoke.add_argument("--write-artifact", action="store_true")
     jobs = sub.add_parser("jobs")
     jobs.add_argument("job_id", nargs="?")
     jobs.add_argument("--limit", type=int, default=20)
@@ -151,7 +152,15 @@ def main() -> None:
     elif args.command == "smoke":
         smoke_gateway(args.url, api_key=args.api_key, recipe=args.recipe)
     elif args.command == "provider-smoke":
-        asyncio.run(provider_smoke_command(args.config_dir, args.provider, args.recipe, ExecutionMode(args.mode)))
+        asyncio.run(
+            provider_smoke_command(
+                args.config_dir,
+                args.provider,
+                args.recipe,
+                ExecutionMode(args.mode),
+                write_artifact=args.write_artifact,
+            )
+        )
     elif args.command == "jobs":
         asyncio.run(jobs_command(args.job_id, args.limit, scrub_inputs=args.scrub_inputs, expire_stale=args.expire_stale))
     elif args.command == "audit":
@@ -318,7 +327,7 @@ def build_launch_report(config_dir: Path, *, url: str | None = None, api_key: st
             blockers.append({"check": "gateway_live_smoke", "passed": False, "summary": gateway_smoke})
         elif gateway_smoke.get("auth_required") is not True:
             blockers.append({"check": "gateway_auth_enforced", "auth_required": gateway_smoke.get("auth_required")})
-        if os.getenv("GPUCALL_REQUIRE_LIVE_VALIDATION", "").strip().lower() in {"1", "true", "yes", "on"} and live_artifact is None:
+        if live_artifact is None:
             blockers.append({"check": "provider_live_validation", "artifact": None})
     report: dict[str, object] = {
         "generated_at": datetime.now(timezone.utc).isoformat(),
@@ -385,11 +394,19 @@ async def seed_liveness(config_dir: Path, recipe_name: str, count: int) -> None:
     print(json.dumps({"recipe": recipe_name, "seed_jobs": completed}, indent=2, sort_keys=True))
 
 
-async def provider_smoke_command(config_dir: Path, provider: str, recipe_name: str, mode: ExecutionMode) -> None:
+async def provider_smoke_command(
+    config_dir: Path,
+    provider: str,
+    recipe_name: str,
+    mode: ExecutionMode,
+    *,
+    write_artifact: bool = False,
+) -> None:
     runtime = build_runtime(config_dir)
     recipe = runtime.compiler.recipes.get(recipe_name)
     if recipe is None:
         raise SystemExit(f"unknown recipe: {recipe_name}")
+    started_at = datetime.now(timezone.utc)
     request = TaskRequest(
         task=recipe.task,
         mode=mode,
@@ -398,6 +415,7 @@ async def provider_smoke_command(config_dir: Path, provider: str, recipe_name: s
         inline_inputs={"prompt": {"value": "gpucall provider smoke"}},
     )
     plan = runtime.compiler.compile(request)
+    summary: dict[str, object]
     if mode is ExecutionMode.STREAM:
         chunks = []
         stream = runtime.dispatcher.execute_stream(plan)
@@ -409,13 +427,8 @@ async def provider_smoke_command(config_dir: Path, provider: str, recipe_name: s
                     break
         finally:
             await stream.aclose()
-        print(
-            json.dumps(
-                {"provider": provider, "recipe": recipe_name, "mode": mode, "chunks": len(chunks), "sample": chunks[:2]},
-                indent=2,
-                sort_keys=True,
-            )
-        )
+        summary = {"provider": provider, "recipe": recipe_name, "mode": mode.value, "chunks": len(chunks), "sample": chunks[:2]}
+        _finish_provider_smoke_summary(summary, started_at=started_at, config_dir=config_dir, plan=plan, write_artifact=write_artifact)
         return
     if mode is ExecutionMode.ASYNC:
         job = await runtime.dispatcher.submit_async(plan)
@@ -428,24 +441,71 @@ async def provider_smoke_command(config_dir: Path, provider: str, recipe_name: s
                 if loaded.state in {JobState.COMPLETED, JobState.FAILED, JobState.CANCELLED, JobState.EXPIRED}:
                     break
             await asyncio.sleep(1.0)
-        print(
-            json.dumps(
-                {
-                    "provider": provider,
-                    "recipe": recipe_name,
-                    "mode": mode,
-                    "job_id": job.job_id,
-                    "state": current.state,
-                    "completed": current.state is JobState.COMPLETED,
-                },
-                indent=2,
-                sort_keys=True,
-                default=str,
-            )
-        )
+        summary = {
+            "provider": provider,
+            "recipe": recipe_name,
+            "mode": mode.value,
+            "job_id": job.job_id,
+            "state": current.state.value,
+            "completed": current.state is JobState.COMPLETED,
+        }
+        _finish_provider_smoke_summary(summary, started_at=started_at, config_dir=config_dir, plan=plan, write_artifact=write_artifact)
         return
     result = await runtime.dispatcher.execute_sync(plan)
-    print(json.dumps({"provider": provider, "recipe": recipe_name, "mode": mode, "result": result.model_dump(mode="json")}, indent=2, sort_keys=True))
+    summary = {"provider": provider, "recipe": recipe_name, "mode": mode.value, "result": result.model_dump(mode="json")}
+    _finish_provider_smoke_summary(summary, started_at=started_at, config_dir=config_dir, plan=plan, write_artifact=write_artifact)
+
+
+def _finish_provider_smoke_summary(
+    summary: dict[str, object],
+    *,
+    started_at: datetime,
+    config_dir: Path,
+    plan,
+    write_artifact: bool,
+) -> None:
+    ended_at = datetime.now(timezone.utc)
+    summary["started_at"] = started_at.isoformat()
+    summary["ended_at"] = ended_at.isoformat()
+    summary["commit"] = _git_commit()
+    summary["config_hash"] = _config_hash(config_dir)
+    summary["governance_hash"] = getattr(plan, "attestations", {}).get("governance_hash")
+    if write_artifact:
+        artifact_path = _write_live_validation_artifact(summary)
+        summary["artifact_path"] = str(artifact_path)
+    print(json.dumps(summary, indent=2, sort_keys=True, default=str))
+
+
+def _write_live_validation_artifact(summary: dict[str, object]) -> Path:
+    root = default_state_dir() / "provider-validation"
+    root.mkdir(parents=True, exist_ok=True)
+    provider = str(summary.get("provider") or "provider").replace("/", "_")
+    stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    path = root / f"{stamp}-{provider}.json"
+    path.write_text(json.dumps(summary, sort_keys=True, separators=(",", ":"), default=str) + "\n", encoding="utf-8")
+    return path
+
+
+def _git_commit() -> str | None:
+    head = PROJECT_ROOT / ".git" / "HEAD"
+    try:
+        value = head.read_text(encoding="utf-8").strip()
+        if value.startswith("ref: "):
+            ref = PROJECT_ROOT / ".git" / value.removeprefix("ref: ")
+            return ref.read_text(encoding="utf-8").strip()
+        return value
+    except OSError:
+        return None
+
+
+def _config_hash(config_dir: Path) -> str:
+    digest = hashlib.sha256()
+    for path in sorted(config_dir.rglob("*.yml")):
+        digest.update(str(path.relative_to(config_dir)).encode("utf-8"))
+        digest.update(b"\0")
+        digest.update(path.read_bytes())
+        digest.update(b"\0")
+    return digest.hexdigest()
 
 
 def registry_command(action: str) -> None:

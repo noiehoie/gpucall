@@ -1,6 +1,13 @@
 name: hyperstack-a100
 adapter: hyperstack
 max_data_classification: restricted
+trust_profile:
+  security_tier: encrypted_capsule
+  sovereign_jurisdiction: CA
+  dedicated_gpu: true
+  requires_attestation: false
+  supports_key_release: false
+  allows_worker_s3_credentials: false
 gpu: A100
 vram_gb: 80
 max_model_len: 32768

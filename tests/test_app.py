@@ -553,6 +553,23 @@ def test_openai_chat_completions_facade_returns_compatible_shape(tmp_path) -> No
     assert payload["choices"][0]["message"]["content"] == "ok:infer:local-echo"
 
 
+def test_openai_chat_completions_facade_accepts_gpucall_chat_alias(tmp_path) -> None:
+    with TestClient(create_app(copy_config(tmp_path))) as client:
+        response = client.post(
+            "/v1/chat/completions",
+            json={
+                "model": "gpucall:chat",
+                "messages": [{"role": "user", "content": "hello"}],
+                "max_tokens": 16,
+            },
+        )
+
+    payload = response.json()
+    assert response.status_code == 200
+    assert payload["model"] == "gpucall:chat"
+    assert payload["gpucall"]["recipe_name"] == "text-infer-standard"
+
+
 def test_openai_chat_completions_facade_rejects_non_auto_model(tmp_path) -> None:
     with TestClient(create_app(copy_config(tmp_path))) as client:
         response = client.post(

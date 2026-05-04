@@ -91,6 +91,12 @@ When adapting another product or service to gpucall, use the one-shot migration 
 gpucall is a deterministic governance router, not a Modal-only proxy. Recipe and provider selection rules are documented in [docs/ROUTING_POLICY.md](docs/ROUTING_POLICY.md).
 RunPod Flash production validation is documented in [docs/RUNPOD_FLASH.md](docs/RUNPOD_FLASH.md).
 
+## Zero-Trust Contracts
+
+Provider definitions declare a `trust_profile` separate from recipe compute requirements. Restricted workloads are routed only to dedicated GPU providers or approved security tiers such as `confidential_tee` with attestation support or `split_learning`; shared GPU providers are rejected before execution. Governance hashes are deterministic over the request, policy, recipe, provider contract, and worker-readable DataRef set, excluding runtime IDs.
+
+Workers consume gateway-presigned HTTP(S) DataRefs by default. Ambient `s3://` worker credentials are disabled unless explicitly opted in for a non-default worker environment. Chained artifacts are recorded as encrypted `ArtifactManifest` entries in the append-only Artifact Registry; the gateway stores lineage, version, checksums, key ids, and attestation references, not plaintext artifact bytes.
+
 ## Object Lifecycle
 
 For Cloudflare R2 or S3-compatible buckets, configure lifecycle expiration for the gpucall prefix. A conservative MVP setting is:
@@ -117,3 +123,5 @@ gpucall launch-check --profile production --url http://127.0.0.1:18088
 gpucall audit verify
 gpucall post-launch-report
 ```
+
+Production launch checks require gateway auth, object-store credentials, a live gateway smoke result, and a provider-validation JSON artifact. Static launch checks remain available for local config validation.

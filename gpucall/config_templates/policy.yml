@@ -5,6 +5,12 @@ max_lease_ttl_seconds: 3600
 max_timeout_seconds: 600
 tokenizer_safety_multiplier: 1.25
 immutable_audit: true
+security:
+  restricted_requires:
+    - confidential_tee
+    - split_learning
+  confidential_allows_inline: true
+  require_data_ref_sha256: true
 providers:
   max_data_classification: confidential
   allow: []

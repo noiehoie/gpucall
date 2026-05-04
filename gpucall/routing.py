@@ -3,7 +3,7 @@ from __future__ import annotations
 import math
 import os
 
-from gpucall.domain import CompiledPlan, DataClassification, ExecutionMode, Policy, ProviderSpec, Recipe, TaskRequest
+from gpucall.domain import CompiledPlan, DataClassification, ExecutionMode, Policy, ProviderSpec, Recipe, SecurityTier, TaskRequest
 
 
 def classification_rank(value: DataClassification) -> int:
@@ -88,6 +88,9 @@ def provider_route_rejection_reason(
         return "recipe data classification exceeds policy ceiling"
     if not provider.max_data_classification.permits(recipe.data_classification):
         return "provider data classification ceiling is below recipe requirement"
+    security_reason = provider_security_rejection_reason(policy=policy, recipe=recipe, provider=provider)
+    if security_reason is not None:
+        return security_reason
     if provider.vram_gb < recipe.min_vram_gb:
         return "provider vram_gb is below recipe min_vram_gb"
     minimum_model_len = required_len if required_len is not None else recipe.max_model_len
@@ -109,6 +112,18 @@ def provider_route_rejection_reason(
         and not provider.stream_target
     ):
         return "modal stream mode requires explicit stream_target"
+    return None
+
+
+def provider_security_rejection_reason(*, policy: Policy, recipe: Recipe, provider: ProviderSpec) -> str | None:
+    profile = provider.trust_profile
+    if recipe.data_classification is DataClassification.RESTRICTED:
+        if profile.dedicated_gpu:
+            return None
+        if profile.security_tier not in set(policy.security.restricted_requires):
+            return "restricted data requires dedicated GPU or an approved security tier"
+        if profile.security_tier is SecurityTier.CONFIDENTIAL_TEE and not profile.requires_attestation:
+            return "restricted confidential TEE routing requires attestation evidence support"
     return None
 
 

@@ -45,6 +45,92 @@ class DataClassification(StrEnum):
         return order[self] >= order[required]
 
 
+class SecurityTier(StrEnum):
+    LOCAL = "local"
+    SHARED_GPU = "shared_gpu"
+    ENCRYPTED_CAPSULE = "encrypted_capsule"
+    CONFIDENTIAL_TEE = "confidential_tee"
+    SPLIT_LEARNING = "split_learning"
+
+
+class ProviderTrustProfile(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    security_tier: SecurityTier = SecurityTier.SHARED_GPU
+    sovereign_jurisdiction: str | None = None
+    dedicated_gpu: bool = False
+    requires_attestation: bool = False
+    supports_key_release: bool = False
+    allows_worker_s3_credentials: bool = False
+    attestation_type: str | None = None
+
+
+class SecurityPolicy(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    restricted_requires: list[SecurityTier] = Field(
+        default_factory=lambda: [SecurityTier.CONFIDENTIAL_TEE, SecurityTier.SPLIT_LEARNING]
+    )
+    confidential_allows_inline: bool = True
+    require_data_ref_sha256: bool = True
+
+
+class AttestationEvidence(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    provider: str
+    gpu_sku: str | None = None
+    security_tier: SecurityTier
+    confidential_computing_mode: str | None = None
+    driver_version: str | None = None
+    firmware_version: str | None = None
+    worker_image_digest: str | None = None
+    nonce: str
+    nonce_observed_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    policy_hash: str
+    kms_key_release_decision: Literal["not_required", "approved", "denied"] = "not_required"
+    evidence_ref: str | None = None
+    verified: bool = False
+
+
+class KeyReleaseGrant(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    key_id: str
+    policy_hash: str
+    attestation_evidence_ref: str
+    recipient: str
+    expires_at: datetime
+
+
+class ArtifactManifest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    artifact_id: str
+    artifact_chain_id: str
+    version: str
+    classification: DataClassification
+    ciphertext_uri: AnyUrl
+    ciphertext_sha256: str = Field(min_length=64, max_length=64)
+    key_id: str
+    producer_plan_hash: str
+    attestation_evidence_ref: str | None = None
+    parent_artifact_ids: list[str] = Field(default_factory=list)
+    legal_hold: bool = False
+    retention_until: datetime | None = None
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+
+
+class CompileArtifact(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    job_spec_hash: str
+    policy_hash: str
+    recipe_hash: str
+    provider_contract_hash: str
+    governance_hash: str
+
+
 class DataRef(BaseModel):
     """Reference to sensitive data; payload bytes must not cross the gateway."""
 
@@ -133,6 +219,7 @@ class Policy(BaseModel):
     max_timeout_seconds: PositiveInt
     tokenizer_safety_multiplier: NonNegativeFloat = 1.25
     providers: ProviderPolicy
+    security: SecurityPolicy = Field(default_factory=SecurityPolicy)
     immutable_audit: bool = True
 
 
@@ -169,6 +256,7 @@ class ProviderSpec(BaseModel):
     name: str
     adapter: str = "echo"
     max_data_classification: DataClassification = DataClassification.CONFIDENTIAL
+    trust_profile: ProviderTrustProfile = Field(default_factory=ProviderTrustProfile)
     gpu: str
     vram_gb: PositiveInt
     max_model_len: PositiveInt

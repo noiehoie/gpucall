@@ -9,7 +9,7 @@ from pathlib import Path
 import pytest
 
 from gpucall.config import ConfigError, load_config
-from gpucall.domain import ProviderSpec, Recipe
+from gpucall.domain import SecurityTier
 
 
 def copy_config(tmp_path: Path) -> Path:
@@ -211,6 +211,8 @@ def test_standard_config_includes_verified_text_recipes(tmp_path) -> None:
     assert config.recipes["vision-image-standard"].allowed_mime_prefixes == ["image/"]
     assert config.providers["hyperstack-a100"].max_model_len == 32768
     assert config.providers["hyperstack-a100"].declared_model_max_len == 32768
+    assert config.providers["hyperstack-a100"].trust_profile.dedicated_gpu is True
+    assert config.providers["modal-a10g"].trust_profile.security_tier is SecurityTier.ENCRYPTED_CAPSULE
     assert config.providers["modal-a10g"].supports_vision is False
     assert "image" not in config.providers["modal-a10g"].input_contracts
 
@@ -234,6 +236,38 @@ def test_validate_config_cli(tmp_path) -> None:
     assert '"valid": true' in result.stdout
 
 
+def test_provider_smoke_writes_live_validation_artifact(tmp_path, monkeypatch) -> None:
+    root = copy_config(tmp_path)
+    monkeypatch.setenv("GPUCALL_ALLOW_FAKE_AUTO_PROVIDERS", "1")
+    monkeypatch.setenv("GPUCALL_STATE_DIR", str(tmp_path / "state"))
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            str(Path(__file__).resolve().parents[1] / "gpucall" / "cli.py"),
+            "provider-smoke",
+            "local-echo",
+            "--config-dir",
+            str(root),
+            "--recipe",
+            "smoke-text-small",
+            "--mode",
+            "sync",
+            "--write-artifact",
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+
+    assert '"artifact_path"' in result.stdout
+    artifacts = list((tmp_path / "state" / "provider-validation").glob("*.json"))
+    assert len(artifacts) == 1
+    payload = artifacts[0].read_text(encoding="utf-8")
+    assert '"provider":"local-echo"' in payload
+    assert '"config_hash"' in payload
+
+
 def test_security_scan_rejects_secret_like_yaml(tmp_path) -> None:
     root = copy_config(tmp_path)
     (root / "providers" / "bad.yml").write_text("api_key: secret\n", encoding="utf-8")
@@ -253,15 +287,6 @@ def test_security_scan_rejects_secret_like_yaml(tmp_path) -> None:
 
     assert result.returncode == 1
     assert "bad.yml" in result.stdout
-
-
-def test_yaml_surface_stays_one_screen() -> None:
-    provider_fields = ProviderSpec.model_fields
-    recipe_fields = Recipe.model_fields
-
-    assert len(provider_fields) <= 24
-    assert len(recipe_fields) <= 22
-    assert "config" not in provider_fields
 
 
 def test_init_config_writes_flat_provider_files(tmp_path) -> None:

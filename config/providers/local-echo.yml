@@ -1,6 +1,13 @@
 name: local-echo
 adapter: echo
 max_data_classification: confidential
+trust_profile:
+  security_tier: local
+  sovereign_jurisdiction: local
+  dedicated_gpu: true
+  requires_attestation: false
+  supports_key_release: false
+  allows_worker_s3_credentials: false
 gpu: L4
 vram_gb: 24
 max_model_len: 32768

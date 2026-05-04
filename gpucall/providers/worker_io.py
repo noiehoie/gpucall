@@ -29,6 +29,8 @@ def fetch_data_ref_text(ref: dict[str, Any]) -> str:
     max_bytes = _max_ref_bytes(ref)
     parsed = urlparse(uri)
     if parsed.scheme == "s3":
+        if not _ambient_s3_allowed(ref):
+            raise ValueError("s3 data refs require gateway-presigned worker capability")
         body = _fetch_s3_ref_bytes(parsed.netloc, parsed.path.lstrip("/"), max_bytes, ref)
         return _decode_ref_body(body, ref)
     if parsed.scheme not in {"http", "https"}:
@@ -100,3 +102,9 @@ def _ref_timeout_seconds() -> float:
         return max(float(os.getenv("GPUCALL_WORKER_REF_TIMEOUT_SECONDS", "30")), 1.0)
     except ValueError:
         return 30.0
+
+
+def _ambient_s3_allowed(ref: dict[str, Any]) -> bool:
+    if ref.get("allow_worker_s3_credentials") is True:
+        return True
+    return os.getenv("GPUCALL_WORKER_ALLOW_AMBIENT_S3", "").strip().lower() in {"1", "true", "yes", "on"}

@@ -329,6 +329,8 @@ def _fetch_data_ref_bytes(ref: dict) -> bytes:
     if not uri:
         raise ValueError("input_ref uri is required")
     if uri.startswith("s3://"):
+        if not _ambient_s3_allowed(ref):
+            raise ValueError("s3 input_refs require gateway-presigned worker capability")
         return _fetch_s3_ref_bytes(uri, max_bytes=max_bytes)
     if uri.startswith("http://") or uri.startswith("https://"):
         if ref.get("gateway_presigned") is not True:
@@ -361,6 +363,12 @@ def _fetch_s3_ref_bytes(uri: str, *, max_bytes: int) -> bytes:
             raise ValueError("input_ref exceeds worker fetch limit")
         chunks.append(chunk)
     return b"".join(chunks)
+
+
+def _ambient_s3_allowed(ref: dict) -> bool:
+    if ref.get("allow_worker_s3_credentials") is True:
+        return True
+    return os.getenv("GPUCALL_WORKER_ALLOW_AMBIENT_S3", "").strip().lower() in {"1", "true", "yes", "on"}
 
 
 def _system_prompt_for_payload(payload: dict) -> str:

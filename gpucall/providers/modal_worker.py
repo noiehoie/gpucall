@@ -105,6 +105,8 @@ def _fetch_data_ref_text(ref: dict[str, Any]) -> str:
     max_bytes = min(int(os.getenv("GPUCALL_WORKER_MAX_REF_BYTES", "16777216")), int(ref.get("bytes") or 16777216))
     parsed = urlparse(uri)
     if parsed.scheme == "s3":
+        if not _ambient_s3_allowed(ref):
+            raise ValueError("s3 data refs require gateway-presigned worker capability")
         body = _fetch_s3_ref_bytes(parsed.netloc, parsed.path.lstrip("/"), max_bytes, ref)
     elif parsed.scheme in {"http", "https"}:
         if ref.get("gateway_presigned") is not True:
@@ -147,6 +149,12 @@ def _fetch_s3_ref_bytes(bucket: str, key: str, max_bytes: int, ref: dict[str, An
         if total > max_bytes:
             raise ValueError(f"data ref exceeds worker limit: {max_bytes} bytes")
     return b"".join(chunks)
+
+
+def _ambient_s3_allowed(ref: dict[str, Any]) -> bool:
+    if ref.get("allow_worker_s3_credentials") is True:
+        return True
+    return os.getenv("GPUCALL_WORKER_ALLOW_AMBIENT_S3", "").strip().lower() in {"1", "true", "yes", "on"}
 
 
 if modal is not None:

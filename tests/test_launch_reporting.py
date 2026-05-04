@@ -41,6 +41,7 @@ def test_production_launch_report_blocks_without_live_requirements(tmp_path, mon
     checks = {blocker["check"] for blocker in report["blockers"]}
     assert "gateway_auth" in checks
     assert "gateway_live_smoke" in checks
+    assert "provider_live_validation" in checks
 
 
 def test_launch_report_blocks_smoke_provider_in_auto_recipe(tmp_path, monkeypatch) -> None:

@@ -279,6 +279,9 @@ def _attestation_audit_summary(value: dict[str, Any]) -> dict[str, Any]:
         summary["context_estimate"] = value.get("context_estimate")
     if value.get("recipe_snapshot") is not None:
         summary["recipe_snapshot"] = _recipe_snapshot_audit_summary(value.get("recipe_snapshot"))
+    for key in ("compile_artifact", "attestation_evidence", "key_release", "artifact_manifest"):
+        if value.get(key) is not None:
+            summary[key] = redact_for_audit(value.get(key))
     return summary
 
 

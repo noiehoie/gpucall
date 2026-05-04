@@ -1,6 +1,13 @@
 name: modal-a10g
 adapter: modal
 max_data_classification: confidential
+trust_profile:
+  security_tier: encrypted_capsule
+  sovereign_jurisdiction: US
+  dedicated_gpu: false
+  requires_attestation: false
+  supports_key_release: false
+  allows_worker_s3_credentials: false
 gpu: A10G
 vram_gb: 24
 max_model_len: 32768

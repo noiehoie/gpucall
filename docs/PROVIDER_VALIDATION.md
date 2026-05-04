@@ -36,4 +36,4 @@ Record for each provider:
 - cost observed on provider dashboard
 - audit trail validity after execution
 
-When `GPUCALL_REQUIRE_LIVE_VALIDATION=1`, production `launch-check` requires a recent JSON artifact under `$XDG_STATE_HOME/gpucall/provider-validation/`. The artifact should include provider, recipe, commit, config hash, start/end timestamps, cleanup result, estimated or observed cost, and audit event IDs.
+Production `launch-check --profile production` requires a recent JSON artifact under `$XDG_STATE_HOME/gpucall/provider-validation/`. The artifact should include provider, recipe, commit, config hash, start/end timestamps, cleanup result, estimated or observed cost, and audit event IDs.

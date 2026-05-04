@@ -4,7 +4,7 @@ import hashlib
 import json
 from datetime import datetime, timezone
 
-from gpucall.domain import CompiledPlan, ExecutionMode, Policy, ProviderSpec, Recipe, TaskRequest
+from gpucall.domain import CompileArtifact, CompiledPlan, ExecutionMode, Policy, ProviderSpec, Recipe, TaskRequest
 from gpucall.domain import ChatMessage, ResponseFormatType
 from gpucall.registry import ObservedRegistry
 from gpucall.routing import classification_rank, is_production_route_candidate, provider_route_rejection_reason, required_model_len, token_budget
@@ -96,7 +96,14 @@ class GovernanceCompiler:
             "required_model_len": compiled_required_model_len,
             "token_budget": compiled_token_budget,
         }
-        plan.attestations["governance_hash"] = self._stable_hash(plan.model_dump(mode="json", exclude={"attestations"}))
+        governance_hash = self._stable_hash(self._governance_material(plan))
+        plan.attestations["governance_hash"] = governance_hash
+        plan.attestations["compile_artifact"] = self._compile_artifact(
+            request=request,
+            recipe=recipe,
+            provider_chain=provider_chain,
+            governance_hash=governance_hash,
+        ).model_dump(mode="json")
         return plan
 
     def _recipe_for(self, request: TaskRequest) -> Recipe:
@@ -331,6 +338,28 @@ class GovernanceCompiler:
     def _stable_hash(value: object) -> str:
         encoded = json.dumps(value, sort_keys=True, separators=(",", ":")).encode("utf-8")
         return hashlib.sha256(encoded).hexdigest()
+
+    @staticmethod
+    def _governance_material(plan: CompiledPlan) -> dict[str, object]:
+        return plan.model_dump(mode="json", exclude={"attestations", "plan_id"})
+
+    def _compile_artifact(
+        self,
+        *,
+        request: TaskRequest,
+        recipe: Recipe,
+        provider_chain: list[str],
+        governance_hash: str,
+    ) -> CompileArtifact:
+        return CompileArtifact(
+            job_spec_hash=self._stable_hash(request.model_dump(mode="json", exclude={"idempotency_key"})),
+            policy_hash=self._stable_hash(self.policy.model_dump(mode="json")),
+            recipe_hash=self._stable_hash(recipe.model_dump(mode="json")),
+            provider_contract_hash=self._stable_hash(
+                {name: self.providers[name].model_dump(mode="json") for name in provider_chain if name in self.providers}
+            ),
+            governance_hash=governance_hash,
+        )
 
     @staticmethod
     def _recipe_snapshot(recipe: Recipe) -> dict[str, object]:
