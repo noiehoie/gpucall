@@ -452,7 +452,7 @@ def _gateway_smoke_summary(url: str, *, api_key: str | None, recipe: str | None 
     key = api_key or _gateway_api_key()
     headers = {"authorization": f"Bearer {key}"} if key else {}
     summary: dict[str, object] = {"ok": False, "recipe_hint": recipe}
-    with httpx.Client(base_url=url.rstrip("/"), timeout=30.0, headers=headers) as client:
+    with httpx.Client(base_url=url.rstrip("/"), timeout=120.0, headers=headers) as client:
         health = client.get("/healthz")
         health.raise_for_status()
         summary["healthz"] = health.json()
