@@ -1,0 +1,19 @@
+name: scaleway-gpu
+adapter: scaleway-instance
+max_data_classification: confidential
+gpu: L40S
+vram_gb: 48
+max_model_len: 32768
+cost_per_second: 0.0
+modes: [async]
+endpoint: https://api.scaleway.com
+endpoint_contract: scaleway-instance
+input_contracts: [chat_messages, data_refs]
+output_contract: gpucall-provider-result
+stream_contract: none
+project_id: ""
+zone: fr-par-1
+instance: GPU-L40S
+image: ubuntu_noble
+provider_params:
+  enable_ipv6: false

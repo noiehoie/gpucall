@@ -1,0 +1,24 @@
+name: azure-h100-confidential
+adapter: azure-compute-vm
+max_data_classification: restricted
+gpu: H100
+vram_gb: 80
+max_model_len: 32768
+cost_per_second: 0.0
+modes: [async]
+endpoint_contract: azure-compute-vm
+input_contracts: [chat_messages, data_refs]
+output_contract: gpucall-provider-result
+stream_contract: none
+region: eastus
+resource_group: ""
+network: ""
+instance: Standard_NC40ads_H100_v5
+provider_params:
+  image_reference:
+    publisher: Canonical
+    offer: ubuntu-24_04-lts
+    sku: server
+    version: latest
+  admin_username: azureuser
+  ssh_public_key: ""

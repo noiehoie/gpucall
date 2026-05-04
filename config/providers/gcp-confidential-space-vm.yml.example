@@ -1,0 +1,22 @@
+name: gcp-confidential-space
+adapter: gcp-confidential-space-vm
+max_data_classification: restricted
+gpu: H100
+vram_gb: 80
+max_model_len: 32768
+cost_per_second: 0.0
+modes: [async]
+endpoint_contract: gcp-confidential-space-vm
+input_contracts: [chat_messages, data_refs]
+output_contract: gpucall-provider-result
+stream_contract: none
+project_id: ""
+zone: us-central1-a
+network: global/networks/default
+subnet: null
+service_account: ""
+instance: zones/us-central1-a/machineTypes/a3-highgpu-1g
+image: projects/confidential-space-images/global/images/family/confidential-space
+provider_params:
+  confidential_instance_type: SEV
+  boot_disk_size_gb: 50

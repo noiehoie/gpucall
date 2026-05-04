@@ -304,6 +304,14 @@ class ProviderSpec(BaseModel):
     cost_per_second: NonNegativeFloat
     modes: list[ExecutionMode] = Field(default_factory=lambda: [ExecutionMode.ASYNC])
     endpoint: AnyHttpUrl | None = None
+    project_id: str | None = None
+    region: str | None = None
+    zone: str | None = None
+    resource_group: str | None = None
+    network: str | None = None
+    subnet: str | None = None
+    service_account: str | None = None
+    provider_params: dict[str, Any] = Field(default_factory=dict)
     target: str | None = None
     stream_target: str | None = None
     endpoint_contract: Literal[
@@ -312,6 +320,10 @@ class ProviderSpec(BaseModel):
         "hyperstack-vm",
         "modal-function",
         "ollama-generate",
+        "azure-compute-vm",
+        "gcp-confidential-space-vm",
+        "scaleway-instance",
+        "ovhcloud-public-cloud-instance",
     ] | None = None
     input_contracts: list[Literal["text", "chat_messages", "data_refs", "image", "activation_refs", "artifact_refs"]] = Field(
         default_factory=list

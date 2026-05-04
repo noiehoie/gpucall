@@ -3,6 +3,12 @@ from __future__ import annotations
 from gpucall.domain import ProviderSpec
 from gpucall.credentials import load_credentials
 from gpucall.providers.base import ProviderAdapter
+from gpucall.providers.cloud_vm_adapters import (
+    AzureComputeVMAdapter,
+    GCPConfidentialSpaceVMAdapter,
+    OVHCloudPublicCloudInstanceAdapter,
+    ScalewayInstanceAdapter,
+)
 from gpucall.providers.echo import EchoProvider
 from gpucall.providers.hyperstack_adapter import HyperstackAdapter
 from gpucall.providers.hyperstack_adapter import DEFAULT_HYPERSTACK_IMAGE
@@ -166,6 +172,74 @@ def _build_hyperstack(spec: ProviderSpec, credentials: dict[str, dict[str, str]]
         lease_manifest_path=spec.lease_manifest_path,
         model=spec.model,
         max_model_len=spec.max_model_len,
+    )
+
+
+@register_adapter("azure-compute-vm")
+def _build_azure_compute_vm(spec: ProviderSpec, credentials: dict[str, dict[str, str]]) -> ProviderAdapter:
+    _require_contract(spec, endpoint="azure-compute-vm", output="gpucall-provider-result", stream="none")
+    azure = credentials.get("azure", {})
+    image_reference = spec.provider_params.get("image_reference")
+    return AzureComputeVMAdapter(
+        name=spec.name,
+        subscription_id=azure.get("subscription_id"),
+        resource_group=spec.resource_group,
+        location=spec.region,
+        vm_size=spec.instance,
+        image_reference=image_reference if isinstance(image_reference, dict) else None,
+        network_interface_id=spec.network,
+        admin_username=spec.provider_params.get("admin_username"),
+        ssh_public_key=spec.provider_params.get("ssh_public_key"),
+        params=spec.provider_params,
+    )
+
+
+@register_adapter("gcp-confidential-space-vm")
+def _build_gcp_confidential_space_vm(spec: ProviderSpec, credentials: dict[str, dict[str, str]]) -> ProviderAdapter:
+    _require_contract(spec, endpoint="gcp-confidential-space-vm", output="gpucall-provider-result", stream="none")
+    gcp = credentials.get("gcp", {})
+    return GCPConfidentialSpaceVMAdapter(
+        name=spec.name,
+        project_id=spec.project_id or gcp.get("project_id"),
+        zone=spec.zone,
+        machine_type=spec.instance,
+        source_image=spec.image,
+        network=spec.network,
+        subnetwork=spec.subnet,
+        service_account=spec.service_account,
+        params=spec.provider_params,
+    )
+
+
+@register_adapter("scaleway-instance")
+def _build_scaleway_instance(spec: ProviderSpec, credentials: dict[str, dict[str, str]]) -> ProviderAdapter:
+    _require_contract(spec, endpoint="scaleway-instance", output="gpucall-provider-result", stream="none")
+    scaleway = credentials.get("scaleway", {})
+    return ScalewayInstanceAdapter(
+        name=spec.name,
+        secret_key=scaleway.get("secret_key"),
+        project_id=spec.project_id or scaleway.get("project_id"),
+        zone=spec.zone,
+        commercial_type=spec.instance,
+        image=spec.image,
+        base_url=str(spec.endpoint) if spec.endpoint else None,
+        params=spec.provider_params,
+    )
+
+
+@register_adapter("ovhcloud-public-cloud-instance")
+def _build_ovhcloud_public_cloud_instance(spec: ProviderSpec, credentials: dict[str, dict[str, str]]) -> ProviderAdapter:
+    _require_contract(spec, endpoint="ovhcloud-public-cloud-instance", output="gpucall-provider-result", stream="none")
+    ovhcloud = credentials.get("ovhcloud", {})
+    return OVHCloudPublicCloudInstanceAdapter(
+        name=spec.name,
+        endpoint=ovhcloud.get("endpoint"),
+        service_name=spec.project_id or ovhcloud.get("service_name"),
+        region=spec.region,
+        flavor_id=spec.instance,
+        image_id=spec.image,
+        ssh_key_id=spec.key_name,
+        params=spec.provider_params,
     )
 
 

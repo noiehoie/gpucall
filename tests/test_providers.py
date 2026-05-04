@@ -9,7 +9,16 @@ import pytest
 
 from gpucall.domain import CompiledPlan, ExecutionMode, InlineValue, ProviderSpec
 from gpucall.providers.hyperstack_adapter import DEFAULT_HYPERSTACK_IMAGE, HyperstackAdapter
-from gpucall.providers import EchoProvider, LocalOllamaAdapter, ModalAdapter, build_adapters
+from gpucall.providers import (
+    AzureComputeVMAdapter,
+    EchoProvider,
+    GCPConfidentialSpaceVMAdapter,
+    LocalOllamaAdapter,
+    ModalAdapter,
+    OVHCloudPublicCloudInstanceAdapter,
+    ScalewayInstanceAdapter,
+    build_adapters,
+)
 from gpucall.providers.base import RemoteHandle
 from gpucall.providers.payloads import gpucall_provider_result, plan_payload
 from gpucall.providers.runpod_adapter import (
@@ -91,6 +100,69 @@ def test_factory_builds_configured_adapter_types() -> None:
             output_contract="gpucall-provider-result",
             model="Qwen/Qwen2.5-1.5B-Instruct",
         ),
+        "azure": ProviderSpec(
+            name="azure",
+            adapter="azure-compute-vm",
+            gpu="H100",
+            vram_gb=80,
+            max_model_len=32768,
+            cost_per_second=0,
+            resource_group="rg",
+            region="eastus",
+            network="/subscriptions/s/resourceGroups/rg/providers/Microsoft.Network/networkInterfaces/nic",
+            endpoint_contract="azure-compute-vm",
+            output_contract="gpucall-provider-result",
+            instance="Standard_NC40ads_H100_v5",
+            provider_params={
+                "image_reference": {"publisher": "Canonical", "offer": "ubuntu-24_04-lts", "sku": "server", "version": "latest"},
+                "admin_username": "azureuser",
+                "ssh_public_key": "ssh-ed25519 AAAA test",
+            },
+        ),
+        "gcp": ProviderSpec(
+            name="gcp",
+            adapter="gcp-confidential-space-vm",
+            gpu="H100",
+            vram_gb=80,
+            max_model_len=32768,
+            cost_per_second=0,
+            project_id="project",
+            zone="us-central1-a",
+            network="global/networks/default",
+            endpoint_contract="gcp-confidential-space-vm",
+            output_contract="gpucall-provider-result",
+            instance="zones/us-central1-a/machineTypes/a3-highgpu-1g",
+            image="projects/confidential-space-images/global/images/family/confidential-space",
+        ),
+        "scaleway": ProviderSpec(
+            name="scaleway",
+            adapter="scaleway-instance",
+            gpu="L40S",
+            vram_gb=48,
+            max_model_len=32768,
+            cost_per_second=0,
+            endpoint_contract="scaleway-instance",
+            output_contract="gpucall-provider-result",
+            project_id="project",
+            zone="fr-par-1",
+            instance="GPU-L40S",
+            image="ubuntu_noble",
+        ),
+        "ovhcloud": ProviderSpec(
+            name="ovhcloud",
+            adapter="ovhcloud-public-cloud-instance",
+            gpu="L40S",
+            vram_gb=48,
+            max_model_len=32768,
+            cost_per_second=0,
+            endpoint_contract="ovhcloud-public-cloud-instance",
+            output_contract="gpucall-provider-result",
+            project_id="service",
+            region="GRA11",
+            instance="flavor-id",
+            image="image-id",
+            key_name="ssh-key-id",
+        ),
     }
 
     adapters = build_adapters(providers)
@@ -101,6 +173,10 @@ def test_factory_builds_configured_adapter_types() -> None:
     assert isinstance(adapters["hyperstack"], HyperstackAdapter)
     assert isinstance(adapters["runpod-vllm-serverless"], RunpodVllmServerlessAdapter)
     assert isinstance(adapters["runpod-vllm-flashboot"], RunpodVllmFlashBootAdapter)
+    assert isinstance(adapters["azure"], AzureComputeVMAdapter)
+    assert isinstance(adapters["gcp"], GCPConfidentialSpaceVMAdapter)
+    assert isinstance(adapters["scaleway"], ScalewayInstanceAdapter)
+    assert isinstance(adapters["ovhcloud"], OVHCloudPublicCloudInstanceAdapter)
     assert adapters["hyperstack"].environment_name == "default-CANADA-1"
     assert adapters["hyperstack"].model == "Qwen/Qwen2.5-1.5B-Instruct"
     assert adapters["modal"].stream_function_name == "stream"
@@ -469,6 +545,217 @@ def plan_payload_plan() -> CompiledPlan:
         input_refs=[],
         inline_inputs={},
     )
+
+
+async def test_azure_adapter_uses_compute_management_client(monkeypatch) -> None:
+    calls: dict[str, object] = {}
+
+    class FakePoller:
+        def result(self) -> None:
+            calls["create_waited"] = True
+
+    class FakeVirtualMachines:
+        def begin_create_or_update(self, resource_group: str, vm_name: str, parameters: dict[str, object]) -> FakePoller:
+            calls["resource_group"] = resource_group
+            calls["vm_name"] = vm_name
+            calls["parameters"] = parameters
+            return FakePoller()
+
+        def begin_delete(self, resource_group: str, vm_name: str) -> FakePoller:
+            calls["delete"] = (resource_group, vm_name)
+            return FakePoller()
+
+    class FakeComputeClient:
+        def __init__(self, credential: object, subscription_id: str) -> None:
+            calls["subscription_id"] = subscription_id
+            self.virtual_machines = FakeVirtualMachines()
+
+    fake_identity = types.ModuleType("azure.identity")
+    fake_identity.DefaultAzureCredential = lambda: object()
+    fake_compute = types.ModuleType("azure.mgmt.compute")
+    fake_compute.ComputeManagementClient = FakeComputeClient
+    monkeypatch.setitem(sys.modules, "azure", types.ModuleType("azure"))
+    monkeypatch.setitem(sys.modules, "azure.identity", fake_identity)
+    monkeypatch.setitem(sys.modules, "azure.mgmt", types.ModuleType("azure.mgmt"))
+    monkeypatch.setitem(sys.modules, "azure.mgmt.compute", fake_compute)
+
+    adapter = AzureComputeVMAdapter(
+        name="azure",
+        subscription_id="sub",
+        resource_group="rg",
+        location="eastus",
+        vm_size="Standard_NC40ads_H100_v5",
+        image_reference={"publisher": "Canonical", "offer": "ubuntu-24_04-lts", "sku": "server", "version": "latest"},
+        network_interface_id="/subscriptions/s/resourceGroups/rg/providers/Microsoft.Network/networkInterfaces/nic",
+        admin_username="azureuser",
+        ssh_public_key="ssh-ed25519 AAAA test",
+        params={"vm_name": "gpucall-test"},
+    )
+
+    plan = plan_payload_plan()
+    handle = await adapter.start(plan)
+    await adapter.cancel_remote(handle)
+
+    parameters = calls["parameters"]
+    assert calls["subscription_id"] == "sub"
+    assert calls["resource_group"] == "rg"
+    assert calls["vm_name"] == "gpucall-test"
+    assert parameters["security_profile"]["security_type"] == "ConfidentialVM"
+    assert calls["delete"] == ("rg", "gpucall-test")
+
+
+async def test_gcp_adapter_uses_instances_client(monkeypatch) -> None:
+    calls: dict[str, object] = {}
+
+    class FakeInstancesClient:
+        def insert(self, **kwargs):
+            calls["insert"] = kwargs
+            return object()
+
+        def delete(self, **kwargs):
+            calls["delete"] = kwargs
+            return object()
+
+    fake_compute_v1 = types.ModuleType("google.cloud.compute_v1")
+    fake_compute_v1.InstancesClient = FakeInstancesClient
+    monkeypatch.setitem(sys.modules, "google", types.ModuleType("google"))
+    monkeypatch.setitem(sys.modules, "google.cloud", types.ModuleType("google.cloud"))
+    monkeypatch.setitem(sys.modules, "google.cloud.compute_v1", fake_compute_v1)
+
+    adapter = GCPConfidentialSpaceVMAdapter(
+        name="gcp",
+        project_id="project",
+        zone="us-central1-a",
+        machine_type="zones/us-central1-a/machineTypes/a3-highgpu-1g",
+        source_image="projects/confidential-space-images/global/images/family/confidential-space",
+        network="global/networks/default",
+        params={"instance_name": "gpucall-test"},
+    )
+
+    plan = plan_payload_plan()
+    handle = await adapter.start(plan)
+    await adapter.cancel_remote(handle)
+
+    instance_resource = calls["insert"]["instance_resource"]
+    assert calls["insert"]["project"] == "project"
+    assert calls["insert"]["zone"] == "us-central1-a"
+    assert instance_resource["name"] == "gpucall-test"
+    assert instance_resource["confidential_instance_config"]["enable_confidential_compute"] is True
+    assert calls["delete"] == {"project": "project", "zone": "us-central1-a", "instance": "gpucall-test"}
+
+
+async def test_scaleway_adapter_uses_official_instance_rest_paths(monkeypatch) -> None:
+    calls: list[tuple[str, str, dict[str, object] | None]] = []
+
+    class FakeCreateResponse:
+        status_code = 201
+
+        def json(self) -> dict[str, object]:
+            return {"server": {"id": "server-1"}}
+
+    class FakeDeleteResponse:
+        status_code = 204
+
+    class FakeSession:
+        def __init__(self) -> None:
+            self.headers: dict[str, str] = {}
+
+        def post(self, url: str, **kwargs):
+            calls.append(("POST", url, kwargs.get("json")))
+            return FakeCreateResponse()
+
+        def delete(self, url: str, **_kwargs):
+            calls.append(("DELETE", url, None))
+            return FakeDeleteResponse()
+
+    fake_requests = types.ModuleType("requests")
+    fake_requests.Session = FakeSession
+    monkeypatch.setitem(sys.modules, "requests", fake_requests)
+
+    adapter = ScalewayInstanceAdapter(
+        name="scaleway",
+        secret_key="secret",
+        project_id="project",
+        zone="fr-par-1",
+        commercial_type="GPU-L40S",
+        image="ubuntu_noble",
+        params={"server_name": "gpucall-test"},
+    )
+
+    plan = plan_payload_plan()
+    handle = await adapter.start(plan)
+    await adapter.cancel_remote(handle)
+
+    assert calls[0] == (
+        "POST",
+        "https://api.scaleway.com/instance/v1/zones/fr-par-1/servers",
+        {
+            "name": "gpucall-test",
+            "project": "project",
+            "commercial_type": "GPU-L40S",
+            "image": "ubuntu_noble",
+            "enable_ipv6": False,
+            "tags": ["gpucall-managed", f"gpucall-plan-{plan.plan_id[:12]}"],
+        },
+    )
+    assert calls[1] == ("DELETE", "https://api.scaleway.com/instance/v1/zones/fr-par-1/servers/server-1", None)
+
+
+async def test_ovhcloud_adapter_uses_official_sdk_paths(monkeypatch) -> None:
+    calls: list[tuple[str, str, dict[str, object]]] = []
+
+    class FakeClient:
+        def __init__(self, endpoint: str) -> None:
+            calls.append(("CLIENT", endpoint, {}))
+
+        def post(self, path: str, **kwargs):
+            calls.append(("POST", path, kwargs))
+            return {"id": "instance-1"}
+
+        def delete(self, path: str):
+            calls.append(("DELETE", path, {}))
+
+    fake_ovh = types.ModuleType("ovh")
+    fake_ovh.Client = FakeClient
+    monkeypatch.setitem(sys.modules, "ovh", fake_ovh)
+
+    adapter = OVHCloudPublicCloudInstanceAdapter(
+        name="ovhcloud",
+        endpoint="ovh-eu",
+        service_name="service",
+        region="GRA11",
+        flavor_id="flavor-id",
+        image_id="image-id",
+        ssh_key_id="ssh-key-id",
+        params={"instance_name": "gpucall-test"},
+    )
+
+    handle = await adapter.start(plan_payload_plan())
+    await adapter.cancel_remote(handle)
+
+    assert calls[1] == (
+        "POST",
+        "/cloud/project/service/instance",
+        {
+            "name": "gpucall-test",
+            "region": "GRA11",
+            "flavorId": "flavor-id",
+            "imageId": "image-id",
+            "sshKeyId": "ssh-key-id",
+        },
+    )
+    assert calls[3] == ("DELETE", "/cloud/project/service/instance/instance-1", {})
+
+
+async def test_lifecycle_only_adapters_do_not_fake_provider_success() -> None:
+    adapter = ScalewayInstanceAdapter(secret_key="secret", project_id="project", zone="fr-par-1", commercial_type="GPU-L40S", image="ubuntu")
+    handle = RemoteHandle(provider="scaleway", remote_id="server-1", expires_at=plan_payload_plan().expires_at())
+
+    with pytest.raises(Exception) as exc_info:
+        await adapter.wait(handle, plan_payload_plan())
+
+    assert getattr(exc_info.value, "status_code", None) == 501
+    assert getattr(exc_info.value, "code", None) == "PROVIDER_WORKER_BOOTSTRAP_NOT_CONFIGURED"
 
 
 def test_hyperstack_manifest_tracks_active_and_destroyed_leases(tmp_path) -> None:

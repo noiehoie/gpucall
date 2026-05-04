@@ -1,0 +1,18 @@
+name: ovhcloud-gpu
+adapter: ovhcloud-public-cloud-instance
+max_data_classification: confidential
+gpu: L40S
+vram_gb: 48
+max_model_len: 32768
+cost_per_second: 0.0
+modes: [async]
+endpoint_contract: ovhcloud-public-cloud-instance
+input_contracts: [chat_messages, data_refs]
+output_contract: gpucall-provider-result
+stream_contract: none
+project_id: ""
+region: GRA11
+instance: ""
+image: ""
+key_name: ""
+provider_params: {}

@@ -183,6 +183,10 @@ def validate_config(config: GpucallConfig) -> None:
             "runpod-vllm-serverless": "openai-chat-completions",
             "runpod-vllm-flashboot": "openai-chat-completions",
             "runpod-flash": "openai-chat-completions",
+            "azure-compute-vm": "azure-compute-vm",
+            "gcp-confidential-space-vm": "gcp-confidential-space-vm",
+            "scaleway-instance": "scaleway-instance",
+            "ovhcloud-public-cloud-instance": "ovhcloud-public-cloud-instance",
         }
         expected = expected_contracts.get(adapter)
         if expected and provider.endpoint_contract != expected:
@@ -196,6 +200,10 @@ def validate_config(config: GpucallConfig) -> None:
             "runpod-vllm-serverless": "openai-chat-completions",
             "runpod-vllm-flashboot": "gpucall-provider-result",
             "runpod-flash": "openai-chat-completions",
+            "azure-compute-vm": "gpucall-provider-result",
+            "gcp-confidential-space-vm": "gpucall-provider-result",
+            "scaleway-instance": "gpucall-provider-result",
+            "ovhcloud-public-cloud-instance": "gpucall-provider-result",
         }
         expected_output = expected_outputs.get(adapter)
         if expected_output and provider.output_contract != expected_output:

@@ -23,7 +23,11 @@ dev = [
   "pytest-asyncio>=0.23",
 ]
 providers = [
+  "azure-identity>=1.17",
+  "azure-mgmt-compute>=30",
+  "google-cloud-compute>=1.19",
   "modal>=1.0",
+  "ovh>=1.2",
   "paramiko>=3.4",
   "requests>=2.32",
   "runpod>=1.7",
