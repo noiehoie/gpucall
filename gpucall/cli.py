@@ -87,6 +87,7 @@ def main() -> None:
     launch_check.add_argument("--config-dir", type=Path, default=default_config_dir())
     launch_check.add_argument("--url", default=None)
     launch_check.add_argument("--api-key", default=None)
+    launch_check.add_argument("--profile", choices=["static", "production"], default="production")
     post_launch = sub.add_parser("post-launch-report")
     post_launch.add_argument("--config-dir", type=Path, default=default_config_dir())
     configure = sub.add_parser("configure")
@@ -162,7 +163,7 @@ def main() -> None:
     elif args.command == "openapi":
         print(json.dumps(create_app(args.config_dir).openapi(), indent=2, sort_keys=True))
     elif args.command == "launch-check":
-        launch_check_command(args.config_dir, url=args.url, api_key=args.api_key)
+        launch_check_command(args.config_dir, url=args.url, api_key=args.api_key, profile=args.profile)
     elif args.command == "post-launch-report":
         asyncio.run(post_launch_report_command(args.config_dir))
     elif args.command == "configure":
@@ -221,15 +222,15 @@ def validate_config_command(config_dir: Path) -> None:
     print(json.dumps({"valid": True, "recipes": sorted(config.recipes), "providers": sorted(config.providers)}, indent=2, sort_keys=True))
 
 
-def launch_check_command(config_dir: Path, *, url: str | None = None, api_key: str | None = None) -> None:
-    report = build_launch_report(config_dir, url=url, api_key=api_key)
+def launch_check_command(config_dir: Path, *, url: str | None = None, api_key: str | None = None, profile: str = "production") -> None:
+    report = build_launch_report(config_dir, url=url, api_key=api_key, profile=profile)
     path = default_state_dir() / "launch" / "launch-check.json"
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(report, indent=2, sort_keys=True, default=str) + "\n", encoding="utf-8")
     print(json.dumps({**report, "report_path": str(path)}, indent=2, sort_keys=True, default=str))
 
 
-def build_launch_report(config_dir: Path, *, url: str | None = None, api_key: str | None = None) -> dict[str, object]:
+def build_launch_report(config_dir: Path, *, url: str | None = None, api_key: str | None = None, profile: str = "production") -> dict[str, object]:
     config = load_config(config_dir)
     creds = load_credentials()
     audit_path = default_state_dir() / "audit" / "trail.jsonl"
@@ -241,7 +242,10 @@ def build_launch_report(config_dir: Path, *, url: str | None = None, api_key: st
     provider_samples = _configured_registry_snapshot(config)
     gateway_smoke: dict[str, object] | None = None
     if url:
-        gateway_smoke = _gateway_smoke_summary(url, api_key=api_key)
+        try:
+            gateway_smoke = _gateway_smoke_summary(url, api_key=api_key)
+        except Exception as exc:
+            gateway_smoke = {"ok": False, "error": str(exc)}
     checks = {
         "config_valid": True,
         "secrets_present": _secret_presence_summary(creds),
@@ -267,6 +271,7 @@ def build_launch_report(config_dir: Path, *, url: str | None = None, api_key: st
             "observability": (PROJECT_ROOT / "docs" / "OBSERVABILITY.md").exists(),
             "provider_validation": (PROJECT_ROOT / "docs" / "PROVIDER_VALIDATION.md").exists(),
         },
+        "launch_profile": profile,
     }
     required_paths = {
         "/healthz",
@@ -289,6 +294,22 @@ def build_launch_report(config_dir: Path, *, url: str | None = None, api_key: st
         blockers.append({"check": "routing_hygiene", "findings": routing_hygiene})
     if not checks["audit_chain_valid"]:
         blockers.append({"check": "audit_chain", "valid": False})
+    secrets = checks["secrets_present"]
+    live_artifact = _latest_live_validation_artifact()
+    production = profile == "production"
+    if production:
+        if not secrets["gateway_auth"]:
+            blockers.append({"check": "gateway_auth", "configured": False})
+        if config.object_store is None or not secrets["object_store"]:
+            blockers.append({"check": "object_store", "configured": config.object_store is not None, "secrets": secrets["object_store"]})
+        if not url:
+            blockers.append({"check": "gateway_live_smoke", "url": None})
+        elif not gateway_smoke or gateway_smoke.get("ok") is not True:
+            blockers.append({"check": "gateway_live_smoke", "passed": False, "summary": gateway_smoke})
+        elif gateway_smoke.get("auth_required") is not True:
+            blockers.append({"check": "gateway_auth_enforced", "auth_required": gateway_smoke.get("auth_required")})
+        if os.getenv("GPUCALL_REQUIRE_LIVE_VALIDATION", "").strip().lower() in {"1", "true", "yes", "on"} and live_artifact is None:
+            blockers.append({"check": "provider_live_validation", "artifact": None})
     report: dict[str, object] = {
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "config_dir": str(config_dir),
@@ -299,6 +320,7 @@ def build_launch_report(config_dir: Path, *, url: str | None = None, api_key: st
         "checks": checks,
         "registry": provider_samples,
         "gateway_smoke": gateway_smoke,
+        "provider_live_validation": live_artifact,
         "blockers": blockers,
         "go": not blockers,
     }
@@ -387,7 +409,30 @@ async def provider_smoke_command(config_dir: Path, provider: str, recipe_name: s
         return
     if mode is ExecutionMode.ASYNC:
         job = await runtime.dispatcher.submit_async(plan)
-        print(json.dumps({"provider": provider, "recipe": recipe_name, "mode": mode, "job_id": job.job_id}, indent=2, sort_keys=True))
+        deadline = asyncio.get_running_loop().time() + plan.timeout_seconds
+        current = job
+        while asyncio.get_running_loop().time() < deadline:
+            loaded = await runtime.jobs.get(job.job_id)
+            if loaded is not None:
+                current = loaded
+                if loaded.state in {JobState.COMPLETED, JobState.FAILED, JobState.CANCELLED, JobState.EXPIRED}:
+                    break
+            await asyncio.sleep(1.0)
+        print(
+            json.dumps(
+                {
+                    "provider": provider,
+                    "recipe": recipe_name,
+                    "mode": mode,
+                    "job_id": job.job_id,
+                    "state": current.state,
+                    "completed": current.state is JobState.COMPLETED,
+                },
+                indent=2,
+                sort_keys=True,
+                default=str,
+            )
+        )
         return
     result = await runtime.dispatcher.execute_sync(plan)
     print(json.dumps({"provider": provider, "recipe": recipe_name, "mode": mode, "result": result.model_dump(mode="json")}, indent=2, sort_keys=True))
@@ -400,13 +445,13 @@ def registry_command(action: str) -> None:
 
 
 def smoke_gateway(url: str, *, api_key: str | None, recipe: str) -> None:
-    print(json.dumps(_gateway_smoke_summary(url, api_key=api_key), indent=2, sort_keys=True))
+    print(json.dumps(_gateway_smoke_summary(url, api_key=api_key, recipe=recipe), indent=2, sort_keys=True))
 
 
-def _gateway_smoke_summary(url: str, *, api_key: str | None) -> dict[str, object]:
+def _gateway_smoke_summary(url: str, *, api_key: str | None, recipe: str | None = None) -> dict[str, object]:
     key = api_key or _gateway_api_key()
     headers = {"authorization": f"Bearer {key}"} if key else {}
-    summary: dict[str, object] = {}
+    summary: dict[str, object] = {"ok": False, "recipe_hint": recipe}
     with httpx.Client(base_url=url.rstrip("/"), timeout=30.0, headers=headers) as client:
         health = client.get("/healthz")
         health.raise_for_status()
@@ -420,19 +465,18 @@ def _gateway_smoke_summary(url: str, *, api_key: str | None) -> dict[str, object
             json={"task": "infer", "mode": "sync"},
             timeout=30.0,
         )
-        summary["auth_required"] = unauth.status_code == 401 if key else False
+        summary["auth_required"] = unauth.status_code == 401
         sync = client.post(
             "/v2/tasks/sync",
-            json={"task": "infer", "mode": "sync"},
+            json={
+                "task": "infer",
+                "mode": "sync",
+                "inline_inputs": {"prompt": {"value": "gpucall smoke", "content_type": "text/plain"}},
+                "metadata": {"smoke": "true"},
+            },
         )
         sync.raise_for_status()
         summary["sync"] = sync.json()
-        vision = client.post(
-            "/v2/tasks/sync",
-            json={"task": "vision", "mode": "sync"},
-        )
-        vision.raise_for_status()
-        summary["vision"] = vision.json()
         if ready_payload.get("object_store"):
             body = b"gpucall smoke\n"
             digest = hashlib.sha256(body).hexdigest()
@@ -450,7 +494,56 @@ def _gateway_smoke_summary(url: str, *, api_key: str | None) -> dict[str, object
                 "uri": data_ref.get("uri"),
                 "bytes": data_ref.get("bytes"),
             }
+            image_body = _smoke_png()
+            image_digest = hashlib.sha256(image_body).hexdigest()
+            image_presign = client.post(
+                "/v2/objects/presign-put",
+                json={"name": "smoke.png", "bytes": len(image_body), "sha256": image_digest, "content_type": "image/png"},
+            )
+            image_presign.raise_for_status()
+            image_ref = image_presign.json()["data_ref"]
+            image_upload = httpx.put(
+                image_presign.json()["upload_url"], content=image_body, headers={"content-type": "image/png"}, timeout=30.0
+            )
+            image_upload.raise_for_status()
+            vision = client.post(
+                "/v2/tasks/sync",
+                json={
+                    "task": "vision",
+                    "mode": "sync",
+                    "input_refs": [image_ref],
+                    "inline_inputs": {"prompt": {"value": "describe smoke image", "content_type": "text/plain"}},
+                    "metadata": {"smoke": "true"},
+                },
+            )
+            summary["vision"] = {"status_code": vision.status_code}
+            if vision.status_code < 400:
+                summary["vision"]["body"] = vision.json()
+        else:
+            summary["vision"] = {"skipped": "object_store is not configured"}
+        summary["ok"] = True
     return summary
+
+
+def _smoke_png() -> bytes:
+    return bytes.fromhex(
+        "89504e470d0a1a0a0000000d49484452000000010000000108060000001f15c4890000000a49444154789c63600000020001e221bc330000000049454e44ae426082"
+    )
+
+
+def _latest_live_validation_artifact() -> dict[str, object] | None:
+    root = default_state_dir() / "provider-validation"
+    if not root.exists():
+        return None
+    candidates = sorted(root.glob("*.json"), key=lambda path: path.stat().st_mtime, reverse=True)
+    if not candidates:
+        return None
+    path = candidates[0]
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        data = {}
+    return {"path": str(path), "mtime": datetime.fromtimestamp(path.stat().st_mtime, timezone.utc).isoformat(), "data": data}
 
 
 async def jobs_command(job_id: str | None, limit: int, *, scrub_inputs: bool = False, expire_stale: bool = False) -> None:

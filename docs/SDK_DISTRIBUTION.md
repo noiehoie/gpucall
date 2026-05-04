@@ -19,7 +19,7 @@ from gpucall_sdk import GPUCallClient
 Compatibility:
 
 ```text
-gpucall-sdk 2.0.0a1 -> gpucall Gateway 2.0.x
+gpucall-sdk 2.0.0a2 -> gpucall Gateway 2.0.x
 ```
 
 Runtime dependency:
@@ -36,14 +36,14 @@ uvicorn are intentionally not SDK dependencies.
 Example:
 
 ```bash
-uv add "gpucall-sdk @ file:///opt/gpucall/artifacts/sdk/python/gpucall_sdk-2.0.0a1-py3-none-any.whl"
+uv add "gpucall-sdk @ file:///opt/gpucall/artifacts/sdk/python/gpucall_sdk-2.0.0a2-py3-none-any.whl"
 ```
 
 For another host, copy the wheel first:
 
 ```bash
-scp netcup:/opt/gpucall/artifacts/sdk/python/gpucall_sdk-2.0.0a1-py3-none-any.whl ./vendor/
-uv add "gpucall-sdk @ file://${PWD}/vendor/gpucall_sdk-2.0.0a1-py3-none-any.whl"
+scp netcup:/opt/gpucall/artifacts/sdk/python/gpucall_sdk-2.0.0a2-py3-none-any.whl ./vendor/
+uv add "gpucall-sdk @ file://${PWD}/vendor/gpucall_sdk-2.0.0a2-py3-none-any.whl"
 ```
 
 ## Configure
@@ -74,3 +74,5 @@ Expected shape:
 - Do not send provider, GPU, or recipe. The gateway rejects caller-controlled routing on public task endpoints.
 - Use `response_format` and `temperature=0` for JSON-required tasks.
 - Validate parsed JSON against the caller's business schema.
+
+The gateway package `gpucall` and client package `gpucall-sdk` are separate artifacts. Installing the gateway wheel does not install `gpucall_sdk`; install `gpucall-sdk` explicitly in client applications.

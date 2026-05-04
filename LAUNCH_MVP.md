@@ -17,6 +17,7 @@
 gpucall configure
 gpucall doctor
 gpucall explain-config text-infer-standard --mode async
+gpucall launch-check --profile static
 ```
 
 Expected `doctor` signals before launch:
@@ -34,7 +35,7 @@ cd /opt/gpucall
 docker compose -p gpucall up -d --build
 gpucall smoke
 gpucall audit verify
-gpucall launch-check
+gpucall launch-check --profile production --url http://127.0.0.1:18088
 ```
 
 `gpucall smoke` checks:
@@ -42,8 +43,9 @@ gpucall launch-check
 - `/healthz`
 - `/readyz`
 - gateway auth rejection without a token
-- explicit smoke execution through `local-echo`
+- explicit non-empty smoke execution through the gateway route
 - Cloudflare R2 presigned PUT upload when object store is configured
+- vision smoke only when object store can provide an image DataRef
 
 Production auto-selected recipes must not include `local-echo` or smoke/stub providers. Stub endpoints such as a RunPod endpoint returning a fixed `Hello World` response must be named as smoke providers and referenced only by explicit smoke recipes.
 
@@ -92,6 +94,7 @@ console.log(await client.infer({ prompt: "hello" }));
 ## Launch Gate
 
 - `gpucall smoke` succeeds.
+- `gpucall launch-check --profile production --url ...` returns `go: true`.
 - `gpucall audit verify` returns `valid: true`.
 - object store is `true` in `/readyz`.
 - unauthenticated task requests return `401`.

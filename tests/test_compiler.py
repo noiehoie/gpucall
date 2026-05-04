@@ -217,7 +217,10 @@ def test_compiler_auto_selection_ignores_non_auto_recipes() -> None:
 
 def test_compiler_auto_selection_uses_request_content_type() -> None:
     compiler = build_compiler()
-    compiler.providers = {name: provider.model_copy(update={"supports_vision": True}) for name, provider in compiler.providers.items()}
+    compiler.providers = {
+        name: provider.model_copy(update={"input_contracts": ["text", "data_refs", "image"]})
+        for name, provider in compiler.providers.items()
+    }
     text_recipe = compiler.recipes["r1"].model_copy(update={"name": "text", "allowed_mime_prefixes": ["text/"]})
     image_recipe = compiler.recipes["r1"].model_copy(
         update={"name": "image", "task": "vision", "allowed_mime_prefixes": ["image/"]}
@@ -236,7 +239,10 @@ def test_compiler_auto_selection_uses_request_content_type() -> None:
 
 def test_vision_recipe_allows_text_prompt_as_inline_companion() -> None:
     compiler = build_compiler()
-    compiler.providers = {name: provider.model_copy(update={"supports_vision": True}) for name, provider in compiler.providers.items()}
+    compiler.providers = {
+        name: provider.model_copy(update={"input_contracts": ["text", "data_refs", "image"]})
+        for name, provider in compiler.providers.items()
+    }
     vision = compiler.recipes["r1"].model_copy(
         update={
             "name": "vision",
@@ -277,6 +283,29 @@ def test_vision_recipe_rejects_non_image_refs_even_when_text_prompt_is_allowed()
     )
 
     with pytest.raises(GovernanceError, match="no auto-selectable recipe"):
+        compiler.compile(request)
+
+
+def test_vision_recipe_rejects_missing_image_ref() -> None:
+    compiler = build_compiler()
+    vision = compiler.recipes["r1"].model_copy(update={"name": "vision", "task": "vision"})
+    compiler.recipes = {"vision": vision}
+
+    with pytest.raises(GovernanceError, match="vision requires an image data_ref"):
+        compiler.compile(TaskRequest(task="vision", mode="sync", recipe="vision"))
+
+
+def test_compiler_rejects_messages_mixed_with_inline_inputs() -> None:
+    compiler = build_compiler()
+    request = TaskRequest(
+        task="infer",
+        mode="sync",
+        recipe="r1",
+        messages=[{"role": "user", "content": "hello"}],
+        inline_inputs={"prompt": {"value": "also hello", "content_type": "text/plain"}},
+    )
+
+    with pytest.raises(GovernanceError, match="messages cannot be combined"):
         compiler.compile(request)
 
 

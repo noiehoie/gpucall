@@ -207,10 +207,12 @@ def test_standard_config_includes_verified_text_recipes(tmp_path) -> None:
     assert config.recipes["text-infer-standard"].max_model_len == 32768
     assert config.recipes["text-infer-standard"].max_input_bytes == 16777216
     assert config.recipes["vision-image-standard"].task == "vision"
+    assert config.recipes["vision-image-standard"].auto_select is False
     assert config.recipes["vision-image-standard"].allowed_mime_prefixes == ["image/"]
     assert config.providers["hyperstack-a100"].max_model_len == 32768
     assert config.providers["hyperstack-a100"].declared_model_max_len == 32768
-    assert config.providers["modal-a10g"].supports_vision is True
+    assert config.providers["modal-a10g"].supports_vision is False
+    assert "image" not in config.providers["modal-a10g"].input_contracts
 
 
 def test_validate_config_cli(tmp_path) -> None:

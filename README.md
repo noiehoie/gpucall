@@ -9,9 +9,10 @@ gpucall init
 gpucall configure
 gpucall validate-config
 gpucall doctor
-gpucall launch-check
+gpucall launch-check --profile static
 docker compose -p gpucall up -d --build
 gpucall smoke
+gpucall launch-check --profile production --url http://127.0.0.1:18088
 gpucall audit verify
 ```
 
@@ -70,7 +71,7 @@ async with AsyncGPUCallClient("http://127.0.0.1:18088") as client:
     job = await client.infer(mode="async", prompt="hello")
 ```
 
-Files are uploaded to the configured object store with presigned PUT and sent to the gateway as `DataRef`.
+Files are uploaded to the configured object store with presigned PUT and sent to the gateway as `DataRef`. The SDK is distributed as the separate `gpucall-sdk` package; the gateway wheel does not include the SDK package.
 
 ## TypeScript SDK
 
@@ -108,10 +109,11 @@ Provider outages, remote capacity exhaustion, authentication failures, and provi
 ```bash
 gpucall validate-config
 gpucall doctor
-gpucall launch-check
+gpucall launch-check --profile static
 gpucall seed-liveness text-infer-standard --count 100
 gpucall registry show
 gpucall smoke
+gpucall launch-check --profile production --url http://127.0.0.1:18088
 gpucall audit verify
 gpucall post-launch-report
 ```

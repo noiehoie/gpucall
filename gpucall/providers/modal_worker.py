@@ -40,13 +40,14 @@ def _format_prompt_for_model(llm: Any, model_id: str, payload: dict[str, Any]) -
         except Exception:
             pass
     if model_id.startswith("Qwen/"):
-        return (
-            "<|im_start|>system\n"
-            f"{messages[0]['content']}<|im_end|>\n"
-            "<|im_start|>user\n"
-            f"{messages[1]['content']}<|im_end|>\n"
-            "<|im_start|>assistant\n"
-        )
+        rendered = []
+        for message in messages:
+            role = message.get("role", "user")
+            if role not in {"system", "user", "assistant", "tool"}:
+                raise ValueError(f"unsupported chat role for Qwen template: {role}")
+            rendered.append(f"<|im_start|>{role}\n{message.get('content', '')}<|im_end|>")
+        rendered.append("<|im_start|>assistant\n")
+        return "\n".join(rendered)
     return raw_prompt
 
 
@@ -282,9 +283,7 @@ if modal is not None:
 
     @app.function(image=_VLLM_IMAGE, gpu="A10G", timeout=1800, scaledown_window=300)
     def stream_inference_on_modal(payload: dict[str, Any], workload: str = "infer", **kwargs) -> Iterator[str]:
-        text = _generate_text(payload, kwargs.get("model"), kwargs.get("max_model_len") or 32768)
-        for index in range(0, len(text), 8):
-            yield text[index : index + 8]
+        raise RuntimeError("Modal true streaming is not implemented in gpucall v2.0")
 
     class VllmWorkerBase:
         _llm: Any = None
@@ -331,9 +330,7 @@ if modal is not None:
             return outputs[0].outputs[0].text.strip()
 
         def _stream(self, payload: dict[str, Any], model: str | None, max_model_len: int) -> Iterator[str]:
-            text = self._generate(payload, model, max_model_len)
-            for index in range(0, len(text), 8):
-                yield text[index : index + 8]
+            raise RuntimeError("Modal true streaming is not implemented in gpucall v2.0")
 
     @app.cls(image=_VLLM_IMAGE, gpu="T4", timeout=1800, scaledown_window=300)
     class VllmWorkerT4(VllmWorkerBase):

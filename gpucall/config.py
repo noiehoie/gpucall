@@ -144,21 +144,22 @@ def validate_config(config: GpucallConfig) -> None:
                 f"recipe {recipe.name!r} data_classification {recipe.data_classification} exceeds policy ceiling "
                 f"{config.policy.providers.max_data_classification}"
             )
-        has_capable_provider = False
-        for provider in config.providers.values():
-            reason = provider_route_rejection_reason(
-                policy=config.policy,
-                recipe=recipe,
-                provider=provider,
-                required_len=recipe.max_model_len,
-                auto_selected=recipe.auto_select,
-            )
-            if reason is not None:
-                continue
-            has_capable_provider = True
-            break
-        if not has_capable_provider:
-            raise ConfigError(f"recipe {recipe.name!r} has no provider satisfying its declared requirements")
+        if recipe.auto_select:
+            has_capable_provider = False
+            for provider in config.providers.values():
+                reason = provider_route_rejection_reason(
+                    policy=config.policy,
+                    recipe=recipe,
+                    provider=provider,
+                    required_len=recipe.max_model_len,
+                    auto_selected=True,
+                )
+                if reason is not None:
+                    continue
+                has_capable_provider = True
+                break
+            if not has_capable_provider:
+                raise ConfigError(f"recipe {recipe.name!r} has no provider satisfying its declared requirements")
     for provider in config.providers.values():
         if provider.declared_model_max_len is not None and provider.max_model_len > provider.declared_model_max_len:
             raise ConfigError(
@@ -186,6 +187,19 @@ def validate_config(config: GpucallConfig) -> None:
         expected = expected_contracts.get(adapter)
         if expected and provider.endpoint_contract != expected:
             raise ConfigError(f"provider {provider.name!r} endpoint_contract must be {expected!r}")
+        expected_outputs = {
+            "modal": "plain-text",
+            "hyperstack": "plain-text",
+            "local-ollama": "ollama-generate",
+            "ollama": "ollama-generate",
+            "runpod-serverless": "gpucall-provider-result",
+            "runpod-vllm-serverless": "openai-chat-completions",
+            "runpod-vllm-flashboot": "gpucall-provider-result",
+            "runpod-flash": "openai-chat-completions",
+        }
+        expected_output = expected_outputs.get(adapter)
+        if expected_output and provider.output_contract != expected_output:
+            raise ConfigError(f"provider {provider.name!r} output_contract must be {expected_output!r}")
         if adapter == "hyperstack":
             _validate_hyperstack_ssh_cidr(provider)
 

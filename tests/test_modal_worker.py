@@ -21,6 +21,15 @@ class FakeLLM:
         return FakeTokenizer()
 
 
+class NoTemplateTokenizer:
+    chat_template = None
+
+
+class NoTemplateLLM:
+    def get_tokenizer(self):
+        return NoTemplateTokenizer()
+
+
 def test_qwen_worker_applies_chat_template_to_instruction_model() -> None:
     payload = {
         "system_prompt": "Answer directly.",
@@ -45,3 +54,21 @@ def test_structured_worker_prompt_demands_json_only() -> None:
 
     messages = json.loads(prompt)
     assert "Return only valid JSON" in messages[0]["content"]
+
+
+def test_qwen_fallback_template_preserves_all_messages() -> None:
+    payload = {
+        "messages": [
+            {"role": "system", "content": "system"},
+            {"role": "user", "content": "first"},
+            {"role": "assistant", "content": "second"},
+            {"role": "user", "content": "third"},
+        ]
+    }
+
+    prompt = _format_prompt_for_model(NoTemplateLLM(), "Qwen/Qwen2.5-1.5B-Instruct", payload)
+
+    assert "system" in prompt
+    assert "first" in prompt
+    assert "second" in prompt
+    assert "third" in prompt

@@ -31,6 +31,8 @@ response = client.chat.completions.create(
 
 The facade is intentionally thin. It is for lightweight text requests and
 compatibility. Large inputs must use the gpucall SDK DataRef upload path.
+The only accepted model name in v2.0 is `gpucall:auto`; provider and recipe
+selection remain gateway-owned.
 
 Structured output validation is returned in:
 
@@ -87,3 +89,7 @@ presign endpoints for internal systems and advanced integrations.
 This level exposes `TaskRequest`, `DataRef`, `response_format`, and job polling
 directly. Public callers still must not set `recipe`, `requested_provider`, or
 `requested_gpu`; those fields are reserved for admin/debug flows.
+
+Do not combine `messages` with `inline_inputs` or `input_refs` in v2.0. Use one
+chat message list or use inline/DataRef inputs. Vision requests must include an
+image DataRef.

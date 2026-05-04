@@ -11,6 +11,6 @@ target: ""
 image: null
 endpoint_contract: openai-chat-completions
 input_contracts: [chat_messages]
-output_contract: openai-chat-completions
+output_contract: gpucall-provider-result
 stream_contract: none
 model: Qwen/Qwen2.5-1.5B-Instruct

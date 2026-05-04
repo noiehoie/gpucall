@@ -75,8 +75,8 @@ def provider_route_rejection_reason(
         missing = required_input_contracts - input_contracts
         if missing:
             return "provider input_contracts missing: " + ", ".join(sorted(missing))
-    if recipe.task == "vision" and "image" not in input_contracts and not provider.supports_vision:
-        return "provider does not declare provider-native vision input support"
+    if recipe.task == "vision" and "image" not in input_contracts:
+        return "provider does not declare image input support"
     if recipe.task == "infer":
         if input_contracts and "text" not in input_contracts and "chat_messages" not in input_contracts:
             return "provider does not declare text or chat input support"

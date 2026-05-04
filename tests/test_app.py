@@ -253,12 +253,41 @@ def test_api_key_auth_when_configured(tmp_path, monkeypatch) -> None:
     assert authorized.status_code == 200
 
 
+def test_production_auth_fails_closed_without_configured_key(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("GPUCALL_ENV", "production")
+    with TestClient(create_app(copy_config(tmp_path))) as client:
+        health = client.get("/healthz")
+        task = client.post("/v2/tasks/sync", json={"task": "infer", "mode": "sync"})
+
+    assert health.status_code == 200
+    assert task.status_code == 401
+
+
 def test_idempotency_key_reuses_sync_response(tmp_path) -> None:
     with TestClient(create_app(copy_config(tmp_path))) as client:
         first = client.post(
             "/v2/tasks/sync",
             json={"task": "infer", "mode": "sync", "idempotency_key": "same"},
         )
+        second = client.post(
+            "/v2/tasks/sync",
+            json={"task": "infer", "mode": "sync", "idempotency_key": "same"},
+        )
+
+    assert first.status_code == 200
+    assert second.status_code == 200
+    assert first.json()["plan_id"] == second.json()["plan_id"]
+
+
+def test_idempotency_key_reuses_sync_response_after_restart(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("GPUCALL_STATE_DIR", str(tmp_path / "state"))
+    config_dir = copy_config(tmp_path)
+    with TestClient(create_app(config_dir)) as client:
+        first = client.post(
+            "/v2/tasks/sync",
+            json={"task": "infer", "mode": "sync", "idempotency_key": "same"},
+        )
+    with TestClient(create_app(config_dir)) as client:
         second = client.post(
             "/v2/tasks/sync",
             json={"task": "infer", "mode": "sync", "idempotency_key": "same"},
@@ -522,6 +551,20 @@ def test_openai_chat_completions_facade_returns_compatible_shape(tmp_path) -> No
     assert payload["model"] == "gpucall:auto"
     assert payload["choices"][0]["message"]["role"] == "assistant"
     assert payload["choices"][0]["message"]["content"] == "ok:infer:local-echo"
+
+
+def test_openai_chat_completions_facade_rejects_non_auto_model(tmp_path) -> None:
+    with TestClient(create_app(copy_config(tmp_path))) as client:
+        response = client.post(
+            "/v1/chat/completions",
+            json={
+                "model": "provider:model",
+                "messages": [{"role": "user", "content": "hello"}],
+            },
+        )
+
+    assert response.status_code == 400
+    assert response.json()["error"]["code"] == "unsupported_model"
 
 
 def test_openai_facade_prompt_does_not_add_user_prefix(tmp_path, monkeypatch) -> None:

@@ -44,13 +44,14 @@ def format_prompt_for_model(llm: Any, model_id: str, payload: dict[str, Any]) ->
         except Exception:
             pass
     if model_id.startswith("Qwen/"):
-        return (
-            "<|im_start|>system\n"
-            f"{messages[0]['content']}<|im_end|>\n"
-            "<|im_start|>user\n"
-            f"{messages[1]['content']}<|im_end|>\n"
-            "<|im_start|>assistant\n"
-        )
+        rendered = []
+        for message in messages:
+            role = message.get("role", "user")
+            if role not in {"system", "user", "assistant", "tool"}:
+                raise ValueError(f"unsupported chat role for Qwen template: {role}")
+            rendered.append(f"<|im_start|>{role}\n{message.get('content', '')}<|im_end|>")
+        rendered.append("<|im_start|>assistant\n")
+        return "\n".join(rendered)
     return raw_prompt
 
 

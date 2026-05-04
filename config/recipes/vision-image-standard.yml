@@ -1,5 +1,6 @@
 name: vision-image-standard
 task: vision
+auto_select: false
 data_classification: confidential
 allowed_modes:
   - sync

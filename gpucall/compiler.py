@@ -86,7 +86,10 @@ class GovernanceCompiler:
             repetition_penalty=recipe.repetition_penalty,
             guided_decoding=recipe.guided_decoding,
             output_validation_attempts=recipe.output_validation_attempts,
-            attestations={"recipe_snapshot": self._recipe_snapshot(recipe)},
+            attestations={
+                "recipe_snapshot": self._recipe_snapshot(recipe),
+                "system_prompt_transform": self._system_prompt_transform(recipe, effective_system_prompt, structured),
+            },
         )
         plan.attestations["context_estimate"] = {
             "method": "utf8_bytes_times_policy_safety_multiplier_plus_output_budget",
@@ -171,6 +174,10 @@ class GovernanceCompiler:
             raise GovernanceError(f"mode {request.mode} is not allowed for recipe {recipe.name}")
         if request.mode is ExecutionMode.STREAM and request.response_format is not None:
             raise GovernanceError("response_format is not supported for stream mode in v2.0 MVP")
+        if request.messages and (request.inline_inputs or request.input_refs):
+            raise GovernanceError("messages cannot be combined with inline_inputs or input_refs in v2.0")
+        if recipe.task == "vision" and not _has_image_ref(request):
+            raise GovernanceError("vision requires an image data_ref")
         inline_bytes = sum(len(item.value.encode("utf-8")) for item in request.inline_inputs.values())
         if inline_bytes > self.policy.inline_bytes_limit:
             raise GovernanceError("inline input exceeds policy limit; use signed object references")
@@ -332,6 +339,26 @@ class GovernanceCompiler:
             value = data.get(key)
             data[key] = _text_snapshot(value) if isinstance(value, str) else None
         return data
+
+    @classmethod
+    def _system_prompt_transform(cls, recipe: Recipe, system_prompt: str | None, structured: bool) -> dict[str, object]:
+        if not system_prompt:
+            return {"applied": False, "recipe": recipe.name}
+        return {
+            "applied": True,
+            "recipe": recipe.name,
+            "source": "structured_system_prompt" if structured and recipe.structured_system_prompt else "system_prompt",
+            "sha256": cls._stable_hash(system_prompt),
+            "bytes": len(system_prompt.encode("utf-8")),
+        }
+
+
+def _has_image_ref(request: TaskRequest) -> bool:
+    for ref in request.input_refs:
+        content_type = (ref.content_type or "").lower()
+        if content_type.startswith("image/"):
+            return True
+    return False
 
 
 def _text_snapshot(value: str) -> dict[str, object]:

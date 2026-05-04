@@ -3,10 +3,10 @@ from __future__ import annotations
 import os
 import time
 import hashlib
+import hmac
 import json
 import re
 from contextlib import asynccontextmanager
-from collections import OrderedDict
 from pathlib import Path
 from typing import Any, Literal
 from uuid import uuid4
@@ -27,7 +27,7 @@ from gpucall.object_store import ObjectStore
 from gpucall.providers.factory import build_adapters
 from gpucall.registry import ObservedRegistry
 from gpucall.routing import route_warning_tags
-from gpucall.sqlite_store import SQLiteJobStore
+from gpucall.sqlite_store import SQLiteIdempotencyStore, SQLiteJobStore
 
 
 class Runtime(BaseModel):
@@ -70,7 +70,13 @@ def build_runtime(config_dir: Path) -> Runtime:
     jobs = SQLiteJobStore(state_dir / "state.db")
     adapters = build_adapters(providers)
     compiler = GovernanceCompiler(policy=policy, recipes=recipes, providers=providers, registry=registry)
-    dispatcher = Dispatcher(adapters=adapters, registry=registry, audit=audit, jobs=jobs)
+    dispatcher = Dispatcher(
+        adapters=adapters,
+        registry=registry,
+        audit=audit,
+        jobs=jobs,
+        provider_costs={name: float(provider.cost_per_second) for name, provider in providers.items()},
+    )
     reaper = LeaseReaper(jobs=jobs, audit=audit, cancel_job=dispatcher.cancel_job)
     reconciler = ProviderReconciler(adapters=adapters, audit=audit)
     return Runtime(
@@ -106,7 +112,7 @@ def create_app(config_dir: Path | None = None) -> FastAPI:
     app = FastAPI(title="gpucall v2.0", version="2.0.0", lifespan=lifespan)
     max_request_bytes = int(os.getenv("GPUCALL_MAX_REQUEST_BYTES", "1048576"))
     configured_api_keys = load_credentials().get("auth", {}).get("api_keys", "")
-    idempotency_cache: OrderedDict[str, tuple[float, str, int, dict[str, Any], dict[str, str]]] = OrderedDict()
+    idempotency_cache = SQLiteIdempotencyStore(default_state_dir() / "idempotency.db")
     rate_limit: dict[str, list[float]] = {}
     requests_per_minute = int(os.getenv("GPUCALL_RATE_LIMIT_PER_MINUTE", "120"))
     idempotency_ttl_seconds = float(os.getenv("GPUCALL_IDEMPOTENCY_TTL_SECONDS", "3600"))
@@ -142,16 +148,26 @@ def create_app(config_dir: Path | None = None) -> FastAPI:
                             "detail": "request body too large; use the gpucall SDK DataRef upload path for large inputs"
                         },
                     )
+            body = await request.body()
+            if len(body) > max_request_bytes:
+                return JSONResponse(
+                    status_code=413,
+                    content={"detail": "request body too large; use the gpucall SDK DataRef upload path for large inputs"},
+                )
         return await call_next(request)
 
     @app.middleware("http")
     async def api_key_auth(request: Request, call_next):
         configured = [key.strip() for key in (os.getenv("GPUCALL_API_KEYS") or configured_api_keys).split(",") if key.strip()]
-        if not configured or request.url.path in {"/healthz", "/readyz"}:
+        if request.url.path in {"/healthz", "/readyz"}:
+            return await call_next(request)
+        if not configured:
+            if _production_auth_required():
+                return error_response(401, "unauthorized")
             return await call_next(request)
         auth = request.headers.get("authorization", "")
         token = auth.removeprefix("Bearer ").strip()
-        if token not in configured:
+        if not any(hmac.compare_digest(token, key) for key in configured):
             return error_response(401, "unauthorized")
         request.state.api_key = token
         return await call_next(request)
@@ -259,6 +275,8 @@ def create_app(config_dir: Path | None = None) -> FastAPI:
     ) -> JSONResponse:
         if request.stream:
             return openai_error_response(400, "stream is not supported by the gpucall OpenAI facade in v2.0 MVP")
+        if request.model != "gpucall:auto":
+            return openai_error_response(400, "OpenAI facade model must be gpucall:auto in v2.0", code="unsupported_model")
         messages = [_openai_message_to_chat_message(message) for message in request.messages]
         message_bytes = sum(len(message.content.encode("utf-8")) for message in messages)
         if message_bytes > runtime.compiler.policy.inline_bytes_limit:
@@ -452,6 +470,12 @@ def _public_metrics_enabled() -> bool:
     return os.getenv("GPUCALL_PUBLIC_METRICS", "").strip().lower() in {"1", "true", "yes", "on"}
 
 
+def _production_auth_required() -> bool:
+    return os.getenv("GPUCALL_ENV", "").strip().lower() in {"prod", "production"} or os.getenv(
+        "GPUCALL_PRODUCTION", ""
+    ).strip().lower() in {"1", "true", "yes", "on"}
+
+
 _HEX_ID_RE = re.compile(r"/[0-9a-fA-F]{16,}(?=/|$)")
 
 
@@ -519,7 +543,7 @@ def compiled_plan_hash(plan: Any) -> str:
 
 def idempotency_lookup(
     request: TaskRequest,
-    cache: OrderedDict[str, tuple[float, str, int, dict[str, Any], dict[str, str]]],
+    cache: SQLiteIdempotencyStore,
     *,
     request_hash: str,
     identity: str,
@@ -528,15 +552,11 @@ def idempotency_lookup(
 ):
     if not request.idempotency_key:
         return None
-    now = time.monotonic()
-    prune_idempotency_cache(cache, now, ttl_seconds=ttl_seconds, max_entries=max_entries)
-    recipe_key = request.recipe or "auto"
-    key = f"{identity}:{request.task}:{recipe_key}:{request.mode}:{request.idempotency_key}"
-    cached = cache.get(key)
+    key = idempotency_cache_key(request, identity)
+    cached = cache.get(key, ttl_seconds=ttl_seconds, max_entries=max_entries)
     if cached is None:
         return None
-    cache.move_to_end(key)
-    _, cached_hash, status, content, headers = cached
+    cached_hash, status, content, headers = cached
     if cached_hash != request_hash:
         raise HTTPException(status_code=409, detail="idempotency key reused with different request body")
     return status, content, headers
@@ -544,7 +564,7 @@ def idempotency_lookup(
 
 def idempotency_store(
     request: TaskRequest,
-    cache: OrderedDict[str, tuple[float, str, int, dict[str, Any], dict[str, str]]],
+    cache: SQLiteIdempotencyStore,
     status: int,
     content: dict[str, Any],
     headers: dict[str, str],
@@ -554,26 +574,19 @@ def idempotency_store(
     max_entries: int,
 ) -> None:
     if request.idempotency_key:
-        recipe_key = request.recipe or "auto"
-        key = f"{identity}:{request.task}:{recipe_key}:{request.mode}:{request.idempotency_key}"
-        cache[key] = (time.monotonic(), request_hash, status, content, headers)
-        cache.move_to_end(key)
-        while len(cache) > max_entries:
-            cache.popitem(last=False)
+        cache.set(
+            idempotency_cache_key(request, identity),
+            request_hash=request_hash,
+            status=status,
+            content=content,
+            headers=headers,
+            max_entries=max_entries,
+        )
 
 
-def prune_idempotency_cache(
-    cache: OrderedDict[str, tuple[float, str, int, dict[str, Any], dict[str, str]]],
-    now: float,
-    *,
-    ttl_seconds: float,
-    max_entries: int,
-) -> None:
-    expired = [key for key, (created, *_rest) in cache.items() if now - created > ttl_seconds]
-    for key in expired:
-        cache.pop(key, None)
-    while len(cache) > max_entries:
-        cache.popitem(last=False)
+def idempotency_cache_key(request: TaskRequest, identity: str) -> str:
+    recipe_key = request.recipe or "auto"
+    return f"{identity}:{request.task}:{recipe_key}:{request.mode}:{request.idempotency_key}"
 
 
 def prune_rate_limit(rate_limit: dict[str, list[float]], now: float, *, max_identities: int) -> None:
@@ -632,12 +645,14 @@ def public_plan_summary(plan: Any, providers: dict[str, Any] | None = None) -> d
     chain = list(getattr(plan, "provider_chain", []) or [])
     selected_provider = chain[0] if chain else None
     selected_spec = providers.get(selected_provider) if providers and selected_provider else None
+    attestations = getattr(plan, "attestations", {}) or {}
     return {
         "recipe_name": getattr(plan, "recipe_name", None),
         "provider_chain": chain,
         "selected_provider": selected_provider,
         "selected_provider_model": getattr(selected_spec, "model", None) if selected_spec is not None else None,
-        "governance_hash": (getattr(plan, "attestations", {}) or {}).get("governance_hash"),
+        "governance_hash": attestations.get("governance_hash"),
+        "system_prompt_transform": attestations.get("system_prompt_transform"),
         "output_validation_attempts": getattr(plan, "output_validation_attempts", None),
     }
 

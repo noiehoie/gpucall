@@ -105,7 +105,7 @@ def _build_runpod_vllm_serverless(spec: ProviderSpec, credentials: dict[str, dic
 
 @register_adapter("runpod-vllm-flashboot")
 def _build_runpod_vllm_flashboot(spec: ProviderSpec, credentials: dict[str, dict[str, str]]) -> ProviderAdapter:
-    _require_contract(spec, endpoint="openai-chat-completions", output="openai-chat-completions", stream="none")
+    _require_contract(spec, endpoint="openai-chat-completions", output="gpucall-provider-result", stream="none")
     runpod = credentials.get("runpod", {})
     return RunpodVllmFlashBootAdapter(
         name=spec.name,

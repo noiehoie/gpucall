@@ -4,7 +4,6 @@ External provider validation can create billable resources. Run these only after
 
 ```bash
 gpucall provider-smoke modal-a10g --recipe text-infer-standard --mode sync
-gpucall provider-smoke modal-a10g --recipe text-infer-standard --mode stream
 gpucall provider-smoke runpod-vllm-serverless --recipe text-infer-light --mode sync
 gpucall provider-smoke runpod-vllm-flashboot --recipe text-infer-light --mode sync
 gpucall provider-smoke local-ollama --recipe text-infer-standard --mode sync
@@ -21,6 +20,8 @@ Use `runpod-vllm-serverless` for the stable Serverless endpoint and `runpod-vllm
 
 Do not declare `stream` for RunPod worker-vLLM providers in v2.0. Token streaming is intentionally unsupported until the RunPod worker path has a real incremental generation contract.
 
+Do not declare `stream` for Modal unless the deployed function provides true incremental generation. Post-hoc chunking of a completed response is not a stream contract.
+
 RunPod Serverless native queue validation uses `/runsync`, `/run`, `/status/{job_id}`, and `/cancel/{job_id}`. That path is distinct from worker-vLLM's OpenAI-compatible route.
 
 Keep smoke/stub endpoints out of production auto-routing. If a provider returns a fixed value such as `Hello World`, name it accordingly, for example `runpod-serverless-smoke`, and validate it only through `gpucall provider-smoke` or a non-auto-selected smoke recipe such as `smoke-text-small`.
@@ -34,3 +35,5 @@ Record for each provider:
 - cleanup result
 - cost observed on provider dashboard
 - audit trail validity after execution
+
+When `GPUCALL_REQUIRE_LIVE_VALIDATION=1`, production `launch-check` requires a recent JSON artifact under `$XDG_STATE_HOME/gpucall/provider-validation/`. The artifact should include provider, recipe, commit, config hash, start/end timestamps, cleanup result, estimated or observed cost, and audit event IDs.

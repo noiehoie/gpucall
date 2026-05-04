@@ -244,7 +244,16 @@ class HyperstackAdapter(ProviderAdapter):
         if not ready:
             raise ProviderError(f"SSH port not open on {ip_address}", retryable=True, status_code=504)
         ssh = paramiko.SSHClient()
-        ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+        known_hosts = os.getenv("GPUCALL_HYPERSTACK_KNOWN_HOSTS")
+        if known_hosts:
+            ssh.load_host_keys(known_hosts)
+            ssh.set_missing_host_key_policy(paramiko.RejectPolicy())
+        elif os.getenv("GPUCALL_ENV", "").strip().lower() in {"prod", "production"} or os.getenv(
+            "GPUCALL_PRODUCTION", ""
+        ).strip().lower() in {"1", "true", "yes", "on"}:
+            raise ProviderError("Hyperstack production SSH requires GPUCALL_HYPERSTACK_KNOWN_HOSTS", retryable=False, status_code=500)
+        else:
+            ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
         ssh.connect(ip_address, username="ubuntu", key_filename=self.ssh_key_path, timeout=10)
         return ssh
 
@@ -494,13 +503,14 @@ def format_prompt_for_model(llm, model_id, payload):
     if callable(template):
         return template(messages, tokenize=False, add_generation_prompt=True)
     if model_id.startswith("Qwen/"):
-        return (
-            "<|im_start|>system\n"
-            + messages[0]["content"]
-            + "<|im_end|>\n<|im_start|>user\n"
-            + messages[1]["content"]
-            + "<|im_end|>\n<|im_start|>assistant\n"
-        )
+        rendered = []
+        for message in messages:
+            role = message.get("role", "user")
+            if role not in {"system", "user", "assistant", "tool"}:
+                raise ValueError("unsupported chat role for Qwen template: " + str(role))
+            rendered.append("<|im_start|>" + role + "\n" + message.get("content", "") + "<|im_end|>")
+        rendered.append("<|im_start|>assistant\n")
+        return "\n".join(rendered)
     return raw_prompt
 
 

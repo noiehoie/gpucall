@@ -21,7 +21,7 @@ def copy_config(tmp_path: Path) -> Path:
 def test_launch_report_is_go_for_sample_config(tmp_path, monkeypatch) -> None:
     monkeypatch.setenv("GPUCALL_STATE_DIR", str(tmp_path / "state"))
 
-    report = build_launch_report(copy_config(tmp_path))
+    report = build_launch_report(copy_config(tmp_path), profile="static")
 
     assert report["go"] is True
     assert report["blockers"] == []
@@ -30,6 +30,17 @@ def test_launch_report_is_go_for_sample_config(tmp_path, monkeypatch) -> None:
     assert checks["secret_scan_ok"] is True
     assert "/v2/tasks/sync" in checks["openapi_paths"]
     assert checks["mvp_scope"]["tasks"] == ["infer", "vision"]
+
+
+def test_production_launch_report_blocks_without_live_requirements(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("GPUCALL_STATE_DIR", str(tmp_path / "state"))
+
+    report = build_launch_report(copy_config(tmp_path), profile="production")
+
+    assert report["go"] is False
+    checks = {blocker["check"] for blocker in report["blockers"]}
+    assert "gateway_auth" in checks
+    assert "gateway_live_smoke" in checks
 
 
 def test_launch_report_blocks_smoke_provider_in_auto_recipe(tmp_path, monkeypatch) -> None:

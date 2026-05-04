@@ -88,7 +88,7 @@ def test_factory_builds_configured_adapter_types() -> None:
             target="endpoint-2",
             image="runpod/worker-v1-vllm:v2.18.1",
             endpoint_contract="openai-chat-completions",
-            output_contract="openai-chat-completions",
+            output_contract="gpucall-provider-result",
             model="Qwen/Qwen2.5-1.5B-Instruct",
         ),
     }

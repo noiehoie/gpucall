@@ -56,11 +56,13 @@ class Dispatcher:
         registry: ObservedRegistry,
         audit: AuditTrail,
         jobs: JobStore,
+        provider_costs: dict[str, float] | None = None,
     ) -> None:
         self.adapters = adapters
         self.registry = registry
         self.audit = audit
         self.jobs = jobs
+        self.provider_costs = provider_costs or {}
         self._job_tasks: dict[str, asyncio.Task[None]] = {}
         self._job_plans: dict[str, CompiledPlan] = {}
 
@@ -86,12 +88,7 @@ class Dispatcher:
                     result = await asyncio.wait_for(adapter.wait(handle, plan), timeout=plan.timeout_seconds)
                     result = _validate_provider_output(plan, result)
                     self.registry.record(
-                        ProviderObservation(
-                            provider=provider,
-                            latency_ms=(monotonic() - started) * 1000,
-                            success=True,
-                            cost=0.0,
-                        )
+                        self._observation(provider, started, success=True)
                     )
                     self.audit.append("plan.completed", {"plan_id": plan.plan_id, "provider": provider, "attempt": attempt})
                     return result
@@ -120,12 +117,7 @@ class Dispatcher:
                         )
                         break
                     self.registry.record(
-                        ProviderObservation(
-                            provider=provider,
-                            latency_ms=(monotonic() - started) * 1000,
-                            success=False,
-                            cost=0.0,
-                        )
+                        self._observation(provider, started, success=False)
                     )
                     self.audit.append(
                         "provider.failed",
@@ -137,24 +129,14 @@ class Dispatcher:
                 except asyncio.TimeoutError as exc:
                     last_error = ProviderError("provider timed out", retryable=True, status_code=504)
                     self.registry.record(
-                        ProviderObservation(
-                            provider=provider,
-                            latency_ms=(monotonic() - started) * 1000,
-                            success=False,
-                            cost=0.0,
-                        )
+                        self._observation(provider, started, success=False)
                     )
                     self.audit.append("provider.timeout", {"plan_id": plan.plan_id, "provider": provider})
                     break
                 except Exception as exc:
                     last_error = ProviderError("provider raised unexpected exception", retryable=True, status_code=502)
                     self.registry.record(
-                        ProviderObservation(
-                            provider=provider,
-                            latency_ms=(monotonic() - started) * 1000,
-                            success=False,
-                            cost=0.0,
-                        )
+                        self._observation(provider, started, success=False)
                     )
                     self.audit.append(
                         "provider.failed",
@@ -167,11 +149,7 @@ class Dispatcher:
                     break
                 finally:
                     if handle is not None:
-                        await adapter.cancel_remote(handle)
-                        self.audit.append(
-                            "lease.cancelled",
-                            {"plan_id": plan.plan_id, "provider": provider, "remote_id": handle.remote_id, "attempt": attempt},
-                        )
+                        await self._cleanup_remote(adapter, handle, plan_id=plan.plan_id, provider=provider, attempt=attempt)
         if last_error is not None:
             raise last_error
         raise ProviderError("no provider adapter available", retryable=False, status_code=503)
@@ -193,24 +171,14 @@ class Dispatcher:
                 async for event in adapter.stream(handle, plan):
                     yield _validate_stream_event(plan, event)
                 self.registry.record(
-                    ProviderObservation(
-                        provider=provider,
-                        latency_ms=(monotonic() - started) * 1000,
-                        success=True,
-                        cost=0.0,
-                    )
+                    self._observation(provider, started, success=True)
                 )
                 self.audit.append("plan.completed", {"plan_id": plan.plan_id, "provider": provider})
                 return
             except ProviderError as exc:
                 last_error = exc
                 self.registry.record(
-                    ProviderObservation(
-                        provider=provider,
-                        latency_ms=(monotonic() - started) * 1000,
-                        success=False,
-                        cost=0.0,
-                    )
+                    self._observation(provider, started, success=False)
                 )
                 self.audit.append(
                     "provider.failed",
@@ -221,12 +189,7 @@ class Dispatcher:
             except Exception as exc:
                 last_error = ProviderError("provider raised unexpected exception", retryable=True, status_code=502)
                 self.registry.record(
-                    ProviderObservation(
-                        provider=provider,
-                        latency_ms=(monotonic() - started) * 1000,
-                        success=False,
-                        cost=0.0,
-                    )
+                    self._observation(provider, started, success=False)
                 )
                 self.audit.append(
                     "provider.failed",
@@ -234,11 +197,34 @@ class Dispatcher:
                 )
             finally:
                 if handle is not None:
-                    await adapter.cancel_remote(handle)
-                    self.audit.append("lease.cancelled", {"plan_id": plan.plan_id, "provider": provider, "remote_id": handle.remote_id})
+                    await self._cleanup_remote(adapter, handle, plan_id=plan.plan_id, provider=provider)
         if last_error is not None:
             raise last_error
         raise ProviderError("no provider adapter available", retryable=False, status_code=503)
+
+    def _observation(self, provider: str, started: float, *, success: bool) -> ProviderObservation:
+        latency_ms = (monotonic() - started) * 1000
+        cost = max(latency_ms / 1000.0 * float(self.provider_costs.get(provider, 0.0)), 0.0)
+        return ProviderObservation(provider=provider, latency_ms=latency_ms, success=success, cost=cost)
+
+    async def _cleanup_remote(
+        self,
+        adapter: ProviderAdapter,
+        handle: RemoteHandle,
+        *,
+        plan_id: str,
+        provider: str,
+        attempt: int | None = None,
+    ) -> None:
+        payload: dict[str, object] = {"plan_id": plan_id, "provider": provider, "remote_id": handle.remote_id}
+        if attempt is not None:
+            payload["attempt"] = attempt
+        try:
+            await adapter.cancel_remote(handle)
+        except Exception as exc:
+            self.audit.append("lease.cleanup_failed", {**payload, "error": _exception_audit(exc, retryable=True)})
+            return
+        self.audit.append("lease.cleaned_up", payload)
 
     async def submit_async(self, plan: CompiledPlan, *, owner_identity: str | None = None) -> JobRecord:
         stored_plan = _storage_safe_plan(plan)
