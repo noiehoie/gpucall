@@ -29,6 +29,37 @@ from gpucall.providers.runpod_adapter import (
 )
 
 
+def test_router_core_does_not_hardcode_builtin_provider_names() -> None:
+    root = Path(__file__).resolve().parents[1]
+    core_files = [
+        root / "gpucall" / "config.py",
+        root / "gpucall" / "routing.py",
+        root / "gpucall" / "provider_catalog.py",
+        root / "gpucall" / "providers" / "factory.py",
+        root / "gpucall" / "compiler.py",
+        root / "gpucall" / "dispatcher.py",
+    ]
+    provider_tokens = [
+        "azure-compute-vm",
+        "gcp-confidential-space-vm",
+        "hyperstack",
+        "local-ollama",
+        "modal",
+        "ovhcloud",
+        "runpod",
+        "scaleway",
+    ]
+
+    offenders: list[str] = []
+    for path in core_files:
+        text = path.read_text(encoding="utf-8")
+        for token in provider_tokens:
+            if token in text:
+                offenders.append(f"{path.relative_to(root)}:{token}")
+
+    assert offenders == []
+
+
 def test_factory_builds_configured_adapter_types() -> None:
     providers = {
         "echo": ProviderSpec(name="echo", adapter="echo", gpu="L4", vram_gb=24, max_model_len=8192, cost_per_second=0),

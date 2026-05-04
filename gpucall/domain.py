@@ -314,27 +314,11 @@ class ProviderSpec(BaseModel):
     provider_params: dict[str, Any] = Field(default_factory=dict)
     target: str | None = None
     stream_target: str | None = None
-    endpoint_contract: Literal[
-        "runpod-serverless",
-        "openai-chat-completions",
-        "hyperstack-vm",
-        "modal-function",
-        "ollama-generate",
-        "azure-compute-vm",
-        "gcp-confidential-space-vm",
-        "scaleway-instance",
-        "ovhcloud-public-cloud-instance",
-    ] | None = None
+    endpoint_contract: str | None = None
     input_contracts: list[Literal["text", "chat_messages", "data_refs", "image", "activation_refs", "artifact_refs"]] = Field(
         default_factory=list
     )
-    output_contract: Literal[
-        "gpucall-provider-result",
-        "plain-text",
-        "openai-chat-completions",
-        "ollama-generate",
-        "artifact-manifest",
-    ] | None = None
+    output_contract: str | None = None
     stream_contract: Literal["none", "token-incremental", "sse"] = "none"
     supports_vision: bool = False
     model: str | None = None

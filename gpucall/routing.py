@@ -4,6 +4,7 @@ import math
 import os
 
 from gpucall.domain import CompiledPlan, DataClassification, ExecutionMode, Policy, ProviderSpec, Recipe, SecurityTier, TaskRequest
+from gpucall.providers.registry import adapter_descriptor
 
 
 def classification_rank(value: DataClassification) -> int:
@@ -39,16 +40,19 @@ def production_route_rejection_reason(provider: ProviderSpec, *, allow_fake: boo
         allow_fake = os.getenv("GPUCALL_ALLOW_FAKE_AUTO_PROVIDERS", "").strip().lower() in {"1", "true", "yes", "on"}
     if allow_fake:
         return None
-    adapter = provider.adapter.lower()
     name = provider.name.lower()
-    if adapter == "echo" or "smoke" in name or "fake" in name:
+    descriptor = adapter_descriptor(provider)
+    if descriptor is not None and not descriptor.production_eligible:
+        return descriptor.production_rejection_reason or "provider is not eligible for production auto-routing"
+    if "smoke" in name or "fake" in name:
         return "smoke/fake provider is not eligible for production auto-routing"
-    if not provider.model:
+    requires_model = descriptor.requires_model_for_auto if descriptor is not None else True
+    if requires_model and not provider.model:
         return "provider model is not configured"
-    if adapter in {"runpod-serverless", "runpod-vllm-serverless", "runpod-vllm-flashboot", "runpod-flash"} and not provider.target:
-        return "RunPod endpoint target is not configured"
-    if adapter == "modal" and not provider.target:
-        return "Modal function target is not configured"
+    required_fields = descriptor.required_auto_fields if descriptor is not None else {}
+    for field, reason in required_fields.items():
+        if not getattr(provider, field, None):
+            return reason
     return None
 
 
@@ -99,19 +103,22 @@ def provider_route_rejection_reason(
     if mode is not None:
         if mode not in provider.modes:
             return "provider does not support requested mode"
-        if mode is ExecutionMode.STREAM and provider.adapter.lower() == "modal" and not provider.stream_target:
-            return "modal stream mode requires explicit stream_target"
+        if mode is ExecutionMode.STREAM:
+            descriptor = adapter_descriptor(provider)
+            required_fields = descriptor.stream_required_fields if descriptor is not None else {}
+            for field, reason in required_fields.items():
+                if not getattr(provider, field, None):
+                    return reason
         if mode is ExecutionMode.STREAM and provider.stream_contract == "none":
             return "provider does not declare a streaming contract"
     elif not any(candidate in provider.modes for candidate in recipe.allowed_modes):
         return "provider modes do not intersect recipe allowed_modes"
-    if (
-        provider.adapter.lower() == "modal"
-        and ExecutionMode.STREAM in provider.modes
-        and ExecutionMode.STREAM in recipe.allowed_modes
-        and not provider.stream_target
-    ):
-        return "modal stream mode requires explicit stream_target"
+    descriptor = adapter_descriptor(provider)
+    stream_required_fields = descriptor.stream_required_fields if descriptor is not None else {}
+    if ExecutionMode.STREAM in provider.modes and ExecutionMode.STREAM in recipe.allowed_modes:
+        for field, reason in stream_required_fields.items():
+            if not getattr(provider, field, None):
+                return reason
     return None
 
 
@@ -130,9 +137,9 @@ def provider_security_rejection_reason(*, policy: Policy, recipe: Recipe, provid
 def is_local_execution_provider(provider: ProviderSpec | None) -> bool:
     if provider is None:
         return False
-    adapter = provider.adapter.lower()
     name = provider.name.lower()
-    return adapter in {"echo", "local", "local-ollama", "ollama"} or name.startswith("local-")
+    descriptor = adapter_descriptor(provider)
+    return bool(descriptor and descriptor.local_execution) or name.startswith("local-")
 
 
 def route_warning_tags(plan: CompiledPlan, providers: dict[str, ProviderSpec] | None = None) -> list[str]:

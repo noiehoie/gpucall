@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import os
-import ipaddress
 from pathlib import Path
 from typing import TypeVar
 
@@ -9,6 +8,7 @@ import yaml
 from pydantic import BaseModel, ValidationError
 
 from gpucall.domain import ObjectStoreConfig, Policy, ProviderSpec, Recipe
+from gpucall.providers.registry import adapter_descriptor
 from gpucall.routing import provider_route_rejection_reason
 
 T = TypeVar("T", bound=BaseModel)
@@ -166,58 +166,25 @@ def validate_config(config: GpucallConfig) -> None:
                 f"provider {provider.name!r} max_model_len {provider.max_model_len} exceeds declared model capability "
                 f"{provider.declared_model_max_len}"
             )
-        adapter = provider.adapter.lower()
-        if adapter != "echo":
+        descriptor = adapter_descriptor(provider)
+        requires_contracts = descriptor.requires_contracts if descriptor is not None else True
+        if requires_contracts:
             if not provider.endpoint_contract:
                 raise ConfigError(f"provider {provider.name!r} must declare endpoint_contract")
             if not provider.input_contracts:
                 raise ConfigError(f"provider {provider.name!r} must declare input_contracts")
             if not provider.output_contract:
                 raise ConfigError(f"provider {provider.name!r} must declare output_contract")
-        expected_contracts = {
-            "modal": "modal-function",
-            "hyperstack": "hyperstack-vm",
-            "local-ollama": "ollama-generate",
-            "ollama": "ollama-generate",
-            "runpod-serverless": "runpod-serverless",
-            "runpod-vllm-serverless": "openai-chat-completions",
-            "runpod-vllm-flashboot": "openai-chat-completions",
-            "runpod-flash": "openai-chat-completions",
-            "azure-compute-vm": "azure-compute-vm",
-            "gcp-confidential-space-vm": "gcp-confidential-space-vm",
-            "scaleway-instance": "scaleway-instance",
-            "ovhcloud-public-cloud-instance": "ovhcloud-public-cloud-instance",
-        }
-        expected = expected_contracts.get(adapter)
-        if expected and provider.endpoint_contract != expected:
+        expected = descriptor.endpoint_contract if descriptor is not None else None
+        if expected is not None and provider.endpoint_contract != expected:
             raise ConfigError(f"provider {provider.name!r} endpoint_contract must be {expected!r}")
-        expected_outputs = {
-            "modal": "plain-text",
-            "hyperstack": "plain-text",
-            "local-ollama": "ollama-generate",
-            "ollama": "ollama-generate",
-            "runpod-serverless": "gpucall-provider-result",
-            "runpod-vllm-serverless": "openai-chat-completions",
-            "runpod-vllm-flashboot": "gpucall-provider-result",
-            "runpod-flash": "openai-chat-completions",
-            "azure-compute-vm": "gpucall-provider-result",
-            "gcp-confidential-space-vm": "gpucall-provider-result",
-            "scaleway-instance": "gpucall-provider-result",
-            "ovhcloud-public-cloud-instance": "gpucall-provider-result",
-        }
-        expected_output = expected_outputs.get(adapter)
-        if expected_output and provider.output_contract != expected_output:
+        expected_output = descriptor.output_contract if descriptor is not None else None
+        if expected_output is not None and provider.output_contract != expected_output:
             raise ConfigError(f"provider {provider.name!r} output_contract must be {expected_output!r}")
-        if adapter == "hyperstack":
-            _validate_hyperstack_ssh_cidr(provider)
-
-
-def _validate_hyperstack_ssh_cidr(provider: ProviderSpec) -> None:
-    if not provider.ssh_remote_cidr:
-        raise ConfigError(f"provider {provider.name!r} must declare ssh_remote_cidr")
-    try:
-        network = ipaddress.ip_network(provider.ssh_remote_cidr, strict=False)
-    except ValueError as exc:
-        raise ConfigError(f"provider {provider.name!r} ssh_remote_cidr is invalid") from exc
-    if network.prefixlen == 0:
-        raise ConfigError(f"provider {provider.name!r} ssh_remote_cidr must not allow all addresses")
+        expected_stream = descriptor.stream_contract if descriptor is not None else None
+        if expected_stream is not None and provider.stream_contract != expected_stream:
+            raise ConfigError(f"provider {provider.name!r} stream_contract must be {expected_stream!r}")
+        if descriptor is not None and descriptor.config_validator is not None:
+            findings = descriptor.config_validator(provider)
+            if findings:
+                raise ConfigError("; ".join(findings))

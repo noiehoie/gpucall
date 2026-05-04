@@ -9,6 +9,7 @@ from uuid import uuid4
 from gpucall.domain import CompiledPlan, ProviderError
 from gpucall.providers.base import ProviderAdapter, RemoteHandle
 from gpucall.providers.payloads import plan_payload
+from gpucall.providers.registry import ProviderAdapterDescriptor, register_adapter
 
 
 class _LifecycleOnlyMixin:
@@ -366,3 +367,79 @@ class OVHCloudPublicCloudInstanceAdapter(_LifecycleOnlyMixin, ProviderAdapter):
 
     def _delete_sync(self, instance_id: str) -> None:
         self._client().delete(f"/cloud/project/{self.service_name}/instance/{instance_id}")
+
+
+@register_adapter(
+    "azure-compute-vm",
+    descriptor=ProviderAdapterDescriptor(endpoint_contract="azure-compute-vm", output_contract="gpucall-provider-result"),
+)
+def build_azure_compute_vm_adapter(spec, credentials):
+    azure = credentials.get("azure", {})
+    image_reference = spec.provider_params.get("image_reference")
+    return AzureComputeVMAdapter(
+        name=spec.name,
+        subscription_id=azure.get("subscription_id"),
+        resource_group=spec.resource_group,
+        location=spec.region,
+        vm_size=spec.instance,
+        image_reference=image_reference if isinstance(image_reference, dict) else None,
+        network_interface_id=spec.network,
+        admin_username=spec.provider_params.get("admin_username"),
+        ssh_public_key=spec.provider_params.get("ssh_public_key"),
+        params=spec.provider_params,
+    )
+
+
+@register_adapter(
+    "gcp-confidential-space-vm",
+    descriptor=ProviderAdapterDescriptor(endpoint_contract="gcp-confidential-space-vm", output_contract="gpucall-provider-result"),
+)
+def build_gcp_confidential_space_vm_adapter(spec, credentials):
+    gcp = credentials.get("gcp", {})
+    return GCPConfidentialSpaceVMAdapter(
+        name=spec.name,
+        project_id=spec.project_id or gcp.get("project_id"),
+        zone=spec.zone,
+        machine_type=spec.instance,
+        source_image=spec.image,
+        network=spec.network,
+        subnetwork=spec.subnet,
+        service_account=spec.service_account,
+        params=spec.provider_params,
+    )
+
+
+@register_adapter(
+    "scaleway-instance",
+    descriptor=ProviderAdapterDescriptor(endpoint_contract="scaleway-instance", output_contract="gpucall-provider-result"),
+)
+def build_scaleway_instance_adapter(spec, credentials):
+    scaleway = credentials.get("scaleway", {})
+    return ScalewayInstanceAdapter(
+        name=spec.name,
+        secret_key=scaleway.get("secret_key"),
+        project_id=spec.project_id or scaleway.get("project_id"),
+        zone=spec.zone,
+        commercial_type=spec.instance,
+        image=spec.image,
+        base_url=str(spec.endpoint) if spec.endpoint else None,
+        params=spec.provider_params,
+    )
+
+
+@register_adapter(
+    "ovhcloud-public-cloud-instance",
+    descriptor=ProviderAdapterDescriptor(endpoint_contract="ovhcloud-public-cloud-instance", output_contract="gpucall-provider-result"),
+)
+def build_ovhcloud_public_cloud_instance_adapter(spec, credentials):
+    ovhcloud = credentials.get("ovhcloud", {})
+    return OVHCloudPublicCloudInstanceAdapter(
+        name=spec.name,
+        endpoint=ovhcloud.get("endpoint"),
+        service_name=spec.project_id or ovhcloud.get("service_name"),
+        region=spec.region,
+        flavor_id=spec.instance,
+        image_id=spec.image,
+        ssh_key_id=spec.key_name,
+        params=spec.provider_params,
+    )

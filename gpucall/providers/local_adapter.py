@@ -7,6 +7,7 @@ import httpx
 from gpucall.domain import CompiledPlan, ProviderError, ProviderResult
 from gpucall.providers.base import ProviderAdapter, RemoteHandle
 from gpucall.providers.payloads import ollama_generate_result
+from gpucall.providers.registry import ProviderAdapterDescriptor, register_adapter
 
 
 class LocalOllamaAdapter(ProviderAdapter):
@@ -59,3 +60,22 @@ class LocalOllamaAdapter(ProviderAdapter):
         if plan.inline_inputs:
             return "\n".join(value.value for value in plan.inline_inputs.values())
         return ""
+
+
+@register_adapter(
+    "local-ollama",
+    aliases=("local", "ollama"),
+    descriptor=ProviderAdapterDescriptor(
+        endpoint_contract="ollama-generate",
+        output_contract="ollama-generate",
+        local_execution=True,
+    ),
+)
+def build_local_ollama_adapter(spec, _credentials):
+    if not spec.endpoint or not spec.model:
+        raise ValueError("local-ollama provider requires explicit endpoint and model")
+    return LocalOllamaAdapter(
+        name=spec.name,
+        base_url=str(spec.endpoint),
+        model=spec.model,
+    )

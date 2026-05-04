@@ -15,6 +15,7 @@ from gpucall.domain import CompiledPlan, ProviderError, ProviderResult
 from gpucall.config import default_state_dir
 from gpucall.providers.base import ProviderAdapter, RemoteHandle
 from gpucall.providers.payloads import plan_payload
+from gpucall.providers.registry import ProviderAdapterDescriptor, register_adapter
 
 HYPERSTACK_API_BASE = "https://infrahub-api.nexgencloud.com/v1"
 DEFAULT_HYPERSTACK_IMAGE = "Ubuntu Server 22.04 LTS R570 CUDA 12.8 with Docker"
@@ -390,6 +391,186 @@ def region_from_hyperstack_environment(environment_name: str) -> str:
     if len(parts) >= 2 and parts[0] == "default":
         return "-".join(parts[1:])
     return str(environment_name or "")
+
+
+def hyperstack_config_findings(provider: Any) -> list[str]:
+    if not provider.ssh_remote_cidr:
+        return [f"provider {provider.name!r} must declare ssh_remote_cidr"]
+    try:
+        network = ipaddress.ip_network(provider.ssh_remote_cidr, strict=False)
+    except ValueError:
+        return [f"provider {provider.name!r} ssh_remote_cidr is invalid"]
+    if network.prefixlen == 0:
+        return [f"provider {provider.name!r} ssh_remote_cidr must not allow all addresses"]
+    return []
+
+
+def hyperstack_catalog_findings(providers: list[Any], credentials: dict[str, dict[str, str]]) -> list[dict[str, Any]]:
+    api_key = credentials.get("hyperstack", {}).get("api_key")
+    if not api_key:
+        return [
+            {
+                "provider": provider.name,
+                "adapter": provider.adapter,
+                "severity": "error",
+                "reason": "missing Hyperstack API key; cannot verify official provider catalog",
+            }
+            for provider in providers
+        ]
+    return _hyperstack_catalog_findings(providers, api_key)
+
+
+def _hyperstack_catalog_findings(providers: list[Any], api_key: str) -> list[dict[str, Any]]:
+    try:
+        import requests
+    except ImportError as exc:
+        return [
+            {
+                "provider": provider.name,
+                "adapter": provider.adapter,
+                "severity": "error",
+                "reason": f"requests is unavailable; cannot verify official provider catalog: {exc}",
+            }
+            for provider in providers
+        ]
+
+    headers = {"api_key": api_key, "Accept": "application/json", "Content-Type": "application/json"}
+    try:
+        base_urls = {str(provider.endpoint or HYPERSTACK_API_BASE).rstrip("/") for provider in providers}
+        if len(base_urls) != 1:
+            raise ValueError("all Hyperstack providers must use the same official endpoint during catalog validation")
+        base_url = next(iter(base_urls))
+        images = _hyperstack_region_images(requests.get(f"{base_url}/core/images", headers=headers, timeout=20).json())
+        flavors = _hyperstack_region_flavors(requests.get(f"{base_url}/core/flavors", headers=headers, timeout=20).json())
+        environments = _hyperstack_environment_names(
+            requests.get(f"{base_url}/core/environments", headers=headers, timeout=20).json()
+        )
+    except Exception as exc:
+        return [
+            {
+                "provider": provider.name,
+                "adapter": provider.adapter,
+                "severity": "error",
+                "reason": f"official Hyperstack catalog lookup failed: {exc}",
+            }
+            for provider in providers
+        ]
+
+    findings: list[dict[str, Any]] = []
+    for provider in providers:
+        region = region_from_hyperstack_environment(provider.target or "")
+        if provider.target not in environments:
+            findings.append(
+                {
+                    "provider": provider.name,
+                    "adapter": provider.adapter,
+                    "severity": "error",
+                    "field": "target",
+                    "configured": provider.target,
+                    "reason": "environment_name is not present in official Hyperstack /core/environments catalog",
+                }
+            )
+        if provider.image not in images.get(region, set()):
+            findings.append(
+                {
+                    "provider": provider.name,
+                    "adapter": provider.adapter,
+                    "severity": "error",
+                    "field": "image",
+                    "configured": provider.image,
+                    "region": region,
+                    "reason": "image_name is not present in official Hyperstack /core/images catalog for provider region",
+                }
+            )
+        if provider.instance not in flavors.get(region, set()):
+            findings.append(
+                {
+                    "provider": provider.name,
+                    "adapter": provider.adapter,
+                    "severity": "error",
+                    "field": "instance",
+                    "configured": provider.instance,
+                    "region": region,
+                    "reason": "flavor_name is not present in official Hyperstack /core/flavors catalog for provider region",
+                }
+            )
+    return findings
+
+
+def _hyperstack_region_images(payload: dict[str, Any]) -> dict[str, set[str]]:
+    rows: dict[str, set[str]] = {}
+    for group in payload.get("images") or []:
+        if not isinstance(group, dict):
+            continue
+        region = str(group.get("region_name") or "")
+        if not region:
+            continue
+        rows.setdefault(region, set())
+        for image in group.get("images") or []:
+            if isinstance(image, dict) and image.get("name"):
+                rows[region].add(str(image["name"]))
+    return rows
+
+
+def _hyperstack_region_flavors(payload: dict[str, Any]) -> dict[str, set[str]]:
+    rows: dict[str, set[str]] = {}
+    for group in payload.get("data") or []:
+        if not isinstance(group, dict):
+            continue
+        region = str(group.get("region_name") or "")
+        if not region:
+            continue
+        rows.setdefault(region, set())
+        for flavor in group.get("flavors") or []:
+            if isinstance(flavor, dict) and flavor.get("name"):
+                rows[region].add(str(flavor["name"]))
+    return rows
+
+
+def _hyperstack_environment_names(payload: dict[str, Any]) -> set[str]:
+    return {str(row["name"]) for row in payload.get("environments") or [] if isinstance(row, dict) and row.get("name")}
+
+
+@register_adapter(
+    "hyperstack",
+    descriptor=ProviderAdapterDescriptor(
+        endpoint_contract="hyperstack-vm",
+        output_contract="plain-text",
+        config_validator=hyperstack_config_findings,
+        catalog_validator=hyperstack_catalog_findings,
+    ),
+)
+def build_hyperstack_adapter(spec, credentials):
+    missing = [
+        field
+        for field, value in {
+            "target": spec.target,
+            "instance": spec.instance,
+            "image": spec.image,
+            "key_name": spec.key_name,
+            "model": spec.model,
+            "max_model_len": spec.max_model_len,
+        }.items()
+        if value in {None, ""}
+    ]
+    if missing:
+        raise ValueError(f"hyperstack provider requires explicit fields: {', '.join(missing)}")
+    hyperstack = credentials.get("hyperstack", {})
+    return HyperstackAdapter(
+        name=spec.name,
+        api_key=hyperstack.get("api_key"),
+        base_url=str(spec.endpoint) if spec.endpoint else None,
+        ssh_key_path=hyperstack.get("ssh_key_path"),
+        environment_name=str(spec.target),
+        flavor_name=str(spec.instance),
+        image_name=str(spec.image),
+        key_name=str(spec.key_name),
+        ssh_remote_cidr=spec.ssh_remote_cidr,
+        lease_manifest_path=spec.lease_manifest_path,
+        model=spec.model,
+        max_model_len=spec.max_model_len,
+    )
+
 
 def _orphan_grace_seconds() -> float:
     try:

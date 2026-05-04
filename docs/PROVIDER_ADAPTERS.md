@@ -2,6 +2,8 @@
 
 gpucall provider adapters are isolated per cloud API surface. An adapter may own provider lifecycle operations only when it can call the provider's official API or SDK. It must not report production inference success unless a gpucall worker bootstrap and result retrieval path is configured and verified.
 
+Each adapter module registers its own builder and `ProviderAdapterDescriptor`. Router core code consumes descriptors for endpoint/output contract validation, production route eligibility, local execution tagging, stream preconditions, and optional live catalog checks. Provider-specific names must not be hardcoded in `config.py`, `routing.py`, `provider_catalog.py`, `compiler.py`, `dispatcher.py`, or `providers/factory.py`.
+
 ## Implemented Lifecycle Adapters
 
 - `azure-compute-vm`: uses Azure SDK for Python `ComputeManagementClient.virtual_machines.begin_create_or_update` and `begin_delete`. Confidential VM intent is expressed through the VM `security_profile`.

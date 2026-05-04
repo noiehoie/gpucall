@@ -14,6 +14,7 @@ from uuid import uuid4
 from gpucall.domain import CompiledPlan, ProviderError, ProviderResult
 from gpucall.providers.base import ProviderAdapter, RemoteHandle
 from gpucall.providers.payloads import plan_payload, plain_text_result
+from gpucall.providers.registry import ProviderAdapterDescriptor, register_adapter
 
 _ephemeral_run_lock = threading.Lock()
 
@@ -81,6 +82,15 @@ def _start_modal_call(remote: Any, *args: Any, **kwargs: Any) -> Any:
     if callable(spawn):
         return spawn(*args, **kwargs)
     return remote.remote(*args, **kwargs)
+
+
+def _split_modal_target(target: str | None) -> tuple[str | None, str | None]:
+    if not target:
+        return None, None
+    if ":" not in target:
+        return target, None
+    app_name, function_name = target.split(":", 1)
+    return app_name or None, function_name or None
 
 
 class ModalAdapter(ProviderAdapter):
@@ -254,3 +264,28 @@ class ModalAdapter(ProviderAdapter):
                 if time.monotonic() > deadline:
                     raise ProviderError("Modal stream timed out", retryable=True, status_code=504)
                 yield str(chunk)
+
+
+@register_adapter(
+    "modal",
+    descriptor=ProviderAdapterDescriptor(
+        endpoint_contract="modal-function",
+        output_contract="plain-text",
+        required_auto_fields={"target": "Modal function target is not configured"},
+        stream_required_fields={"stream_target": "modal stream mode requires explicit stream_target"},
+    ),
+)
+def build_modal_adapter(spec, _credentials):
+    app_name, function_name = _split_modal_target(spec.target)
+    stream_app_name, stream_function_name = _split_modal_target(spec.stream_target)
+    if stream_app_name and app_name and stream_app_name != app_name:
+        raise ValueError("modal stream_target must use the same app as target")
+    return ModalAdapter(
+        name=spec.name,
+        app_name=app_name,
+        function_name=function_name,
+        stream_function_name=stream_function_name,
+        model=spec.model,
+        max_model_len=spec.max_model_len,
+        allow_ephemeral=False,
+    )

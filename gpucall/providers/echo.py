@@ -6,6 +6,7 @@ from uuid import uuid4
 
 from gpucall.domain import CompiledPlan, ProviderError, ProviderResult
 from gpucall.providers.base import ProviderAdapter, RemoteHandle
+from gpucall.providers.registry import ProviderAdapterDescriptor, register_adapter
 
 
 class EchoProvider(ProviderAdapter):
@@ -34,3 +35,18 @@ class EchoProvider(ProviderAdapter):
         yield ": heartbeat\n\n"
         await asyncio.sleep(self.latency_seconds)
         yield f"data: ok:{plan.task}:{handle.provider}\n\n"
+
+
+@register_adapter(
+    "echo",
+    descriptor=ProviderAdapterDescriptor(
+        requires_contracts=False,
+        stream_contract=None,
+        production_eligible=False,
+        production_rejection_reason="smoke/fake provider is not eligible for production auto-routing",
+        local_execution=True,
+        requires_model_for_auto=False,
+    ),
+)
+def build_echo_adapter(spec, _credentials):
+    return EchoProvider(name=spec.name)

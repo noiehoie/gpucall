@@ -10,6 +10,7 @@ from typing import Any
 from gpucall.domain import CompiledPlan, ProviderError, ProviderResult
 from gpucall.providers.base import ProviderAdapter, RemoteHandle
 from gpucall.providers.payloads import gpucall_provider_result, openai_chat_completion_result, plan_payload
+from gpucall.providers.registry import ProviderAdapterDescriptor, register_adapter
 
 RUNPOD_API_BASE = "https://api.runpod.ai/v2"
 
@@ -567,3 +568,91 @@ def _integer_usage(value: Any) -> dict[str, int]:
         if isinstance(raw, int):
             usage[str(key)] = raw
     return usage
+
+
+@register_adapter(
+    "runpod-serverless",
+    aliases=("runpod",),
+    descriptor=ProviderAdapterDescriptor(
+        endpoint_contract="runpod-serverless",
+        output_contract="gpucall-provider-result",
+        required_auto_fields={"target": "RunPod endpoint target is not configured"},
+    ),
+)
+def build_runpod_serverless_adapter(spec, credentials):
+    runpod = credentials.get("runpod", {})
+    return RunpodServerlessAdapter(
+        name=spec.name,
+        api_key=runpod.get("api_key"),
+        endpoint_id=spec.target,
+        base_url=str(spec.endpoint) if spec.endpoint else None,
+        model=spec.model,
+        max_model_len=spec.max_model_len,
+    )
+
+
+@register_adapter(
+    "runpod-vllm-serverless",
+    descriptor=ProviderAdapterDescriptor(
+        endpoint_contract="openai-chat-completions",
+        output_contract="openai-chat-completions",
+        required_auto_fields={"target": "RunPod endpoint target is not configured"},
+    ),
+)
+def build_runpod_vllm_serverless_adapter(spec, credentials):
+    runpod = credentials.get("runpod", {})
+    return RunpodVllmServerlessAdapter(
+        name=spec.name,
+        api_key=runpod.get("api_key"),
+        endpoint_id=spec.target,
+        base_url=str(spec.endpoint) if spec.endpoint else None,
+        model=spec.model,
+        max_model_len=spec.max_model_len,
+        image=spec.image,
+        endpoint_contract=spec.endpoint_contract,
+    )
+
+
+@register_adapter(
+    "runpod-vllm-flashboot",
+    descriptor=ProviderAdapterDescriptor(
+        endpoint_contract="openai-chat-completions",
+        output_contract="gpucall-provider-result",
+        required_auto_fields={"target": "RunPod endpoint target is not configured"},
+    ),
+)
+def build_runpod_vllm_flashboot_adapter(spec, credentials):
+    runpod = credentials.get("runpod", {})
+    return RunpodVllmFlashBootAdapter(
+        name=spec.name,
+        api_key=runpod.get("api_key"),
+        endpoint_id=spec.target,
+        base_url=str(spec.endpoint) if spec.endpoint else None,
+        model=spec.model,
+        max_model_len=spec.max_model_len,
+        image=spec.image,
+        endpoint_contract=spec.endpoint_contract,
+    )
+
+
+@register_adapter(
+    "runpod-flash",
+    aliases=("flash",),
+    descriptor=ProviderAdapterDescriptor(
+        endpoint_contract="openai-chat-completions",
+        output_contract="openai-chat-completions",
+        required_auto_fields={"target": "RunPod endpoint target is not configured"},
+    ),
+)
+def build_runpod_flash_adapter(spec, credentials):
+    runpod = credentials.get("runpod", {})
+    return RunpodFlashAdapter(
+        name=spec.name,
+        api_key=runpod.get("api_key"),
+        endpoint_id=spec.target,
+        base_url=str(spec.endpoint) if spec.endpoint else None,
+        model=spec.model,
+        max_model_len=spec.max_model_len,
+        image=spec.image,
+        endpoint_contract=spec.endpoint_contract,
+    )
