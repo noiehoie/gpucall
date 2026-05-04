@@ -1,0 +1,33 @@
+services:
+  gpucall:
+    build: .
+    user: "${GPUCALL_UID:-1000}:${GPUCALL_GID:-1000}"
+    restart: unless-stopped
+    ports:
+      - "${GPUCALL_BIND_ADDRESS:-127.0.0.1}:18088:8080"
+    environment:
+      HOME: /config
+      PYTHONDONTWRITEBYTECODE: "1"
+      GPUCALL_CREDENTIALS: /config/credentials.yml
+      GPUCALL_STATE_DIR: /state
+      XDG_CACHE_HOME: /cache
+      GPUCALL_API_KEYS: ${GPUCALL_API_KEYS:-}
+      AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID:-}
+      AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY:-}
+      AWS_REGION: ${AWS_REGION:-}
+      GPUCALL_MODAL_APP: ${GPUCALL_MODAL_APP:-}
+      GPUCALL_MODAL_FN: ${GPUCALL_MODAL_FN:-}
+      GPUCALL_MODAL_STREAM_FN: ${GPUCALL_MODAL_STREAM_FN:-}
+      GPUCALL_RUNPOD_API_KEY: ${GPUCALL_RUNPOD_API_KEY:-}
+      GPUCALL_RUNPOD_ENDPOINT_ID: ${GPUCALL_RUNPOD_ENDPOINT_ID:-}
+    volumes:
+      - ${GPUCALL_CONFIG_DIR:-./config}:/config
+      - ${GPUCALL_STATE_DIR:-./state}:/state
+      - ${GPUCALL_CACHE_DIR:-./cache}:/cache
+      - ${GPUCALL_MODAL_CONFIG_FILE:-/dev/null}:/config/.modal.toml:ro
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/healthz', timeout=2).read()"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s

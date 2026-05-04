@@ -1,0 +1,14 @@
+name: local-ollama
+adapter: local-ollama
+max_data_classification: internal
+gpu: local
+vram_gb: 1
+max_model_len: 8192
+cost_per_second: 0
+modes: [sync, async]
+endpoint: http://127.0.0.1:11434
+endpoint_contract: ollama-generate
+input_contracts: [text, chat_messages]
+output_contract: ollama-generate
+stream_contract: none
+model: llama3

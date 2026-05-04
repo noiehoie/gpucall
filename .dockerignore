@@ -1,0 +1,14 @@
+.venv
+.pytest_cache
+__pycache__
+*.pyc
+*.egg-info
+.DS_Store
+tests
+gpucall_sdk
+sdk
+scripts
+docs
+dist
+config
+sdk/typescript/node_modules

@@ -1,0 +1,16 @@
+name: runpod-vllm-serverless
+adapter: runpod-vllm-serverless
+max_data_classification: confidential
+gpu: AMPERE_16
+vram_gb: 16
+max_model_len: 8192
+cost_per_second: 0.00045
+modes: [sync, async]
+endpoint: null
+target: ""
+image: runpod/worker-v1-vllm:v2.18.1
+endpoint_contract: openai-chat-completions
+input_contracts: [chat_messages]
+output_contract: openai-chat-completions
+stream_contract: none
+model: Qwen/Qwen2.5-1.5B-Instruct

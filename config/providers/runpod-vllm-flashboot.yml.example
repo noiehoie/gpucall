@@ -1,0 +1,16 @@
+name: runpod-vllm-flashboot
+adapter: runpod-vllm-flashboot
+max_data_classification: confidential
+gpu: AMPERE_16
+vram_gb: 16
+max_model_len: 8192
+cost_per_second: 0.00046
+modes: [sync, async]
+endpoint: null
+target: ""
+image: null
+endpoint_contract: openai-chat-completions
+input_contracts: [chat_messages]
+output_contract: openai-chat-completions
+stream_contract: none
+model: Qwen/Qwen2.5-1.5B-Instruct

@@ -1,0 +1,2 @@
+prune gpucall_sdk
+prune tests

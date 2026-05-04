@@ -1,0 +1,12 @@
+name: local-echo
+adapter: echo
+max_data_classification: confidential
+gpu: L4
+vram_gb: 24
+max_model_len: 32768
+cost_per_second: 0
+modes: [sync, async, stream]
+endpoint: null
+input_contracts: [text, chat_messages, data_refs]
+output_contract: gpucall-provider-result
+stream_contract: token-incremental

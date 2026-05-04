@@ -1,0 +1,6 @@
+provider: s3
+bucket: gpucall-artifacts
+region: ap-northeast-1
+endpoint: null
+prefix: gpucall
+presign_ttl_seconds: 900

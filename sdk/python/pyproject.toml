@@ -1,0 +1,25 @@
+[project]
+name = "gpucall-sdk"
+version = "2.0.0a2"
+description = "Lightweight Python SDK for gpucall v2.0 Gateway"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+  "httpx>=0.27",
+]
+
+[project.optional-dependencies]
+dev = [
+  "pytest>=8.2",
+  "pytest-asyncio>=0.23",
+]
+
+[tool.setuptools.packages.find]
+include = ["gpucall_sdk*"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+markers = [
+  "integration: requires a running gpucall gateway",
+]

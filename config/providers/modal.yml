@@ -1,0 +1,17 @@
+name: modal-a10g
+adapter: modal
+max_data_classification: confidential
+gpu: A10G
+vram_gb: 24
+max_model_len: 32768
+cost_per_second: 0.00035
+modes: [sync, async]
+endpoint: null
+endpoint_contract: modal-function
+input_contracts: [text, chat_messages, data_refs, image]
+output_contract: plain-text
+stream_contract: none
+target: gpucall-worker-json:run_inference_on_modal
+model: Qwen/Qwen2.5-1.5B-Instruct
+declared_model_max_len: 32768
+supports_vision: true

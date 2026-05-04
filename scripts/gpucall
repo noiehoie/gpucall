@@ -1,0 +1,18 @@
+#!/usr/bin/env sh
+set -eu
+
+app_name="${GPUCALL_APP_NAME:-gpucall}"
+home_dir="${HOME:?HOME is required}"
+xdg_config_home="${XDG_CONFIG_HOME:-$home_dir/.config}"
+xdg_state_home="${XDG_STATE_HOME:-$home_dir/.local/state}"
+xdg_cache_home="${XDG_CACHE_HOME:-$home_dir/.cache}"
+app_root="${GPUCALL_APP_ROOT:-/opt/gpucall}"
+
+export GPUCALL_CONFIG_DIR="${GPUCALL_CONFIG_DIR:-$xdg_config_home/$app_name}"
+export GPUCALL_STATE_DIR="${GPUCALL_STATE_DIR:-$xdg_state_home/$app_name}"
+export XDG_CACHE_HOME="$xdg_cache_home"
+export GPUCALL_CREDENTIALS="${GPUCALL_CREDENTIALS:-$GPUCALL_CONFIG_DIR/credentials.yml}"
+export PYTHONDONTWRITEBYTECODE="${PYTHONDONTWRITEBYTECODE:-1}"
+export PATH="$app_root/.venv/bin:$PATH"
+
+exec "$app_root/.venv/bin/gpucall" "$@"

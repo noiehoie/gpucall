@@ -1,0 +1,342 @@
+from __future__ import annotations
+
+import hashlib
+import json
+from datetime import datetime, timezone
+
+from gpucall.domain import CompiledPlan, ExecutionMode, Policy, ProviderSpec, Recipe, TaskRequest
+from gpucall.domain import ChatMessage, ResponseFormatType
+from gpucall.registry import ObservedRegistry
+from gpucall.routing import classification_rank, is_production_route_candidate, provider_route_rejection_reason, required_model_len, token_budget
+
+
+class GovernanceError(ValueError):
+    def __init__(self, message: str, *, code: str = "GOVERNANCE_ERROR", context: dict[str, object] | None = None) -> None:
+        super().__init__(message)
+        self.code = code
+        self.context = context or {}
+
+
+class GovernanceCompiler:
+    SUPPORTED_TASKS = {"infer", "vision"}
+    def __init__(
+        self,
+        *,
+        policy: Policy,
+        recipes: dict[str, Recipe],
+        providers: dict[str, ProviderSpec],
+        registry: ObservedRegistry,
+    ) -> None:
+        self.policy = policy
+        self.recipes = recipes
+        self.providers = providers
+        self.registry = registry
+
+    def compile(self, request: TaskRequest) -> CompiledPlan:
+        recipe = self._recipe_for(request)
+        self._validate_request_against_recipe(request, recipe)
+        provider_chain = self._provider_chain(request, recipe, auto_selected=request.recipe is None)
+
+        compiled_token_budget = self._token_budget(request)
+        compiled_required_model_len = self._required_model_len(request, recipe)
+        if compiled_required_model_len > recipe.max_model_len:
+            raise GovernanceError(
+                f"required model length {compiled_required_model_len} exceeds recipe max_model_len {recipe.max_model_len}",
+                code="REQUEST_EXCEEDS_RECIPE_CONTEXT",
+                context={
+                    "required_model_len": compiled_required_model_len,
+                    "recipe_max_model_len": recipe.max_model_len,
+                    "recipe": recipe.name,
+                    "task": request.task,
+                },
+            )
+
+        timeout = min(request.timeout_seconds or recipe.timeout_seconds, self.policy.max_timeout_seconds)
+        ttl = min(
+            request.lease_ttl_seconds or recipe.lease_ttl_seconds or self.policy.default_lease_ttl_seconds,
+            self.policy.max_lease_ttl_seconds,
+        )
+        if timeout > ttl:
+            raise GovernanceError("timeout_seconds must not exceed lease_ttl_seconds")
+
+        structured = request.response_format is not None and request.response_format.type is not ResponseFormatType.TEXT
+        compiled_temperature = request.temperature
+        if compiled_temperature is None:
+            compiled_temperature = recipe.structured_temperature if structured else recipe.default_temperature
+        effective_system_prompt = recipe.structured_system_prompt if structured and recipe.structured_system_prompt else recipe.system_prompt
+        compiled_messages = self._compiled_messages(request, effective_system_prompt)
+        plan = CompiledPlan(
+            policy_version=self.policy.version,
+            recipe_name=recipe.name,
+            task=recipe.task,
+            mode=request.mode,
+            provider_chain=provider_chain,
+            timeout_seconds=timeout,
+            lease_ttl_seconds=ttl,
+            tokenizer_family=recipe.tokenizer_family,
+            token_budget=compiled_token_budget,
+            max_tokens=request.max_tokens,
+            temperature=compiled_temperature,
+            input_refs=request.input_refs,
+            inline_inputs=request.inline_inputs,
+            messages=compiled_messages,
+            response_format=request.response_format,
+            system_prompt=effective_system_prompt,
+            stop_tokens=recipe.stop_tokens,
+            repetition_penalty=recipe.repetition_penalty,
+            guided_decoding=recipe.guided_decoding,
+            output_validation_attempts=recipe.output_validation_attempts,
+            attestations={"recipe_snapshot": self._recipe_snapshot(recipe)},
+        )
+        plan.attestations["context_estimate"] = {
+            "method": "utf8_bytes_times_policy_safety_multiplier_plus_output_budget",
+            "required_model_len": compiled_required_model_len,
+            "token_budget": compiled_token_budget,
+        }
+        plan.attestations["governance_hash"] = self._stable_hash(plan.model_dump(mode="json", exclude={"attestations"}))
+        return plan
+
+    def _recipe_for(self, request: TaskRequest) -> Recipe:
+        if request.task not in self.SUPPORTED_TASKS:
+            raise GovernanceError(f"unsupported task for v2.0 MVP: {request.task}")
+        if request.recipe is None:
+            return self._select_recipe(request)
+        recipe = self.recipes.get(request.recipe)
+        if recipe is None:
+            raise GovernanceError(f"unknown recipe: {request.recipe}")
+        if recipe.task != request.task:
+            raise GovernanceError(f"request task {request.task!r} does not match recipe task {recipe.task!r}")
+        return recipe
+
+    def _select_recipe(self, request: TaskRequest) -> Recipe:
+        candidates: list[Recipe] = []
+        rejected: list[str] = []
+        for recipe in self.recipes.values():
+            reason = self._recipe_rejection_reason(request, recipe)
+            if reason is None:
+                candidates.append(recipe)
+            else:
+                rejected.append(f"{recipe.name}: {reason}")
+        if not candidates:
+            detail = "; ".join(sorted(rejected)) if rejected else "no recipes are configured"
+            context: dict[str, object] = {
+                "task": request.task,
+                "mode": request.mode.value,
+                "required_model_len": self._largest_required_model_len(request),
+                "largest_auto_recipe_model_len": self._largest_auto_recipe_model_len(request.task),
+                "rejections": sorted(rejected),
+            }
+            raise GovernanceError(
+                f"no auto-selectable recipe for task {request.task!r}: {detail}",
+                code="NO_AUTO_SELECTABLE_RECIPE",
+                context=context,
+            )
+        return sorted(candidates, key=self._recipe_selection_key)[0]
+
+    def _recipe_rejection_reason(self, request: TaskRequest, recipe: Recipe) -> str | None:
+        if not recipe.auto_select:
+            return "auto_select is false"
+        if recipe.task != request.task:
+            return f"task is {recipe.task!r}"
+        if request.mode not in recipe.allowed_modes:
+            return f"mode {request.mode} is not allowed"
+        if request.max_tokens is not None:
+            token_budget = self._token_budget(request)
+            if token_budget is not None and token_budget > recipe.max_model_len:
+                return f"token budget {token_budget} exceeds max_model_len {recipe.max_model_len}"
+        required_model_len = self._required_model_len(request, recipe)
+        if required_model_len > recipe.max_model_len:
+            return f"required model length {required_model_len} exceeds max_model_len {recipe.max_model_len}"
+        for ref in request.input_refs:
+            if recipe.max_input_bytes is not None and ref.bytes is not None and ref.bytes > recipe.max_input_bytes:
+                return f"input data_ref exceeds max_input_bytes {recipe.max_input_bytes}"
+            if recipe.allowed_mime_prefixes and ref.content_type:
+                if not any(ref.content_type.startswith(prefix) for prefix in recipe.allowed_mime_prefixes):
+                    return f"content_type {ref.content_type!r} is not allowed"
+        inline_types = [item.content_type for item in request.inline_inputs.values() if item.content_type]
+        inline_allowed = self._inline_mime_prefixes(recipe)
+        if inline_allowed and inline_types:
+            for content_type in inline_types:
+                if not any(content_type.startswith(prefix) for prefix in inline_allowed):
+                    return f"inline content_type {content_type!r} is not allowed"
+        return None
+
+    def _recipe_selection_key(self, recipe: Recipe) -> tuple[int, int, int, str]:
+        # Prefer the smallest matching recipe. Larger/expensive recipes remain
+        # available for requests that exceed lighter recipe limits.
+        return (classification_rank(recipe.data_classification), recipe.min_vram_gb, recipe.max_model_len, recipe.name)
+
+    def _validate_request_against_recipe(self, request: TaskRequest, recipe: Recipe) -> None:
+        if request.mode not in recipe.allowed_modes:
+            raise GovernanceError(f"mode {request.mode} is not allowed for recipe {recipe.name}")
+        if request.mode is ExecutionMode.STREAM and request.response_format is not None:
+            raise GovernanceError("response_format is not supported for stream mode in v2.0 MVP")
+        inline_bytes = sum(len(item.value.encode("utf-8")) for item in request.inline_inputs.values())
+        if inline_bytes > self.policy.inline_bytes_limit:
+            raise GovernanceError("inline input exceeds policy limit; use signed object references")
+        inline_allowed = self._inline_mime_prefixes(recipe)
+        if inline_allowed:
+            for item in request.inline_inputs.values():
+                if item.content_type and not any(item.content_type.startswith(prefix) for prefix in inline_allowed):
+                    raise GovernanceError(f"inline content_type {item.content_type!r} is not allowed for recipe {recipe.name}")
+        for ref in request.input_refs:
+            if ref.expires_at is not None and ref.expires_at <= datetime.now(timezone.utc):
+                raise GovernanceError("input data_ref is expired")
+            if recipe.max_input_bytes is not None and ref.bytes is not None and ref.bytes > recipe.max_input_bytes:
+                raise GovernanceError(f"input data_ref exceeds recipe max_input_bytes {recipe.max_input_bytes}")
+            if recipe.allowed_mime_prefixes and ref.content_type:
+                if not any(ref.content_type.startswith(prefix) for prefix in recipe.allowed_mime_prefixes):
+                    raise GovernanceError(f"input content_type {ref.content_type!r} is not allowed for recipe {recipe.name}")
+
+    def _provider_chain(self, request: TaskRequest, recipe: Recipe, *, auto_selected: bool) -> list[str]:
+        if request.requested_provider:
+            allowed = self._eligible_providers([request.requested_provider], request, recipe, auto_selected=False)
+            if request.requested_provider not in allowed:
+                raise GovernanceError(f"requested provider {request.requested_provider!r} is not eligible for recipe {recipe.name}")
+            if not self.registry.is_available(request.requested_provider):
+                raise GovernanceError(f"requested provider {request.requested_provider!r} is unavailable due to circuit breaker")
+            return [request.requested_provider]
+
+        eligible = self._eligible_providers(sorted(self.providers), request, recipe, auto_selected=True)
+        ranked = self._rank_by_fit_then_observations(eligible, request, recipe)
+        if not ranked:
+            raise GovernanceError("no eligible provider after policy, recipe, and circuit constraints")
+        return ranked
+
+    def _rank_by_fit_then_observations(
+        self, providers: list[str], request: TaskRequest, recipe: Recipe
+    ) -> list[str]:
+        ordered = self._fit_ordered_providers(providers, request, recipe)
+        ranked: list[str] = []
+        current_key: tuple[int, int, float] | None = None
+        current_group: list[str] = []
+        for provider in ordered:
+            fit_key = self._provider_fit_key(provider, request, recipe)
+            if current_key is not None and fit_key != current_key:
+                ranked.extend(self.registry.rank(current_group))
+                current_group = []
+            current_key = fit_key
+            current_group.append(provider)
+        if current_group:
+            ranked.extend(self.registry.rank(current_group))
+        return ranked
+
+    def _fit_ordered_providers(self, providers: list[str], request: TaskRequest, recipe: Recipe) -> list[str]:
+        return sorted(providers, key=lambda name: (*self._provider_fit_key(name, request, recipe), name))
+
+    def _provider_fit_key(self, name: str, request: TaskRequest, recipe: Recipe) -> tuple[int, int, float]:
+        compiled_required_model_len = self._required_model_len(request, recipe)
+        spec = self.providers[name]
+        return (
+            spec.vram_gb,
+            spec.max_model_len - compiled_required_model_len,
+            float(spec.cost_per_second),
+        )
+
+    def _eligible_providers(
+        self,
+        candidates: list[str],
+        request: TaskRequest,
+        recipe: Recipe,
+        *,
+        auto_selected: bool,
+    ) -> list[str]:
+        seen: set[str] = set()
+        eligible: list[str] = []
+        for name in candidates:
+            if not name or name in seen:
+                continue
+            seen.add(name)
+            spec = self.providers.get(name)
+            if spec is None:
+                continue
+            reason = provider_route_rejection_reason(
+                policy=self.policy,
+                recipe=recipe,
+                provider=spec,
+                mode=request.mode,
+                required_len=self._required_model_len(request, recipe),
+                required_input_contracts=self._required_input_contracts(request),
+                auto_selected=auto_selected,
+            )
+            if reason is not None:
+                continue
+            eligible.append(name)
+        return eligible
+
+    def _is_production_route_candidate(self, spec: ProviderSpec) -> bool:
+        return is_production_route_candidate(spec)
+
+    def _token_budget(self, request: TaskRequest) -> int | None:
+        return token_budget(request, self.policy)
+
+    def _required_model_len(self, request: TaskRequest, recipe: Recipe) -> int:
+        return required_model_len(request, recipe, self.policy)
+
+    @staticmethod
+    def _inline_mime_prefixes(recipe: Recipe) -> list[str]:
+        return recipe.allowed_inline_mime_prefixes or recipe.allowed_mime_prefixes
+
+    def _largest_required_model_len(self, request: TaskRequest) -> int:
+        matching = [recipe for recipe in self.recipes.values() if recipe.task == request.task]
+        if not matching:
+            return required_model_len(request, self._synthetic_recipe_for(request), self.policy)
+        return max(required_model_len(request, recipe, self.policy) for recipe in matching)
+
+    def _largest_auto_recipe_model_len(self, task: str) -> int | None:
+        values = [recipe.max_model_len for recipe in self.recipes.values() if recipe.task == task and recipe.auto_select]
+        return max(values) if values else None
+
+    @staticmethod
+    def _synthetic_recipe_for(request: TaskRequest) -> Recipe:
+        return Recipe(
+            name="__synthetic__",
+            task=request.task,
+            allowed_modes=[request.mode],
+            min_vram_gb=1,
+            max_model_len=1,
+            timeout_seconds=1,
+            lease_ttl_seconds=1,
+            tokenizer_family="unknown",
+        )
+
+    @staticmethod
+    def _compiled_messages(request: TaskRequest, system_prompt: str | None) -> list[ChatMessage]:
+        messages = list(request.messages)
+        if system_prompt:
+            messages = [ChatMessage(role="system", content=system_prompt), *messages]
+        return messages
+
+    @staticmethod
+    def _required_input_contracts(request: TaskRequest) -> set[str]:
+        required: set[str] = set()
+        if request.messages:
+            required.add("chat_messages")
+        if request.inline_inputs:
+            required.add("text")
+        if request.input_refs:
+            required.add("data_refs")
+        if not required:
+            required.add("text")
+        return required
+
+    @staticmethod
+    def _stable_hash(value: object) -> str:
+        encoded = json.dumps(value, sort_keys=True, separators=(",", ":")).encode("utf-8")
+        return hashlib.sha256(encoded).hexdigest()
+
+    @staticmethod
+    def _recipe_snapshot(recipe: Recipe) -> dict[str, object]:
+        data = recipe.model_dump(mode="json")
+        for key in ("system_prompt", "structured_system_prompt"):
+            value = data.get(key)
+            data[key] = _text_snapshot(value) if isinstance(value, str) else None
+        return data
+
+
+def _text_snapshot(value: str) -> dict[str, object]:
+    return {
+        "redacted": True,
+        "bytes": len(value.encode("utf-8")),
+        "sha256": hashlib.sha256(value.encode("utf-8")).hexdigest(),
+    }
