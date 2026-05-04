@@ -471,7 +471,8 @@ def _gateway_smoke_summary(url: str, *, api_key: str | None, recipe: str | None 
             json={
                 "task": "infer",
                 "mode": "sync",
-                "inline_inputs": {"prompt": {"value": "gpucall smoke", "content_type": "text/plain"}},
+                "messages": [{"role": "user", "content": "Reply with exactly: gpucall smoke"}],
+                "max_tokens": 16,
                 "metadata": {"smoke": "true"},
             },
         )
