@@ -11,7 +11,7 @@ from contextlib import ExitStack, contextmanager
 from typing import Any, Iterator
 from uuid import uuid4
 
-from gpucall.domain import CompiledPlan, ProviderError, ProviderResult
+from gpucall.domain import ArtifactManifest, CompiledPlan, ProviderError, ProviderResult
 from gpucall.providers.base import ProviderAdapter, RemoteHandle
 from gpucall.providers.payloads import plan_payload, plain_text_result
 from gpucall.providers.registry import ProviderAdapterDescriptor, register_adapter
@@ -134,6 +134,8 @@ class ModalAdapter(ProviderAdapter):
     async def wait(self, handle: RemoteHandle, plan: CompiledPlan) -> ProviderResult:
         try:
             value = await asyncio.to_thread(self._invoke, plan, plan.timeout_seconds, handle.remote_id)
+            if plan.artifact_export is not None:
+                return ProviderResult(kind="artifact_manifest", artifact_manifest=ArtifactManifest.model_validate_json(value))
             return plain_text_result(value)
         finally:
             with self._remote_lock:

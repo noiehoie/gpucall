@@ -4,12 +4,16 @@ import os
 from typing import Any
 
 from gpucall.providers.llm_engine import generate_text
+from gpucall.providers.worker_artifacts import execute_artifact_workload
 
 
 def handler(event: dict[str, Any]) -> dict[str, Any]:
     payload = event.get("input") or event
     if not isinstance(payload, dict):
         raise ValueError("RunPod event input must be an object")
+    artifact_result = execute_artifact_workload(payload)
+    if artifact_result is not None:
+        return artifact_result
     model = payload.get("model") or os.getenv("GPUCALL_RUNPOD_MODEL")
     max_model_len = payload.get("max_model_len") or os.getenv("GPUCALL_RUNPOD_MAX_MODEL_LEN")
     if not model or not max_model_len:

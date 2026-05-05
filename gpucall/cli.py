@@ -305,7 +305,7 @@ def build_launch_report(config_dir: Path, *, url: str | None = None, api_key: st
     if not checks["audit_chain_valid"]:
         blockers.append({"check": "audit_chain", "valid": False})
     secrets = checks["secrets_present"]
-    live_artifact = _latest_live_validation_artifact()
+    live_artifact = _latest_live_validation_artifact(config_dir=config_dir)
     production = profile == "production"
     checks["launch_gates"] = {
         "static_config_valid": checks["config_valid"],
@@ -616,19 +616,24 @@ def _smoke_png() -> bytes:
     )
 
 
-def _latest_live_validation_artifact() -> dict[str, object] | None:
+def _latest_live_validation_artifact(config_dir: Path | None = None) -> dict[str, object] | None:
     root = default_state_dir() / "provider-validation"
     if not root.exists():
         return None
+    expected_commit = _git_commit()
+    expected_config_hash = _config_hash(config_dir) if config_dir is not None else None
     candidates = sorted(root.glob("*.json"), key=lambda path: path.stat().st_mtime, reverse=True)
-    if not candidates:
-        return None
-    path = candidates[0]
-    try:
-        data = json.loads(path.read_text(encoding="utf-8"))
-    except Exception:
-        data = {}
-    return {"path": str(path), "mtime": datetime.fromtimestamp(path.stat().st_mtime, timezone.utc).isoformat(), "data": data}
+    for path in candidates:
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except Exception:
+            data = {}
+        if expected_commit and data.get("commit") != expected_commit:
+            continue
+        if expected_config_hash and data.get("config_hash") != expected_config_hash:
+            continue
+        return {"path": str(path), "mtime": datetime.fromtimestamp(path.stat().st_mtime, timezone.utc).isoformat(), "data": data}
+    return None
 
 
 async def jobs_command(job_id: str | None, limit: int, *, scrub_inputs: bool = False, expire_stale: bool = False) -> None:

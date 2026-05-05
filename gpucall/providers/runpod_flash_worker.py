@@ -229,10 +229,23 @@ _LOADED_MODEL: object = None
 
 
 def _run_inference(payload: dict) -> dict:
+    artifact_result = _execute_artifact_workload(payload)
+    if artifact_result is not None:
+        return artifact_result
     model = str(payload.get("model") or os.getenv("GPUCALL_RUNPOD_FLASH_MODEL") or "Qwen/Qwen2.5-1.5B-Instruct")
     max_model_len = int(payload.get("max_model_len") or os.getenv("GPUCALL_RUNPOD_FLASH_MAX_MODEL_LEN", "16384"))
     text = _generate_text(payload, model=model, max_model_len=max_model_len)
     return {"kind": "inline", "value": text}
+
+
+def _execute_artifact_workload(payload: dict) -> dict | None:
+    try:
+        from importlib import import_module
+
+        execute_artifact_workload = import_module("gpucall.providers.worker_artifacts").execute_artifact_workload
+    except ImportError:
+        return None
+    return execute_artifact_workload(payload)
 
 
 def _generate_text(payload: dict, *, model: str, max_model_len: int) -> str:

@@ -4,6 +4,7 @@ import shutil
 import subprocess
 import sys
 import os
+import json
 from pathlib import Path
 
 import pytest
@@ -266,6 +267,29 @@ def test_provider_smoke_writes_live_validation_artifact(tmp_path, monkeypatch) -
     payload = artifacts[0].read_text(encoding="utf-8")
     assert '"provider":"local-echo"' in payload
     assert '"config_hash"' in payload
+
+
+def test_live_validation_artifact_must_match_current_commit_and_config(tmp_path, monkeypatch) -> None:
+    from gpucall.cli import _config_hash, _git_commit, _latest_live_validation_artifact
+
+    root = copy_config(tmp_path)
+    state = tmp_path / "state"
+    artifact_dir = state / "provider-validation"
+    artifact_dir.mkdir(parents=True)
+    monkeypatch.setenv("GPUCALL_STATE_DIR", str(state))
+    (artifact_dir / "old.json").write_text('{"provider":"p","commit":"old","config_hash":"old"}\n', encoding="utf-8")
+    current = {
+        "provider": "p",
+        "commit": _git_commit(),
+        "config_hash": _config_hash(root),
+    }
+    (artifact_dir / "current.json").write_text(json.dumps(current), encoding="utf-8")
+
+    latest = _latest_live_validation_artifact(config_dir=root)
+
+    assert latest is not None
+    assert latest["data"]["commit"] == current["commit"]
+    assert latest["data"]["config_hash"] == current["config_hash"]
 
 
 def test_security_scan_rejects_secret_like_yaml(tmp_path) -> None:

@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
-from gpucall.domain import CompiledPlan, ProviderError, ProviderResult
+from gpucall.domain import ArtifactManifest, CompiledPlan, ProviderError, ProviderResult
 from gpucall.config import default_state_dir
 from gpucall.providers.base import ProviderAdapter, RemoteHandle
 from gpucall.providers.payloads import plan_payload
@@ -145,14 +145,13 @@ class HyperstackAdapter(ProviderAdapter):
             if sg_rule_id:
                 self._record_lease({"event": "sg_rule.created", "vm_id": vm_id, "sg_rule_id": sg_rule_id})
             ssh = self._connect_ssh(ip_address)
-            payload = json.dumps(plan_payload(plan), separators=(",", ":"))
             model = self.model or "Qwen/Qwen2.5-1.5B-Instruct"
             max_model_len = self.max_model_len or plan.token_budget or 32768
+            self._upload_worker_files(ssh, plan)
             cmd = (
                 "set -euo pipefail\n"
-                "mkdir -p /tmp/gpucall && "
-                f"cat > /tmp/gpucall/input.json <<'EOF'\n{payload}\nEOF\n"
-                f"cat > /tmp/gpucall/worker.py <<'PY'\n{_hyperstack_worker_script()}\nPY\n"
+                "test -s /tmp/gpucall/input.json\n"
+                "test -s /tmp/gpucall/worker.py\n"
                 "python3 - <<'PY'\n"
                 "import os, subprocess, sys\n"
                 "os.environ.setdefault('GPUCALL_WORKER_MODEL', " + repr(model) + ")\n"
@@ -164,7 +163,7 @@ class HyperstackAdapter(ProviderAdapter):
                 "deps='/tmp/gpucall/deps'\n"
                 "os.makedirs(deps, exist_ok=True)\n"
                 "subprocess.check_call([sys.executable, '-m', 'pip', 'install', '--quiet', '--target', deps, "
-                "'boto3>=1.34', 'vllm==0.6.3', 'transformers==4.45.2', 'huggingface-hub[hf_transfer]', 'hf_transfer'])\n"
+                "'boto3>=1.34', 'cryptography>=42', 'vllm==0.6.3', 'transformers==4.45.2', 'huggingface-hub[hf_transfer]', 'hf_transfer'])\n"
                 "env=os.environ.copy()\n"
                 "env['PYTHONPATH']=deps + (os.pathsep + env['PYTHONPATH'] if env.get('PYTHONPATH') else '')\n"
                 "subprocess.check_call([sys.executable, '/tmp/gpucall/worker.py'], env=env)\n"
@@ -182,6 +181,19 @@ class HyperstackAdapter(ProviderAdapter):
         except Exception:
             self._destroy_sync({"vm_id": vm_id, "sg_rule_id": sg_rule_id})
             raise
+
+    def _upload_worker_files(self, ssh: Any, plan: CompiledPlan) -> None:
+        payload = json.dumps(plan_payload(plan), separators=(",", ":"))
+        sftp = ssh.open_sftp()
+        try:
+            try:
+                sftp.mkdir("/tmp/gpucall")
+            except OSError:
+                pass
+            _sftp_write_text(sftp, "/tmp/gpucall/input.json", payload)
+            _sftp_write_text(sftp, "/tmp/gpucall/worker.py", _hyperstack_worker_script())
+        finally:
+            sftp.close()
 
     def _wait_active(self, session: Any, vm_id: str) -> str:
         deadline = time.monotonic() + 600
@@ -270,7 +282,10 @@ class HyperstackAdapter(ProviderAdapter):
                     raise ProviderError(f"Hyperstack script failed ({status})", retryable=True, status_code=502)
                 ssh = handle.meta["ssh_client"]
                 _, stdout, _ = ssh.exec_command("cat /tmp/gpucall/output.txt")
-                return ProviderResult(kind="inline", value=stdout.read().decode().strip())
+                value = stdout.read().decode().strip()
+                if plan.artifact_export is not None:
+                    return ProviderResult(kind="artifact_manifest", artifact_manifest=ArtifactManifest.model_validate_json(value))
+                return ProviderResult(kind="inline", value=value)
             time.sleep(2)
         raise ProviderError("Hyperstack SSH execution timed out", retryable=True, status_code=504)
 
@@ -595,6 +610,11 @@ def _extract_sg_rule_id(data: dict[str, Any]) -> str | None:
     return None
 
 
+def _sftp_write_text(sftp: Any, path: str, value: str) -> None:
+    with sftp.file(path, "w") as handle:
+        handle.write(value)
+
+
 def _hyperstack_worker_script() -> str:
     return r'''
 import hashlib
@@ -606,6 +626,10 @@ from urllib.request import Request, urlopen
 
 def main():
     payload = json.load(open("/tmp/gpucall/input.json", "r", encoding="utf-8"))
+    artifact_result = execute_artifact_workload(payload)
+    if artifact_result is not None:
+        open("/tmp/gpucall/output.txt", "w", encoding="utf-8").write(json.dumps(artifact_result.get("artifact_manifest") or artifact_result, sort_keys=True, separators=(",", ":")))
+        return
     model = os.environ["GPUCALL_WORKER_MODEL"]
     max_model_len = int(os.environ["GPUCALL_WORKER_MAX_MODEL_LEN"])
     text = generate_text(payload, model=model, max_model_len=max_model_len)
@@ -639,6 +663,117 @@ def generate_text(payload, *, model, max_model_len):
     params = SamplingParams(**sampling_kwargs)
     outputs = llm.generate([prompt], params, use_tqdm=False)
     return outputs[0].outputs[0].text.strip()
+
+
+def execute_artifact_workload(payload):
+    task = str(payload.get("task") or "")
+    if task == "split-infer" and payload.get("split_learning") is not None:
+        spec = payload["split_learning"]
+        activation = fetch_ref_bytes(spec["activation_ref"])
+        return {
+            "kind": "inline",
+            "value": json.dumps(
+                {
+                    "kind": "split_learning_activation_accepted",
+                    "activation_sha256": hashlib.sha256(activation).hexdigest(),
+                    "dp_epsilon": spec.get("dp_epsilon"),
+                    "irreversibility_claim": spec.get("irreversibility_claim"),
+                },
+                sort_keys=True,
+                separators=(",", ":"),
+            ),
+        }
+    if task not in {"train", "fine-tune"} or payload.get("artifact_export") is None:
+        return None
+    export = payload["artifact_export"]
+    key = artifact_dek()
+    plaintext = artifact_plaintext(payload, task=task)
+    nonce = hashlib.sha256(plaintext + key).digest()[:12]
+    try:
+        from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+    except ImportError as exc:
+        raise RuntimeError("cryptography is required for worker artifact encryption") from exc
+    associated = json.dumps(
+        {
+            "plan_hash": (payload.get("attestations") or {}).get("governance_hash"),
+            "artifact_chain_id": export.get("artifact_chain_id"),
+            "version": export.get("version"),
+            "key_id": export.get("key_id"),
+        },
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    ciphertext = AESGCM(key).encrypt(nonce, plaintext, associated)
+    ciphertext_sha256 = hashlib.sha256(ciphertext).hexdigest()
+    uri = write_artifact_ciphertext(export, ciphertext)
+    manifest = {
+        "artifact_id": hashlib.sha256(f"{export['artifact_chain_id']}:{export['version']}:{ciphertext_sha256}".encode("utf-8")).hexdigest(),
+        "artifact_chain_id": export["artifact_chain_id"],
+        "version": export["version"],
+        "classification": str(payload.get("data_classification") or "restricted"),
+        "ciphertext_uri": uri,
+        "ciphertext_sha256": ciphertext_sha256,
+        "key_id": export["key_id"],
+        "producer_plan_hash": str((payload.get("attestations") or {}).get("governance_hash") or ""),
+        "attestation_evidence_ref": None,
+        "parent_artifact_ids": list(export.get("parent_artifact_ids") or []),
+        "legal_hold": bool(export.get("legal_hold") or False),
+        "retention_until": export.get("retention_until"),
+    }
+    return {"kind": "artifact_manifest", "artifact_manifest": manifest}
+
+
+def artifact_plaintext(payload, *, task):
+    inputs = []
+    for ref in payload.get("input_refs") or []:
+        body = fetch_ref_bytes(ref)
+        inputs.append({"uri": str(ref.get("uri")), "sha256": hashlib.sha256(body).hexdigest(), "bytes": len(body), "content_type": ref.get("content_type")})
+    return json.dumps({"kind": "gpucall-chained-artifact", "task": task, "recipe": payload.get("recipe"), "plan_id": payload.get("plan_id"), "inputs": inputs}, sort_keys=True, separators=(",", ":")).encode("utf-8")
+
+
+def artifact_dek():
+    raw = os.environ.get("GPUCALL_WORKER_ARTIFACT_DEK_HEX", "")
+    if not raw:
+        raise RuntimeError("GPUCALL_WORKER_ARTIFACT_DEK_HEX is required for artifact export")
+    key = bytes.fromhex(raw)
+    if len(key) != 32:
+        raise RuntimeError("GPUCALL_WORKER_ARTIFACT_DEK_HEX must encode a 32-byte AES-256 key")
+    return key
+
+
+def write_artifact_ciphertext(export, ciphertext):
+    uri = os.environ.get("GPUCALL_WORKER_ARTIFACT_URI")
+    if uri:
+        if uri.startswith("file://"):
+            path = uri.removeprefix("file://")
+            os.makedirs(os.path.dirname(path), exist_ok=True)
+            open(path, "wb").write(ciphertext)
+            return uri
+        if not uri.startswith("s3://"):
+            raise RuntimeError("GPUCALL_WORKER_ARTIFACT_URI must be s3:// or file://")
+        put_s3(uri, ciphertext)
+        return uri
+    bucket = os.environ.get("GPUCALL_WORKER_ARTIFACT_BUCKET")
+    prefix = os.environ.get("GPUCALL_WORKER_ARTIFACT_PREFIX", "gpucall/artifacts").strip("/")
+    if not bucket:
+        raise RuntimeError("GPUCALL_WORKER_ARTIFACT_BUCKET or GPUCALL_WORKER_ARTIFACT_URI is required for artifact export")
+    uri = f"s3://{bucket}/{prefix}/{export['artifact_chain_id']}/{export['version']}/artifact.bin"
+    put_s3(uri, ciphertext)
+    return uri
+
+
+def put_s3(uri, body):
+    import boto3
+    bucket_key = uri.removeprefix("s3://")
+    bucket, _, key = bucket_key.partition("/")
+    kwargs = {}
+    endpoint = os.environ.get("AWS_ENDPOINT_URL_S3") or os.environ.get("R2_ENDPOINT_URL")
+    region = os.environ.get("AWS_REGION") or os.environ.get("AWS_DEFAULT_REGION")
+    if endpoint:
+        kwargs["endpoint_url"] = endpoint
+    if region:
+        kwargs["region_name"] = region
+    boto3.client("s3", **kwargs).put_object(Bucket=bucket, Key=key, Body=body, ContentType="application/octet-stream")
 
 
 def guided_decoding_params(response_format):

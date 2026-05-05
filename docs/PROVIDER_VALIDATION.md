@@ -36,4 +36,15 @@ Record for each provider:
 - cost observed on provider dashboard
 - audit trail validity after execution
 
-Production `launch-check --profile production` requires a recent JSON artifact under `$XDG_STATE_HOME/gpucall/provider-validation/`. The artifact should include provider, recipe, commit, config hash, start/end timestamps, cleanup result, estimated or observed cost, and audit event IDs.
+Production `launch-check --profile production` requires a JSON artifact under `$XDG_STATE_HOME/gpucall/provider-validation/` whose `commit` equals the current git HEAD and whose `config_hash` equals the active config directory. The artifact should include provider, recipe, commit, config hash, start/end timestamps, cleanup result, estimated or observed cost, and audit event IDs.
+
+## Artifact and Split-Learning Worker Paths
+
+Workers support governed artifact execution only when the worker environment has explicit artifact export capabilities:
+
+- `GPUCALL_WORKER_ARTIFACT_DEK_HEX`: 32-byte AES-256 key encoded as hex. This must be released to the worker by tenant KMS/HYOK/BYOK or an attestation-bound mechanism; the gateway must not generate it.
+- `GPUCALL_WORKER_ARTIFACT_BUCKET` plus optional `GPUCALL_WORKER_ARTIFACT_PREFIX`, or an explicit `GPUCALL_WORKER_ARTIFACT_URI`.
+
+For `train` and `fine-tune`, the worker fetches DataRefs, encrypts a chained artifact bundle with AES-GCM, writes ciphertext directly to object storage, and returns an `artifact_manifest`. For `split-infer`, the worker fetches the activation ref, verifies the bytes through the DataRef path, and returns a deterministic split-learning acceptance result. Missing key material or object-store destination is a hard worker error, not a production success.
+
+Hyperstack worker bootstrap uploads `input.json` and `worker.py` via SFTP. The shell command no longer embeds request JSON or worker source through heredocs.

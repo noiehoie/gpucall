@@ -35,7 +35,7 @@ def gpucall_provider_result(value: Any) -> ProviderResult:
     if isinstance(value, ProviderResult):
         return value
     if isinstance(value, dict):
-        if value.get("kind") in {"inline", "ref"}:
+        if value.get("kind") in {"inline", "ref", "artifact_manifest"}:
             return ProviderResult.model_validate(value)
     raise ProviderError(f"provider output does not match gpucall ProviderResult contract: {type(value).__name__}", retryable=True, status_code=502)
 

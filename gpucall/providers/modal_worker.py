@@ -164,6 +164,7 @@ if modal is not None:
         .apt_install("git", "ffmpeg")
         .pip_install(
             "boto3",
+            "cryptography",
             "vllm==0.6.3",
             "transformers==4.45.2",
             "huggingface-hub[hf_transfer]",
@@ -279,6 +280,9 @@ if modal is not None:
         sys.modules["pyairports.airports"] = airports
 
     def _generate_text(payload: dict[str, Any], model: str | None, max_model_len: int) -> str:
+        artifact_result = _execute_artifact_workload(payload)
+        if artifact_result is not None:
+            return json.dumps(artifact_result.get("artifact_manifest") or artifact_result, sort_keys=True, separators=(",", ":"))
         requested_model = model or os.getenv("GPUCALL_MODAL_VLLM_MODEL", "facebook/opt-125m")
         llm = _load_top_level_llm(requested_model, max_model_len)
         prompt = _format_prompt_for_model(llm, requested_model, payload)
@@ -332,6 +336,9 @@ if modal is not None:
             return _format_prompt_for_model(self._llm, self._loaded_id, payload)
 
         def _generate(self, payload: dict[str, Any], model: str | None, max_model_len: int) -> str:
+            artifact_result = _execute_artifact_workload(payload)
+            if artifact_result is not None:
+                return json.dumps(artifact_result.get("artifact_manifest") or artifact_result, sort_keys=True, separators=(",", ":"))
             requested_model = model or os.getenv("GPUCALL_MODAL_VLLM_MODEL", "facebook/opt-125m")
             self._load_llm(requested_model, max_model_len)
             outputs = self._llm.generate([self._to_prompt(payload)], _sampling_params(payload), use_tqdm=False)
@@ -367,3 +374,11 @@ else:
     app = None
     vllm_t4_ref = None
     vllm_a10g_ref = None
+
+
+def _execute_artifact_workload(payload: dict[str, Any]) -> dict[str, Any] | None:
+    try:
+        from gpucall.providers.worker_artifacts import execute_artifact_workload
+    except ImportError:
+        return None
+    return execute_artifact_workload(payload)

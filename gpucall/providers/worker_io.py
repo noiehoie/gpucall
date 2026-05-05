@@ -25,14 +25,17 @@ def prompt_from_payload(payload: dict[str, Any]) -> str:
 
 
 def fetch_data_ref_text(ref: dict[str, Any]) -> str:
+    return _decode_ref_body(fetch_data_ref_bytes(ref), ref)
+
+
+def fetch_data_ref_bytes(ref: dict[str, Any]) -> bytes:
     uri = str(ref["uri"])
     max_bytes = _max_ref_bytes(ref)
     parsed = urlparse(uri)
     if parsed.scheme == "s3":
         if not _ambient_s3_allowed(ref):
             raise ValueError("s3 data refs require gateway-presigned worker capability")
-        body = _fetch_s3_ref_bytes(parsed.netloc, parsed.path.lstrip("/"), max_bytes, ref)
-        return _decode_ref_body(body, ref)
+        return _fetch_s3_ref_bytes(parsed.netloc, parsed.path.lstrip("/"), max_bytes, ref)
     if parsed.scheme not in {"http", "https"}:
         raise ValueError(f"unsupported data ref scheme: {parsed.scheme}")
     if ref.get("gateway_presigned") is not True:
@@ -42,7 +45,12 @@ def fetch_data_ref_text(ref: dict[str, Any]) -> str:
         body = response.read(max_bytes + 1)
     if len(body) > max_bytes:
         raise ValueError(f"data ref exceeds worker limit: {max_bytes} bytes")
-    return _decode_ref_body(body, ref)
+    expected = ref.get("sha256")
+    if expected:
+        actual = hashlib.sha256(body).hexdigest()
+        if actual != expected:
+            raise ValueError("data ref sha256 mismatch")
+    return body
 
 
 def _fetch_s3_ref_bytes(bucket: str, key: str, max_bytes: int, ref: dict[str, Any]) -> bytes:

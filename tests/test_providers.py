@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import contextlib
+import json
 from pathlib import Path
 import sys
 import types
@@ -8,6 +9,7 @@ import types
 import pytest
 
 from gpucall.domain import CompiledPlan, ExecutionMode, InlineValue, ProviderSpec
+from gpucall.domain import ArtifactExportSpec, DataClassification
 from gpucall.providers.hyperstack_adapter import DEFAULT_HYPERSTACK_IMAGE, HyperstackAdapter
 from gpucall.providers import (
     AzureComputeVMAdapter,
@@ -937,6 +939,36 @@ def test_hyperstack_worker_script_invokes_vllm_not_smoke_output(monkeypatch, tmp
                 return 0
 
     class FakeSSH:
+        uploaded: dict[str, str] = {}
+
+        def open_sftp(self):
+            parent = self
+
+            class FakeHandle:
+                def __init__(self, path: str) -> None:
+                    self.path = path
+
+                def __enter__(self):
+                    return self
+
+                def __exit__(self, *_args):
+                    return None
+
+                def write(self, value: str) -> None:
+                    parent.uploaded[self.path] = value
+
+            class FakeSFTP:
+                def mkdir(self, _path: str) -> None:
+                    return None
+
+                def file(self, path: str, _mode: str):
+                    return FakeHandle(path)
+
+                def close(self) -> None:
+                    return None
+
+            return FakeSFTP()
+
         def exec_command(self, cmd: str):
             commands.append(cmd)
             return None, FakeStdout(), None
@@ -957,7 +989,60 @@ def test_hyperstack_worker_script_invokes_vllm_not_smoke_output(monkeypatch, tmp
     assert commands
     assert "vllm==0.6.3" in commands[0]
     assert "GPUCALL_WORKER_MODEL" in commands[0]
+    assert "cat > /tmp/gpucall/input.json" not in commands[0]
+    assert "cat > /tmp/gpucall/worker.py" not in commands[0]
     assert "[HYPERSTACK]" not in commands[0]
+
+
+def test_hyperstack_wait_parses_artifact_manifest(tmp_path) -> None:
+    manifest = {
+        "artifact_id": "a" * 64,
+        "artifact_chain_id": "chain-1",
+        "version": "0001",
+        "classification": "restricted",
+        "ciphertext_uri": "s3://bucket/artifact.bin",
+        "ciphertext_sha256": "b" * 64,
+        "key_id": "tenant-key",
+        "producer_plan_hash": "c" * 64,
+    }
+
+    class FakeChannel:
+        def exit_status_ready(self) -> bool:
+            return True
+
+        def recv_exit_status(self) -> int:
+            return 0
+
+    class FakeStdout:
+        channel = FakeChannel()
+
+        def read(self) -> bytes:
+            return json.dumps(manifest).encode("utf-8")
+
+    class FakeSSH:
+        def exec_command(self, _cmd: str):
+            return None, FakeStdout(), None
+
+    adapter = HyperstackAdapter(api_key="test", lease_manifest_path=str(tmp_path / "leases.jsonl"), ssh_remote_cidr="203.0.113.0/24")
+    plan = plan_payload_plan().model_copy(
+        update={
+            "task": "fine-tune",
+            "data_classification": DataClassification.RESTRICTED,
+            "artifact_export": ArtifactExportSpec(artifact_chain_id="chain-1", version="0001", key_id="tenant-key"),
+        }
+    )
+    handle = RemoteHandle(
+        provider="hyperstack",
+        remote_id="vm-1",
+        expires_at=plan.expires_at(),
+        meta={"ssh_channel": FakeChannel(), "ssh_client": FakeSSH()},
+    )
+
+    result = adapter._wait_sync(handle, plan)
+
+    assert result.kind == "artifact_manifest"
+    assert result.artifact_manifest is not None
+    assert result.artifact_manifest.artifact_chain_id == "chain-1"
 
 
 
@@ -1043,6 +1128,36 @@ def _fake_ssh():
             return b"ok"
 
     class FakeSSH:
+        uploaded: dict[str, str] = {}
+
+        def open_sftp(self):
+            parent = self
+
+            class FakeHandle:
+                def __init__(self, path: str) -> None:
+                    self.path = path
+
+                def __enter__(self):
+                    return self
+
+                def __exit__(self, *_args):
+                    return None
+
+                def write(self, value: str) -> None:
+                    parent.uploaded[self.path] = value
+
+            class FakeSFTP:
+                def mkdir(self, _path: str) -> None:
+                    return None
+
+                def file(self, path: str, _mode: str):
+                    return FakeHandle(path)
+
+                def close(self) -> None:
+                    return None
+
+            return FakeSFTP()
+
         def exec_command(self, _cmd: str):
             return None, FakeStdout(), None
 
