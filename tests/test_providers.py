@@ -83,11 +83,16 @@ def test_provider_contract_modules_are_separated_and_sourced() -> None:
         assert f"gpucall.providers.{module}" in registry
 
     expected = {
+        "local-ollama": "https://github.com/ollama/ollama/blob/main/docs/api.md#generate-a-completion",
         "modal": "https://modal.com/docs/reference/modal.Function#from_name",
         "runpod-serverless": "https://docs.runpod.io/serverless/endpoints/send-requests",
         "runpod-vllm-serverless": "https://docs.runpod.io/serverless/vllm/openai-compatibility",
         "runpod-flash": "https://docs.runpod.io/serverless/vllm/openai-compatibility",
         "hyperstack": "https://portal.hyperstack.cloud/knowledge/api-documentation",
+        "azure-compute-vm": "https://learn.microsoft.com/en-us/python/api/azure-mgmt-compute/azure.mgmt.compute.operations.virtualmachinesoperations",
+        "gcp-confidential-space-vm": "https://cloud.google.com/python/docs/reference/compute/latest/google.cloud.compute_v1.services.instances.InstancesClient",
+        "scaleway-instance": "https://www.scaleway.com/en/developer-api/",
+        "ovhcloud-public-cloud-instance": "https://github.com/ovh/python-ovh",
     }
     for adapter, source in expected.items():
         descriptor = adapter_descriptor(adapter)
@@ -99,6 +104,27 @@ def test_provider_contract_modules_are_separated_and_sourced() -> None:
     assert flashboot.endpoint_contract == "runpod-flash-sdk"
     assert flashboot.output_contract == "gpucall-provider-result"
     assert flashboot.production_eligible is False
+
+    for adapter in ("azure-compute-vm", "gcp-confidential-space-vm", "scaleway-instance", "ovhcloud-public-cloud-instance"):
+        descriptor = adapter_descriptor(adapter)
+        assert descriptor is not None
+        assert descriptor.production_eligible is False
+        assert descriptor.production_rejection_reason
+
+
+def test_provider_descriptor_conformance_invariants() -> None:
+    from gpucall.providers.registry import registered_adapter_descriptors
+
+    descriptors = registered_adapter_descriptors()
+
+    for name, descriptor in descriptors.items():
+        if descriptor.production_eligible and not descriptor.local_execution:
+            assert descriptor.official_sources, f"{name} is production-eligible without official sources"
+
+    assert descriptors["echo"].production_eligible is False
+    for name in ("azure-compute-vm", "gcp-confidential-space-vm", "scaleway-instance", "ovhcloud-public-cloud-instance"):
+        assert descriptors[name].production_eligible is False
+        assert "lifecycle-only" in str(descriptors[name].production_rejection_reason)
 
 
 def test_factory_builds_configured_adapter_types() -> None:
@@ -760,8 +786,8 @@ async def test_ovhcloud_adapter_uses_official_sdk_paths(monkeypatch) -> None:
     calls: list[tuple[str, str, dict[str, object]]] = []
 
     class FakeClient:
-        def __init__(self, endpoint: str) -> None:
-            calls.append(("CLIENT", endpoint, {}))
+        def __init__(self, **kwargs) -> None:
+            calls.append(("CLIENT", "", kwargs))
 
         def post(self, path: str, **kwargs):
             calls.append(("POST", path, kwargs))
@@ -782,12 +808,16 @@ async def test_ovhcloud_adapter_uses_official_sdk_paths(monkeypatch) -> None:
         flavor_id="flavor-id",
         image_id="image-id",
         ssh_key_id="ssh-key-id",
+        application_key="ak",
+        application_secret="as",
+        consumer_key="ck",
         params={"instance_name": "gpucall-test"},
     )
 
     handle = await adapter.start(plan_payload_plan())
     await adapter.cancel_remote(handle)
 
+    assert calls[0] == ("CLIENT", "", {"endpoint": "ovh-eu", "application_key": "ak", "application_secret": "as", "consumer_key": "ck"})
     assert calls[1] == (
         "POST",
         "/cloud/project/service/instance",

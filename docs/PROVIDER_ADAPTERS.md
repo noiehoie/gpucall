@@ -14,6 +14,7 @@ Each adapter module registers its own builder and `ProviderAdapterDescriptor`. R
 ## Non-Negotiable Behavior
 
 - Lifecycle-only adapters raise `PROVIDER_WORKER_BOOTSTRAP_NOT_CONFIGURED` with HTTP `501` from `wait` and `stream`.
+- Lifecycle-only adapters are not production-eligible for deterministic routing until worker bootstrap, result retrieval, and billable live validation are implemented.
 - Credentials are loaded from environment variables or `credentials.yml`; secrets do not belong in provider YAML.
 - Provider YAML examples declare resource shape and routing metadata only.
 

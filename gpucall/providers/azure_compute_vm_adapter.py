@@ -116,7 +116,16 @@ class AzureComputeVMAdapter(LifecycleOnlyMixin, ProviderAdapter):
 
 @register_adapter(
     "azure-compute-vm",
-    descriptor=ProviderAdapterDescriptor(endpoint_contract="azure-compute-vm", output_contract="gpucall-provider-result"),
+    descriptor=ProviderAdapterDescriptor(
+        endpoint_contract="azure-compute-vm",
+        output_contract="gpucall-provider-result",
+        production_eligible=False,
+        production_rejection_reason="Azure VM adapter is lifecycle-only until worker bootstrap and result retrieval are configured",
+        official_sources=(
+            "https://learn.microsoft.com/en-us/python/api/azure-mgmt-compute/azure.mgmt.compute.operations.virtualmachinesoperations",
+            "https://learn.microsoft.com/en-us/python/api/azure-identity/azure.identity.defaultazurecredential",
+        ),
+    ),
 )
 def build_azure_compute_vm_adapter(spec, credentials):
     azure = credentials.get("azure", {})

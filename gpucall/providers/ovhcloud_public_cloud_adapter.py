@@ -22,6 +22,9 @@ class OVHCloudPublicCloudInstanceAdapter(LifecycleOnlyMixin, ProviderAdapter):
         flavor_id: str | None = None,
         image_id: str | None = None,
         ssh_key_id: str | None = None,
+        application_key: str | None = None,
+        application_secret: str | None = None,
+        consumer_key: str | None = None,
         params: dict[str, Any] | None = None,
     ) -> None:
         self.name = name
@@ -31,6 +34,9 @@ class OVHCloudPublicCloudInstanceAdapter(LifecycleOnlyMixin, ProviderAdapter):
         self.flavor_id = flavor_id
         self.image_id = image_id
         self.ssh_key_id = ssh_key_id
+        self.application_key = application_key or os.getenv("OVH_APPLICATION_KEY")
+        self.application_secret = application_secret or os.getenv("OVH_APPLICATION_SECRET")
+        self.consumer_key = consumer_key or os.getenv("OVH_CONSUMER_KEY")
         self.params = params or {}
 
     async def start(self, plan: CompiledPlan) -> RemoteHandle:
@@ -45,7 +51,14 @@ class OVHCloudPublicCloudInstanceAdapter(LifecycleOnlyMixin, ProviderAdapter):
             import ovh
         except ImportError as exc:
             raise ProviderError("ovh is required for ovhcloud-public-cloud-instance", retryable=False, status_code=501) from exc
-        return ovh.Client(endpoint=self.endpoint)
+        kwargs: dict[str, str] = {"endpoint": self.endpoint}
+        if self.application_key:
+            kwargs["application_key"] = self.application_key
+        if self.application_secret:
+            kwargs["application_secret"] = self.application_secret
+        if self.consumer_key:
+            kwargs["consumer_key"] = self.consumer_key
+        return ovh.Client(**kwargs)
 
     def _start_sync(self, plan: CompiledPlan) -> dict[str, Any]:
         required = {
@@ -79,7 +92,17 @@ class OVHCloudPublicCloudInstanceAdapter(LifecycleOnlyMixin, ProviderAdapter):
 
 @register_adapter(
     "ovhcloud-public-cloud-instance",
-    descriptor=ProviderAdapterDescriptor(endpoint_contract="ovhcloud-public-cloud-instance", output_contract="gpucall-provider-result"),
+    descriptor=ProviderAdapterDescriptor(
+        endpoint_contract="ovhcloud-public-cloud-instance",
+        output_contract="gpucall-provider-result",
+        production_eligible=False,
+        production_rejection_reason="OVHcloud Public Cloud adapter is lifecycle-only until worker bootstrap and result retrieval are configured",
+        official_sources=(
+            "https://github.com/ovh/python-ovh",
+            "https://api.ovh.com/console/#/cloud/project/%7BserviceName%7D/instance#POST",
+            "https://api.ovh.com/console/#/cloud/project/%7BserviceName%7D/instance/%7BinstanceId%7D#DELETE",
+        ),
+    ),
 )
 def build_ovhcloud_public_cloud_instance_adapter(spec, credentials):
     ovhcloud = credentials.get("ovhcloud", {})
@@ -91,5 +114,8 @@ def build_ovhcloud_public_cloud_instance_adapter(spec, credentials):
         flavor_id=spec.instance,
         image_id=spec.image,
         ssh_key_id=spec.key_name,
+        application_key=ovhcloud.get("application_key"),
+        application_secret=ovhcloud.get("application_secret"),
+        consumer_key=ovhcloud.get("consumer_key"),
         params=spec.provider_params,
     )

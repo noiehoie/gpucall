@@ -101,7 +101,16 @@ class GCPConfidentialSpaceVMAdapter(LifecycleOnlyMixin, ProviderAdapter):
 
 @register_adapter(
     "gcp-confidential-space-vm",
-    descriptor=ProviderAdapterDescriptor(endpoint_contract="gcp-confidential-space-vm", output_contract="gpucall-provider-result"),
+    descriptor=ProviderAdapterDescriptor(
+        endpoint_contract="gcp-confidential-space-vm",
+        output_contract="gpucall-provider-result",
+        production_eligible=False,
+        production_rejection_reason="GCP Confidential Space VM adapter is lifecycle-only until worker bootstrap and result retrieval are configured",
+        official_sources=(
+            "https://cloud.google.com/python/docs/reference/compute/latest/google.cloud.compute_v1.services.instances.InstancesClient",
+            "https://cloud.google.com/compute/docs/reference/rest/v1/instances/insert",
+        ),
+    ),
 )
 def build_gcp_confidential_space_vm_adapter(spec, credentials):
     gcp = credentials.get("gcp", {})

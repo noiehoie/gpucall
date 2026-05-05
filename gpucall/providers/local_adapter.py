@@ -69,6 +69,9 @@ class LocalOllamaAdapter(ProviderAdapter):
         endpoint_contract="ollama-generate",
         output_contract="ollama-generate",
         local_execution=True,
+        official_sources=(
+            "https://github.com/ollama/ollama/blob/main/docs/api.md#generate-a-completion",
+        ),
     ),
 )
 def build_local_ollama_adapter(spec, _credentials):

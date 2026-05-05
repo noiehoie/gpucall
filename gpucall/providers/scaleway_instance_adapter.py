@@ -84,7 +84,16 @@ class ScalewayInstanceAdapter(LifecycleOnlyMixin, ProviderAdapter):
 
 @register_adapter(
     "scaleway-instance",
-    descriptor=ProviderAdapterDescriptor(endpoint_contract="scaleway-instance", output_contract="gpucall-provider-result"),
+    descriptor=ProviderAdapterDescriptor(
+        endpoint_contract="scaleway-instance",
+        output_contract="gpucall-provider-result",
+        production_eligible=False,
+        production_rejection_reason="Scaleway Instance adapter is lifecycle-only until worker bootstrap and result retrieval are configured",
+        official_sources=(
+            "https://www.scaleway.com/en/developer-api/",
+            "https://www.scaleway.com/en/developers/api/instances/",
+        ),
+    ),
 )
 def build_scaleway_instance_adapter(spec, credentials):
     scaleway = credentials.get("scaleway", {})
