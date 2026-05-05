@@ -2,8 +2,11 @@ from __future__ import annotations
 
 import json
 
+import httpx
+
 from gpucall_recipe_draft.cli import main
 from gpucall_recipe_draft.core import DraftInputs, draft_from_intake, intake_from_error, llm_prompt_from_intake
+from gpucall_recipe_draft.llm import LLMConfig, call_openai_compatible, draft_with_llm, load_llm_config, write_default_config
 
 
 def test_intake_redacts_sensitive_payload_and_keeps_metadata() -> None:
@@ -136,3 +139,55 @@ def test_recipe_draft_cli_llm_prompt(tmp_path, capsys) -> None:
 
     assert "answer_question_about_image" in output
     assert "Sanitized gpucall request metadata" in output
+
+
+def test_llm_config_template_contains_no_secret(tmp_path) -> None:
+    path = write_default_config(tmp_path / "recipe-draft.json")
+    data = json.loads(path.read_text(encoding="utf-8"))
+
+    assert data["provider"] == "openai-compatible"
+    assert "api_key" not in data
+    assert data["api_key_env"] is None
+    assert load_llm_config(path).base_url == data["base_url"]
+
+
+def test_openai_compatible_call_uses_user_config_and_env_key(monkeypatch) -> None:
+    seen = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen["url"] = str(request.url)
+        seen["auth"] = request.headers.get("authorization")
+        seen["payload"] = json.loads(request.read())
+        return httpx.Response(200, json={"choices": [{"message": {"content": "{\"ok\": true}"}}]})
+
+    monkeypatch.setenv("DRAFT_API_KEY", "secret-key")
+    config = LLMConfig(
+        provider="openai-compatible",
+        base_url="https://llm.example/v1",
+        model="draft-model",
+        api_key_env="DRAFT_API_KEY",
+    )
+
+    text = call_openai_compatible(config, "safe prompt", transport=httpx.MockTransport(handler))
+
+    assert text == "{\"ok\": true}"
+    assert seen["url"] == "https://llm.example/v1/chat/completions"
+    assert seen["auth"] == "Bearer secret-key"
+    assert seen["payload"]["model"] == "draft-model"
+    assert seen["payload"]["messages"][1]["content"] == "safe prompt"
+
+
+def test_draft_with_llm_returns_review_artifact() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"choices": [{"message": {"content": "{\"proposed_recipe\": {\"name\": \"x\"}}"}}]})
+
+    result = draft_with_llm(
+        {"sanitized_request": {"task": "infer", "intent": "summarize_text"}},
+        LLMConfig(provider="openai-compatible", base_url="http://local/v1", model="local-model"),
+        transport=httpx.MockTransport(handler),
+    )
+
+    assert result["phase"] == "llm-draft"
+    assert result["source"] == "sanitized_request_only"
+    assert result["human_review_required"] is True
+    assert result["parsed_json"] == {"proposed_recipe": {"name": "x"}}

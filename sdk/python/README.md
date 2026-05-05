@@ -60,4 +60,20 @@ gpucall-recipe-draft draft --input intake.json --output recipe-draft.json
 gpucall-recipe-draft llm-prompt --input intake.json --output llm-prompt.txt
 ```
 
+`gpucall-recipe-draft` does not choose an LLM for you. If you want the helper to call an LLM directly, create a user-controlled config. Secrets stay in environment variables, not in the config file.
+
+```bash
+gpucall-recipe-draft init-config
+
+# Edit ~/.config/gpucall/recipe-draft.json:
+# {
+#   "provider": "openai-compatible",
+#   "base_url": "http://127.0.0.1:11434/v1",
+#   "model": "qwen2.5:7b-instruct",
+#   "api_key_env": null
+# }
+
+gpucall-recipe-draft draft-llm --input intake.json --output llm-draft.json
+```
+
 Generated drafts are review artifacts for gpucall administrators, not production config.

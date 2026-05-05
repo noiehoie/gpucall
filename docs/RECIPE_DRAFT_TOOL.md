@@ -26,7 +26,7 @@ In normal operation, unknown workloads are handled as follows:
 4. The caller sends the sanitized intake and draft to the gpucall administrator through an approved operator channel.
 5. The administrator reviews the draft, writes canonical recipe/provider YAML, validates it, and deploys it for future runs.
 
-The helper may use an approved LLM for the drafting step because recipe drafting is a design task, not runtime routing. The LLM must receive only sanitized intake JSON. The helper is designed to remove raw prompt bodies, message bodies, documents, media bytes, DataRef URIs, presigned URLs, and secrets before any LLM prompt is produced. This minimizes leakage risk; it is not a license to submit raw confidential data to an external LLM.
+The helper may use an approved LLM for the drafting step because recipe drafting is a design task, not runtime routing. gpucall does not choose that LLM. The caller or operator decides whether to use a local model, a company-approved gateway, or a cloud AI API. The LLM must receive only sanitized intake JSON. The helper is designed to remove raw prompt bodies, message bodies, documents, media bytes, DataRef URIs, presigned URLs, and secrets before any LLM prompt is produced. This minimizes leakage risk; it is not a license to submit raw confidential data to an external LLM.
 
 ## Two Phases
 
@@ -67,6 +67,36 @@ To use an approved LLM, generate the prompt from sanitized intake only:
 
 ```bash
 gpucall-recipe-draft llm-prompt --input intake.json --output llm-prompt.txt
+```
+
+If the helper should call an LLM directly, create a user-controlled config:
+
+```bash
+gpucall-recipe-draft init-config
+```
+
+This writes a template to `$XDG_CONFIG_HOME/gpucall/recipe-draft.json`, or `~/.config/gpucall/recipe-draft.json` when `XDG_CONFIG_HOME` is unset.
+
+```json
+{
+  "api_key_env": null,
+  "base_url": "http://127.0.0.1:11434/v1",
+  "model": "qwen2.5:7b-instruct",
+  "provider": "openai-compatible",
+  "temperature": 0,
+  "timeout_seconds": 120
+}
+```
+
+The config selects the LLM endpoint. It must not contain secret values. Put API keys in the environment and set `api_key_env` to the environment variable name.
+
+```bash
+export RECIPE_DRAFT_API_KEY="..."
+
+gpucall-recipe-draft draft-llm \
+  --input intake.json \
+  --config ~/.config/gpucall/recipe-draft.json \
+  --output llm-draft.json
 ```
 
 The output is not production config. It is a review artifact for gpucall administrators.
