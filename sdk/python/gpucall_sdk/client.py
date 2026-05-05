@@ -532,6 +532,10 @@ def _normalize_messages(messages: list[dict[str, Any]]) -> list[dict[str, str]]:
     return normalized
 
 
+def _messages_to_prompt(messages: list[dict[str, Any]]) -> str:
+    return "\n".join(message["content"] for message in _normalize_messages(messages))
+
+
 def _extract_result_text(result: dict[str, Any]) -> str:
     payload = result.get("result") or {}
     value = payload.get("value")
