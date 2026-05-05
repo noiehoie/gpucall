@@ -4,6 +4,7 @@ import json
 
 from gpucall.providers.modal_worker import (
     _format_prompt_for_model,
+    _json_object_guided_schema,
     vision_prompt_from_payload,
 )
 
@@ -55,6 +56,10 @@ def test_structured_worker_prompt_demands_json_only() -> None:
 
     messages = json.loads(prompt)
     assert "Return only valid JSON" in messages[0]["content"]
+
+
+def test_json_object_guided_decoding_uses_object_schema() -> None:
+    assert _json_object_guided_schema() == {"type": "object", "additionalProperties": True}
 
 
 def test_qwen_fallback_template_preserves_all_messages() -> None:

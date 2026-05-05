@@ -24,6 +24,10 @@ def _is_structured_payload(payload: dict[str, Any]) -> bool:
     return response_format.get("type") in {"json_object", "json_schema"}
 
 
+def _json_object_guided_schema() -> dict[str, Any]:
+    return {"type": "object", "additionalProperties": True}
+
+
 def _system_prompt_for_payload(payload: dict[str, Any]) -> str:
     return str(payload.get("system_prompt") or "")
 
@@ -284,15 +288,7 @@ if modal is not None:
         except Exception:
             return None
         if response_format.get("type") == "json_object":
-            try:
-                import inspect
-
-                params = inspect.signature(GuidedDecodingParams).parameters
-                if "json_object" in params:
-                    return GuidedDecodingParams(json_object=True)
-            except Exception:
-                pass
-            return GuidedDecodingParams(json={})
+            return GuidedDecodingParams(json=_json_object_guided_schema())
         if response_format.get("type") == "json_schema":
             return GuidedDecodingParams(json=response_format.get("json_schema") or {})
         return None
