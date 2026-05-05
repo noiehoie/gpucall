@@ -348,7 +348,7 @@ if modal is not None:
         from PIL import Image
 
         image = Image.open(io.BytesIO(image_body)).convert("RGB")
-        model_id = model or os.getenv("GPUCALL_MODAL_VISION_MODEL", "Salesforce/blip-vqa-base")
+        model_id = model or os.getenv("GPUCALL_MODAL_VISION_MODEL", "Salesforce/blip-image-captioning-base")
         processor, vision_model, _ = _load_vision_model(model_id)
         prompt = vision_prompt_from_payload(payload).strip()
         if model_id == "Salesforce/blip-vqa-base" and not prompt:
