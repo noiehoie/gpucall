@@ -108,7 +108,7 @@ def test_sync_endpoint_returns_structured_context_overflow(tmp_path) -> None:
                     {
                         "uri": "s3://bucket/large.txt",
                         "sha256": "a" * 64,
-                        "bytes": 100000,
+                        "bytes": 1000000,
                         "content_type": "text/plain",
                     }
                 ],
@@ -119,6 +119,17 @@ def test_sync_endpoint_returns_structured_context_overflow(tmp_path) -> None:
     assert response.status_code == 422
     assert payload["code"] == "NO_AUTO_SELECTABLE_RECIPE"
     assert payload["context"]["required_model_len"] > payload["context"]["largest_auto_recipe_model_len"]
+    assert payload["context"]["largest_auto_recipe_model_len"] == 32768
+
+
+def test_readyz_reports_recipe_and_provider_capacity(tmp_path) -> None:
+    with TestClient(create_app(copy_config(tmp_path))) as client:
+        response = client.get("/readyz")
+
+    payload = response.json()
+    assert response.status_code == 200
+    assert payload["recipes"]["text-infer-standard"]["max_model_len"] == 32768
+    assert payload["providers"]["local-echo"]["max_model_len"] == 32768
 
 
 def test_runtime_state_uses_xdg_state_dir(tmp_path, monkeypatch) -> None:

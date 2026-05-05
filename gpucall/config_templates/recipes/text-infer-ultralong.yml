@@ -1,0 +1,25 @@
+name: text-infer-ultralong
+task: infer
+data_classification: confidential
+allowed_modes:
+  - sync
+  - async
+min_vram_gb: 80
+max_model_len: 524288
+timeout_seconds: 600
+lease_ttl_seconds: 900
+tokenizer_family: qwen
+gpu: any
+max_input_bytes: 536870912
+allowed_mime_prefixes:
+  - text/
+default_temperature: 0.7
+structured_temperature: 0.0
+structured_system_prompt: "Return only valid JSON when response_format requests JSON. Do not include markdown fences or prose."
+system_prompt: "Answer the user's request directly."
+stop_tokens:
+  - "<|im_end|>"
+  - "<|endoftext|>"
+repetition_penalty: 1.05
+guided_decoding: true
+output_validation_attempts: 1

@@ -4,6 +4,7 @@ import json
 
 from gpucall.providers.modal_worker import (
     _format_prompt_for_model,
+    vision_prompt_from_payload,
 )
 
 
@@ -72,3 +73,16 @@ def test_qwen_fallback_template_preserves_all_messages() -> None:
     assert "first" in prompt
     assert "second" in prompt
     assert "third" in prompt
+
+
+def test_vision_prompt_excludes_gateway_system_prompt() -> None:
+    payload = {
+        "system_prompt": "Answer the user's vision request directly from the supplied image and prompt.",
+        "inline_inputs": {"prompt": {"value": "この画像に写っている新聞紙名を答えよ", "content_type": "text/plain"}},
+        "messages": [{"role": "system", "content": "Answer the user's vision request directly from the supplied image and prompt."}],
+    }
+
+    prompt = vision_prompt_from_payload(payload)
+
+    assert prompt == "この画像に写っている新聞紙名を答えよ"
+    assert "vision request directly" not in prompt

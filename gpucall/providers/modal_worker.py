@@ -101,6 +101,22 @@ def prompt_from_payload(payload: dict[str, Any]) -> str:
     return "\n".join(part for part in parts if part)
 
 
+def vision_prompt_from_payload(payload: dict[str, Any]) -> str:
+    inline = payload.get("inline_inputs") or {}
+    prompt_item = inline.get("prompt")
+    if isinstance(prompt_item, dict) and str(prompt_item.get("value", "")):
+        return str(prompt_item.get("value", ""))
+    messages = payload.get("messages") or []
+    parts = [
+        str(message.get("content", ""))
+        for message in messages
+        if str(message.get("role", "user")) != "system" and str(message.get("content", ""))
+    ]
+    if parts:
+        return "\n".join(parts)
+    return ""
+
+
 def _fetch_data_ref_text(ref: dict[str, Any]) -> str:
     body = _fetch_data_ref_bytes(ref)
     content_type = str(ref.get("content_type") or "").lower()
@@ -330,7 +346,7 @@ if modal is not None:
         image = Image.open(io.BytesIO(image_body)).convert("RGB")
         model_id = model or os.getenv("GPUCALL_MODAL_VISION_MODEL", "Salesforce/blip-image-captioning-base")
         processor, vision_model, _ = _load_vision_model(model_id)
-        prompt = prompt_from_payload({**payload, "input_refs": []}).strip()
+        prompt = vision_prompt_from_payload(payload).strip()
         if prompt:
             inputs = processor(image, prompt, return_tensors="pt")
         else:

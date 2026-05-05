@@ -232,6 +232,24 @@ def create_app(config_dir: Path | None = None) -> FastAPI:
         return {
             "status": "ready",
             "object_store": runtime.object_store is not None,
+            "recipes": {
+                name: {
+                    "task": recipe.task,
+                    "auto_select": recipe.auto_select,
+                    "max_model_len": recipe.max_model_len,
+                }
+                for name, recipe in sorted(runtime.compiler.recipes.items())
+            },
+            "providers": {
+                name: {
+                    "adapter": provider.adapter,
+                    "max_model_len": provider.max_model_len,
+                    "model": provider.model,
+                    "modes": [mode.value for mode in provider.modes],
+                    "input_contracts": provider.input_contracts,
+                }
+                for name, provider in sorted(runtime.compiler.providers.items())
+            },
         }
 
     @app.get("/metrics")

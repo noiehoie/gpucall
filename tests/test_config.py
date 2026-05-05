@@ -10,7 +10,9 @@ from pathlib import Path
 import pytest
 
 from gpucall.config import ConfigError, load_config
-from gpucall.domain import SecurityTier
+from gpucall.compiler import GovernanceCompiler
+from gpucall.domain import DataRef, ExecutionMode, SecurityTier, TaskRequest
+from gpucall.registry import ObservedRegistry
 
 
 def copy_config(tmp_path: Path) -> Path:
@@ -205,6 +207,9 @@ def test_standard_config_includes_verified_text_recipes(tmp_path) -> None:
 
     assert config.recipes["text-infer-light"].task == "infer"
     assert config.recipes["text-infer-standard"].task == "infer"
+    assert config.recipes["text-infer-large"].max_model_len == 65536
+    assert config.recipes["text-infer-exlarge"].max_model_len == 131072
+    assert config.recipes["text-infer-ultralong"].max_model_len == 524288
     assert config.recipes["text-infer-standard"].max_model_len == 32768
     assert config.recipes["text-infer-standard"].max_input_bytes == 16777216
     assert config.recipes["vision-image-standard"].task == "vision"
@@ -212,12 +217,40 @@ def test_standard_config_includes_verified_text_recipes(tmp_path) -> None:
     assert config.recipes["vision-image-standard"].allowed_mime_prefixes == ["image/"]
     assert config.providers["hyperstack-a100"].max_model_len == 32768
     assert config.providers["hyperstack-a100"].declared_model_max_len == 32768
+    assert config.providers["hyperstack-qwen-1m"].max_model_len == 524288
+    assert config.providers["hyperstack-qwen-1m"].declared_model_max_len == 1010000
+    assert config.providers["hyperstack-qwen-1m"].model == "Qwen/Qwen2.5-7B-Instruct-1M"
     assert config.providers["hyperstack-a100"].trust_profile.dedicated_gpu is True
     assert config.providers["modal-a10g"].trust_profile.security_tier is SecurityTier.ENCRYPTED_CAPSULE
     assert config.providers["modal-a10g"].supports_vision is False
     assert "image" not in config.providers["modal-a10g"].input_contracts
     assert config.providers["modal-vision-a10g"].supports_vision is True
     assert "image" in config.providers["modal-vision-a10g"].input_contracts
+
+
+def test_standard_config_routes_news_sized_prompts_to_long_recipes(tmp_path) -> None:
+    config = load_config(copy_config(tmp_path))
+    compiler = GovernanceCompiler(policy=config.policy, recipes=config.recipes, providers=config.providers, registry=ObservedRegistry())
+
+    large_plan = compiler.compile(
+        TaskRequest(
+            task="infer",
+            mode=ExecutionMode.SYNC,
+            input_refs=[DataRef(uri="s3://bucket/chosun.txt", sha256="a" * 64, bytes=32000, content_type="text/plain")],
+        )
+    )
+    ultralong_plan = compiler.compile(
+        TaskRequest(
+            task="infer",
+            mode=ExecutionMode.SYNC,
+            input_refs=[DataRef(uri="s3://bucket/integrated.txt", sha256="b" * 64, bytes=220000, content_type="text/plain")],
+        )
+    )
+
+    assert large_plan.recipe_name == "text-infer-large"
+    assert large_plan.provider_chain[0] == "hyperstack-qwen-1m"
+    assert ultralong_plan.recipe_name == "text-infer-ultralong"
+    assert ultralong_plan.provider_chain[0] == "hyperstack-qwen-1m"
 
 
 def test_validate_config_cli(tmp_path) -> None:
