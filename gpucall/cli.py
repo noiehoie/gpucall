@@ -18,12 +18,12 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if __package__ in (None, ""):
     sys.path.insert(0, str(PROJECT_ROOT))
 
-from gpucall.app import build_runtime, create_app
+from gpucall.app import build_runtime, create_app, plan_with_worker_refs, worker_readable_request
 from gpucall.compiler import GovernanceCompiler
 from gpucall.config import ConfigError, default_config_dir, default_state_dir, load_config
 from gpucall.configure import configure_command
 from gpucall.credentials import configured_credentials, credentials_path, load_credentials
-from gpucall.domain import ExecutionMode, JobState, TaskRequest
+from gpucall.domain import ExecutionMode, JobState, PresignPutRequest, TaskRequest
 from gpucall.provider_catalog import live_provider_catalog_findings
 from gpucall.registry import ObservedRegistry
 from gpucall.audit import AuditTrail
@@ -408,14 +408,11 @@ async def provider_smoke_command(
     if recipe is None:
         raise SystemExit(f"unknown recipe: {recipe_name}")
     started_at = datetime.now(timezone.utc)
-    request = TaskRequest(
-        task=recipe.task,
-        mode=mode,
-        recipe=recipe.name,
-        requested_provider=provider,
-        inline_inputs={"prompt": {"value": "gpucall provider smoke"}},
-    )
+    request = _provider_smoke_request(runtime, recipe, mode, provider)
     plan = runtime.compiler.compile(request)
+    if request.input_refs or request.split_learning is not None:
+        worker_request = worker_readable_request(request, runtime)
+        plan = plan_with_worker_refs(plan, worker_request.input_refs, split_learning=worker_request.split_learning)
     summary: dict[str, object]
     if mode is ExecutionMode.STREAM:
         chunks = []
@@ -455,6 +452,30 @@ async def provider_smoke_command(
     result = await runtime.dispatcher.execute_sync(plan)
     summary = {"provider": provider, "recipe": recipe_name, "mode": mode.value, "result": result.model_dump(mode="json")}
     _finish_provider_smoke_summary(summary, started_at=started_at, config_dir=config_dir, plan=plan, write_artifact=write_artifact)
+
+
+def _provider_smoke_request(runtime, recipe, mode: ExecutionMode, provider: str) -> TaskRequest:
+    inline_inputs = {"prompt": {"value": "gpucall provider smoke", "content_type": "text/plain"}}
+    input_refs = []
+    if recipe.task == "vision":
+        if runtime.object_store is None:
+            raise SystemExit("provider-smoke vision requires object_store")
+        image_body = _smoke_png()
+        digest = hashlib.sha256(image_body).hexdigest()
+        presigned = runtime.object_store.presign_put(
+            PresignPutRequest(name="provider-smoke.png", bytes=len(image_body), sha256=digest, content_type="image/png")
+        )
+        upload = httpx.put(presigned.upload_url, content=image_body, headers={"content-type": "image/png"}, timeout=30.0)
+        upload.raise_for_status()
+        input_refs.append(presigned.data_ref)
+    return TaskRequest(
+        task=recipe.task,
+        mode=mode,
+        recipe=recipe.name,
+        requested_provider=provider,
+        inline_inputs=inline_inputs,
+        input_refs=input_refs,
+    )
 
 
 def _finish_provider_smoke_summary(
