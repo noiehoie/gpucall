@@ -3,6 +3,7 @@ from gpucall_sdk.client import (
     GPUCallCallerRoutingError,
     GPUCallClient,
     GPUCallEmptyOutputError,
+    GPUCallHTTPError,
     GPUCallJSONParseError,
     GPUCallWarning,
 )
@@ -12,6 +13,7 @@ __all__ = [
     "GPUCallCallerRoutingError",
     "GPUCallClient",
     "GPUCallEmptyOutputError",
+    "GPUCallHTTPError",
     "GPUCallJSONParseError",
     "GPUCallWarning",
 ]

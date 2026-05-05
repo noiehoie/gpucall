@@ -22,4 +22,4 @@ stop_tokens:
   - "<|endoftext|>"
 repetition_penalty: 1.05
 guided_decoding: true
-output_validation_attempts: 1
+output_validation_attempts: 2

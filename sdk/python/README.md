@@ -8,6 +8,18 @@ Install from a private wheel:
 uv add "gpucall-sdk @ file:///path/to/gpucall_sdk-2.0.0a2-py3-none-any.whl"
 ```
 
+Verify that the SDK console script is installed:
+
+```bash
+uv run gpucall-recipe-draft --help
+```
+
+When running directly from a source checkout instead of an installed wheel, use:
+
+```bash
+uv run python -m gpucall_recipe_draft.cli --help
+```
+
 Configure:
 
 ```bash

@@ -212,6 +212,8 @@ def test_standard_config_includes_verified_text_recipes(tmp_path) -> None:
     assert config.recipes["text-infer-ultralong"].max_model_len == 524288
     assert config.recipes["text-infer-standard"].max_model_len == 32768
     assert config.recipes["text-infer-standard"].max_input_bytes == 16777216
+    assert config.recipes["text-infer-light"].output_validation_attempts == 2
+    assert config.recipes["text-infer-ultralong"].output_validation_attempts == 2
     assert config.recipes["vision-image-standard"].task == "vision"
     assert config.recipes["vision-image-standard"].auto_select is True
     assert config.recipes["vision-image-standard"].allowed_mime_prefixes == ["image/"]

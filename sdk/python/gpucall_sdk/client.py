@@ -34,6 +34,23 @@ class GPUCallCallerRoutingError(ValueError):
     pass
 
 
+class GPUCallHTTPError(RuntimeError):
+    def __init__(
+        self,
+        message: str,
+        *,
+        status_code: int,
+        code: str | None = None,
+        response_body: dict[str, Any] | None = None,
+        failure_artifact: dict[str, Any] | None = None,
+    ) -> None:
+        super().__init__(message)
+        self.status_code = status_code
+        self.code = code
+        self.response_body = response_body or {}
+        self.failure_artifact = failure_artifact
+
+
 class GPUCallClient:
     def __init__(
         self,
@@ -609,10 +626,14 @@ def _raise_typed_http_error(response: httpx.Response, exc: httpx.HTTPStatusError
     detail = None
     code = None
     raw_text = None
+    payload: dict[str, Any] | None = None
+    failure_artifact: dict[str, Any] | None = None
     try:
         payload = response.json()
         detail = payload.get("detail")
         code = payload.get("code")
+        artifact = payload.get("failure_artifact") or (payload.get("error") or {}).get("gpucall_failure_artifact")
+        failure_artifact = artifact if isinstance(artifact, dict) else None
         result = payload.get("result") or {}
         raw_text = result.get("value") if isinstance(result, dict) else None
     except Exception:
@@ -621,7 +642,13 @@ def _raise_typed_http_error(response: httpx.Response, exc: httpx.HTTPStatusError
         raise GPUCallEmptyOutputError(detail or "gpucall returned an empty output") from exc
     if code == "MALFORMED_OUTPUT":
         raise GPUCallJSONParseError(detail or "gpucall returned malformed JSON output", raw_text=raw_text) from exc
-    raise RuntimeError(detail or str(exc)) from exc
+    raise GPUCallHTTPError(
+        detail or str(exc),
+        status_code=response.status_code,
+        code=code,
+        response_body=payload,
+        failure_artifact=failure_artifact,
+    ) from exc
 
 
 class _HTTPLogRedactionFilter(logging.Filter):

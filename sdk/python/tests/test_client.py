@@ -6,7 +6,7 @@ import httpx
 
 import pytest
 
-from gpucall_sdk import GPUCallCallerRoutingError, GPUCallClient, GPUCallEmptyOutputError, GPUCallJSONParseError
+from gpucall_sdk import GPUCallCallerRoutingError, GPUCallClient, GPUCallEmptyOutputError, GPUCallHTTPError, GPUCallJSONParseError
 from gpucall_sdk.client import DEFAULT_AUTO_UPLOAD_THRESHOLD_BYTES
 
 
@@ -177,6 +177,35 @@ def test_422_malformed_output_maps_to_typed_exception() -> None:
     with pytest.raises(GPUCallJSONParseError) as exc_info:
         client.chat.completions.create(messages=[{"role": "user", "content": "json"}], parse_json=True)
     assert exc_info.value.raw_text == "{bad"
+
+
+def test_http_error_preserves_failure_artifact() -> None:
+    artifact = {
+        "schema_version": 1,
+        "failure_id": "pf-test",
+        "failure_kind": "provider_runtime",
+        "caller_action": "retry_later",
+    }
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            502,
+            json={
+                "detail": "provider execution failed (PROVIDER_PROVISION_FAILED)",
+                "code": "PROVIDER_PROVISION_FAILED",
+                "failure_artifact": artifact,
+            },
+        )
+
+    client = GPUCallClient("http://gpucall.test", transport=httpx.MockTransport(handler))
+
+    with pytest.raises(GPUCallHTTPError) as exc_info:
+        client.chat.completions.create(messages=[{"role": "user", "content": "hello"}])
+
+    assert exc_info.value.status_code == 502
+    assert exc_info.value.code == "PROVIDER_PROVISION_FAILED"
+    assert exc_info.value.failure_artifact == artifact
+    assert exc_info.value.response_body["failure_artifact"] == artifact
 
 
 def test_redacts_presigned_httpx_url_log_args() -> None:
