@@ -58,6 +58,19 @@ class DraftInputs:
     expected_output: str | None = None
 
 
+@dataclass(frozen=True)
+class PreflightInputs:
+    task: str
+    mode: str = "sync"
+    intent: str | None = None
+    business_need: str | None = None
+    classification: str = "confidential"
+    expected_output: str = "plain_text"
+    content_types: tuple[str, ...] = ()
+    byte_values: tuple[int, ...] = ()
+    required_model_len: int | None = None
+
+
 def intake_from_error(inputs: DraftInputs) -> dict[str, Any]:
     error = dict(inputs.error_payload)
     code = _first_present(error, "code", ("error", "code")) or _infer_code_from_detail(error)
@@ -102,6 +115,90 @@ def intake_from_error(inputs: DraftInputs) -> dict[str, Any]:
             "presigned_url_forwarded": False,
         },
         "redacted_error_payload": redacted,
+    }
+
+
+def intake_from_preflight(inputs: PreflightInputs) -> dict[str, Any]:
+    desired_capabilities = _capabilities_for(task=inputs.task, intent=inputs.intent)
+    max_bytes = max(inputs.byte_values) if inputs.byte_values else None
+    return {
+        "schema_version": 1,
+        "phase": "deterministic-preflight-intake",
+        "llm_safe": True,
+        "sanitized_request": {
+            "task": inputs.task,
+            "mode": inputs.mode,
+            "intent": inputs.intent,
+            "business_need": _sanitize_free_text(inputs.business_need or ""),
+            "classification": inputs.classification,
+            "expected_output": inputs.expected_output,
+            "error": {
+                "code": None,
+                "detail_kind": "preflight",
+                "context": {
+                    "required_model_len": inputs.required_model_len,
+                    "largest_auto_recipe_model_len": None,
+                },
+                "rejections": [],
+            },
+            "input_summary": {
+                "content_types": sorted(set(inputs.content_types)),
+                "max_bytes": max_bytes,
+                "input_count": len(inputs.content_types) or len(inputs.byte_values),
+                "prompt_lengths": [],
+            },
+            "desired_capabilities": desired_capabilities,
+        },
+        "redaction_report": {
+            "removed_fields": [],
+            "sensitive_keys": sorted(SENSITIVE_KEYS),
+            "prompt_body_forwarded": False,
+            "data_ref_uri_forwarded": False,
+            "presigned_url_forwarded": False,
+        },
+        "redacted_error_payload": {},
+    }
+
+
+def compare_preflight_to_failure(preflight: Mapping[str, Any], failure_intake: Mapping[str, Any]) -> dict[str, Any]:
+    before = _as_mapping(preflight.get("sanitized_request"))
+    after = _as_mapping(failure_intake.get("sanitized_request"))
+    checks = [
+        ("task", before.get("task"), after.get("task")),
+        ("mode", before.get("mode"), after.get("mode")),
+        ("intent", before.get("intent"), after.get("intent")),
+        ("classification", before.get("classification"), after.get("classification")),
+        ("expected_output", before.get("expected_output"), after.get("expected_output")),
+        (
+            "required_model_len",
+            _as_mapping(_as_mapping(before.get("error")).get("context")).get("required_model_len"),
+            _as_mapping(_as_mapping(after.get("error")).get("context")).get("required_model_len"),
+        ),
+        ("content_types", _as_mapping(before.get("input_summary")).get("content_types"), _as_mapping(after.get("input_summary")).get("content_types")),
+        ("max_bytes", _as_mapping(before.get("input_summary")).get("max_bytes"), _as_mapping(after.get("input_summary")).get("max_bytes")),
+        ("desired_capabilities", before.get("desired_capabilities"), after.get("desired_capabilities")),
+    ]
+    differences = [
+        {"field": field, "preflight": expected, "actual": actual}
+        for field, expected, actual in checks
+        if _normalized(expected) != _normalized(actual)
+    ]
+    if not differences:
+        classification = "preflight_matched_runtime_failure"
+        action = "check admin status and provider/runtime failures"
+    elif any(item["field"] in {"task", "required_model_len", "content_types", "desired_capabilities"} for item in differences):
+        classification = "workload_drift"
+        action = "submit updated intake"
+    else:
+        classification = "metadata_drift"
+        action = "review caller preflight metadata"
+    return {
+        "schema_version": 1,
+        "phase": "preflight-failure-compare",
+        "preflight_matched_actual": not differences,
+        "classification": classification,
+        "differences": differences,
+        "recommended_action": action,
     }
 
 
@@ -334,6 +431,12 @@ def _as_mapping(value: Any) -> Mapping[str, Any]:
 
 def _str_or_none(value: Any) -> str | None:
     return str(value) if value is not None else None
+
+
+def _normalized(value: Any) -> Any:
+    if isinstance(value, list):
+        return sorted(_normalized(item) for item in value)
+    return value
 
 
 def _sanitize_free_text(value: str) -> str:

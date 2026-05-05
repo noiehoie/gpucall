@@ -4,7 +4,14 @@ import json
 from pathlib import Path
 
 from gpucall_recipe_draft.cli import main
-from gpucall_recipe_draft.core import DraftInputs, draft_from_intake, intake_from_error
+from gpucall_recipe_draft.core import (
+    DraftInputs,
+    PreflightInputs,
+    compare_preflight_to_failure,
+    draft_from_intake,
+    intake_from_error,
+    intake_from_preflight,
+)
 from gpucall_recipe_draft.submit import build_submission_bundle, submit_bundle
 
 
@@ -132,3 +139,104 @@ def test_recipe_draft_cli_submit(tmp_path, capsys) -> None:
     assert output_path
     assert Path(output_path).exists()
     assert json.loads(Path(output_path).read_text(encoding="utf-8"))["source"] == "caller"
+
+
+def test_preflight_intake_is_sanitized_metadata_only() -> None:
+    intake = intake_from_preflight(
+        PreflightInputs(
+            task="vision",
+            mode="sync",
+            intent="understand_document_image",
+            classification="confidential",
+            content_types=("image/png",),
+            byte_values=(123456,),
+            required_model_len=9000,
+        )
+    )
+
+    sanitized = intake["sanitized_request"]
+    assert intake["phase"] == "deterministic-preflight-intake"
+    assert sanitized["task"] == "vision"
+    assert sanitized["desired_capabilities"] == [
+        "document_understanding",
+        "visual_question_answering",
+        "instruction_following",
+    ]
+    assert sanitized["input_summary"]["content_types"] == ["image/png"]
+    assert sanitized["input_summary"]["max_bytes"] == 123456
+    assert intake["redaction_report"]["prompt_body_forwarded"] is False
+
+
+def test_compare_preflight_to_failure_detects_workload_drift() -> None:
+    preflight = intake_from_preflight(
+        PreflightInputs(task="infer", intent="summarize_text", content_types=("text/plain",), required_model_len=40000)
+    )
+    failure = intake_from_preflight(
+        PreflightInputs(task="vision", intent="understand_document_image", content_types=("image/png",), required_model_len=9000)
+    )
+
+    report = compare_preflight_to_failure(preflight, failure)
+
+    assert report["preflight_matched_actual"] is False
+    assert report["classification"] == "workload_drift"
+    assert {item["field"] for item in report["differences"]} >= {"task", "content_types", "desired_capabilities"}
+
+
+def test_compare_preflight_to_failure_matches() -> None:
+    preflight = intake_from_preflight(
+        PreflightInputs(task="infer", intent="summarize_text", content_types=("text/plain",), required_model_len=40000)
+    )
+    failure = intake_from_preflight(
+        PreflightInputs(task="infer", intent="summarize_text", content_types=("text/plain",), required_model_len=40000)
+    )
+
+    report = compare_preflight_to_failure(preflight, failure)
+
+    assert report["preflight_matched_actual"] is True
+    assert report["classification"] == "preflight_matched_runtime_failure"
+    assert report["differences"] == []
+
+
+def test_recipe_draft_cli_preflight_and_compare(tmp_path, capsys) -> None:
+    preflight_path = tmp_path / "preflight.json"
+    failure_path = tmp_path / "failure.json"
+    assert (
+        main(
+            [
+                "preflight",
+                "--task",
+                "infer",
+                "--intent",
+                "summarize_text",
+                "--content-type",
+                "text/plain",
+                "--required-model-len",
+                "40000",
+                "--output",
+                str(preflight_path),
+            ]
+        )
+        == 0
+    )
+    failure_path.write_text(
+        json.dumps(
+            {
+                "sanitized_request": {
+                    "task": "infer",
+                    "mode": "sync",
+                    "intent": "summarize_text",
+                    "classification": "confidential",
+                    "expected_output": "plain_text",
+                    "desired_capabilities": ["summarization"],
+                    "error": {"context": {"required_model_len": 40000}},
+                    "input_summary": {"content_types": ["text/plain"], "max_bytes": None},
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    assert main(["compare", "--preflight", str(preflight_path), "--failure", str(failure_path)]) == 0
+    output = json.loads(capsys.readouterr().out)
+
+    assert output["preflight_matched_actual"] is True

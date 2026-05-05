@@ -5,7 +5,7 @@ import json
 import pytest
 import yaml
 
-from gpucall.recipe_admin import canonical_recipe_from_artifact, main, process_inbox
+from gpucall.recipe_admin import canonical_recipe_from_artifact, main, process_inbox, recipe_request_status
 
 
 def test_admin_materializes_intake_to_canonical_recipe() -> None:
@@ -115,6 +115,9 @@ def test_admin_process_inbox_materializes_submission(tmp_path) -> None:
     assert (output_dir / "infer-summarize-text-draft.yml").exists()
     assert (inbox / "processed" / "rr-test.json").exists()
     assert (inbox / "reports" / "rr-test.report.json").exists()
+    status = recipe_request_status("rr-test", inbox)
+    assert status["state"] == "processed"
+    assert status["report"]["policy"] == "accept-all"
 
 
 def test_admin_cli_process_inbox_requires_accept_all(tmp_path) -> None:
@@ -157,3 +160,14 @@ def test_admin_cli_watch_one_iteration(tmp_path, capsys) -> None:
     output = json.loads(capsys.readouterr().out)
 
     assert output["processed"][0]["ok"] is True
+
+
+def test_admin_cli_status(tmp_path, capsys) -> None:
+    inbox = tmp_path / "inbox"
+    inbox.mkdir()
+    (inbox / "rr-pending.json").write_text(json.dumps({"request_id": "rr-pending"}), encoding="utf-8")
+
+    assert main(["status", "--request-id", "rr-pending", "--inbox-dir", str(inbox)]) == 0
+    output = json.loads(capsys.readouterr().out)
+
+    assert output["state"] == "pending"

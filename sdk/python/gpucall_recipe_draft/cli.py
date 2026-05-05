@@ -6,7 +6,15 @@ import sys
 from pathlib import Path
 from typing import Any
 
-from gpucall_recipe_draft.core import DraftInputs, draft_from_intake, dumps_json, intake_from_error
+from gpucall_recipe_draft.core import (
+    DraftInputs,
+    PreflightInputs,
+    compare_preflight_to_failure,
+    draft_from_intake,
+    dumps_json,
+    intake_from_error,
+    intake_from_preflight,
+)
 from gpucall_recipe_draft.submit import build_submission_bundle, submit_bundle
 
 
@@ -27,6 +35,23 @@ def main(argv: list[str] | None = None) -> int:
     draft = subcommands.add_parser("draft", help="create a human-reviewed recipe/provider draft from sanitized intake JSON")
     draft.add_argument("--input", "-i", required=True, help="path to sanitized intake JSON, or '-' for stdin")
     draft.add_argument("--output", "-o", help="write draft JSON to this path")
+
+    preflight = subcommands.add_parser("preflight", help="create sanitized intake before running an unknown workload")
+    preflight.add_argument("--task", required=True)
+    preflight.add_argument("--mode", default="sync")
+    preflight.add_argument("--intent")
+    preflight.add_argument("--business-need", default="")
+    preflight.add_argument("--classification", default="confidential")
+    preflight.add_argument("--expected-output", default="plain_text")
+    preflight.add_argument("--content-type", action="append", default=[])
+    preflight.add_argument("--bytes", dest="byte_values", action="append", type=int, default=[])
+    preflight.add_argument("--required-model-len", type=int)
+    preflight.add_argument("--output", "-o", help="write preflight intake JSON to this path")
+
+    compare = subcommands.add_parser("compare", help="compare a preflight intake with a post-failure intake")
+    compare.add_argument("--preflight", required=True)
+    compare.add_argument("--failure", required=True)
+    compare.add_argument("--output", "-o")
 
     submit = subcommands.add_parser("submit", help="submit sanitized intake/draft to a file-based gpucall recipe request inbox")
     submit.add_argument("--intake", required=True, help="path to sanitized intake JSON")
@@ -52,6 +77,26 @@ def main(argv: list[str] | None = None) -> int:
         return 0
     if args.command == "draft":
         result = draft_from_intake(_load_json(args.input))
+        _write_json(result, args.output)
+        return 0
+    if args.command == "preflight":
+        result = intake_from_preflight(
+            PreflightInputs(
+                task=args.task,
+                mode=args.mode,
+                intent=args.intent,
+                business_need=args.business_need,
+                classification=args.classification,
+                expected_output=args.expected_output,
+                content_types=tuple(args.content_type),
+                byte_values=tuple(args.byte_values),
+                required_model_len=args.required_model_len,
+            )
+        )
+        _write_json(result, args.output)
+        return 0
+    if args.command == "compare":
+        result = compare_preflight_to_failure(_load_json(args.preflight), _load_json(args.failure))
         _write_json(result, args.output)
         return 0
     if args.command == "submit":

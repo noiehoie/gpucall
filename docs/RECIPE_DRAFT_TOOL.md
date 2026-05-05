@@ -11,7 +11,7 @@ It is intentionally separate from the gateway runtime.
 
 ## When To Use It
 
-Use this tool when gpucall returns a structured governance failure such as:
+Use this tool before a new workload class reaches production, and after gpucall returns a structured governance failure such as:
 
 - `NO_AUTO_SELECTABLE_RECIPE`
 - `no eligible provider after policy, recipe, and circuit constraints`
@@ -21,19 +21,42 @@ Do not use it to bypass policy. If gpucall fails closed, the workload should not
 
 In normal operation, unknown workloads are handled as follows:
 
-1. gpucall returns `422 NO_AUTO_SELECTABLE_RECIPE` when no installed recipe honestly describes the request.
-2. gpucall returns `503 no eligible provider after policy, recipe, and circuit constraints` when a recipe exists but no eligible provider can execute it.
-3. The caller runs this helper outside the gateway runtime.
-4. The caller sends the sanitized intake and draft to the gpucall administrator through an approved operator channel.
-5. The administrator decides whether the request should become a supported workload class.
-6. If recipe authoring needs LLM assistance, the administrator runs that inside an audited gpucall admin workflow.
-7. The administrator reviews the draft, writes canonical recipe/provider YAML, validates it, and deploys it for future runs.
+1. Before production, caller runs `preflight` for the planned workload metadata.
+2. Caller submits the sanitized preflight intake to the gpucall administrator.
+3. Administrator materializes or rejects the workload class.
+4. If production still fails, gpucall returns `422 NO_AUTO_SELECTABLE_RECIPE` or `503 no eligible provider after policy, recipe, and circuit constraints`.
+5. Caller runs post-failure `intake` and `compare` to distinguish workload drift from admin/provider/runtime failure.
 
 The helper is designed to remove raw prompt bodies, message bodies, documents, media bytes, DataRef URIs, presigned URLs, and secrets. It produces an intake artifact for gpucall administrators. LLM-assisted recipe authoring belongs on the administrator side, after the administrator accepts the sanitized intake into an audited workflow.
 
 ## Two Phases
 
-### Phase 1: Deterministic Intake
+### Phase 0: Preflight Intake
+
+Use preflight before sending a new workload class to production. This does not contact gpucall and does not inspect prompt bodies.
+
+```bash
+gpucall-recipe-draft preflight \
+  --task vision \
+  --mode sync \
+  --intent understand_document_image \
+  --content-type image/png \
+  --bytes 2000000 \
+  --required-model-len 9000 \
+  --classification confidential \
+  --output preflight-intake.json
+```
+
+Submit this intake before the first production run:
+
+```bash
+gpucall-recipe-draft submit \
+  --intake preflight-intake.json \
+  --inbox-dir /path/to/gpucall-recipe-requests/inbox \
+  --source news-system
+```
+
+### Phase 1: Post-Failure Intake
 
 This phase does not use an LLM.
 
@@ -55,6 +78,21 @@ The output contains:
 - content types, byte sizes, and estimated context limits
 - recipe rejection reasons
 - redaction report
+
+If a preflight was submitted but the production run still failed, compare the preflight with the actual failure intake:
+
+```bash
+gpucall-recipe-draft compare \
+  --preflight preflight-intake.json \
+  --failure failure-intake.json \
+  --output drift-report.json
+```
+
+The report classifies the failure as:
+
+- `preflight_matched_runtime_failure`: metadata matched; check admin status, provider availability, validation, or runtime failures.
+- `workload_drift`: actual workload differed materially from preflight; submit updated intake.
+- `metadata_drift`: lower-level metadata differed; review the caller preflight declaration.
 
 ### Phase 2: Local Draft Summary
 
@@ -173,3 +211,11 @@ gpucall-recipe-admin watch \
 ```
 
 This still only writes recipe YAML. It does not deploy, does not edit provider specs, and does not bypass `validate-config` or launch checks.
+
+To inspect a submitted request:
+
+```bash
+gpucall-recipe-admin status \
+  --request-id rr-20260506T010203Z-abcdef123456 \
+  --inbox-dir /path/to/gpucall-recipe-requests/inbox
+```

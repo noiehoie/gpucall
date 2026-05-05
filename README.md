@@ -97,7 +97,9 @@ Unknown workloads return a structured governance error instead of being silently
 When this happens, run the independent helper:
 
 ```bash
+gpucall-recipe-draft preflight --task vision --intent understand_document_image --content-type image/png --bytes 2000000 --output preflight-intake.json
 gpucall-recipe-draft intake --error gpucall-error.json --intent <caller-intent> --output intake.json
+gpucall-recipe-draft compare --preflight preflight-intake.json --failure intake.json --output drift-report.json
 gpucall-recipe-draft draft --input intake.json --output recipe-draft.json
 gpucall-recipe-draft submit --intake intake.json --draft recipe-draft.json --inbox-dir /path/to/inbox
 ```

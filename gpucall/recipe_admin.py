@@ -56,6 +56,10 @@ def main(argv: list[str] | None = None) -> int:
     process.add_argument("--accept-all", action="store_true")
     process.add_argument("--force", action="store_true")
 
+    status = subcommands.add_parser("status", help="show status for a submitted recipe request id")
+    status.add_argument("--request-id", required=True)
+    status.add_argument("--inbox-dir", required=True)
+
     watch = subcommands.add_parser("watch", help="poll a file-based recipe request inbox and materialize submissions")
     watch.add_argument("--inbox-dir", required=True)
     watch.add_argument("--output-dir", required=True)
@@ -94,6 +98,9 @@ def main(argv: list[str] | None = None) -> int:
             force=args.force,
         )
         sys.stdout.write(json.dumps({"processed": results}, ensure_ascii=False, indent=2, sort_keys=True) + "\n")
+        return 0
+    if args.command == "status":
+        sys.stdout.write(json.dumps(recipe_request_status(args.request_id, args.inbox_dir), ensure_ascii=False, indent=2, sort_keys=True) + "\n")
         return 0
     if args.command == "watch":
         if not args.accept_all:
@@ -207,6 +214,27 @@ def process_inbox(
             _move_submission(path, destination)
             results.append({"submission": str(destination), "ok": False, "error": str(exc)})
     return results
+
+
+def recipe_request_status(request_id: str, inbox_dir: str | Path) -> dict[str, Any]:
+    inbox = Path(inbox_dir)
+    candidates = [
+        ("pending", inbox / f"{request_id}.json"),
+        ("processed", inbox / "processed" / f"{request_id}.json"),
+        ("failed", inbox / "failed" / f"{request_id}.json"),
+    ]
+    for state, path in candidates:
+        if path.exists():
+            result: dict[str, Any] = {"request_id": request_id, "state": state, "path": str(path)}
+            report_path = inbox / "reports" / f"{request_id}.report.json"
+            if report_path.exists():
+                result["report_path"] = str(report_path)
+                try:
+                    result["report"] = json.loads(report_path.read_text(encoding="utf-8"))
+                except json.JSONDecodeError:
+                    result["report_error"] = "invalid report JSON"
+            return result
+    return {"request_id": request_id, "state": "missing"}
 
 
 def write_recipe_yaml(recipe: Mapping[str, Any], output_dir: str | Path, *, force: bool = False) -> Path:

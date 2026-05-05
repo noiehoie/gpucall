@@ -48,6 +48,13 @@ The SDK distribution also includes `gpucall-recipe-draft`, an operator-assist CL
 It does not change gateway routing and it does not bypass policy. The `intake` phase is deterministic and strips prompt bodies, DataRef URIs, presigned URLs, and secrets before any draft is produced.
 
 ```bash
+gpucall-recipe-draft preflight \
+  --task vision \
+  --intent understand_document_image \
+  --content-type image/png \
+  --bytes 2000000 \
+  --output preflight-intake.json
+
 gpucall-recipe-draft intake \
   --error gpucall-error.json \
   --task vision \
@@ -56,6 +63,11 @@ gpucall-recipe-draft intake \
   --output intake.json
 
 gpucall-recipe-draft draft --input intake.json --output recipe-draft.json
+
+gpucall-recipe-draft compare \
+  --preflight preflight-intake.json \
+  --failure intake.json \
+  --output drift-report.json
 
 gpucall-recipe-draft submit \
   --intake intake.json \
