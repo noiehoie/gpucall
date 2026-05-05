@@ -11,11 +11,12 @@ It is intentionally separate from the gateway runtime.
 
 ## When To Use It
 
-Use this tool before a new workload class reaches production, and after gpucall returns a structured governance failure such as:
+Use this tool before a new workload class reaches production, after gpucall returns a structured governance failure, and after a `200 OK` result that the caller's own business validator rejects.
 
 - `NO_AUTO_SELECTABLE_RECIPE`
 - `no eligible provider after policy, recipe, and circuit constraints`
 - context length, media type, mode, or capability mismatch
+- low-quality success, where gpucall executed a recipe but the selected model or recipe did not satisfy the caller's declared capability
 
 gpucall failure responses include a machine-readable `failure_artifact`. This artifact is the preferred input for operator workflows because it contains only redacted routing metadata:
 
@@ -38,6 +39,7 @@ In normal operation, unknown workloads are handled as follows:
 3. Administrator materializes or rejects the workload class.
 4. If production still fails, gpucall returns `422 NO_AUTO_SELECTABLE_RECIPE` or `503 no eligible provider after policy, recipe, and circuit constraints`.
 5. Caller runs post-failure `intake` and `compare` to distinguish workload drift from admin/provider/runtime failure.
+6. If gpucall returns `200 OK` but caller-side validation fails, caller runs `quality` and submits that sanitized feedback to the same admin inbox.
 
 The helper is designed to remove raw prompt bodies, message bodies, documents, media bytes, DataRef URIs, presigned URLs, and secrets. It produces an intake artifact for gpucall administrators. LLM-assisted recipe authoring belongs on the administrator side, after the administrator accepts the sanitized intake into an audited workflow.
 
@@ -81,7 +83,9 @@ gpucall-recipe-draft intake \
   --intent understand_document_image \
   --business-need "画像の内容に関する質問に答えたい" \
   --classification confidential \
-  --output intake.json
+  --output intake.json \
+  --inbox-dir /path/to/gpucall-recipe-requests/inbox \
+  --source news-system
 ```
 
 The output contains:
@@ -105,6 +109,32 @@ The report classifies the failure as:
 - `preflight_matched_runtime_failure`: metadata matched; check admin status, provider availability, validation, or runtime failures.
 - `workload_drift`: actual workload differed materially from preflight; submit updated intake.
 - `metadata_drift`: lower-level metadata differed; review the caller preflight declaration.
+
+### Phase 1b: Low-Quality Success Feedback
+
+This phase is for `200 OK` responses that gpucall considers successful but the caller's business validator rejects. The gateway must not inspect prompt meaning or media content, so the caller owns this quality judgment.
+
+Do not pass raw output, prompt bodies, image bytes, DataRef URIs, or presigned URLs. Pass only metadata and the caller-side failure category.
+
+```bash
+gpucall-recipe-draft quality \
+  --task vision \
+  --mode sync \
+  --intent understand_document_image \
+  --expected-output headline_list \
+  --content-type image/jpeg \
+  --bytes 1136521 \
+  --dimension 1200x2287 \
+  --selected-recipe vision-image-standard \
+  --selected-provider modal-vision-a10g \
+  --selected-provider-model Salesforce/blip-vqa-base \
+  --quality-failure-kind insufficient_ocr \
+  --quality-failure-reason "short answer only; expected top headlines" \
+  --inbox-dir /path/to/gpucall-recipe-requests/inbox \
+  --source news-system
+```
+
+This creates a `deterministic-quality-feedback-intake` submission. It is a request to review recipe/provider capability, not proof that gpucall routed incorrectly.
 
 ### Phase 2: Local Draft Summary
 
@@ -131,6 +161,8 @@ gpucall-recipe-draft submit \
 ```
 
 The submitted bundle contains only the sanitized intake and optional draft. It does not contain raw prompt bodies, DataRef URIs, presigned URLs, or secrets.
+
+For caller automation, `preflight`, `intake`, and `quality` also accept `--inbox-dir` and `--source`. When these flags are present, the helper writes the sanitized intake and submits it in one command.
 
 ## Caller-Facing Intents
 

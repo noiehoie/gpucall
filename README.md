@@ -87,7 +87,7 @@ const result = await client.infer({ prompt: "hello" });
 
 When adapting another product or service to gpucall, use the one-shot migration prompt in [docs/EXTERNAL_SYSTEM_ADAPTATION_PROMPT.md](docs/EXTERNAL_SYSTEM_ADAPTATION_PROMPT.md). External systems should normally send only `task`, `mode`, and input data or `DataRef`; recipe and provider selection belong to the gateway.
 
-If a caller's workload is unknown to the installed recipes/providers, gpucall fails closed instead of guessing or routing to a weaker model. Use the SDK-distributed `gpucall-recipe-draft` helper to sanitize the failure payload and prepare a recipe/provider request for gpucall administrators. See [docs/RECIPE_DRAFT_TOOL.md](docs/RECIPE_DRAFT_TOOL.md).
+If a caller's workload is unknown to the installed recipes/providers, gpucall fails closed instead of guessing or routing to a weaker model. If gpucall returns `200 OK` but the caller's own business validator rejects the output, treat it as low-quality success feedback. Use the SDK-distributed `gpucall-recipe-draft` helper to sanitize either case and submit a recipe/provider request for gpucall administrators. See [docs/RECIPE_DRAFT_TOOL.md](docs/RECIPE_DRAFT_TOOL.md).
 
 Unknown workloads return a structured governance error instead of being silently routed:
 
@@ -100,13 +100,14 @@ When this happens, run the independent helper:
 
 ```bash
 gpucall-recipe-draft preflight --task vision --intent understand_document_image --content-type image/png --bytes 2000000 --output preflight-intake.json
-gpucall-recipe-draft intake --error gpucall-error.json --intent <caller-intent> --output intake.json
+gpucall-recipe-draft intake --error gpucall-error.json --intent <caller-intent> --output intake.json --inbox-dir /path/to/inbox
+gpucall-recipe-draft quality --task vision --intent understand_document_image --quality-failure-kind insufficient_ocr --inbox-dir /path/to/inbox
 gpucall-recipe-draft compare --preflight preflight-intake.json --failure intake.json --output drift-report.json
 gpucall-recipe-draft draft --input intake.json --output recipe-draft.json
 gpucall-recipe-draft submit --intake intake.json --draft recipe-draft.json --inbox-dir /path/to/inbox
 ```
 
-The caller-side helper is deterministic and does not call an LLM. It prepares sanitized intake and an optional local draft summary so gpucall administrators can decide whether the workload class should become a supported recipe. Submit the sanitized intake through your organization's approved gpucall operator channel. If the administrator adopts an accept-all policy, the gateway-side `gpucall-recipe-admin materialize --accept-all` helper can turn sanitized intake into canonical recipe YAML. Any draft or materialized recipe still requires `validate-config`, tests, launch checks, and deployment before subsequent requests can use it.
+The caller-side helper is deterministic and does not call an LLM. It prepares sanitized intake and an optional local draft summary so gpucall administrators can decide whether the workload class should become a supported recipe. With `--inbox-dir`, the helper submits sanitized intake directly to the approved file-based operator inbox. If the administrator adopts an accept-all policy, the gateway-side `gpucall-recipe-admin materialize --accept-all` helper can turn sanitized intake into canonical recipe YAML. Any draft or materialized recipe still requires `validate-config`, tests, launch checks, and deployment before subsequent requests can use it.
 
 For fully file-based automation without adding a gateway API, administrators can run:
 

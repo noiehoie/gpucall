@@ -55,7 +55,7 @@ boto3.
 
 ## Recipe Draft Helper
 
-The SDK distribution also includes `gpucall-recipe-draft`, an operator-assist CLI for workloads that the gateway cannot route with its current recipes/providers.
+The SDK distribution also includes `gpucall-recipe-draft`, an operator-assist CLI for workloads that the gateway cannot route with its current recipes/providers, and for `200 OK` outputs that fail caller-side business quality checks.
 
 It does not change gateway routing and it does not bypass policy. The `intake` phase is deterministic and strips prompt bodies, DataRef URIs, presigned URLs, and secrets before any draft is produced.
 
@@ -72,7 +72,23 @@ gpucall-recipe-draft intake \
   --task vision \
   --intent understand_document_image \
   --classification confidential \
-  --output intake.json
+  --output intake.json \
+  --inbox-dir /path/to/gpucall-recipe-requests/inbox \
+  --source news-system
+
+gpucall-recipe-draft quality \
+  --task vision \
+  --intent understand_document_image \
+  --content-type image/jpeg \
+  --bytes 1136521 \
+  --dimension 1200x2287 \
+  --selected-recipe vision-image-standard \
+  --selected-provider modal-vision-a10g \
+  --selected-provider-model Salesforce/blip-vqa-base \
+  --quality-failure-kind insufficient_ocr \
+  --quality-failure-reason "short answer only; expected top headlines" \
+  --inbox-dir /path/to/gpucall-recipe-requests/inbox \
+  --source news-system
 
 gpucall-recipe-draft draft --input intake.json --output recipe-draft.json
 
@@ -90,4 +106,4 @@ gpucall-recipe-draft submit \
 
 The caller-side helper does not call an LLM. It creates deterministic intake material for gpucall administrators. If LLM-assisted recipe authoring is needed, it should run on the gpucall administrator side as an audited admin workflow.
 
-Generated drafts are review artifacts, not production config. `submit` writes a JSON bundle to a file-based inbox; it does not call the gpucall gateway API.
+Generated drafts are review artifacts, not production config. `submit` writes a JSON bundle to a file-based inbox; it does not call the gpucall gateway API. `preflight`, `intake`, and `quality` can also write to the inbox directly with `--inbox-dir`.

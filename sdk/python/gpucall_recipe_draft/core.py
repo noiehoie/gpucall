@@ -71,6 +71,27 @@ class PreflightInputs:
     required_model_len: int | None = None
 
 
+@dataclass(frozen=True)
+class QualityFeedbackInputs:
+    task: str
+    mode: str = "sync"
+    intent: str | None = None
+    business_need: str | None = None
+    classification: str = "confidential"
+    expected_output: str = "plain_text"
+    content_types: tuple[str, ...] = ()
+    byte_values: tuple[int, ...] = ()
+    dimensions: tuple[str, ...] = ()
+    required_model_len: int | None = None
+    selected_recipe: str | None = None
+    selected_provider: str | None = None
+    selected_provider_model: str | None = None
+    output_validated: bool | None = None
+    quality_failure_kind: str = "low_quality_success"
+    quality_failure_reason: str = ""
+    observed_output_kind: str | None = None
+
+
 def intake_from_error(inputs: DraftInputs) -> dict[str, Any]:
     error = dict(inputs.error_payload)
     failure_artifact = _failure_artifact(error)
@@ -168,6 +189,65 @@ def intake_from_preflight(inputs: PreflightInputs) -> dict[str, Any]:
     }
 
 
+def intake_from_quality_feedback(inputs: QualityFeedbackInputs) -> dict[str, Any]:
+    desired_capabilities = _capabilities_for(task=inputs.task, intent=inputs.intent)
+    max_bytes = max(inputs.byte_values) if inputs.byte_values else None
+    return {
+        "schema_version": 1,
+        "phase": "deterministic-quality-feedback-intake",
+        "llm_safe": True,
+        "sanitized_request": {
+            "task": inputs.task,
+            "mode": inputs.mode,
+            "intent": inputs.intent,
+            "business_need": _sanitize_free_text(inputs.business_need or ""),
+            "classification": inputs.classification,
+            "expected_output": inputs.expected_output,
+            "error": {
+                "code": "LOW_QUALITY_SUCCESS",
+                "detail_kind": "quality_feedback",
+                "failure_kind": "low_quality_success",
+                "caller_action": "submit_quality_feedback_to_gpucall_admin",
+                "capability_gap": _quality_capability_gap(inputs.quality_failure_kind),
+                "context": {
+                    "required_model_len": inputs.required_model_len,
+                    "largest_auto_recipe_model_len": None,
+                },
+                "rejections": [],
+            },
+            "input_summary": {
+                "content_types": sorted(set(inputs.content_types)),
+                "max_bytes": max_bytes,
+                "input_count": len(inputs.content_types) or len(inputs.byte_values),
+                "prompt_lengths": [],
+                "dimensions": sorted(set(inputs.dimensions)),
+            },
+            "runtime_selection": {
+                "recipe": inputs.selected_recipe,
+                "provider": inputs.selected_provider,
+                "provider_model": inputs.selected_provider_model,
+                "output_validated": inputs.output_validated,
+            },
+            "quality_feedback": {
+                "kind": _sanitize_quality_kind(inputs.quality_failure_kind),
+                "reason": _sanitize_free_text(inputs.quality_failure_reason),
+                "observed_output_kind": _sanitize_free_text(inputs.observed_output_kind or ""),
+            },
+            "desired_capabilities": desired_capabilities,
+        },
+        "redaction_report": {
+            "removed_fields": [],
+            "sensitive_keys": sorted(SENSITIVE_KEYS),
+            "prompt_body_forwarded": False,
+            "message_content_forwarded": False,
+            "data_ref_uri_forwarded": False,
+            "presigned_url_forwarded": False,
+            "output_body_forwarded": False,
+        },
+        "redacted_error_payload": {},
+    }
+
+
 def compare_preflight_to_failure(preflight: Mapping[str, Any], failure_intake: Mapping[str, Any]) -> dict[str, Any]:
     before = _as_mapping(preflight.get("sanitized_request"))
     after = _as_mapping(failure_intake.get("sanitized_request"))
@@ -256,6 +336,22 @@ def _capabilities_for(*, task: str, intent: str | None) -> list[str]:
     if intent and intent in CAPABILITY_BY_INTENT:
         return CAPABILITY_BY_INTENT[intent]
     return TASK_DEFAULT_CAPABILITIES.get(task, ["instruction_following"])
+
+
+def _quality_capability_gap(kind: str) -> str:
+    normalized = _sanitize_quality_kind(kind)
+    if normalized in {"weak_model", "wrong_capability", "insufficient_ocr", "insufficient_document_understanding"}:
+        return "model_or_recipe_capability_mismatch"
+    if normalized in {"insufficient_context", "truncated_output"}:
+        return "context_or_output_budget_insufficient"
+    if normalized in {"insufficient_structured_output", "malformed_business_output"}:
+        return "output_contract_insufficient"
+    return "quality_expectation_not_met"
+
+
+def _sanitize_quality_kind(value: str) -> str:
+    cleaned = re.sub(r"[^a-z0-9_]+", "_", value.strip().lower()).strip("_")
+    return cleaned[:80] or "low_quality_success"
 
 
 def _extract_rejections(error: Mapping[str, Any], context: Mapping[str, Any]) -> list[str]:

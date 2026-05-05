@@ -7,10 +7,12 @@ from gpucall_recipe_draft.cli import main
 from gpucall_recipe_draft.core import (
     DraftInputs,
     PreflightInputs,
+    QualityFeedbackInputs,
     compare_preflight_to_failure,
     draft_from_intake,
     intake_from_error,
     intake_from_preflight,
+    intake_from_quality_feedback,
 )
 from gpucall_recipe_draft.submit import build_submission_bundle, submit_bundle
 
@@ -204,6 +206,38 @@ def test_preflight_intake_is_sanitized_metadata_only() -> None:
     assert intake["redaction_report"]["prompt_body_forwarded"] is False
 
 
+def test_quality_feedback_intake_is_sanitized_metadata_only() -> None:
+    intake = intake_from_quality_feedback(
+        QualityFeedbackInputs(
+            task="vision",
+            mode="sync",
+            intent="understand_document_image",
+            classification="confidential",
+            expected_output="headline_list",
+            content_types=("image/jpeg",),
+            byte_values=(1136521,),
+            dimensions=("1200x2287",),
+            selected_recipe="vision-image-standard",
+            selected_provider="modal-vision-a10g",
+            selected_provider_model="Salesforce/blip-vqa-base",
+            output_validated=None,
+            quality_failure_kind="insufficient_ocr",
+            quality_failure_reason="short answer only; expected top headlines, not raw page text",
+            observed_output_kind="short_answer",
+        )
+    )
+
+    sanitized = intake["sanitized_request"]
+    assert intake["phase"] == "deterministic-quality-feedback-intake"
+    assert sanitized["error"]["code"] == "LOW_QUALITY_SUCCESS"
+    assert sanitized["error"]["capability_gap"] == "model_or_recipe_capability_mismatch"
+    assert sanitized["runtime_selection"]["provider_model"] == "Salesforce/blip-vqa-base"
+    assert sanitized["quality_feedback"]["kind"] == "insufficient_ocr"
+    assert sanitized["input_summary"]["dimensions"] == ["1200x2287"]
+    assert intake["redaction_report"]["prompt_body_forwarded"] is False
+    assert intake["redaction_report"]["output_body_forwarded"] is False
+
+
 def test_compare_preflight_to_failure_detects_workload_drift() -> None:
     preflight = intake_from_preflight(
         PreflightInputs(task="infer", intent="summarize_text", content_types=("text/plain",), required_model_len=40000)
@@ -277,3 +311,65 @@ def test_recipe_draft_cli_preflight_and_compare(tmp_path, capsys) -> None:
     output = json.loads(capsys.readouterr().out)
 
     assert output["preflight_matched_actual"] is True
+
+
+def test_recipe_draft_cli_intake_can_auto_submit(tmp_path, capsys) -> None:
+    error_path = tmp_path / "error.json"
+    inbox = tmp_path / "inbox"
+    error_path.write_text(
+        json.dumps({"detail": "no auto-selectable recipe for task 'infer'", "context": {"task": "infer", "mode": "sync"}}),
+        encoding="utf-8",
+    )
+
+    assert main(["intake", "--error", str(error_path), "--intent", "summarize_text", "--inbox-dir", str(inbox), "--source", "caller"]) == 0
+    captured = capsys.readouterr()
+    submitted = Path(captured.err.strip())
+
+    assert submitted.exists()
+    bundle = json.loads(submitted.read_text(encoding="utf-8"))
+    assert bundle["source"] == "caller"
+    assert bundle["intake"]["sanitized_request"]["intent"] == "summarize_text"
+
+
+def test_recipe_draft_cli_quality_can_auto_submit(tmp_path, capsys) -> None:
+    inbox = tmp_path / "inbox"
+
+    assert (
+        main(
+            [
+                "quality",
+                "--task",
+                "vision",
+                "--intent",
+                "understand_document_image",
+                "--content-type",
+                "image/jpeg",
+                "--bytes",
+                "1136521",
+                "--dimension",
+                "1200x2287",
+                "--selected-recipe",
+                "vision-image-standard",
+                "--selected-provider",
+                "modal-vision-a10g",
+                "--selected-provider-model",
+                "Salesforce/blip-vqa-base",
+                "--quality-failure-kind",
+                "insufficient_ocr",
+                "--quality-failure-reason",
+                "short answer only",
+                "--inbox-dir",
+                str(inbox),
+                "--source",
+                "news-system",
+            ]
+        )
+        == 0
+    )
+    captured = capsys.readouterr()
+    submitted = Path(captured.err.strip())
+
+    assert submitted.exists()
+    intake = json.loads(submitted.read_text(encoding="utf-8"))["intake"]
+    assert intake["phase"] == "deterministic-quality-feedback-intake"
+    assert intake["sanitized_request"]["quality_feedback"]["kind"] == "insufficient_ocr"
