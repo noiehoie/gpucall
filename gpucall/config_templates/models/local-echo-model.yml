@@ -1,0 +1,16 @@
+name: local-echo-model
+provider_model_id: local-echo
+capabilities:
+  - instruction_following
+max_model_len: 32768
+min_vram_gb: 1
+supported_engines:
+  - local-echo-engine
+input_contracts: [text, chat_messages, data_refs]
+output_contracts: [gpucall-provider-result, plain-text]
+supports_vision: false
+supports_guided_decoding: false
+supports_streaming: true
+source: local-test
+evidence: []
+production_ready: false

@@ -1,0 +1,11 @@
+name: hyperstack-vllm
+kind: vllm
+version: null
+input_contracts: [text, chat_messages, data_refs]
+output_contracts: [plain-text, json_object]
+supports_guided_decoding: true
+supports_streaming: false
+supports_multimodal: false
+supports_data_refs: true
+official_doc_refs: []
+production_ready: false

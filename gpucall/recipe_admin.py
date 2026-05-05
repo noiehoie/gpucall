@@ -1,16 +1,22 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import re
 import shutil
 import sys
 import time
 from collections.abc import Mapping
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
 import yaml
+
+from gpucall.config import ConfigError, default_state_dir, load_config
+from gpucall.domain import ExecutionMode, ProviderSpec, Recipe
+from gpucall.routing import provider_route_rejection_reason
 
 
 TEXT_STOP_TOKENS = ["<|im_end|>", "<|endoftext|>"]
@@ -47,6 +53,12 @@ def main(argv: list[str] | None = None) -> int:
     materialize.add_argument("--force", action="store_true", help="overwrite existing recipe YAML")
     materialize.add_argument("--dry-run", action="store_true", help="print YAML without writing files")
 
+    review = subcommands.add_parser("review", help="review a submitted recipe request against config, providers, policy, and live evidence")
+    review.add_argument("--input", "-i", required=True, help="path to caller submission/intake/draft JSON, or '-' for stdin")
+    review.add_argument("--config-dir", help="gpucall config directory to review against")
+    review.add_argument("--validation-dir", help="provider live validation artifact directory")
+    review.add_argument("--output", "-o", help="write review report JSON")
+
     process = subcommands.add_parser("process-inbox", help="process file-based recipe request submissions once")
     process.add_argument("--inbox-dir", required=True)
     process.add_argument("--output-dir", required=True)
@@ -55,6 +67,8 @@ def main(argv: list[str] | None = None) -> int:
     process.add_argument("--report-dir")
     process.add_argument("--accept-all", action="store_true")
     process.add_argument("--force", action="store_true")
+    process.add_argument("--config-dir", help="gpucall config directory to review against")
+    process.add_argument("--validation-dir", help="provider live validation artifact directory")
 
     status = subcommands.add_parser("status", help="show status for a submitted recipe request id")
     status.add_argument("--request-id", required=True)
@@ -68,6 +82,8 @@ def main(argv: list[str] | None = None) -> int:
     watch.add_argument("--report-dir")
     watch.add_argument("--accept-all", action="store_true")
     watch.add_argument("--force", action="store_true")
+    watch.add_argument("--config-dir", help="gpucall config directory to review against")
+    watch.add_argument("--validation-dir", help="provider live validation artifact directory")
     watch.add_argument("--interval-seconds", type=float, default=10.0)
     watch.add_argument("--max-iterations", type=int)
 
@@ -86,6 +102,14 @@ def main(argv: list[str] | None = None) -> int:
         if args.report:
             Path(args.report).write_text(json.dumps(report, ensure_ascii=False, indent=2, sort_keys=True) + "\n", encoding="utf-8")
         return 0
+    if args.command == "review":
+        report = review_artifact(
+            _load_json(args.input),
+            config_dir=args.config_dir,
+            validation_dir=args.validation_dir,
+        )
+        _write_json(report, args.output)
+        return 0
     if args.command == "process-inbox":
         if not args.accept_all:
             raise SystemExit("refusing to process inbox without --accept-all")
@@ -96,6 +120,8 @@ def main(argv: list[str] | None = None) -> int:
             failed_dir=args.failed_dir,
             report_dir=args.report_dir,
             force=args.force,
+            config_dir=args.config_dir,
+            validation_dir=args.validation_dir,
         )
         sys.stdout.write(json.dumps({"processed": results}, ensure_ascii=False, indent=2, sort_keys=True) + "\n")
         return 0
@@ -114,6 +140,8 @@ def main(argv: list[str] | None = None) -> int:
                 failed_dir=args.failed_dir,
                 report_dir=args.report_dir,
                 force=args.force,
+                config_dir=args.config_dir,
+                validation_dir=args.validation_dir,
             )
             if results:
                 sys.stdout.write(json.dumps({"processed": results}, ensure_ascii=False, indent=2, sort_keys=True) + "\n")
@@ -152,6 +180,8 @@ def canonical_recipe_from_artifact(artifact: Mapping[str, Any]) -> dict[str, Any
         "repetition_penalty": 1.05,
         "guided_decoding": True,
         "output_validation_attempts": 1,
+        "required_model_capabilities": [str(item) for item in proposed.get("required_model_capabilities") or []],
+        "output_contract": _route_output_contract(proposed),
     }
     if task == "vision":
         recipe["allowed_inline_mime_prefixes"] = ["text/"]
@@ -175,6 +205,50 @@ def materialization_report(artifact: Mapping[str, Any], recipe: Mapping[str, Any
     }
 
 
+def review_artifact(
+    artifact_or_submission: Mapping[str, Any],
+    *,
+    config_dir: str | Path | None = None,
+    validation_dir: str | Path | None = None,
+) -> dict[str, Any]:
+    started = datetime.now(timezone.utc).isoformat()
+    report: dict[str, Any] = {
+        "schema_version": 1,
+        "phase": "admin-review",
+        "reviewed_at": started,
+        "decision": "REJECT",
+        "production_ready": False,
+        "auto_select_safe": False,
+        "findings": [],
+        "blockers": [],
+        "warnings": [],
+        "provider_matrix": {},
+        "required_provider_contract": {},
+        "live_validation": {"matched": []},
+    }
+    try:
+        artifact = _artifact_from_submission(artifact_or_submission)
+        report["request_id"] = artifact_or_submission.get("request_id") if isinstance(artifact_or_submission, Mapping) else None
+        report["submission_kind"] = artifact_or_submission.get("kind") if isinstance(artifact_or_submission, Mapping) else None
+        report["intake_phase"] = artifact.get("phase")
+        _review_redaction(artifact, report)
+        recipe_dict = canonical_recipe_from_artifact(artifact)
+        recipe = Recipe.model_validate(recipe_dict)
+        report["canonical_recipe"] = recipe.model_dump(mode="json")
+        report["required_provider_contract"] = provider_contract_requirements(artifact, recipe)
+        _review_config_and_providers(
+            report,
+            recipe=recipe,
+            artifact=artifact,
+            config_dir=Path(config_dir).expanduser() if config_dir else None,
+            validation_dir=Path(validation_dir).expanduser() if validation_dir else None,
+        )
+    except Exception as exc:
+        report["blockers"].append({"check": "review_exception", "reason": str(exc)})
+    _finalize_review_decision(report)
+    return report
+
+
 def process_inbox(
     *,
     inbox_dir: str | Path,
@@ -183,6 +257,8 @@ def process_inbox(
     failed_dir: str | Path | None = None,
     report_dir: str | Path | None = None,
     force: bool = False,
+    config_dir: str | Path | None = None,
+    validation_dir: str | Path | None = None,
 ) -> list[dict[str, Any]]:
     inbox = Path(inbox_dir)
     processed = Path(processed_dir) if processed_dir else inbox / "processed"
@@ -198,9 +274,14 @@ def process_inbox(
         if path.parent != inbox:
             continue
         try:
-            artifact = _artifact_from_submission(_load_json(str(path)))
+            submission = _load_json(str(path))
+            review = review_artifact(submission, config_dir=config_dir, validation_dir=validation_dir)
+            if review.get("decision") == "REJECT":
+                raise ValueError("admin review rejected submission: " + "; ".join(_finding_reasons(review.get("blockers"))))
+            artifact = _artifact_from_submission(submission)
             recipe = canonical_recipe_from_artifact(artifact)
             report = materialization_report(artifact, recipe)
+            report["admin_review"] = review
             recipe_path = write_recipe_yaml(recipe, output, force=force)
             report["recipe_path"] = str(recipe_path)
             report["submission_path"] = str(path)
@@ -237,6 +318,284 @@ def recipe_request_status(request_id: str, inbox_dir: str | Path) -> dict[str, A
     return {"request_id": request_id, "state": "missing"}
 
 
+def _review_redaction(artifact: Mapping[str, Any], report: dict[str, Any]) -> None:
+    redaction = artifact.get("redaction_report")
+    if not isinstance(redaction, Mapping):
+        report["blockers"].append({"check": "redaction_report", "reason": "missing redaction_report"})
+        return
+    unsafe = {
+        str(key): value
+        for key, value in redaction.items()
+        if (str(key).endswith("_forwarded") or str(key).endswith("_included")) and value is not False
+    }
+    if unsafe:
+        report["blockers"].append({"check": "redaction_report", "reason": "sensitive fields may have been forwarded", "fields": unsafe})
+    else:
+        report["findings"].append({"check": "redaction_report", "ok": True})
+
+
+def _review_config_and_providers(
+    report: dict[str, Any],
+    *,
+    recipe: Recipe,
+    artifact: Mapping[str, Any],
+    config_dir: Path | None,
+    validation_dir: Path | None,
+) -> None:
+    try:
+        config = load_config(config_dir)
+    except ConfigError as exc:
+        report["warnings"].append({"check": "config", "reason": str(exc)})
+        report["decision_hint"] = "CANDIDATE_ONLY"
+        return
+    report["config_dir"] = str(config_dir) if config_dir else None
+    report["policy_version"] = config.policy.version
+    required_contracts = _required_input_contracts(recipe)
+    provider_matrix: dict[str, Any] = {}
+    eligible: list[str] = []
+    for provider in sorted(config.providers.values(), key=lambda item: item.name):
+        reason = provider_route_rejection_reason(
+            policy=config.policy,
+            recipe=recipe,
+            provider=provider,
+            model=config.models.get(provider.model_ref) if provider.model_ref else None,
+            engine=config.engines.get(provider.engine_ref) if provider.engine_ref else None,
+            mode=_first_mode(recipe),
+            required_len=recipe.max_model_len,
+            required_input_contracts=required_contracts,
+            auto_selected=True,
+        )
+        provider_matrix[provider.name] = _provider_review_row(provider, reason)
+        if reason is None:
+            eligible.append(provider.name)
+    report["provider_matrix"] = provider_matrix
+    report["eligible_providers"] = eligible
+    if not eligible:
+        report["warnings"].append({"check": "provider_fit", "reason": "no provider satisfies recipe, policy, mode, and contract requirements"})
+        report["warnings"].append(
+            {
+                "check": "provider_authoring_required",
+                "reason": "existing providers are insufficient; use required_provider_contract to add or update a provider spec and run billable validation",
+            }
+        )
+        report["decision_hint"] = "CANDIDATE_ONLY"
+        return
+    capability_warnings = _capability_warnings(artifact, recipe, [config.providers[name] for name in eligible])
+    report["capability_review"] = {"warnings": capability_warnings}
+    if capability_warnings:
+        report["warnings"].extend(capability_warnings)
+    live = _matching_live_validation(
+        providers=[config.providers[name] for name in eligible],
+        recipe=recipe,
+        config_dir=config_dir,
+        validation_dir=validation_dir,
+    )
+    report["live_validation"] = live
+    shadowing = _auto_select_shadowing(recipe, config.recipes)
+    report["auto_select_review"] = shadowing
+    if not live["matched"]:
+        report["decision_hint"] = "READY_FOR_VALIDATION"
+        return
+    if capability_warnings:
+        report["decision_hint"] = "READY_FOR_VALIDATION"
+        return
+    report["decision_hint"] = "READY_FOR_PRODUCTION"
+    if shadowing["safe"]:
+        report["auto_select_safe"] = True
+        report["decision_hint"] = "AUTO_SELECT_SAFE"
+
+
+def _provider_review_row(provider: ProviderSpec, reason: str | None) -> dict[str, Any]:
+    return {
+        "eligible": reason is None,
+        "reason": reason,
+        "adapter": provider.adapter,
+        "model": provider.model,
+        "model_ref": provider.model_ref,
+        "engine_ref": provider.engine_ref,
+        "max_data_classification": str(provider.max_data_classification),
+        "gpu": provider.gpu,
+        "vram_gb": provider.vram_gb,
+        "max_model_len": provider.max_model_len,
+        "modes": [str(mode) for mode in provider.modes],
+        "input_contracts": list(provider.input_contracts),
+        "endpoint_contract": provider.endpoint_contract,
+        "output_contract": provider.output_contract,
+        "stream_contract": provider.stream_contract,
+    }
+
+
+def provider_contract_requirements(artifact: Mapping[str, Any], recipe: Recipe) -> dict[str, Any]:
+    sanitized = _mapping(artifact.get("sanitized_request"))
+    desired_capabilities = sanitized.get("desired_capabilities")
+    if not isinstance(desired_capabilities, list) or not desired_capabilities:
+        desired_capabilities = CAPABILITY_BY_INTENT.get(str(sanitized.get("intent") or ""), TASK_DEFAULT_CAPABILITIES.get(recipe.task, []))
+    quality_feedback = _mapping(sanitized.get("quality_feedback"))
+    requirements: dict[str, Any] = {
+        "task": recipe.task,
+        "model_capabilities": [str(item) for item in desired_capabilities],
+        "min_vram_gb": recipe.min_vram_gb,
+        "min_model_len": recipe.max_model_len,
+        "modes": [str(mode) for mode in recipe.allowed_modes],
+        "input_contracts": sorted(_required_input_contracts(recipe)),
+        "max_data_classification": str(recipe.data_classification),
+        "endpoint_contract": _endpoint_contract_for(recipe),
+        "output_contract": "plain-text",
+        "stream_contract": "none" if ExecutionMode.STREAM not in recipe.allowed_modes else "token-incremental",
+        "live_validation_required": True,
+        "official_provider_spec_required": True,
+        "acceptance_checks": [
+            "provider spec validates under gpucall validate-config",
+            "provider adapter contract matches official provider API or SDK documentation",
+            "provider model explicitly declares the required context window",
+            "provider live validation artifact matches current commit and config hash",
+            "cleanup and cost evidence are present in the live validation artifact",
+        ],
+    }
+    if recipe.task == "vision":
+        requirements["model_family_requirement"] = "vision-language model with document/image understanding; short-answer VQA alone is insufficient"
+        requirements["input_contracts"] = ["data_refs", "image", "text"]
+        requirements["acceptance_checks"].append("live quality validation covers the caller-declared visual task category")
+    if quality_feedback:
+        requirements["quality_failure_to_correct"] = {
+            "kind": quality_feedback.get("kind"),
+            "observed_output_kind": quality_feedback.get("observed_output_kind"),
+            "expected_output": sanitized.get("expected_output"),
+        }
+    return requirements
+
+
+def _endpoint_contract_for(recipe: Recipe) -> str:
+    if recipe.task == "vision":
+        return "modal-function-or-official-vlm-endpoint"
+    return "official-chat-completions-or-gpucall-provider-result"
+
+
+def _required_input_contracts(recipe: Recipe) -> set[str]:
+    if recipe.task == "vision":
+        return {"image", "text", "data_refs"}
+    if recipe.task in {"train", "fine-tune"}:
+        return {"data_refs", "artifact_refs"}
+    if recipe.task == "split-infer":
+        return {"activation_refs"}
+    return {"chat_messages"}
+
+
+def _first_mode(recipe: Recipe) -> ExecutionMode | None:
+    return recipe.allowed_modes[0] if recipe.allowed_modes else None
+
+
+def _capability_warnings(artifact: Mapping[str, Any], recipe: Recipe, providers: list[ProviderSpec]) -> list[dict[str, Any]]:
+    sanitized = _mapping(artifact.get("sanitized_request"))
+    capabilities = sanitized.get("desired_capabilities")
+    warnings: list[dict[str, Any]] = []
+    if isinstance(capabilities, list) and capabilities:
+        warnings.append(
+            {
+                "check": "model_capability_evidence",
+                "reason": "provider specs do not yet carry explicit semantic model capability evidence",
+                "requested_capabilities": [str(item) for item in capabilities],
+                "eligible_provider_models": {provider.name: provider.model for provider in providers},
+            }
+        )
+    if recipe.task == "vision" and any("document_understanding" == str(item) for item in capabilities or []):
+        warnings.append(
+            {
+                "check": "document_vision_quality",
+                "reason": "document image understanding requires model/live validation evidence; image input support alone is insufficient",
+            }
+        )
+    return warnings
+
+
+def _matching_live_validation(
+    *,
+    providers: list[ProviderSpec],
+    recipe: Recipe,
+    config_dir: Path | None,
+    validation_dir: Path | None,
+) -> dict[str, Any]:
+    root = validation_dir or (default_state_dir() / "provider-validation")
+    expected_hash = _config_hash(config_dir) if config_dir is not None and config_dir.exists() else None
+    expected_commit = _git_commit(Path.cwd())
+    result: dict[str, Any] = {"dir": str(root), "matched": [], "checked": 0, "missing_for_providers": [provider.name for provider in providers]}
+    if not root.exists():
+        result["reason"] = "validation artifact directory does not exist"
+        return result
+    provider_names = {provider.name for provider in providers}
+    matched: list[dict[str, Any]] = []
+    for path in sorted(root.glob("*.json"), key=lambda item: item.stat().st_mtime, reverse=True):
+        result["checked"] += 1
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except Exception:
+            continue
+        if data.get("validation_schema_version") != 1 or data.get("passed") is not True:
+            continue
+        if data.get("provider") not in provider_names:
+            continue
+        provider = next((item for item in providers if item.name == data.get("provider")), None)
+        if provider is None:
+            continue
+        if data.get("model_ref") != provider.model_ref or data.get("engine_ref") != provider.engine_ref:
+            continue
+        if data.get("recipe") != recipe.name:
+            continue
+        if expected_hash and data.get("config_hash") != expected_hash:
+            continue
+        if expected_commit and data.get("commit") != expected_commit:
+            continue
+        matched.append({"path": str(path), "provider": data.get("provider"), "recipe": data.get("recipe"), "mode": data.get("mode")})
+    result["matched"] = matched
+    matched_providers = {str(item.get("provider")) for item in matched}
+    result["missing_for_providers"] = sorted(provider_names - matched_providers)
+    return result
+
+
+def _auto_select_shadowing(recipe: Recipe, recipes: Mapping[str, Recipe]) -> dict[str, Any]:
+    same_task = [item for item in recipes.values() if item.task == recipe.task and item.auto_select]
+    larger_than_existing = all(recipe.max_model_len > item.max_model_len for item in same_task) if same_task else True
+    cheaper_or_equal = all(recipe.min_vram_gb <= item.min_vram_gb for item in same_task) if same_task else True
+    return {
+        "candidate_auto_select": recipe.auto_select,
+        "existing_auto_select_recipes": [item.name for item in same_task],
+        "safe": bool(recipe.auto_select and larger_than_existing and cheaper_or_equal),
+        "reason": None
+        if recipe.auto_select and larger_than_existing and cheaper_or_equal
+        else "candidate may be shadowed by existing recipes or may widen routing without enough evidence",
+    }
+
+
+def _finalize_review_decision(report: dict[str, Any]) -> None:
+    if report.get("blockers"):
+        report["decision"] = "REJECT"
+        return
+    hint = report.get("decision_hint")
+    if hint == "AUTO_SELECT_SAFE":
+        report["decision"] = "AUTO_SELECT_SAFE"
+        report["production_ready"] = True
+        report["auto_select_safe"] = True
+    elif hint == "READY_FOR_PRODUCTION":
+        report["decision"] = "READY_FOR_PRODUCTION"
+        report["production_ready"] = True
+    elif hint == "READY_FOR_VALIDATION":
+        report["decision"] = "READY_FOR_VALIDATION"
+    else:
+        report["decision"] = "CANDIDATE_ONLY"
+
+
+def _finding_reasons(value: Any) -> list[str]:
+    if not isinstance(value, list):
+        return []
+    reasons = []
+    for item in value:
+        if isinstance(item, Mapping):
+            reasons.append(str(item.get("reason") or item.get("check") or item))
+        else:
+            reasons.append(str(item))
+    return reasons
+
+
 def write_recipe_yaml(recipe: Mapping[str, Any], output_dir: str | Path, *, force: bool = False) -> Path:
     root = Path(output_dir)
     root.mkdir(parents=True, exist_ok=True)
@@ -249,6 +608,40 @@ def write_recipe_yaml(recipe: Mapping[str, Any], output_dir: str | Path, *, forc
 
 def to_yaml(value: Mapping[str, Any]) -> str:
     return yaml.safe_dump(dict(value), allow_unicode=True, sort_keys=False)
+
+
+def _write_json(data: Mapping[str, Any], output: str | None) -> None:
+    text = json.dumps(data, ensure_ascii=False, indent=2, sort_keys=True) + "\n"
+    if output:
+        Path(output).write_text(text, encoding="utf-8")
+    else:
+        sys.stdout.write(text)
+
+
+def _config_hash(config_dir: Path | None) -> str | None:
+    if config_dir is None or not config_dir.exists():
+        return None
+    digest = hashlib.sha256()
+    for path in sorted(config_dir.rglob("*.yml")):
+        if not path.is_file():
+            continue
+        digest.update(str(path.relative_to(config_dir)).encode("utf-8"))
+        digest.update(b"\0")
+        digest.update(path.read_bytes())
+        digest.update(b"\0")
+    return digest.hexdigest()
+
+
+def _git_commit(root: Path) -> str | None:
+    head = root / ".git" / "HEAD"
+    try:
+        value = head.read_text(encoding="utf-8").strip()
+        if value.startswith("ref: "):
+            ref = root / ".git" / value.removeprefix("ref: ")
+            return ref.read_text(encoding="utf-8").strip()
+        return value
+    except OSError:
+        return None
 
 
 def _proposed_recipe_from_artifact(artifact: Mapping[str, Any]) -> Mapping[str, Any]:
@@ -298,6 +691,15 @@ def _proposed_recipe_from_sanitized(sanitized: Mapping[str, Any]) -> dict[str, A
         "allowed_mime_prefixes": _mime_prefixes_for(task),
         "output_contract": sanitized.get("expected_output") or "plain_text",
     }
+
+
+def _route_output_contract(proposed: Mapping[str, Any]) -> str:
+    raw = str(proposed.get("output_contract") or "").strip().lower().replace("_", "-")
+    if raw in {"json-object", "json-schema"}:
+        return raw.replace("-", "_")
+    if raw in {"plain-text", "text", "plain"}:
+        return "plain-text"
+    return "plain-text"
 
 
 def _load_json(path: str) -> dict[str, Any]:

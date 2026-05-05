@@ -229,6 +229,16 @@ For `restricted` workloads, use the intake artifact only, or use an approved loc
 
 The caller-side helper ships with the SDK. The administrator-side helper ships with the gateway package, not the SDK.
 
+Before materializing a submitted request, review it against the capability catalog:
+
+```bash
+gpucall-recipe-admin review \
+  --input /path/to/gpucall-recipe-requests/inbox/rr-....json \
+  --config-dir config
+```
+
+The review checks the sanitized request against recipe, model, engine, provider/GPU, policy, and live validation evidence. If existing providers are insufficient, the report includes a `required_provider_contract` describing the missing model/engine/provider tuple that must be authored and validated.
+
 For low-friction operations, a gpucall administrator may choose an explicit accept-all policy for sanitized caller intake:
 
 ```bash

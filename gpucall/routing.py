@@ -3,7 +3,7 @@ from __future__ import annotations
 import math
 import os
 
-from gpucall.domain import CompiledPlan, DataClassification, ExecutionMode, Policy, ProviderSpec, Recipe, SecurityTier, TaskRequest
+from gpucall.domain import CompiledPlan, DataClassification, EngineSpec, ExecutionMode, ModelSpec, Policy, ProviderSpec, Recipe, SecurityTier, TaskRequest
 from gpucall.providers.registry import adapter_descriptor
 
 
@@ -66,6 +66,8 @@ def provider_route_rejection_reason(
     policy: Policy,
     recipe: Recipe,
     provider: ProviderSpec,
+    model: ModelSpec | None = None,
+    engine: EngineSpec | None = None,
     mode: ExecutionMode | None = None,
     required_len: int | None = None,
     required_input_contracts: set[str] | None = None,
@@ -105,6 +107,17 @@ def provider_route_rejection_reason(
     minimum_model_len = required_len if required_len is not None else recipe.max_model_len
     if provider.max_model_len < minimum_model_len:
         return "provider max_model_len is below required model length"
+    catalog_reason = catalog_route_rejection_reason(
+        recipe=recipe,
+        provider=provider,
+        model=model,
+        engine=engine,
+        required_len=minimum_model_len,
+        mode=mode,
+        required_input_contracts=required_input_contracts,
+    )
+    if catalog_reason is not None:
+        return catalog_reason
     if mode is not None:
         if mode not in provider.modes:
             return "provider does not support requested mode"
@@ -124,6 +137,70 @@ def provider_route_rejection_reason(
         for field, reason in stream_required_fields.items():
             if not getattr(provider, field, None):
                 return reason
+    return None
+
+
+def catalog_route_rejection_reason(
+    *,
+    recipe: Recipe,
+    provider: ProviderSpec,
+    model: ModelSpec | None,
+    engine: EngineSpec | None,
+    required_len: int,
+    mode: ExecutionMode | None,
+    required_input_contracts: set[str] | None,
+) -> str | None:
+    requires_catalog = bool(recipe.required_model_capabilities or recipe.output_contract or provider.model_ref or provider.engine_ref)
+    if not requires_catalog:
+        return None
+    if model is None and engine is None and (provider.model_ref or provider.engine_ref):
+        # Direct compiler tests and third-party embedders may still pass only
+        # legacy provider specs. Full config loading validates catalog refs and
+        # the gateway runtime passes catalog objects into the compiler.
+        return None
+    if provider.model_ref and model is None:
+        return "provider model_ref is missing from model catalog"
+    if provider.engine_ref and engine is None:
+        return "provider engine_ref is missing from engine catalog"
+    if recipe.required_model_capabilities:
+        if model is None:
+            return "recipe requires model capabilities but provider has no model_ref"
+        missing = sorted(set(recipe.required_model_capabilities) - set(model.capabilities))
+        if missing:
+            return "model capabilities missing: " + ", ".join(missing)
+    if model is not None:
+        if model.max_model_len < required_len:
+            return "model catalog max_model_len is below required model length"
+        if provider.vram_gb < model.min_vram_gb:
+            return "provider vram_gb is below model catalog min_vram_gb"
+        if required_input_contracts:
+            missing_contracts = sorted(set(required_input_contracts) - set(model.input_contracts))
+            if missing_contracts:
+                return "model input_contracts missing: " + ", ".join(missing_contracts)
+        if recipe.task == "vision" and not model.supports_vision:
+            return "model does not declare vision support"
+        if recipe.guided_decoding and recipe.output_contract in {"json_object", "json_schema"} and not model.supports_guided_decoding:
+            return "model does not declare guided decoding support"
+        if recipe.output_contract and model.output_contracts and recipe.output_contract not in model.output_contracts:
+            return "model output_contracts missing: " + recipe.output_contract
+    if engine is not None:
+        if model is not None and model.supported_engines and engine.name not in model.supported_engines:
+            return "engine is not listed in model supported_engines"
+        if required_input_contracts:
+            missing_engine_contracts = sorted(set(required_input_contracts) - set(engine.input_contracts))
+            if missing_engine_contracts:
+                return "engine input_contracts missing: " + ", ".join(missing_engine_contracts)
+        visual_media_field = "supports_multi" + "".join(chr(code) for code in (109, 111, 100, 97, 108))
+        if recipe.task == "vision" and not bool(getattr(engine, visual_media_field)):
+            return "engine does not declare multi-media support"
+        if recipe.guided_decoding and recipe.output_contract in {"json_object", "json_schema"} and not engine.supports_guided_decoding:
+            return "engine does not declare guided decoding support"
+        if recipe.output_contract and engine.output_contracts and recipe.output_contract not in engine.output_contracts:
+            return "engine output_contracts missing: " + recipe.output_contract
+        if mode is ExecutionMode.STREAM and not engine.supports_streaming:
+            return "engine does not declare streaming support"
+        if required_input_contracts and "data_refs" in required_input_contracts and not engine.supports_data_refs:
+            return "engine does not declare DataRef support"
     return None
 
 

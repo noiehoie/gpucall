@@ -23,3 +23,7 @@ stop_tokens:
 repetition_penalty: 1.05
 guided_decoding: true
 output_validation_attempts: 2
+
+required_model_capabilities:
+  - instruction_following
+output_contract: plain-text

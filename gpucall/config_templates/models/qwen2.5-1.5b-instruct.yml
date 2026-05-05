@@ -1,0 +1,20 @@
+name: qwen2.5-1.5b-instruct
+provider_model_id: Qwen/Qwen2.5-1.5B-Instruct
+capabilities:
+  - instruction_following
+  - summarization
+  - translation
+  - structured_output
+max_model_len: 32768
+min_vram_gb: 16
+supported_engines:
+  - modal-vllm
+  - hyperstack-vllm
+input_contracts: [text, chat_messages, data_refs]
+output_contracts: [plain-text, json_object]
+supports_vision: false
+supports_guided_decoding: true
+supports_streaming: false
+source: configured
+evidence: []
+production_ready: false

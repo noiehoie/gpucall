@@ -7,7 +7,7 @@ from typing import TypeVar
 import yaml
 from pydantic import BaseModel, ValidationError
 
-from gpucall.domain import ObjectStoreConfig, Policy, ProviderSpec, Recipe
+from gpucall.domain import EngineSpec, ModelSpec, ObjectStoreConfig, Policy, ProviderSpec, Recipe
 from gpucall.providers.registry import adapter_descriptor
 from gpucall.routing import provider_route_rejection_reason
 
@@ -22,6 +22,8 @@ class GpucallConfig(BaseModel):
     policy: Policy
     recipes: dict[str, Recipe]
     providers: dict[str, ProviderSpec]
+    models: dict[str, ModelSpec] = {}
+    engines: dict[str, EngineSpec] = {}
     object_store: ObjectStoreConfig | None = None
 
 
@@ -105,12 +107,36 @@ def load_providers(config_dir: Path | None = None) -> dict[str, ProviderSpec]:
     return providers
 
 
+def load_models(config_dir: Path | None = None) -> dict[str, ModelSpec]:
+    root = config_dir or default_config_dir()
+    models: dict[str, ModelSpec] = {}
+    for path in sorted((root / "models").glob("*.yml")):
+        model = load_model(path, ModelSpec)
+        if model.name in models:
+            raise ConfigError(f"duplicate model name {model.name!r} in {path}")
+        models[model.name] = model
+    return models
+
+
+def load_engines(config_dir: Path | None = None) -> dict[str, EngineSpec]:
+    root = config_dir or default_config_dir()
+    engines: dict[str, EngineSpec] = {}
+    for path in sorted((root / "engines").glob("*.yml")):
+        engine = load_model(path, EngineSpec)
+        if engine.name in engines:
+            raise ConfigError(f"duplicate engine name {engine.name!r} in {path}")
+        engines[engine.name] = engine
+    return engines
+
+
 def load_config(config_dir: Path | None = None) -> GpucallConfig:
     root = config_dir or default_config_dir()
     config = GpucallConfig(
         policy=load_policy(root),
         recipes=load_recipes(root),
         providers=load_providers(root),
+        models=load_models(root),
+        engines=load_engines(root),
         object_store=load_object_store(root),
     )
     validate_config(config)
@@ -151,6 +177,8 @@ def validate_config(config: GpucallConfig) -> None:
                     policy=config.policy,
                     recipe=recipe,
                     provider=provider,
+                    model=config.models.get(provider.model_ref) if provider.model_ref else None,
+                    engine=config.engines.get(provider.engine_ref) if provider.engine_ref else None,
                     required_len=recipe.max_model_len,
                     auto_selected=True,
                 )
@@ -161,6 +189,30 @@ def validate_config(config: GpucallConfig) -> None:
             if not has_capable_provider:
                 raise ConfigError(f"recipe {recipe.name!r} has no provider satisfying its declared requirements")
     for provider in config.providers.values():
+        if provider.model_ref:
+            model = config.models.get(provider.model_ref)
+            if model is None:
+                raise ConfigError(f"provider {provider.name!r} references unknown model {provider.model_ref!r}")
+            if provider.model and provider.model != model.provider_model_id:
+                raise ConfigError(
+                    f"provider {provider.name!r} model {provider.model!r} does not match model catalog provider_model_id "
+                    f"{model.provider_model_id!r}"
+                )
+            if provider.max_model_len > model.max_model_len:
+                raise ConfigError(
+                    f"provider {provider.name!r} max_model_len {provider.max_model_len} exceeds model catalog capability "
+                    f"{model.max_model_len}"
+                )
+        if provider.engine_ref:
+            engine = config.engines.get(provider.engine_ref)
+            if engine is None:
+                raise ConfigError(f"provider {provider.name!r} references unknown engine {provider.engine_ref!r}")
+            if provider.model_ref:
+                model = config.models[provider.model_ref]
+                if model.supported_engines and provider.engine_ref not in model.supported_engines:
+                    raise ConfigError(
+                        f"provider {provider.name!r} engine {provider.engine_ref!r} is not supported by model {provider.model_ref!r}"
+                    )
         if provider.declared_model_max_len is not None and provider.max_model_len > provider.declared_model_max_len:
             raise ConfigError(
                 f"provider {provider.name!r} max_model_len {provider.max_model_len} exceeds declared model capability "

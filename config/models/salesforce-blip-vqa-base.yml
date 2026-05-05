@@ -1,0 +1,18 @@
+name: salesforce-blip-vqa-base
+provider_model_id: Salesforce/blip-vqa-base
+capabilities:
+  - visual_question_answering
+  - image_captioning
+  - short_answer_vision
+max_model_len: 512
+min_vram_gb: 16
+supported_engines:
+  - modal-transformers-vision
+input_contracts: [image, data_refs, text]
+output_contracts: [plain-text]
+supports_vision: true
+supports_guided_decoding: false
+supports_streaming: false
+source: configured
+evidence: []
+production_ready: false

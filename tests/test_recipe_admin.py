@@ -5,7 +5,7 @@ import json
 import pytest
 import yaml
 
-from gpucall.recipe_admin import canonical_recipe_from_artifact, main, process_inbox, recipe_request_status
+from gpucall.recipe_admin import canonical_recipe_from_artifact, main, process_inbox, recipe_request_status, review_artifact
 
 
 def test_admin_materializes_intake_to_canonical_recipe() -> None:
@@ -20,6 +20,7 @@ def test_admin_materializes_intake_to_canonical_recipe() -> None:
             "desired_capabilities": ["document_understanding", "visual_question_answering", "instruction_following"],
             "error": {"context": {"required_model_len": 9000}},
         },
+        "redaction_report": {"prompt_body_forwarded": False, "data_ref_uri_forwarded": False, "presigned_url_forwarded": False},
     }
 
     recipe = canonical_recipe_from_artifact(intake)
@@ -30,7 +31,7 @@ def test_admin_materializes_intake_to_canonical_recipe() -> None:
     assert recipe["max_model_len"] == 32768
     assert recipe["allowed_mime_prefixes"] == ["image/"]
     assert recipe["allowed_inline_mime_prefixes"] == ["text/"]
-    assert "required_model_capabilities" not in recipe
+    assert recipe["required_model_capabilities"] == ["document_understanding", "visual_question_answering", "instruction_following"]
 
 
 def test_admin_materialize_requires_accept_all(tmp_path) -> None:
@@ -55,7 +56,8 @@ def test_admin_materialize_writes_yaml_and_report(tmp_path) -> None:
                     "classification": "confidential",
                     "desired_capabilities": ["summarization"],
                     "error": {"context": {"required_model_len": 40000}},
-                }
+                },
+                "redaction_report": {"prompt_body_forwarded": False, "data_ref_uri_forwarded": False, "presigned_url_forwarded": False},
             }
         ),
         encoding="utf-8",
@@ -94,18 +96,19 @@ def test_admin_process_inbox_materializes_submission(tmp_path) -> None:
     submission = {
         "kind": "gpucall.recipe_request_submission",
         "request_id": "rr-test",
-        "intake": {
-            "phase": "deterministic-intake",
-            "sanitized_request": {
+            "intake": {
+                "phase": "deterministic-intake",
+                "sanitized_request": {
                 "task": "infer",
                 "mode": "sync",
                 "intent": "summarize_text",
                 "classification": "confidential",
                 "desired_capabilities": ["summarization"],
-                "error": {"context": {"required_model_len": 40000}},
+                    "error": {"context": {"required_model_len": 40000}},
+                },
+                "redaction_report": {"prompt_body_forwarded": False, "data_ref_uri_forwarded": False, "presigned_url_forwarded": False},
             },
-        },
-        "draft": None,
+            "draft": None,
     }
     (inbox / "rr-test.json").write_text(json.dumps(submission), encoding="utf-8")
 
@@ -118,6 +121,7 @@ def test_admin_process_inbox_materializes_submission(tmp_path) -> None:
     status = recipe_request_status("rr-test", inbox)
     assert status["state"] == "processed"
     assert status["report"]["policy"] == "accept-all"
+    assert status["report"]["admin_review"]["decision"] in {"CANDIDATE_ONLY", "READY_FOR_VALIDATION", "READY_FOR_PRODUCTION", "AUTO_SELECT_SAFE"}
 
 
 def test_admin_cli_process_inbox_requires_accept_all(tmp_path) -> None:
@@ -134,7 +138,10 @@ def test_admin_cli_watch_one_iteration(tmp_path, capsys) -> None:
             {
                 "kind": "gpucall.recipe_request_submission",
                 "request_id": "rr-test",
-                "intake": {"sanitized_request": {"task": "infer", "intent": "summarize_text"}},
+                "intake": {
+                    "sanitized_request": {"task": "infer", "intent": "summarize_text"},
+                    "redaction_report": {"prompt_body_forwarded": False, "data_ref_uri_forwarded": False, "presigned_url_forwarded": False},
+                },
             }
         ),
         encoding="utf-8",
@@ -171,3 +178,42 @@ def test_admin_cli_status(tmp_path, capsys) -> None:
     output = json.loads(capsys.readouterr().out)
 
     assert output["state"] == "pending"
+
+
+def test_admin_review_rejects_missing_redaction_report() -> None:
+    report = review_artifact({"sanitized_request": {"task": "infer", "intent": "summarize_text"}})
+
+    assert report["decision"] == "REJECT"
+    assert report["blockers"][0]["check"] == "redaction_report"
+
+
+def test_admin_review_outputs_provider_contract_when_existing_providers_are_insufficient(tmp_path) -> None:
+    artifact = {
+        "phase": "deterministic-quality-feedback-intake",
+        "sanitized_request": {
+            "task": "vision",
+            "mode": "sync",
+            "intent": "understand_document_image",
+            "classification": "confidential",
+            "expected_output": "headline_list",
+            "desired_capabilities": ["document_understanding", "visual_question_answering", "instruction_following"],
+            "quality_feedback": {"kind": "insufficient_ocr", "observed_output_kind": "short_answer"},
+        },
+        "redaction_report": {
+            "prompt_body_forwarded": False,
+            "output_body_forwarded": False,
+            "data_ref_uri_forwarded": False,
+            "presigned_url_forwarded": False,
+        },
+    }
+
+    report = review_artifact(artifact, config_dir="gpucall/config_templates")
+
+    assert report["decision"] == "CANDIDATE_ONLY"
+    assert report["required_provider_contract"]["model_capabilities"] == [
+        "document_understanding",
+        "visual_question_answering",
+        "instruction_following",
+    ]
+    assert report["required_provider_contract"]["live_validation_required"] is True
+    assert report["required_provider_contract"]["quality_failure_to_correct"]["kind"] == "insufficient_ocr"

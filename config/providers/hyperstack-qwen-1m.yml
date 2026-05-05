@@ -21,6 +21,8 @@ stream_contract: none
 target: default-CANADA-1
 model: Qwen/Qwen2.5-7B-Instruct-1M
 declared_model_max_len: 1010000
+model_ref: qwen2.5-7b-instruct-1m
+engine_ref: hyperstack-vllm
 instance: n3-A100x1
 image: Ubuntu Server 22.04 LTS R570 CUDA 12.8 with Docker
 key_name: gpucall-key

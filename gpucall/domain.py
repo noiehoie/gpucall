@@ -289,6 +289,46 @@ class Recipe(BaseModel):
     output_validation_attempts: PositiveInt = 1
     artifact_export: bool = False
     requires_key_release: bool = False
+    required_model_capabilities: list[str] = Field(default_factory=list)
+    output_contract: str | None = None
+
+
+InputContract = Literal["text", "chat_messages", "data_refs", "image", "activation_refs", "artifact_refs"]
+
+
+class ModelSpec(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    name: str
+    provider_model_id: str
+    capabilities: list[str] = Field(default_factory=list)
+    max_model_len: PositiveInt
+    min_vram_gb: PositiveInt
+    supported_engines: list[str] = Field(default_factory=list)
+    input_contracts: list[InputContract] = Field(default_factory=list)
+    output_contracts: list[str] = Field(default_factory=list)
+    supports_vision: bool = False
+    supports_guided_decoding: bool = False
+    supports_streaming: bool = False
+    source: str | None = None
+    evidence: list[str] = Field(default_factory=list)
+    production_ready: bool = False
+
+
+class EngineSpec(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    name: str
+    kind: str
+    version: str | None = None
+    input_contracts: list[InputContract] = Field(default_factory=list)
+    output_contracts: list[str] = Field(default_factory=list)
+    supports_guided_decoding: bool = False
+    supports_streaming: bool = False
+    supports_multimodal: bool = False
+    supports_data_refs: bool = False
+    official_doc_refs: list[str] = Field(default_factory=list)
+    production_ready: bool = False
 
 
 class ProviderSpec(BaseModel):
@@ -328,6 +368,8 @@ class ProviderSpec(BaseModel):
     lease_manifest_path: str | None = None
     ssh_remote_cidr: str | None = None
     declared_model_max_len: PositiveInt | None = None
+    model_ref: str | None = None
+    engine_ref: str | None = None
 
 
 class ObjectStoreConfig(BaseModel):

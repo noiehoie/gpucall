@@ -72,7 +72,14 @@ def build_runtime(config_dir: Path) -> Runtime:
     object_store = ObjectStore(config.object_store) if config.object_store is not None else None
     jobs = SQLiteJobStore(state_dir / "state.db")
     adapters = build_adapters(providers)
-    compiler = GovernanceCompiler(policy=policy, recipes=recipes, providers=providers, registry=registry)
+    compiler = GovernanceCompiler(
+        policy=policy,
+        recipes=recipes,
+        providers=providers,
+        models=config.models,
+        engines=config.engines,
+        registry=registry,
+    )
     dispatcher = Dispatcher(
         adapters=adapters,
         registry=registry,

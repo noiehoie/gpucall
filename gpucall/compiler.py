@@ -8,8 +8,10 @@ from gpucall.domain import (
     CompileArtifact,
     CompiledPlan,
     DataClassification,
+    EngineSpec,
     ExecutionMode,
     KeyReleaseRequirement,
+    ModelSpec,
     Policy,
     ProviderSpec,
     Recipe,
@@ -37,10 +39,14 @@ class GovernanceCompiler:
         recipes: dict[str, Recipe],
         providers: dict[str, ProviderSpec],
         registry: ObservedRegistry,
+        models: dict[str, ModelSpec] | None = None,
+        engines: dict[str, EngineSpec] | None = None,
     ) -> None:
         self.policy = policy
         self.recipes = recipes
         self.providers = providers
+        self.models = models or {}
+        self.engines = engines or {}
         self.registry = registry
 
     def compile(self, request: TaskRequest) -> CompiledPlan:
@@ -320,6 +326,8 @@ class GovernanceCompiler:
                 policy=self.policy,
                 recipe=recipe,
                 provider=spec,
+                model=self.models.get(spec.model_ref) if spec.model_ref else None,
+                engine=self.engines.get(spec.engine_ref) if spec.engine_ref else None,
                 mode=request.mode,
                 required_len=self._required_model_len(request, recipe),
                 required_input_contracts=self._required_input_contracts(request),
@@ -338,6 +346,8 @@ class GovernanceCompiler:
                 policy=self.policy,
                 recipe=recipe,
                 provider=spec,
+                model=self.models.get(spec.model_ref) if spec.model_ref else None,
+                engine=self.engines.get(spec.engine_ref) if spec.engine_ref else None,
                 mode=request.mode,
                 required_len=self._required_model_len(request, recipe),
                 required_input_contracts=self._required_input_contracts(request),

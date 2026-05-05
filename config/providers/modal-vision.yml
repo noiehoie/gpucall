@@ -22,3 +22,5 @@ supports_vision: true
 target: gpucall-worker-json:run_inference_on_modal
 model: Salesforce/blip-vqa-base
 declared_model_max_len: 512
+model_ref: salesforce-blip-vqa-base
+engine_ref: modal-transformers-vision

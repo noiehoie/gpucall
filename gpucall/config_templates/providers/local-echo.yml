@@ -17,3 +17,6 @@ endpoint: null
 input_contracts: [text, chat_messages, data_refs]
 output_contract: gpucall-provider-result
 stream_contract: token-incremental
+
+model_ref: local-echo-model
+engine_ref: local-echo-engine

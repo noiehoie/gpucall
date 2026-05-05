@@ -1,0 +1,11 @@
+name: modal-transformers-vision
+kind: transformers
+version: null
+input_contracts: [image, data_refs, text]
+output_contracts: [plain-text]
+supports_guided_decoding: false
+supports_streaming: false
+supports_multimodal: true
+supports_data_refs: true
+official_doc_refs: []
+production_ready: false

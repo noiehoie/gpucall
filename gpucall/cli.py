@@ -19,6 +19,7 @@ if __package__ in (None, ""):
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from gpucall.app import build_runtime, create_app, plan_with_worker_refs, worker_readable_request
+from gpucall.catalog import SQLiteCapabilityCatalog, dumps_snapshot
 from gpucall.compiler import GovernanceCompiler
 from gpucall.config import ConfigError, default_config_dir, default_state_dir, load_config
 from gpucall.configure import configure_command
@@ -75,6 +76,10 @@ def main() -> None:
     jobs.add_argument("--expire-stale", action="store_true")
     registry = sub.add_parser("registry")
     registry.add_argument("action", choices=["show"])
+    catalog = sub.add_parser("catalog")
+    catalog.add_argument("action", choices=["build", "show"])
+    catalog.add_argument("--config-dir", type=Path, default=default_config_dir())
+    catalog.add_argument("--db", type=Path, default=None)
     audit = sub.add_parser("audit")
     audit.add_argument("action", choices=["verify", "tail", "rotate"])
     audit.add_argument("--limit", type=int, default=20)
@@ -118,6 +123,8 @@ def main() -> None:
                 policy=config.policy,
                 recipes=config.recipes,
                 providers=config.providers,
+                models=config.models,
+                engines=config.engines,
                 registry=ObservedRegistry(),
             )
             plan = compiler.compile(request)
@@ -167,6 +174,8 @@ def main() -> None:
         audit_command(args.action, args.limit, args.max_bytes)
     elif args.command == "registry":
         registry_command(args.action)
+    elif args.command == "catalog":
+        catalog_command(args.action, args.config_dir, args.db)
     elif args.command == "security":
         security_command(args.action, args.config_dir)
     elif args.command == "openapi":
@@ -212,6 +221,8 @@ def doctor_config(config_dir: Path, *, live_provider_catalog: bool = False) -> N
         "policy_version": config.policy.version,
         "recipes": sorted(config.recipes),
         "providers": sorted(config.providers),
+        "models": sorted(config.models),
+        "engines": sorted(config.engines),
         "object_store": config.object_store.model_dump(mode="json") if config.object_store else None,
         "registry": _configured_registry_snapshot(config),
         "routing": _routing_decision_summary(config),
@@ -425,7 +436,8 @@ async def provider_smoke_command(
                     break
         finally:
             await stream.aclose()
-        summary = {"provider": provider, "recipe": recipe_name, "mode": mode.value, "chunks": len(chunks), "sample": chunks[:2]}
+        summary = _provider_smoke_base_summary(runtime, provider, recipe_name, mode)
+        summary.update({"chunks": len(chunks), "sample": chunks[:2]})
         _finish_provider_smoke_summary(summary, started_at=started_at, config_dir=config_dir, plan=plan, write_artifact=write_artifact)
         return
     if mode is ExecutionMode.ASYNC:
@@ -440,6 +452,7 @@ async def provider_smoke_command(
                     break
             await asyncio.sleep(1.0)
         summary = {
+            **_provider_smoke_base_summary(runtime, provider, recipe_name, mode),
             "provider": provider,
             "recipe": recipe_name,
             "mode": mode.value,
@@ -450,8 +463,22 @@ async def provider_smoke_command(
         _finish_provider_smoke_summary(summary, started_at=started_at, config_dir=config_dir, plan=plan, write_artifact=write_artifact)
         return
     result = await runtime.dispatcher.execute_sync(plan)
-    summary = {"provider": provider, "recipe": recipe_name, "mode": mode.value, "result": result.model_dump(mode="json")}
+    summary = _provider_smoke_base_summary(runtime, provider, recipe_name, mode)
+    summary["result"] = result.model_dump(mode="json")
     _finish_provider_smoke_summary(summary, started_at=started_at, config_dir=config_dir, plan=plan, write_artifact=write_artifact)
+
+
+def _provider_smoke_base_summary(runtime, provider: str, recipe_name: str, mode: ExecutionMode) -> dict[str, object]:
+    spec = runtime.compiler.providers.get(provider)
+    return {
+        "provider": provider,
+        "recipe": recipe_name,
+        "mode": mode.value,
+        "model_ref": getattr(spec, "model_ref", None),
+        "engine_ref": getattr(spec, "engine_ref", None),
+        "provider_model": getattr(spec, "model", None),
+        "gpu": getattr(spec, "gpu", None),
+    }
 
 
 def _provider_smoke_request(runtime, recipe, mode: ExecutionMode, provider: str) -> TaskRequest:
@@ -551,6 +578,14 @@ def registry_command(action: str) -> None:
     registry = ObservedRegistry(path=default_state_dir() / "registry.db")
     if action == "show":
         print(json.dumps(registry.snapshot(), indent=2, sort_keys=True))
+
+
+def catalog_command(action: str, config_dir: Path, db: Path | None) -> None:
+    path = db or (default_state_dir() / "capability-catalog.db")
+    catalog = SQLiteCapabilityCatalog(path)
+    if action == "build":
+        catalog.replace_from_config(load_config(config_dir))
+    print(dumps_snapshot(catalog.snapshot()), end="")
 
 
 def smoke_gateway(url: str, *, api_key: str | None, recipe: str) -> None:
