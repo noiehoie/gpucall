@@ -225,7 +225,7 @@ def test_standard_config_includes_verified_text_recipes(tmp_path) -> None:
     assert config.providers["modal-a10g"].supports_vision is False
     assert "image" not in config.providers["modal-a10g"].input_contracts
     assert config.providers["modal-vision-a10g"].supports_vision is True
-    assert config.providers["modal-vision-a10g"].model == "Salesforce/blip-image-captioning-base"
+    assert config.providers["modal-vision-a10g"].model == "Salesforce/blip-vqa-base"
     assert "image" in config.providers["modal-vision-a10g"].input_contracts
 
 

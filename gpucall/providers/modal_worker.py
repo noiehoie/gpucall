@@ -206,6 +206,7 @@ if modal is not None:
             "Qwen/Qwen2-1.5B-Instruct",
             "facebook/opt-125m",
             "Salesforce/blip-image-captioning-base",
+            "Salesforce/blip-vqa-base",
             "meta-llama/Llama-3.1-8B-Instruct",
         }
     )
@@ -353,7 +354,7 @@ if modal is not None:
         prompt = vision_prompt_from_payload(payload).strip()
         if model_id == "Salesforce/blip-vqa-base" and not prompt:
             prompt = "What is in the image?"
-        if prompt:
+        if model_id == "Salesforce/blip-vqa-base" and prompt:
             inputs = processor(image, prompt, return_tensors="pt")
         else:
             inputs = processor(image, return_tensors="pt")
