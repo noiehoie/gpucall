@@ -64,6 +64,43 @@ def test_intake_redacts_sensitive_payload_and_keeps_metadata() -> None:
     assert intake["redacted_error_payload"]["upload_url"]["redacted"] is True
 
 
+def test_intake_from_gateway_failure_artifact_prefers_safe_summary() -> None:
+    intake = intake_from_error(
+        DraftInputs(
+            error_payload={
+                "detail": "no auto-selectable recipe for task 'vision'",
+                "code": "NO_AUTO_SELECTABLE_RECIPE",
+                "failure_artifact": {
+                    "failure_id": "gf-test",
+                    "failure_kind": "no_recipe",
+                    "caller_action": "run_gpucall_recipe_draft_intake",
+                    "capability_gap": "unsupported_content_type",
+                    "safe_request_summary": {
+                        "task": "vision",
+                        "mode": "sync",
+                        "classification": "confidential",
+                        "input_ref_count": 1,
+                        "input_ref_content_types": ["image/png"],
+                        "input_ref_max_bytes": 12345,
+                    },
+                    "rejection_matrix": {"recipes": {"vision-image-standard": "content_type 'image/png' is not allowed"}},
+                    "redaction_guarantee": {"data_ref_uri_included": False},
+                },
+            },
+            intent="understand_document_image",
+        )
+    )
+
+    sanitized = intake["sanitized_request"]
+    assert sanitized["task"] == "vision"
+    assert sanitized["mode"] == "sync"
+    assert sanitized["input_summary"]["content_types"] == ["image/png"]
+    assert sanitized["input_summary"]["max_bytes"] == 12345
+    assert sanitized["error"]["failure_id"] == "gf-test"
+    assert sanitized["error"]["capability_gap"] == "unsupported_content_type"
+    assert sanitized["error"]["rejections"] == ["vision-image-standard: content_type 'image/png' is not allowed"]
+
+
 def test_draft_uses_sanitized_intake_only() -> None:
     intake = {
         "sanitized_request": {

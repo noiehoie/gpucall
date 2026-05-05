@@ -73,12 +73,16 @@ class PreflightInputs:
 
 def intake_from_error(inputs: DraftInputs) -> dict[str, Any]:
     error = dict(inputs.error_payload)
+    failure_artifact = _failure_artifact(error)
+    safe_summary = _as_mapping(failure_artifact.get("safe_request_summary"))
     code = _first_present(error, "code", ("error", "code")) or _infer_code_from_detail(error)
-    context = _as_mapping(error.get("context"))
-    task = inputs.task or _str_or_none(context.get("task")) or _task_from_detail(error.get("detail")) or "infer"
-    mode = inputs.mode or _str_or_none(context.get("mode")) or "sync"
+    if code is None:
+        code = _str_or_none(failure_artifact.get("code"))
+    context = _as_mapping(error.get("context")) or _as_mapping(failure_artifact.get("context"))
+    task = inputs.task or _str_or_none(context.get("task")) or _str_or_none(safe_summary.get("task")) or _task_from_detail(error.get("detail")) or "infer"
+    mode = inputs.mode or _str_or_none(context.get("mode")) or _str_or_none(safe_summary.get("mode")) or "sync"
     rejections = _extract_rejections(error, context)
-    input_summary = _input_summary(error)
+    input_summary = _input_summary_from_failure_artifact(safe_summary) or _input_summary(error)
     llm_safe_business_need = _sanitize_free_text(inputs.business_need or "")
     desired_capabilities = _capabilities_for(task=task, intent=inputs.intent)
     sanitized_request = {
@@ -86,11 +90,15 @@ def intake_from_error(inputs: DraftInputs) -> dict[str, Any]:
         "mode": mode,
         "intent": inputs.intent,
         "business_need": llm_safe_business_need,
-        "classification": inputs.classification,
+        "classification": _str_or_none(safe_summary.get("classification")) or inputs.classification,
         "expected_output": inputs.expected_output or _expected_output_from_error(error),
         "error": {
             "code": code,
             "detail_kind": _detail_kind(error.get("detail")),
+            "failure_id": failure_artifact.get("failure_id"),
+            "failure_kind": failure_artifact.get("failure_kind"),
+            "caller_action": failure_artifact.get("caller_action"),
+            "capability_gap": failure_artifact.get("capability_gap"),
             "context": {
                 "required_model_len": context.get("required_model_len"),
                 "largest_auto_recipe_model_len": context.get("largest_auto_recipe_model_len"),
@@ -251,6 +259,12 @@ def _capabilities_for(*, task: str, intent: str | None) -> list[str]:
 
 
 def _extract_rejections(error: Mapping[str, Any], context: Mapping[str, Any]) -> list[str]:
+    failure_artifact = _failure_artifact(error)
+    matrix = _as_mapping(failure_artifact.get("rejection_matrix"))
+    recipe_matrix = _as_mapping(matrix.get("recipes"))
+    provider_matrix = _as_mapping(matrix.get("providers"))
+    if recipe_matrix or provider_matrix:
+        return [f"{name}: {reason}" for name, reason in sorted({**recipe_matrix, **provider_matrix}.items())]
     raw = context.get("rejections")
     if isinstance(raw, list):
         return [str(item) for item in raw]
@@ -259,6 +273,48 @@ def _extract_rejections(error: Mapping[str, Any], context: Mapping[str, Any]) ->
         return []
     _, _, tail = detail.partition(":")
     return [part.strip() for part in tail.split(";") if part.strip()]
+
+
+def _failure_artifact(error: Mapping[str, Any]) -> Mapping[str, Any]:
+    direct = _as_mapping(error.get("failure_artifact"))
+    if direct:
+        return direct
+    return _as_mapping(_as_mapping(error.get("error")).get("gpucall_failure_artifact"))
+
+
+def _input_summary_from_failure_artifact(safe_summary: Mapping[str, Any]) -> dict[str, Any] | None:
+    if not safe_summary:
+        return None
+    content_types = sorted(
+        {
+            str(value)
+            for key in ("input_ref_content_types", "inline_input_content_types")
+            for value in _list_or_empty(safe_summary.get(key))
+        }
+    )
+    byte_values = [
+        value
+        for value in (
+            safe_summary.get("input_ref_max_bytes"),
+            safe_summary.get("message_max_bytes"),
+        )
+        if isinstance(value, int)
+    ]
+    input_count = 0
+    for key in ("input_ref_count", "inline_input_count", "message_count"):
+        value = safe_summary.get(key)
+        if isinstance(value, int):
+            input_count += value
+    return {
+        "content_types": content_types,
+        "max_bytes": max(byte_values) if byte_values else None,
+        "input_count": input_count,
+        "prompt_lengths": [safe_summary["message_max_bytes"]] if isinstance(safe_summary.get("message_max_bytes"), int) else [],
+    }
+
+
+def _list_or_empty(value: Any) -> list[Any]:
+    return value if isinstance(value, list) else []
 
 
 def _input_summary(payload: Any) -> dict[str, Any]:

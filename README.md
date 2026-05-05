@@ -94,6 +94,8 @@ Unknown workloads return a structured governance error instead of being silently
 - `422 NO_AUTO_SELECTABLE_RECIPE`: no installed recipe honestly describes the request.
 - `503 no eligible provider after policy, recipe, and circuit constraints`: a recipe exists, but no currently eligible provider can execute it.
 
+The response includes a `failure_artifact` with redacted request metadata, rejection reasons, `caller_action`, and a redaction guarantee.
+
 When this happens, run the independent helper:
 
 ```bash

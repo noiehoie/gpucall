@@ -17,6 +17,18 @@ Use this tool before a new workload class reaches production, and after gpucall 
 - `no eligible provider after policy, recipe, and circuit constraints`
 - context length, media type, mode, or capability mismatch
 
+gpucall failure responses include a machine-readable `failure_artifact`. This artifact is the preferred input for operator workflows because it contains only redacted routing metadata:
+
+- `failure_id`
+- `failure_kind`
+- `caller_action`
+- `safe_request_summary`
+- `capability_gap`
+- `rejection_matrix`
+- `redaction_guarantee`
+
+It does not include prompt bodies, message content, DataRef URIs, presigned URLs, API keys, provider raw output, or provider secrets.
+
 Do not use it to bypass policy. If gpucall fails closed, the workload should not be forced through a weaker provider.
 
 In normal operation, unknown workloads are handled as follows:

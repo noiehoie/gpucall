@@ -256,7 +256,17 @@ class GovernanceCompiler:
         eligible = self._eligible_providers(sorted(self.providers), request, recipe, auto_selected=True)
         ranked = self._rank_by_fit_then_observations(eligible, request, recipe)
         if not ranked:
-            raise GovernanceError("no eligible provider after policy, recipe, and circuit constraints")
+            raise GovernanceError(
+                "no eligible provider after policy, recipe, and circuit constraints",
+                code="NO_ELIGIBLE_PROVIDER",
+                context={
+                    "task": request.task,
+                    "mode": request.mode.value,
+                    "recipe": recipe.name,
+                    "required_model_len": self._required_model_len(request, recipe),
+                    "provider_rejections": self._provider_rejections(request, recipe, auto_selected=True),
+                },
+            )
         return ranked
 
     def _rank_by_fit_then_observations(
@@ -319,6 +329,25 @@ class GovernanceCompiler:
                 continue
             eligible.append(name)
         return eligible
+
+    def _provider_rejections(self, request: TaskRequest, recipe: Recipe, *, auto_selected: bool) -> dict[str, str]:
+        rejected: dict[str, str] = {}
+        for name in sorted(self.providers):
+            spec = self.providers[name]
+            reason = provider_route_rejection_reason(
+                policy=self.policy,
+                recipe=recipe,
+                provider=spec,
+                mode=request.mode,
+                required_len=self._required_model_len(request, recipe),
+                required_input_contracts=self._required_input_contracts(request),
+                auto_selected=auto_selected,
+            )
+            if reason is None and not self.registry.is_available(name):
+                reason = "provider is unavailable due to circuit breaker"
+            if reason is not None:
+                rejected[name] = reason
+        return rejected
 
     def _is_production_route_candidate(self, spec: ProviderSpec) -> bool:
         return is_production_route_candidate(spec)

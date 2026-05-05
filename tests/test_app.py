@@ -120,6 +120,17 @@ def test_sync_endpoint_returns_structured_context_overflow(tmp_path) -> None:
     assert payload["code"] == "NO_AUTO_SELECTABLE_RECIPE"
     assert payload["context"]["required_model_len"] > payload["context"]["largest_auto_recipe_model_len"]
     assert payload["context"]["largest_auto_recipe_model_len"] == 32768
+    artifact = payload["failure_artifact"]
+    assert artifact["schema_version"] == 1
+    assert artifact["failure_id"].startswith("gf-")
+    assert artifact["failure_kind"] == "no_recipe"
+    assert artifact["recipe_request_recommended"] is True
+    assert artifact["caller_action"] == "run_gpucall_recipe_draft_intake"
+    assert artifact["capability_gap"] == "context_window_too_small"
+    assert artifact["safe_request_summary"]["input_ref_content_types"] == ["text/plain"]
+    assert artifact["safe_request_summary"]["input_ref_max_bytes"] == 1000000
+    assert artifact["redaction_guarantee"]["data_ref_uri_included"] is False
+    assert "text-infer-standard" in artifact["rejection_matrix"]["recipes"]
 
 
 def test_readyz_reports_recipe_and_provider_capacity(tmp_path) -> None:
@@ -659,6 +670,11 @@ def test_provider_error_response_does_not_expose_internal_detail(tmp_path, monke
     assert "X-Amz-Signature" not in raw
     assert "Bearer" not in raw
     assert response.json()["detail"] == "provider execution failed (PROVIDER_UPSTREAM)"
+    artifact = response.json()["failure_artifact"]
+    assert artifact["failure_kind"] == "provider_runtime"
+    assert artifact["retryable"] is True
+    assert artifact["caller_action"] == "retry_later"
+    assert artifact["redaction_guarantee"]["provider_raw_output_included"] is False
 
 
 def test_provider_error_response_does_not_expose_raw_output(tmp_path, monkeypatch) -> None:
@@ -680,6 +696,7 @@ def test_provider_error_response_does_not_expose_raw_output(tmp_path, monkeypatc
     assert response.status_code == 422
     assert "caller content" not in response.text
     assert response.json()["detail"] == "provider execution failed (MALFORMED_OUTPUT)"
+    assert response.json()["failure_artifact"]["redaction_guarantee"]["provider_raw_output_included"] is False
 
 
 def test_validation_error_response_does_not_expose_request_input(tmp_path) -> None:

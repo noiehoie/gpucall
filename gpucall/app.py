@@ -306,11 +306,11 @@ def create_app(config_dir: Path | None = None) -> FastAPI:
             )
             return JSONResponse(status_code=200, content=content, headers=headers)
         except GovernanceError as exc:
-            return governance_error_response(exc)
+            return governance_error_response(exc, request=request)
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         except ProviderError as exc:
-            raise HTTPException(status_code=exc.status_code, detail=public_provider_error(exc)) from exc
+            return provider_error_response(exc, request=request)
 
     @app.post("/v1/chat/completions")
     async def openai_chat_completions(
@@ -362,7 +362,12 @@ def create_app(config_dir: Path | None = None) -> FastAPI:
         except GovernanceError as exc:
             status_code = governance_status_code(exc)
             code = "provider_unavailable" if status_code == 503 else exc.code.lower()
-            return openai_error_response(status_code, str(exc), code=code)
+            return openai_error_response(
+                status_code,
+                str(exc),
+                code=code,
+                gpucall_failure_artifact=build_governance_failure_artifact(exc, task_request),
+            )
         except ProviderError as exc:
             headers: dict[str, str] = {}
             if exc.raw_output is not None:
@@ -372,6 +377,7 @@ def create_app(config_dir: Path | None = None) -> FastAPI:
                 public_provider_error(exc),
                 code=exc.code or "provider_error",
                 headers=headers,
+                gpucall_failure_artifact=build_provider_failure_artifact(exc, task_request),
             )
 
     @app.post("/v2/tasks/async")
@@ -421,7 +427,7 @@ def create_app(config_dir: Path | None = None) -> FastAPI:
                 headers=headers,
             )
         except GovernanceError as exc:
-            return governance_error_response(exc)
+            return governance_error_response(exc, request=request)
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -435,7 +441,7 @@ def create_app(config_dir: Path | None = None) -> FastAPI:
             request = worker_readable_request(request, runtime)
             plan = plan_with_worker_refs(plan, request.input_refs, split_learning=request.split_learning)
         except GovernanceError as exc:
-            raise HTTPException(status_code=governance_status_code(exc), detail=str(exc)) from exc
+            return governance_error_response(exc, request=request)
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -539,17 +545,162 @@ def metric_route_path(request: Request) -> str:
 def governance_status_code(exc: GovernanceError) -> int:
     if exc.code in {"NO_AUTO_SELECTABLE_RECIPE", "REQUEST_EXCEEDS_RECIPE_CONTEXT"}:
         return 422
+    if exc.code == "NO_ELIGIBLE_PROVIDER":
+        return 503
     message = str(exc)
     if "circuit breaker" in message or "no eligible provider after policy, recipe, and circuit constraints" in message:
         return 503
     return 400
 
 
-def governance_error_response(exc: GovernanceError) -> JSONResponse:
+def governance_error_response(exc: GovernanceError, *, request: TaskRequest | None = None) -> JSONResponse:
     content: dict[str, Any] = {"detail": str(exc), "code": exc.code}
     if exc.context:
         content["context"] = exc.context
+    content["failure_artifact"] = build_governance_failure_artifact(exc, request)
     return JSONResponse(status_code=governance_status_code(exc), content=content)
+
+
+def provider_error_response(exc: ProviderError, *, request: TaskRequest | None = None) -> JSONResponse:
+    content = {
+        "detail": public_provider_error(exc),
+        "code": exc.code or "PROVIDER_ERROR",
+        "failure_artifact": build_provider_failure_artifact(exc, request),
+    }
+    return JSONResponse(status_code=exc.status_code, content=content)
+
+
+def build_governance_failure_artifact(exc: GovernanceError, request: TaskRequest | None = None) -> dict[str, Any]:
+    status_code = governance_status_code(exc)
+    failure_kind = governance_failure_kind(exc)
+    artifact: dict[str, Any] = {
+        "schema_version": 1,
+        "failure_id": f"gf-{uuid4().hex}",
+        "failure_kind": failure_kind,
+        "code": exc.code,
+        "status_code": status_code,
+        "message": str(exc),
+        "recipe_request_recommended": failure_kind in {"no_recipe", "input_contract"},
+        "caller_action": caller_action_for_governance_failure(failure_kind),
+        "safe_request_summary": safe_request_summary(request),
+        "capability_gap": capability_gap_for_governance_failure(exc),
+        "rejection_matrix": rejection_matrix_from_context(exc.context),
+        "context": exc.context,
+        "redaction_guarantee": redaction_guarantee(),
+    }
+    return artifact
+
+
+def build_provider_failure_artifact(exc: ProviderError, request: TaskRequest | None = None) -> dict[str, Any]:
+    return {
+        "schema_version": 1,
+        "failure_id": f"pf-{uuid4().hex}",
+        "failure_kind": "provider_runtime",
+        "code": exc.code or "PROVIDER_ERROR",
+        "status_code": exc.status_code,
+        "message": public_provider_error(exc),
+        "retryable": exc.retryable,
+        "recipe_request_recommended": False,
+        "caller_action": "retry_later" if exc.retryable else "contact_gpucall_admin",
+        "safe_request_summary": safe_request_summary(request),
+        "capability_gap": None,
+        "rejection_matrix": {},
+        "redaction_guarantee": redaction_guarantee(),
+    }
+
+
+def governance_failure_kind(exc: GovernanceError) -> str:
+    if exc.code in {"NO_AUTO_SELECTABLE_RECIPE", "REQUEST_EXCEEDS_RECIPE_CONTEXT"}:
+        return "no_recipe"
+    if exc.code == "NO_ELIGIBLE_PROVIDER":
+        return "no_provider"
+    message = str(exc)
+    if "not eligible" in message or "security" in message or "policy" in message:
+        return "policy_denied"
+    return "input_contract"
+
+
+def caller_action_for_governance_failure(failure_kind: str) -> str:
+    if failure_kind == "no_recipe":
+        return "run_gpucall_recipe_draft_intake"
+    if failure_kind == "no_provider":
+        return "check_provider_health_or_retry_later"
+    if failure_kind == "policy_denied":
+        return "contact_gpucall_admin"
+    return "fix_request_or_run_gpucall_recipe_draft_intake"
+
+
+def capability_gap_for_governance_failure(exc: GovernanceError) -> str | None:
+    context = exc.context
+    if exc.code == "NO_ELIGIBLE_PROVIDER":
+        return "no_eligible_provider"
+    required_len = context.get("required_model_len")
+    largest_len = context.get("largest_auto_recipe_model_len") or context.get("recipe_max_model_len")
+    if isinstance(required_len, int) and isinstance(largest_len, int) and required_len > largest_len:
+        return "context_window_too_small"
+    rejections = context.get("rejections")
+    if isinstance(rejections, list) and any("content_type" in str(item) for item in rejections):
+        return "unsupported_content_type"
+    return None
+
+
+def rejection_matrix_from_context(context: dict[str, object]) -> dict[str, Any]:
+    matrix: dict[str, Any] = {}
+    rejections = context.get("rejections")
+    if isinstance(rejections, list):
+        matrix["recipes"] = _named_rejection_list(rejections)
+    provider_rejections = context.get("provider_rejections")
+    if isinstance(provider_rejections, dict):
+        matrix["providers"] = {str(name): str(reason) for name, reason in sorted(provider_rejections.items())}
+    return matrix
+
+
+def _named_rejection_list(rejections: list[object]) -> dict[str, str]:
+    named: dict[str, str] = {}
+    for item in rejections:
+        text = str(item)
+        name, separator, reason = text.partition(": ")
+        if separator:
+            named[name] = reason
+        else:
+            named[text] = ""
+    return named
+
+
+def safe_request_summary(request: TaskRequest | None) -> dict[str, Any]:
+    if request is None:
+        return {}
+    input_ref_bytes = [ref.bytes for ref in request.input_refs if ref.bytes is not None]
+    input_ref_content_types = sorted({ref.content_type for ref in request.input_refs if ref.content_type})
+    inline_content_types = sorted({item.content_type for item in request.inline_inputs.values() if item.content_type})
+    message_lengths = [len(message.content.encode("utf-8")) for message in request.messages]
+    return {
+        "task": request.task,
+        "mode": request.mode.value,
+        "classification": request.metadata.get("classification") or request.metadata.get("data_classification"),
+        "input_ref_count": len(request.input_refs),
+        "input_ref_content_types": input_ref_content_types,
+        "input_ref_max_bytes": max(input_ref_bytes) if input_ref_bytes else None,
+        "input_ref_total_bytes": sum(input_ref_bytes) if input_ref_bytes else None,
+        "inline_input_count": len(request.inline_inputs),
+        "inline_input_content_types": inline_content_types,
+        "message_count": len(request.messages),
+        "message_max_bytes": max(message_lengths) if message_lengths else None,
+        "message_total_bytes": sum(message_lengths) if message_lengths else None,
+        "response_format": request.response_format.type.value if request.response_format is not None else None,
+        "max_tokens": request.max_tokens,
+    }
+
+
+def redaction_guarantee() -> dict[str, bool]:
+    return {
+        "prompt_body_included": False,
+        "message_content_included": False,
+        "data_ref_uri_included": False,
+        "presigned_url_included": False,
+        "api_key_included": False,
+        "provider_raw_output_included": False,
+    }
 
 
 def worker_readable_request(request: TaskRequest, runtime: Runtime) -> TaskRequest:
@@ -727,8 +878,11 @@ def openai_error_response(
     *,
     code: str = "bad_request",
     headers: dict[str, str] | None = None,
+    gpucall_failure_artifact: dict[str, Any] | None = None,
 ) -> JSONResponse:
     error: dict[str, Any] = {"message": message, "type": "gpucall_error", "code": code}
+    if gpucall_failure_artifact is not None:
+        error["gpucall_failure_artifact"] = gpucall_failure_artifact
     return JSONResponse(status_code=status_code, content={"error": error}, headers=headers)
 
 
