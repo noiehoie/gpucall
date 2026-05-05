@@ -68,6 +68,20 @@ gpucall-recipe-draft draft --input intake.json --output recipe-draft.json
 
 The output is not production config. It is a review artifact for gpucall administrators.
 
+### Submission
+
+The caller-side helper can submit sanitized intake and draft artifacts to a file-based inbox. This is not a gpucall API. The inbox can be a shared directory, mounted object-store prefix, or any path synchronized by your own transport.
+
+```bash
+gpucall-recipe-draft submit \
+  --intake intake.json \
+  --draft recipe-draft.json \
+  --inbox-dir /path/to/gpucall-recipe-requests/inbox \
+  --source news-system
+```
+
+The submitted bundle contains only the sanitized intake and optional draft. It does not contain raw prompt bodies, DataRef URIs, presigned URLs, or secrets.
+
 ## Caller-Facing Intents
 
 Callers should describe intent at a high level. They should not specify GPU names, provider names, model names, or gpucall-internal capability labels.
@@ -134,3 +148,28 @@ gpucall launch-check --profile static --config-dir config
 ```
 
 If validation reports that no provider satisfies the new recipe, the administrator must add or enable an appropriate provider before production use.
+
+### Inbox Automation
+
+For operators who choose to accept every submitted sanitized request, the admin helper can process the inbox without an API endpoint:
+
+```bash
+gpucall-recipe-admin process-inbox \
+  --inbox-dir /path/to/gpucall-recipe-requests/inbox \
+  --output-dir config/recipes \
+  --accept-all
+```
+
+Processed submissions are moved to `inbox/processed`, failed submissions to `inbox/failed`, and materialization reports to `inbox/reports`.
+
+To poll continuously:
+
+```bash
+gpucall-recipe-admin watch \
+  --inbox-dir /path/to/gpucall-recipe-requests/inbox \
+  --output-dir config/recipes \
+  --accept-all \
+  --interval-seconds 10
+```
+
+This still only writes recipe YAML. It does not deploy, does not edit provider specs, and does not bypass `validate-config` or launch checks.

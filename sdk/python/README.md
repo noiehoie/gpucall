@@ -56,8 +56,14 @@ gpucall-recipe-draft intake \
   --output intake.json
 
 gpucall-recipe-draft draft --input intake.json --output recipe-draft.json
+
+gpucall-recipe-draft submit \
+  --intake intake.json \
+  --draft recipe-draft.json \
+  --inbox-dir /path/to/gpucall-recipe-requests/inbox \
+  --source news-system
 ```
 
 The caller-side helper does not call an LLM. It creates deterministic intake material for gpucall administrators. If LLM-assisted recipe authoring is needed, it should run on the gpucall administrator side as an audited admin workflow.
 
-Generated drafts are review artifacts, not production config.
+Generated drafts are review artifacts, not production config. `submit` writes a JSON bundle to a file-based inbox; it does not call the gpucall gateway API.

@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Any
 
 from gpucall_recipe_draft.core import DraftInputs, draft_from_intake, dumps_json, intake_from_error
+from gpucall_recipe_draft.submit import build_submission_bundle, submit_bundle
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -27,6 +28,12 @@ def main(argv: list[str] | None = None) -> int:
     draft.add_argument("--input", "-i", required=True, help="path to sanitized intake JSON, or '-' for stdin")
     draft.add_argument("--output", "-o", help="write draft JSON to this path")
 
+    submit = subcommands.add_parser("submit", help="submit sanitized intake/draft to a file-based gpucall recipe request inbox")
+    submit.add_argument("--intake", required=True, help="path to sanitized intake JSON")
+    submit.add_argument("--draft", help="path to deterministic draft JSON")
+    submit.add_argument("--inbox-dir", required=True, help="shared inbox directory managed outside the gpucall API")
+    submit.add_argument("--source", help="caller/source label to include in the submission bundle")
+
     args = parser.parse_args(argv)
     if args.command == "intake":
         error_payload = _load_json(args.error)
@@ -46,6 +53,15 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "draft":
         result = draft_from_intake(_load_json(args.input))
         _write_json(result, args.output)
+        return 0
+    if args.command == "submit":
+        bundle = build_submission_bundle(
+            intake=_load_json(args.intake),
+            draft=_load_json(args.draft) if args.draft else None,
+            source=args.source,
+        )
+        path = submit_bundle(bundle, args.inbox_dir)
+        sys.stdout.write(str(path) + "\n")
         return 0
     raise AssertionError(args.command)
 

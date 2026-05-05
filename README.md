@@ -99,9 +99,16 @@ When this happens, run the independent helper:
 ```bash
 gpucall-recipe-draft intake --error gpucall-error.json --intent <caller-intent> --output intake.json
 gpucall-recipe-draft draft --input intake.json --output recipe-draft.json
+gpucall-recipe-draft submit --intake intake.json --draft recipe-draft.json --inbox-dir /path/to/inbox
 ```
 
 The caller-side helper is deterministic and does not call an LLM. It prepares sanitized intake and an optional local draft summary so gpucall administrators can decide whether the workload class should become a supported recipe. Submit the sanitized intake through your organization's approved gpucall operator channel. If the administrator adopts an accept-all policy, the gateway-side `gpucall-recipe-admin materialize --accept-all` helper can turn sanitized intake into canonical recipe YAML. Any draft or materialized recipe still requires `validate-config`, tests, launch checks, and deployment before subsequent requests can use it.
+
+For fully file-based automation without adding a gateway API, administrators can run:
+
+```bash
+gpucall-recipe-admin watch --inbox-dir /path/to/inbox --output-dir config/recipes --accept-all
+```
 
 ## Routing
 

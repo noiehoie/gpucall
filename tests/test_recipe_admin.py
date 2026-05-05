@@ -5,7 +5,7 @@ import json
 import pytest
 import yaml
 
-from gpucall.recipe_admin import canonical_recipe_from_artifact, main
+from gpucall.recipe_admin import canonical_recipe_from_artifact, main, process_inbox
 
 
 def test_admin_materializes_intake_to_canonical_recipe() -> None:
@@ -85,3 +85,75 @@ def test_admin_materialize_writes_yaml_and_report(tmp_path) -> None:
     assert recipe["max_model_len"] == 65536
     assert report["policy"] == "accept-all"
     assert report["human_review_bypassed"] is True
+
+
+def test_admin_process_inbox_materializes_submission(tmp_path) -> None:
+    inbox = tmp_path / "inbox"
+    output_dir = tmp_path / "recipes"
+    inbox.mkdir()
+    submission = {
+        "kind": "gpucall.recipe_request_submission",
+        "request_id": "rr-test",
+        "intake": {
+            "phase": "deterministic-intake",
+            "sanitized_request": {
+                "task": "infer",
+                "mode": "sync",
+                "intent": "summarize_text",
+                "classification": "confidential",
+                "desired_capabilities": ["summarization"],
+                "error": {"context": {"required_model_len": 40000}},
+            },
+        },
+        "draft": None,
+    }
+    (inbox / "rr-test.json").write_text(json.dumps(submission), encoding="utf-8")
+
+    results = process_inbox(inbox_dir=inbox, output_dir=output_dir)
+
+    assert results[0]["ok"] is True
+    assert (output_dir / "infer-summarize-text-draft.yml").exists()
+    assert (inbox / "processed" / "rr-test.json").exists()
+    assert (inbox / "reports" / "rr-test.report.json").exists()
+
+
+def test_admin_cli_process_inbox_requires_accept_all(tmp_path) -> None:
+    with pytest.raises(SystemExit, match="refusing to process inbox without --accept-all"):
+        main(["process-inbox", "--inbox-dir", str(tmp_path / "inbox"), "--output-dir", str(tmp_path / "recipes")])
+
+
+def test_admin_cli_watch_one_iteration(tmp_path, capsys) -> None:
+    inbox = tmp_path / "inbox"
+    output_dir = tmp_path / "recipes"
+    inbox.mkdir()
+    (inbox / "rr-test.json").write_text(
+        json.dumps(
+            {
+                "kind": "gpucall.recipe_request_submission",
+                "request_id": "rr-test",
+                "intake": {"sanitized_request": {"task": "infer", "intent": "summarize_text"}},
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    assert (
+        main(
+            [
+                "watch",
+                "--inbox-dir",
+                str(inbox),
+                "--output-dir",
+                str(output_dir),
+                "--accept-all",
+                "--max-iterations",
+                "1",
+                "--interval-seconds",
+                "0",
+            ]
+        )
+        == 0
+    )
+    output = json.loads(capsys.readouterr().out)
+
+    assert output["processed"][0]["ok"] is True

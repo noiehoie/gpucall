@@ -3,7 +3,9 @@ from __future__ import annotations
 import argparse
 import json
 import re
+import shutil
 import sys
+import time
 from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
@@ -45,6 +47,26 @@ def main(argv: list[str] | None = None) -> int:
     materialize.add_argument("--force", action="store_true", help="overwrite existing recipe YAML")
     materialize.add_argument("--dry-run", action="store_true", help="print YAML without writing files")
 
+    process = subcommands.add_parser("process-inbox", help="process file-based recipe request submissions once")
+    process.add_argument("--inbox-dir", required=True)
+    process.add_argument("--output-dir", required=True)
+    process.add_argument("--processed-dir")
+    process.add_argument("--failed-dir")
+    process.add_argument("--report-dir")
+    process.add_argument("--accept-all", action="store_true")
+    process.add_argument("--force", action="store_true")
+
+    watch = subcommands.add_parser("watch", help="poll a file-based recipe request inbox and materialize submissions")
+    watch.add_argument("--inbox-dir", required=True)
+    watch.add_argument("--output-dir", required=True)
+    watch.add_argument("--processed-dir")
+    watch.add_argument("--failed-dir")
+    watch.add_argument("--report-dir")
+    watch.add_argument("--accept-all", action="store_true")
+    watch.add_argument("--force", action="store_true")
+    watch.add_argument("--interval-seconds", type=float, default=10.0)
+    watch.add_argument("--max-iterations", type=int)
+
     args = parser.parse_args(argv)
     if args.command == "materialize":
         if not args.accept_all:
@@ -60,6 +82,39 @@ def main(argv: list[str] | None = None) -> int:
         if args.report:
             Path(args.report).write_text(json.dumps(report, ensure_ascii=False, indent=2, sort_keys=True) + "\n", encoding="utf-8")
         return 0
+    if args.command == "process-inbox":
+        if not args.accept_all:
+            raise SystemExit("refusing to process inbox without --accept-all")
+        results = process_inbox(
+            inbox_dir=args.inbox_dir,
+            output_dir=args.output_dir,
+            processed_dir=args.processed_dir,
+            failed_dir=args.failed_dir,
+            report_dir=args.report_dir,
+            force=args.force,
+        )
+        sys.stdout.write(json.dumps({"processed": results}, ensure_ascii=False, indent=2, sort_keys=True) + "\n")
+        return 0
+    if args.command == "watch":
+        if not args.accept_all:
+            raise SystemExit("refusing to watch inbox without --accept-all")
+        iterations = 0
+        while True:
+            results = process_inbox(
+                inbox_dir=args.inbox_dir,
+                output_dir=args.output_dir,
+                processed_dir=args.processed_dir,
+                failed_dir=args.failed_dir,
+                report_dir=args.report_dir,
+                force=args.force,
+            )
+            if results:
+                sys.stdout.write(json.dumps({"processed": results}, ensure_ascii=False, indent=2, sort_keys=True) + "\n")
+                sys.stdout.flush()
+            iterations += 1
+            if args.max_iterations is not None and iterations >= args.max_iterations:
+                return 0
+            time.sleep(args.interval_seconds)
     raise AssertionError(args.command)
 
 
@@ -113,6 +168,47 @@ def materialization_report(artifact: Mapping[str, Any], recipe: Mapping[str, Any
     }
 
 
+def process_inbox(
+    *,
+    inbox_dir: str | Path,
+    output_dir: str | Path,
+    processed_dir: str | Path | None = None,
+    failed_dir: str | Path | None = None,
+    report_dir: str | Path | None = None,
+    force: bool = False,
+) -> list[dict[str, Any]]:
+    inbox = Path(inbox_dir)
+    processed = Path(processed_dir) if processed_dir else inbox / "processed"
+    failed = Path(failed_dir) if failed_dir else inbox / "failed"
+    reports = Path(report_dir) if report_dir else inbox / "reports"
+    processed.mkdir(parents=True, exist_ok=True)
+    failed.mkdir(parents=True, exist_ok=True)
+    reports.mkdir(parents=True, exist_ok=True)
+    output = Path(output_dir)
+    output.mkdir(parents=True, exist_ok=True)
+    results: list[dict[str, Any]] = []
+    for path in sorted(inbox.glob("*.json")):
+        if path.parent != inbox:
+            continue
+        try:
+            artifact = _artifact_from_submission(_load_json(str(path)))
+            recipe = canonical_recipe_from_artifact(artifact)
+            report = materialization_report(artifact, recipe)
+            recipe_path = write_recipe_yaml(recipe, output, force=force)
+            report["recipe_path"] = str(recipe_path)
+            report["submission_path"] = str(path)
+            report_path = reports / f"{path.stem}.report.json"
+            report_path.write_text(json.dumps(report, ensure_ascii=False, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+            destination = processed / path.name
+            _move_submission(path, destination)
+            results.append({"submission": str(destination), "recipe": str(recipe_path), "report": str(report_path), "ok": True})
+        except Exception as exc:
+            destination = failed / path.name
+            _move_submission(path, destination)
+            results.append({"submission": str(destination), "ok": False, "error": str(exc)})
+    return results
+
+
 def write_recipe_yaml(recipe: Mapping[str, Any], output_dir: str | Path, *, force: bool = False) -> Path:
     root = Path(output_dir)
     root.mkdir(parents=True, exist_ok=True)
@@ -134,6 +230,25 @@ def _proposed_recipe_from_artifact(artifact: Mapping[str, Any]) -> Mapping[str, 
     if sanitized:
         return _proposed_recipe_from_sanitized(sanitized)
     raise ValueError("artifact must be a gpucall-recipe-draft intake or draft JSON object")
+
+
+def _artifact_from_submission(data: Mapping[str, Any]) -> Mapping[str, Any]:
+    if data.get("kind") == "gpucall.recipe_request_submission":
+        draft = data.get("draft")
+        if isinstance(draft, Mapping):
+            return draft
+        intake = data.get("intake")
+        if isinstance(intake, Mapping):
+            return intake
+        raise ValueError("submission does not contain intake or draft")
+    return data
+
+
+def _move_submission(source: Path, destination: Path) -> None:
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    if destination.exists():
+        destination = destination.with_name(destination.stem + "-" + str(int(time.time())) + destination.suffix)
+    shutil.move(str(source), str(destination))
 
 
 def _proposed_recipe_from_sanitized(sanitized: Mapping[str, Any]) -> dict[str, Any]:

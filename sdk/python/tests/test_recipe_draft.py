@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
 
 from gpucall_recipe_draft.cli import main
 from gpucall_recipe_draft.core import DraftInputs, draft_from_intake, intake_from_error
+from gpucall_recipe_draft.submit import build_submission_bundle, submit_bundle
 
 
 def test_intake_redacts_sensitive_payload_and_keeps_metadata() -> None:
@@ -99,3 +101,34 @@ def test_recipe_draft_cli_intake_and_draft(tmp_path, capsys) -> None:
     assert output["proposed_recipe"]["task"] == "infer"
     assert output["proposed_recipe"]["required_model_capabilities"] == ["summarization"]
     assert output["proposed_recipe"]["max_model_len"] == 65536
+
+
+def test_submit_writes_file_based_bundle(tmp_path) -> None:
+    bundle = build_submission_bundle(
+        intake={"phase": "deterministic-intake", "sanitized_request": {"task": "infer"}},
+        draft={"phase": "draft", "proposed_recipe": {"name": "infer-draft", "task": "infer"}},
+        source="news-system",
+    )
+
+    path = submit_bundle(bundle, tmp_path / "inbox")
+    data = json.loads(path.read_text(encoding="utf-8"))
+
+    assert path.name.startswith("rr-")
+    assert data["kind"] == "gpucall.recipe_request_submission"
+    assert data["source"] == "news-system"
+    assert data["intake"]["sanitized_request"]["task"] == "infer"
+
+
+def test_recipe_draft_cli_submit(tmp_path, capsys) -> None:
+    intake = tmp_path / "intake.json"
+    draft = tmp_path / "draft.json"
+    inbox = tmp_path / "inbox"
+    intake.write_text(json.dumps({"phase": "deterministic-intake", "sanitized_request": {"task": "infer"}}), encoding="utf-8")
+    draft.write_text(json.dumps({"phase": "draft", "proposed_recipe": {"name": "infer-draft", "task": "infer"}}), encoding="utf-8")
+
+    assert main(["submit", "--intake", str(intake), "--draft", str(draft), "--inbox-dir", str(inbox), "--source", "caller"]) == 0
+    output_path = capsys.readouterr().out.strip()
+
+    assert output_path
+    assert Path(output_path).exists()
+    assert json.loads(Path(output_path).read_text(encoding="utf-8"))["source"] == "caller"
