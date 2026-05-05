@@ -87,7 +87,8 @@ class AuditTrail:
                 return rotated
 
     def _chain_paths(self) -> list[Path]:
-        rotated = sorted(self.path.parent.glob(f"{self.path.stem}.*{self.path.suffix}"))
+        rotated_name = re.compile(rf"^{re.escape(self.path.stem)}\.\d{{8}}T\d{{6}}Z{re.escape(self.path.suffix)}$")
+        rotated = sorted(path for path in self.path.parent.glob(f"{self.path.stem}.*{self.path.suffix}") if rotated_name.match(path.name))
         paths = [path for path in rotated if path.is_file()]
         if self.path.exists():
             paths.append(self.path)

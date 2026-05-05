@@ -75,6 +75,15 @@ def test_audit_rotation_preserves_hash_chain_continuity(tmp_path) -> None:
     assert AuditTrail(path).verify()
 
 
+def test_audit_verify_ignores_quarantined_invalid_files(tmp_path) -> None:
+    path = tmp_path / "trail.jsonl"
+    (tmp_path / "trail.invalid-20260430T143101Z.jsonl").write_text("not json\n", encoding="utf-8")
+    audit = AuditTrail(path)
+    audit.append("one", {"a": 1})
+
+    assert AuditTrail(path).verify()
+
+
 def test_redacted_plan_for_audit_is_allowlisted() -> None:
     plan = CompiledPlan(
         policy_version="test",
