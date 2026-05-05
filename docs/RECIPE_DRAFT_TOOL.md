@@ -70,6 +70,15 @@ gpucall-recipe-draft submit \
   --source news-system
 ```
 
+If the gpucall administrator exposes an SSH-only operator inbox, submit directly to it:
+
+```bash
+gpucall-recipe-draft submit \
+  --intake preflight-intake.json \
+  --remote-inbox admin@gpucall.example.internal:/srv/gpucall/state/recipe_requests/inbox \
+  --source news-system
+```
+
 ### Phase 1: Post-Failure Intake
 
 This phase does not use an LLM.
@@ -84,7 +93,7 @@ gpucall-recipe-draft intake \
   --business-need "画像の内容に関する質問に答えたい" \
   --classification confidential \
   --output intake.json \
-  --inbox-dir /path/to/gpucall-recipe-requests/inbox \
+  --remote-inbox admin@gpucall.example.internal:/srv/gpucall/state/recipe_requests/inbox \
   --source news-system
 ```
 
@@ -130,7 +139,7 @@ gpucall-recipe-draft quality \
   --selected-provider-model Salesforce/blip-vqa-base \
   --quality-failure-kind insufficient_ocr \
   --quality-failure-reason "short answer only; expected top headlines" \
-  --inbox-dir /path/to/gpucall-recipe-requests/inbox \
+  --remote-inbox admin@gpucall.example.internal:/srv/gpucall/state/recipe_requests/inbox \
   --source news-system
 ```
 
@@ -150,7 +159,7 @@ The output is not production config. It is a review artifact for gpucall adminis
 
 ### Submission
 
-The caller-side helper can submit sanitized intake and draft artifacts to a file-based inbox. This is not a gpucall API. The inbox can be a shared directory, mounted object-store prefix, or any path synchronized by your own transport.
+The caller-side helper can submit sanitized intake and draft artifacts to a file-based inbox. This is not a gpucall API. The inbox can be a local shared directory, or an SSH-accessible directory controlled by the gpucall administrator.
 
 ```bash
 gpucall-recipe-draft submit \
@@ -160,9 +169,19 @@ gpucall-recipe-draft submit \
   --source news-system
 ```
 
-The submitted bundle contains only the sanitized intake and optional draft. It does not contain raw prompt bodies, DataRef URIs, presigned URLs, or secrets.
+For remote submission:
 
-For caller automation, `preflight`, `intake`, and `quality` also accept `--inbox-dir` and `--source`. When these flags are present, the helper writes the sanitized intake and submits it in one command.
+```bash
+gpucall-recipe-draft submit \
+  --intake intake.json \
+  --draft recipe-draft.json \
+  --remote-inbox admin@gpucall.example.internal:/srv/gpucall/state/recipe_requests/inbox \
+  --source news-system
+```
+
+Remote submission uses SSH, creates the target directory if needed, writes a temporary file, and atomically renames it to `<request_id>.json`. The submitted bundle contains only the sanitized intake and optional draft. It does not contain raw prompt bodies, DataRef URIs, presigned URLs, or secrets.
+
+For caller automation, `preflight`, `intake`, and `quality` also accept `--inbox-dir`, `--remote-inbox`, and `--source`. When either inbox flag is present, the helper writes the sanitized intake and submits it in one command.
 
 ## Caller-Facing Intents
 

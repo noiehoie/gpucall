@@ -100,14 +100,14 @@ When this happens, run the independent helper:
 
 ```bash
 gpucall-recipe-draft preflight --task vision --intent understand_document_image --content-type image/png --bytes 2000000 --output preflight-intake.json
-gpucall-recipe-draft intake --error gpucall-error.json --intent <caller-intent> --output intake.json --inbox-dir /path/to/inbox
-gpucall-recipe-draft quality --task vision --intent understand_document_image --quality-failure-kind insufficient_ocr --inbox-dir /path/to/inbox
+gpucall-recipe-draft intake --error gpucall-error.json --intent <caller-intent> --output intake.json --remote-inbox admin@gpucall.example.internal:/srv/gpucall/state/recipe_requests/inbox
+gpucall-recipe-draft quality --task vision --intent understand_document_image --quality-failure-kind insufficient_ocr --remote-inbox admin@gpucall.example.internal:/srv/gpucall/state/recipe_requests/inbox
 gpucall-recipe-draft compare --preflight preflight-intake.json --failure intake.json --output drift-report.json
 gpucall-recipe-draft draft --input intake.json --output recipe-draft.json
-gpucall-recipe-draft submit --intake intake.json --draft recipe-draft.json --inbox-dir /path/to/inbox
+gpucall-recipe-draft submit --intake intake.json --draft recipe-draft.json --remote-inbox admin@gpucall.example.internal:/srv/gpucall/state/recipe_requests/inbox
 ```
 
-The caller-side helper is deterministic and does not call an LLM. It prepares sanitized intake and an optional local draft summary so gpucall administrators can decide whether the workload class should become a supported recipe. With `--inbox-dir`, the helper submits sanitized intake directly to the approved file-based operator inbox. If the administrator adopts an accept-all policy, the gateway-side `gpucall-recipe-admin materialize --accept-all` helper can turn sanitized intake into canonical recipe YAML. Any draft or materialized recipe still requires `validate-config`, tests, launch checks, and deployment before subsequent requests can use it.
+The caller-side helper is deterministic and does not call an LLM. It prepares sanitized intake and an optional local draft summary so gpucall administrators can decide whether the workload class should become a supported recipe. With `--inbox-dir` or `--remote-inbox`, the helper submits sanitized intake directly to the approved operator inbox. Remote submission uses SSH and does not call the gateway API. If the administrator adopts an accept-all policy, the gateway-side `gpucall-recipe-admin materialize --accept-all` helper can turn sanitized intake into canonical recipe YAML. Any draft or materialized recipe still requires `validate-config`, tests, launch checks, and deployment before subsequent requests can use it.
 
 For fully file-based automation without adding a gateway API, administrators can run:
 

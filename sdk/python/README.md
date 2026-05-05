@@ -73,7 +73,7 @@ gpucall-recipe-draft intake \
   --intent understand_document_image \
   --classification confidential \
   --output intake.json \
-  --inbox-dir /path/to/gpucall-recipe-requests/inbox \
+  --remote-inbox admin@gpucall.example.internal:/srv/gpucall/state/recipe_requests/inbox \
   --source news-system
 
 gpucall-recipe-draft quality \
@@ -87,7 +87,7 @@ gpucall-recipe-draft quality \
   --selected-provider-model Salesforce/blip-vqa-base \
   --quality-failure-kind insufficient_ocr \
   --quality-failure-reason "short answer only; expected top headlines" \
-  --inbox-dir /path/to/gpucall-recipe-requests/inbox \
+  --remote-inbox admin@gpucall.example.internal:/srv/gpucall/state/recipe_requests/inbox \
   --source news-system
 
 gpucall-recipe-draft draft --input intake.json --output recipe-draft.json
@@ -100,10 +100,10 @@ gpucall-recipe-draft compare \
 gpucall-recipe-draft submit \
   --intake intake.json \
   --draft recipe-draft.json \
-  --inbox-dir /path/to/gpucall-recipe-requests/inbox \
+  --remote-inbox admin@gpucall.example.internal:/srv/gpucall/state/recipe_requests/inbox \
   --source news-system
 ```
 
 The caller-side helper does not call an LLM. It creates deterministic intake material for gpucall administrators. If LLM-assisted recipe authoring is needed, it should run on the gpucall administrator side as an audited admin workflow.
 
-Generated drafts are review artifacts, not production config. `submit` writes a JSON bundle to a file-based inbox; it does not call the gpucall gateway API. `preflight`, `intake`, and `quality` can also write to the inbox directly with `--inbox-dir`.
+Generated drafts are review artifacts, not production config. `submit` writes a JSON bundle to a file-based inbox; it does not call the gpucall gateway API. `preflight`, `intake`, and `quality` can also write to the inbox directly with `--inbox-dir` or over SSH with `--remote-inbox USER@HOST:/absolute/path`.

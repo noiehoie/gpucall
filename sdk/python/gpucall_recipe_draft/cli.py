@@ -17,7 +17,7 @@ from gpucall_recipe_draft.core import (
     intake_from_preflight,
     intake_from_quality_feedback,
 )
-from gpucall_recipe_draft.submit import build_submission_bundle, submit_bundle
+from gpucall_recipe_draft.submit import build_submission_bundle, submit_bundle, submit_bundle_to_remote
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -34,6 +34,7 @@ def main(argv: list[str] | None = None) -> int:
     intake.add_argument("--expected-output")
     intake.add_argument("--output", "-o", help="write sanitized intake JSON to this path")
     intake.add_argument("--inbox-dir", help="also submit the sanitized intake to this file-based admin inbox")
+    intake.add_argument("--remote-inbox", help="also submit to USER@HOST:/absolute/admin/inbox over SSH")
     intake.add_argument("--source", help="caller/source label for automatic submission")
 
     draft = subcommands.add_parser("draft", help="create a human-reviewed recipe/provider draft from sanitized intake JSON")
@@ -52,6 +53,7 @@ def main(argv: list[str] | None = None) -> int:
     preflight.add_argument("--required-model-len", type=int)
     preflight.add_argument("--output", "-o", help="write preflight intake JSON to this path")
     preflight.add_argument("--inbox-dir", help="also submit the sanitized intake to this file-based admin inbox")
+    preflight.add_argument("--remote-inbox", help="also submit to USER@HOST:/absolute/admin/inbox over SSH")
     preflight.add_argument("--source", help="caller/source label for automatic submission")
 
     quality = subcommands.add_parser(
@@ -77,6 +79,7 @@ def main(argv: list[str] | None = None) -> int:
     quality.add_argument("--observed-output-kind", default="")
     quality.add_argument("--output", "-o", help="write quality feedback intake JSON to this path")
     quality.add_argument("--inbox-dir", help="also submit the sanitized intake to this file-based admin inbox")
+    quality.add_argument("--remote-inbox", help="also submit to USER@HOST:/absolute/admin/inbox over SSH")
     quality.add_argument("--source", help="caller/source label for automatic submission")
 
     compare = subcommands.add_parser("compare", help="compare a preflight intake with a post-failure intake")
@@ -87,7 +90,8 @@ def main(argv: list[str] | None = None) -> int:
     submit = subcommands.add_parser("submit", help="submit sanitized intake/draft to a file-based gpucall recipe request inbox")
     submit.add_argument("--intake", required=True, help="path to sanitized intake JSON")
     submit.add_argument("--draft", help="path to deterministic draft JSON")
-    submit.add_argument("--inbox-dir", required=True, help="shared inbox directory managed outside the gpucall API")
+    submit.add_argument("--inbox-dir", help="shared inbox directory managed outside the gpucall API")
+    submit.add_argument("--remote-inbox", help="submit to USER@HOST:/absolute/admin/inbox over SSH")
     submit.add_argument("--source", help="caller/source label to include in the submission bundle")
 
     args = parser.parse_args(argv)
@@ -105,7 +109,7 @@ def main(argv: list[str] | None = None) -> int:
             )
         )
         _write_json(result, args.output)
-        _submit_if_requested(result, args.inbox_dir, args.source)
+        _submit_if_requested(result, args.inbox_dir, args.remote_inbox, args.source)
         return 0
     if args.command == "draft":
         result = draft_from_intake(_load_json(args.input))
@@ -126,7 +130,7 @@ def main(argv: list[str] | None = None) -> int:
             )
         )
         _write_json(result, args.output)
-        _submit_if_requested(result, args.inbox_dir, args.source)
+        _submit_if_requested(result, args.inbox_dir, args.remote_inbox, args.source)
         return 0
     if args.command == "quality":
         result = intake_from_quality_feedback(
@@ -151,7 +155,7 @@ def main(argv: list[str] | None = None) -> int:
             )
         )
         _write_json(result, args.output)
-        _submit_if_requested(result, args.inbox_dir, args.source)
+        _submit_if_requested(result, args.inbox_dir, args.remote_inbox, args.source)
         return 0
     if args.command == "compare":
         result = compare_preflight_to_failure(_load_json(args.preflight), _load_json(args.failure))
@@ -163,8 +167,10 @@ def main(argv: list[str] | None = None) -> int:
             draft=_load_json(args.draft) if args.draft else None,
             source=args.source,
         )
-        path = submit_bundle(bundle, args.inbox_dir)
-        sys.stdout.write(str(path) + "\n")
+        paths = _submit_bundle(bundle, args.inbox_dir, args.remote_inbox)
+        if not paths:
+            raise SystemExit("submit requires --inbox-dir or --remote-inbox")
+        sys.stdout.write("\n".join(paths) + "\n")
         return 0
     raise AssertionError(args.command)
 
@@ -185,12 +191,26 @@ def _write_json(data: dict[str, Any], output: str | None) -> None:
         sys.stdout.write(text)
 
 
-def _submit_if_requested(intake: dict[str, Any], inbox_dir: str | None, source: str | None) -> None:
-    if not inbox_dir:
+def _submit_if_requested(
+    intake: dict[str, Any],
+    inbox_dir: str | None,
+    remote_inbox: str | None,
+    source: str | None,
+) -> None:
+    if not inbox_dir and not remote_inbox:
         return
     bundle = build_submission_bundle(intake=intake, draft=None, source=source)
-    path = submit_bundle(bundle, inbox_dir)
-    sys.stderr.write(str(path) + "\n")
+    for path in _submit_bundle(bundle, inbox_dir, remote_inbox):
+        sys.stderr.write(str(path) + "\n")
+
+
+def _submit_bundle(bundle: dict[str, Any], inbox_dir: str | None, remote_inbox: str | None) -> list[str]:
+    paths: list[str] = []
+    if inbox_dir:
+        paths.append(str(submit_bundle(bundle, inbox_dir)))
+    if remote_inbox:
+        paths.append(submit_bundle_to_remote(bundle, remote_inbox))
+    return paths
 
 
 def _parse_bool(value: str) -> bool | None:

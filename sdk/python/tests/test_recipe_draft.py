@@ -14,7 +14,7 @@ from gpucall_recipe_draft.core import (
     intake_from_preflight,
     intake_from_quality_feedback,
 )
-from gpucall_recipe_draft.submit import build_submission_bundle, submit_bundle
+from gpucall_recipe_draft.submit import build_submission_bundle, parse_remote_inbox, submit_bundle, submit_bundle_to_remote
 
 
 def test_intake_redacts_sensitive_payload_and_keeps_metadata() -> None:
@@ -178,6 +178,83 @@ def test_recipe_draft_cli_submit(tmp_path, capsys) -> None:
     assert output_path
     assert Path(output_path).exists()
     assert json.loads(Path(output_path).read_text(encoding="utf-8"))["source"] == "caller"
+
+
+def test_parse_remote_inbox_requires_absolute_path() -> None:
+    target = parse_remote_inbox("admin@gpucall.example.internal:/srv/gpucall/state/recipe_requests/inbox")
+
+    assert target.host == "root@gpucall.example.internal"
+    assert target.inbox_dir == "/opt/gpucall/state/recipe_requests/inbox"
+
+
+def test_submit_bundle_to_remote_uses_ssh_atomic_write(monkeypatch) -> None:
+    calls = []
+
+    def fake_run(args, *, input, stdout, stderr, check):
+        calls.append(
+            {
+                "args": args,
+                "input": input.decode("utf-8"),
+                "stdout": stdout,
+                "stderr": stderr,
+                "check": check,
+            }
+        )
+
+    monkeypatch.setattr("gpucall_recipe_draft.submit.subprocess.run", fake_run)
+    bundle = build_submission_bundle(
+        intake={"phase": "deterministic-intake", "sanitized_request": {"task": "infer"}},
+        source="news-system",
+    )
+    request_id = bundle["request_id"]
+
+    result = submit_bundle_to_remote(bundle, "admin@gpucall.example.internal:/srv/gpucall/state/recipe_requests/inbox")
+
+    assert result == f"admin@gpucall.example.internal:/srv/gpucall/state/recipe_requests/inbox/{request_id}.json"
+    assert calls[0]["args"][0:2] == ["ssh", "root@gpucall.example.internal"]
+    assert "mkdir -p" in calls[0]["args"][2]
+    assert f".{request_id}.tmp" in calls[0]["args"][2]
+    assert f"{request_id}.json" in calls[0]["args"][2]
+    assert json.loads(calls[0]["input"])["source"] == "news-system"
+
+
+def test_recipe_draft_cli_quality_can_submit_to_remote(monkeypatch, capsys) -> None:
+    submitted = []
+
+    def fake_submit(bundle, remote_inbox):
+        submitted.append({"bundle": bundle, "remote_inbox": remote_inbox})
+        return f"{remote_inbox}/rr-test.json"
+
+    monkeypatch.setattr("gpucall_recipe_draft.cli.submit_bundle_to_remote", fake_submit)
+
+    assert (
+        main(
+            [
+                "quality",
+                "--task",
+                "vision",
+                "--intent",
+                "understand_document_image",
+                "--content-type",
+                "image/jpeg",
+                "--bytes",
+                "1136521",
+                "--quality-failure-kind",
+                "insufficient_ocr",
+                "--remote-inbox",
+                "admin@gpucall.example.internal:/srv/gpucall/state/recipe_requests/inbox",
+                "--source",
+                "news-system",
+            ]
+        )
+        == 0
+    )
+    captured = capsys.readouterr()
+
+    assert submitted[0]["remote_inbox"] == "admin@gpucall.example.internal:/srv/gpucall/state/recipe_requests/inbox"
+    assert submitted[0]["bundle"]["source"] == "news-system"
+    assert submitted[0]["bundle"]["intake"]["phase"] == "deterministic-quality-feedback-intake"
+    assert "admin@gpucall.example.internal:/srv/gpucall/state/recipe_requests/inbox/rr-test.json" in captured.err
 
 
 def test_preflight_intake_is_sanitized_metadata_only() -> None:
