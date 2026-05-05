@@ -101,7 +101,7 @@ gpucall-recipe-draft intake --error gpucall-error.json --intent <caller-intent> 
 gpucall-recipe-draft draft --input intake.json --output recipe-draft.json
 ```
 
-The helper prepares a recipe/provider draft so gpucall administrators can support the same workload class in future runs. gpucall does not choose the drafting LLM; the caller or operator configures a local model, company-approved gateway, or cloud AI API. LLM drafting happens only after the deterministic intake phase removes prompt bodies, message bodies, DataRef URIs, presigned URLs, and secrets. Submit the sanitized intake and draft through your organization's approved gpucall operator channel. The draft is not production config; gpucall administrators review it, write canonical recipe/provider YAML, validate it, and deploy it for subsequent requests.
+The caller-side helper is deterministic and does not call an LLM. It prepares sanitized intake and an optional local draft summary so gpucall administrators can decide whether the workload class should become a supported recipe. Submit the sanitized intake through your organization's approved gpucall operator channel. If recipe authoring needs LLM assistance, that belongs to the gpucall administrator side as an audited admin workflow, not to the caller-side helper. Any draft is not production config; gpucall administrators review it, write canonical recipe/provider YAML, validate it, and deploy it for subsequent requests.
 
 ## Routing
 

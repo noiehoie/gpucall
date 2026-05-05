@@ -6,8 +6,7 @@ import sys
 from pathlib import Path
 from typing import Any
 
-from gpucall_recipe_draft.core import DraftInputs, draft_from_intake, dumps_json, intake_from_error, llm_prompt_from_intake
-from gpucall_recipe_draft.llm import DEFAULT_CONFIG_PATH, draft_with_llm, load_llm_config, write_default_config
+from gpucall_recipe_draft.core import DraftInputs, draft_from_intake, dumps_json, intake_from_error
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -28,19 +27,6 @@ def main(argv: list[str] | None = None) -> int:
     draft.add_argument("--input", "-i", required=True, help="path to sanitized intake JSON, or '-' for stdin")
     draft.add_argument("--output", "-o", help="write draft JSON to this path")
 
-    llm_prompt = subcommands.add_parser("llm-prompt", help="emit a safe prompt for an approved LLM using sanitized intake only")
-    llm_prompt.add_argument("--input", "-i", required=True, help="path to sanitized intake JSON, or '-' for stdin")
-    llm_prompt.add_argument("--output", "-o", help="write prompt text to this path")
-
-    init_config = subcommands.add_parser("init-config", help="write a user-controlled LLM config template")
-    init_config.add_argument("--output", "-o", default=str(DEFAULT_CONFIG_PATH))
-    init_config.add_argument("--force", action="store_true")
-
-    draft_llm = subcommands.add_parser("draft-llm", help="call the user-configured LLM with sanitized intake only")
-    draft_llm.add_argument("--input", "-i", required=True, help="path to sanitized intake JSON, or '-' for stdin")
-    draft_llm.add_argument("--config", default=str(DEFAULT_CONFIG_PATH), help="path to recipe-draft LLM JSON config")
-    draft_llm.add_argument("--output", "-o", help="write LLM draft JSON to this path")
-
     args = parser.parse_args(argv)
     if args.command == "intake":
         error_payload = _load_json(args.error)
@@ -59,21 +45,6 @@ def main(argv: list[str] | None = None) -> int:
         return 0
     if args.command == "draft":
         result = draft_from_intake(_load_json(args.input))
-        _write_json(result, args.output)
-        return 0
-    if args.command == "llm-prompt":
-        result = llm_prompt_from_intake(_load_json(args.input))
-        if args.output:
-            Path(args.output).write_text(result, encoding="utf-8")
-        else:
-            sys.stdout.write(result)
-        return 0
-    if args.command == "init-config":
-        path = write_default_config(args.output, force=args.force)
-        sys.stdout.write(str(path) + "\n")
-        return 0
-    if args.command == "draft-llm":
-        result = draft_with_llm(_load_json(args.input), load_llm_config(args.config))
         _write_json(result, args.output)
         return 0
     raise AssertionError(args.command)

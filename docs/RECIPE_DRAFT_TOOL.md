@@ -5,7 +5,8 @@
 It is intentionally separate from the gateway runtime.
 
 - The gateway remains deterministic and does not inspect prompt meaning.
-- The tool collects sanitized failure metadata for gpucall administrators.
+- The caller-side tool collects sanitized failure metadata for gpucall administrators.
+- The caller-side tool does not call an LLM.
 - Any generated recipe or provider draft requires human review before production use.
 
 ## When To Use It
@@ -24,9 +25,11 @@ In normal operation, unknown workloads are handled as follows:
 2. gpucall returns `503 no eligible provider after policy, recipe, and circuit constraints` when a recipe exists but no eligible provider can execute it.
 3. The caller runs this helper outside the gateway runtime.
 4. The caller sends the sanitized intake and draft to the gpucall administrator through an approved operator channel.
-5. The administrator reviews the draft, writes canonical recipe/provider YAML, validates it, and deploys it for future runs.
+5. The administrator decides whether the request should become a supported workload class.
+6. If recipe authoring needs LLM assistance, the administrator runs that inside an audited gpucall admin workflow.
+7. The administrator reviews the draft, writes canonical recipe/provider YAML, validates it, and deploys it for future runs.
 
-The helper may use an approved LLM for the drafting step because recipe drafting is a design task, not runtime routing. gpucall does not choose that LLM. The caller or operator decides whether to use a local model, a company-approved gateway, or a cloud AI API. The LLM must receive only sanitized intake JSON. The helper is designed to remove raw prompt bodies, message bodies, documents, media bytes, DataRef URIs, presigned URLs, and secrets before any LLM prompt is produced. This minimizes leakage risk; it is not a license to submit raw confidential data to an external LLM.
+The helper is designed to remove raw prompt bodies, message bodies, documents, media bytes, DataRef URIs, presigned URLs, and secrets. It produces an intake artifact for gpucall administrators. LLM-assisted recipe authoring belongs on the administrator side, after the administrator accepts the sanitized intake into an audited workflow.
 
 ## Two Phases
 
@@ -53,50 +56,14 @@ The output contains:
 - recipe rejection reasons
 - redaction report
 
-### Phase 2: Draft
+### Phase 2: Local Draft Summary
 
-This phase consumes only the sanitized intake JSON.
+This phase consumes only the sanitized intake JSON and does not call an LLM.
 
-The default draft command is deterministic. A deployment may optionally send the sanitized intake JSON to an approved LLM, but raw prompts, documents, media bytes, DataRef URIs, and presigned URLs must not be forwarded.
+The draft command creates a deterministic review artifact. It is useful as a cover sheet for the administrator, not as production config.
 
 ```bash
 gpucall-recipe-draft draft --input intake.json --output recipe-draft.json
-```
-
-To use an approved LLM, generate the prompt from sanitized intake only:
-
-```bash
-gpucall-recipe-draft llm-prompt --input intake.json --output llm-prompt.txt
-```
-
-If the helper should call an LLM directly, create a user-controlled config:
-
-```bash
-gpucall-recipe-draft init-config
-```
-
-This writes a template to `$XDG_CONFIG_HOME/gpucall/recipe-draft.json`, or `~/.config/gpucall/recipe-draft.json` when `XDG_CONFIG_HOME` is unset.
-
-```json
-{
-  "api_key_env": null,
-  "base_url": "http://127.0.0.1:11434/v1",
-  "model": "qwen2.5:7b-instruct",
-  "provider": "openai-compatible",
-  "temperature": 0,
-  "timeout_seconds": 120
-}
-```
-
-The config selects the LLM endpoint. It must not contain secret values. Put API keys in the environment and set `api_key_env` to the environment variable name.
-
-```bash
-export RECIPE_DRAFT_API_KEY="..."
-
-gpucall-recipe-draft draft-llm \
-  --input intake.json \
-  --config ~/.config/gpucall/recipe-draft.json \
-  --output llm-draft.json
 ```
 
 The output is not production config. It is a review artifact for gpucall administrators.
@@ -137,7 +104,8 @@ For `restricted` workloads, use the intake artifact only, or use an approved loc
 
 1. Caller runs `gpucall-recipe-draft intake` against the failure payload.
 2. Caller sends `intake.json` and a business-level description to the gpucall administrator.
-3. Administrator runs or reviews `gpucall-recipe-draft draft`.
-4. Administrator writes canonical gpucall recipe/provider YAML.
-5. Administrator runs `gpucall validate-config`, tests, provider validation, and `gpucall launch-check`.
-6. Only reviewed and validated config is committed and deployed.
+3. Administrator decides whether recipe authoring is appropriate.
+4. If needed, administrator runs an audited admin-side recipe-authoring workflow.
+5. Administrator writes canonical gpucall recipe/provider YAML.
+6. Administrator runs `gpucall validate-config`, tests, provider validation, and `gpucall launch-check`.
+7. Only reviewed and validated config is committed and deployed.

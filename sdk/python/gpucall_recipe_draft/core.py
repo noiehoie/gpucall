@@ -147,18 +147,6 @@ def draft_from_intake(intake: Mapping[str, Any]) -> dict[str, Any]:
     }
 
 
-def llm_prompt_from_intake(intake: Mapping[str, Any]) -> str:
-    sanitized = _as_mapping(intake.get("sanitized_request"))
-    return (
-        "You are drafting a gpucall recipe/provider request for a human gpucall administrator.\n"
-        "Use only the sanitized JSON below. Do not infer from missing prompt text, media bytes, URLs, or secrets.\n"
-        "Do not propose a provider name, GPU vendor account, API key, or production-ready config.\n"
-        "Return JSON with proposed_recipe, provider_requirements, risks, and human_review_questions.\n\n"
-        "Sanitized gpucall request metadata:\n"
-        f"{dumps_json({'sanitized_request': sanitized})}"
-    )
-
-
 def _capabilities_for(*, task: str, intent: str | None) -> list[str]:
     if intent and intent in CAPABILITY_BY_INTENT:
         return CAPABILITY_BY_INTENT[intent]
