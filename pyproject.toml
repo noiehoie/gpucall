@@ -37,6 +37,7 @@ providers = [
 
 [project.scripts]
 gpucall = "gpucall.cli:main"
+gpucall-recipe-admin = "gpucall.recipe_admin:main"
 
 [project.entry-points."gpucall.adapters"]
 # External provider packages can register adapter builders in this group.

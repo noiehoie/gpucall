@@ -101,7 +101,7 @@ gpucall-recipe-draft intake --error gpucall-error.json --intent <caller-intent> 
 gpucall-recipe-draft draft --input intake.json --output recipe-draft.json
 ```
 
-The caller-side helper is deterministic and does not call an LLM. It prepares sanitized intake and an optional local draft summary so gpucall administrators can decide whether the workload class should become a supported recipe. Submit the sanitized intake through your organization's approved gpucall operator channel. If recipe authoring needs LLM assistance, that belongs to the gpucall administrator side as an audited admin workflow, not to the caller-side helper. Any draft is not production config; gpucall administrators review it, write canonical recipe/provider YAML, validate it, and deploy it for subsequent requests.
+The caller-side helper is deterministic and does not call an LLM. It prepares sanitized intake and an optional local draft summary so gpucall administrators can decide whether the workload class should become a supported recipe. Submit the sanitized intake through your organization's approved gpucall operator channel. If the administrator adopts an accept-all policy, the gateway-side `gpucall-recipe-admin materialize --accept-all` helper can turn sanitized intake into canonical recipe YAML. Any draft or materialized recipe still requires `validate-config`, tests, launch checks, and deployment before subsequent requests can use it.
 
 ## Routing
 

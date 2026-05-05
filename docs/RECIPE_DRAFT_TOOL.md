@@ -105,7 +105,32 @@ For `restricted` workloads, use the intake artifact only, or use an approved loc
 1. Caller runs `gpucall-recipe-draft intake` against the failure payload.
 2. Caller sends `intake.json` and a business-level description to the gpucall administrator.
 3. Administrator decides whether recipe authoring is appropriate.
-4. If needed, administrator runs an audited admin-side recipe-authoring workflow.
+4. If the organization has adopted an accept-all policy, administrator runs the gateway-side `gpucall-recipe-admin` helper.
 5. Administrator writes canonical gpucall recipe/provider YAML.
 6. Administrator runs `gpucall validate-config`, tests, provider validation, and `gpucall launch-check`.
 7. Only reviewed and validated config is committed and deployed.
+
+## Gateway-Side Admin Helper
+
+The caller-side helper ships with the SDK. The administrator-side helper ships with the gateway package, not the SDK.
+
+For low-friction operations, a gpucall administrator may choose an explicit accept-all policy for sanitized caller intake:
+
+```bash
+gpucall-recipe-admin materialize \
+  --input intake.json \
+  --output-dir config/recipes \
+  --report materialization-report.json \
+  --accept-all
+```
+
+`--accept-all` is required so accidental materialization fails closed. This command writes canonical recipe YAML for the current gpucall schema. It does not create a capable provider, does not edit policy, and does not deploy anything.
+
+After materialization:
+
+```bash
+gpucall validate-config --config-dir config
+gpucall launch-check --profile static --config-dir config
+```
+
+If validation reports that no provider satisfies the new recipe, the administrator must add or enable an appropriate provider before production use.
