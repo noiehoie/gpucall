@@ -24,7 +24,7 @@ Production-like runtime layout follows XDG:
 
 ## MVP Scope
 
-Supported:
+Production-supported v2.0 tasks:
 
 - Tasks: `infer`, `vision`
 - Modes: `sync`, `async`, `stream`
@@ -32,12 +32,13 @@ Supported:
 - Deployment: Docker Compose
 - State: SQLite WAL for jobs, JSONL audit hash chain
 
-Not supported in v2.0:
+Not production-supported in v2.0:
 
 - `transcribe`
-- `train`
+- `train` (control-plane contract exists; production provider execution is v2.1 work)
 - `convert`
-- fine-tune
+- fine-tune (control-plane contract exists; production provider execution is v2.1 work)
+- split-infer (control-plane contract exists; production split-learning execution is v2.1 work)
 - multi-file batch orchestration
 - Postgres
 - Helm/systemd packaging

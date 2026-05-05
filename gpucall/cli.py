@@ -267,6 +267,7 @@ def build_launch_report(config_dir: Path, *, url: str | None = None, api_key: st
         "mvp_scope": {
             "tasks": ["infer", "vision"],
             "deferred": ["transcribe", "train", "convert", "fine-tune", "multi-file batch", "postgres", "helm", "systemd"],
+            "control_plane_only": ["train", "fine-tune", "split-infer"],
         },
         "packaging": {
             "dockerfile": (PROJECT_ROOT / "Dockerfile").exists(),
@@ -467,6 +468,11 @@ def _finish_provider_smoke_summary(
     ended_at = datetime.now(timezone.utc)
     summary["started_at"] = started_at.isoformat()
     summary["ended_at"] = ended_at.isoformat()
+    summary["validation_schema_version"] = 1
+    summary["passed"] = _provider_smoke_passed(summary)
+    summary.setdefault("cleanup", {"required": False, "completed": None})
+    summary.setdefault("cost", {"observed": None, "estimated": None})
+    summary.setdefault("audit", {"event_ids": []})
     summary["commit"] = _git_commit()
     summary["config_hash"] = _config_hash(config_dir)
     summary["governance_hash"] = getattr(plan, "attestations", {}).get("governance_hash")
@@ -484,6 +490,18 @@ def _write_live_validation_artifact(summary: dict[str, object]) -> Path:
     path = root / f"{stamp}-{provider}.json"
     path.write_text(json.dumps(summary, sort_keys=True, separators=(",", ":"), default=str) + "\n", encoding="utf-8")
     return path
+
+
+def _provider_smoke_passed(summary: dict[str, object]) -> bool:
+    mode = summary.get("mode")
+    if mode == "stream":
+        return int(summary.get("chunks") or 0) > 0
+    if mode == "async":
+        return summary.get("completed") is True
+    result = summary.get("result")
+    if isinstance(result, dict):
+        return result.get("kind") in {"inline", "ref", "artifact_manifest"}
+    return False
 
 
 def _git_commit() -> str | None:
@@ -601,12 +619,21 @@ def _gateway_smoke_summary(url: str, *, api_key: str | None, recipe: str | None 
                     "metadata": {"smoke": "true"},
                 },
             )
-            summary["vision"] = {"status_code": vision.status_code}
+            summary["vision"] = {"status_code": vision.status_code, "ok": vision.status_code < 400}
             if vision.status_code < 400:
                 summary["vision"]["body"] = vision.json()
+            else:
+                summary["vision"]["required_for_gateway_ok"] = False
         else:
             summary["vision"] = {"skipped": "object_store is not configured"}
-        summary["ok"] = True
+        summary["ok"] = bool(
+            isinstance(summary.get("sync"), dict)
+            and summary["sync"].get("output_non_empty") is True
+            and (
+                not isinstance(summary.get("object_store_smoke"), dict)
+                or summary["object_store_smoke"].get("uploaded") is True
+            )
+        )
     return summary
 
 
@@ -632,8 +659,27 @@ def _latest_live_validation_artifact(config_dir: Path | None = None) -> dict[str
             continue
         if expected_config_hash and data.get("config_hash") != expected_config_hash:
             continue
+        if not _live_validation_artifact_valid(data):
+            continue
         return {"path": str(path), "mtime": datetime.fromtimestamp(path.stat().st_mtime, timezone.utc).isoformat(), "data": data}
     return None
+
+
+def _live_validation_artifact_valid(data: dict[str, object]) -> bool:
+    required = {"provider", "recipe", "mode", "started_at", "ended_at", "commit", "config_hash", "governance_hash"}
+    if not required.issubset(data):
+        return False
+    if data.get("validation_schema_version") != 1:
+        return False
+    if data.get("passed") is not True:
+        return False
+    if not isinstance(data.get("cleanup"), dict):
+        return False
+    if not isinstance(data.get("cost"), dict):
+        return False
+    if not isinstance(data.get("audit"), dict):
+        return False
+    return True
 
 
 async def jobs_command(job_id: str | None, limit: int, *, scrub_inputs: bool = False, expire_stale: bool = False) -> None:

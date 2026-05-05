@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import secrets
 from datetime import datetime, timezone
 from typing import Any
 
@@ -43,14 +44,15 @@ def _encrypted_artifact_export(payload: dict[str, Any], *, task: str) -> dict[st
     export = payload["artifact_export"]
     key = _artifact_dek()
     plaintext = _artifact_plaintext(payload, task=task)
-    nonce = hashlib.sha256(plaintext + key).digest()[:12]
+    nonce = secrets.token_bytes(12)
     try:
         from cryptography.hazmat.primitives.ciphers.aead import AESGCM
     except ImportError as exc:
         raise RuntimeError("cryptography is required for worker artifact encryption") from exc
     ciphertext = AESGCM(key).encrypt(nonce, plaintext, _associated_data(payload, export))
-    ciphertext_sha256 = hashlib.sha256(ciphertext).hexdigest()
-    uri = _write_artifact_ciphertext(export, ciphertext)
+    artifact_blob = nonce + ciphertext
+    ciphertext_sha256 = hashlib.sha256(artifact_blob).hexdigest()
+    uri = _write_artifact_ciphertext(export, artifact_blob)
     return {
         "artifact_id": hashlib.sha256(
             f"{export['artifact_chain_id']}:{export['version']}:{ciphertext_sha256}".encode("utf-8")

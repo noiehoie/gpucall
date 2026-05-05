@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+from datetime import datetime, timedelta, timezone
 
 import pytest
 
@@ -103,7 +104,21 @@ def artifact_plan(chain: list[str]) -> CompiledPlan:
             "task": "fine-tune",
             "data_classification": DataClassification.RESTRICTED,
             "artifact_export": ArtifactExportSpec(artifact_chain_id="chain-1", version="0001", key_id="tenant-key"),
-            "attestations": {"governance_hash": "c" * 64},
+            "attestations": {
+                "governance_hash": "c" * 64,
+                "key_release_requirement": {
+                    "required": True,
+                    "key_id": "tenant-key",
+                    "policy_hash": "p" * 64,
+                },
+                "key_release_grant": {
+                    "key_id": "tenant-key",
+                    "policy_hash": "p" * 64,
+                    "attestation_evidence_ref": "attestation-1",
+                    "recipient": "worker",
+                    "expires_at": (datetime.now(timezone.utc) + timedelta(minutes=5)).isoformat(),
+                },
+            },
         }
     )
 
@@ -360,6 +375,71 @@ async def test_stream_events_must_match_sse_contract(tmp_path) -> None:
     with pytest.raises(ProviderError, match="SSE-framed"):
         async for _event in dispatcher.execute_stream(stream_plan):
             pass
+
+
+@pytest.mark.asyncio
+async def test_stream_execution_enforces_security_gate_before_start(tmp_path) -> None:
+    provider = BadStreamProvider("bad")
+    dispatcher = Dispatcher(
+        adapters={"bad": provider},
+        registry=ObservedRegistry(),
+        audit=AuditTrail(tmp_path / "audit.jsonl"),
+        jobs=JobStore(),
+    )
+    stream_plan = plan(["bad"]).model_copy(
+        update={
+            "mode": ExecutionMode.STREAM,
+            "attestations": {
+                "key_release_requirement": {
+                    "required": True,
+                    "key_id": "tenant-key",
+                    "policy_hash": "c" * 64,
+                }
+            },
+        }
+    )
+
+    with pytest.raises(ProviderError, match="key release grant is required"):
+        async for _event in dispatcher.execute_stream(stream_plan):
+            pass
+
+
+@pytest.mark.asyncio
+async def test_key_release_gate_rejects_policy_mismatch_and_expiry(tmp_path) -> None:
+    dispatcher = Dispatcher(
+        adapters={"good": EchoProvider("good")},
+        registry=ObservedRegistry(),
+        audit=AuditTrail(tmp_path / "audit.jsonl"),
+        jobs=JobStore(),
+    )
+    base_attestations = {
+        "key_release_requirement": {
+            "required": True,
+            "key_id": "tenant-key",
+            "policy_hash": "c" * 64,
+        },
+        "key_release_grant": {
+            "key_id": "tenant-key",
+            "policy_hash": "d" * 64,
+            "attestation_evidence_ref": "attestation-1",
+            "recipient": "worker",
+            "expires_at": (datetime.now(timezone.utc) + timedelta(minutes=5)).isoformat(),
+        },
+    }
+
+    with pytest.raises(ProviderError, match="policy_hash"):
+        await dispatcher.execute_sync(plan(["good"]).model_copy(update={"attestations": base_attestations}))
+
+    expired = {
+        **base_attestations,
+        "key_release_grant": {
+            **base_attestations["key_release_grant"],
+            "policy_hash": "c" * 64,
+            "expires_at": (datetime.now(timezone.utc) - timedelta(minutes=5)).isoformat(),
+        },
+    }
+    with pytest.raises(ProviderError, match="expired"):
+        await dispatcher.execute_sync(plan(["good"]).model_copy(update={"attestations": expired}))
 
 
 @pytest.mark.asyncio

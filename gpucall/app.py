@@ -153,12 +153,33 @@ def create_app(config_dir: Path | None = None) -> FastAPI:
                             "detail": "request body too large; use the gpucall SDK DataRef upload path for large inputs"
                         },
                     )
-            body = await request.body()
+            chunks: list[bytes] = []
+            total = 0
+            async for chunk in request.stream():
+                total += len(chunk)
+                if total > max_request_bytes:
+                    return JSONResponse(
+                        status_code=413,
+                        content={"detail": "request body too large; use the gpucall SDK DataRef upload path for large inputs"},
+                    )
+                chunks.append(chunk)
+            body = b"".join(chunks)
             if len(body) > max_request_bytes:
                 return JSONResponse(
                     status_code=413,
                     content={"detail": "request body too large; use the gpucall SDK DataRef upload path for large inputs"},
                 )
+            delivered = False
+
+            async def replay_body():
+                nonlocal delivered
+                if delivered:
+                    return {"type": "http.request", "body": b"", "more_body": False}
+                delivered = True
+                return {"type": "http.request", "body": body, "more_body": False}
+
+            request._receive = replay_body
+            request._stream_consumed = False
         return await call_next(request)
 
     @app.middleware("http")

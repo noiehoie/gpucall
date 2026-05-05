@@ -4,6 +4,7 @@ import asyncio
 import ipaddress
 import json
 import os
+import secrets
 import socket
 import time
 from datetime import datetime, timezone
@@ -620,6 +621,7 @@ def _hyperstack_worker_script() -> str:
 import hashlib
 import json
 import os
+import secrets
 from urllib.parse import urlparse
 from urllib.request import Request, urlopen
 
@@ -688,7 +690,7 @@ def execute_artifact_workload(payload):
     export = payload["artifact_export"]
     key = artifact_dek()
     plaintext = artifact_plaintext(payload, task=task)
-    nonce = hashlib.sha256(plaintext + key).digest()[:12]
+    nonce = secrets.token_bytes(12)
     try:
         from cryptography.hazmat.primitives.ciphers.aead import AESGCM
     except ImportError as exc:
@@ -704,8 +706,9 @@ def execute_artifact_workload(payload):
         separators=(",", ":"),
     ).encode("utf-8")
     ciphertext = AESGCM(key).encrypt(nonce, plaintext, associated)
-    ciphertext_sha256 = hashlib.sha256(ciphertext).hexdigest()
-    uri = write_artifact_ciphertext(export, ciphertext)
+    artifact_blob = nonce + ciphertext
+    ciphertext_sha256 = hashlib.sha256(artifact_blob).hexdigest()
+    uri = write_artifact_ciphertext(export, artifact_blob)
     manifest = {
         "artifact_id": hashlib.sha256(f"{export['artifact_chain_id']}:{export['version']}:{ciphertext_sha256}".encode("utf-8")).hexdigest(),
         "artifact_chain_id": export["artifact_chain_id"],

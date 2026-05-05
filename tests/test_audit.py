@@ -58,6 +58,19 @@ def test_audit_trail_coordinates_multiple_writers(tmp_path) -> None:
 
     first.append("one", {"a": 1})
     second.append("two", {"b": 2})
+    first.append("three", {"c": 3})
+
+    assert AuditTrail(path).verify()
+
+
+def test_audit_rotation_preserves_hash_chain_continuity(tmp_path) -> None:
+    path = tmp_path / "trail.jsonl"
+    audit = AuditTrail(path)
+    audit.append("one", {"a": 1})
+    rotated = audit.rotate_if_needed(1)
+    assert rotated is not None
+
+    audit.append("two", {"b": 2})
 
     assert AuditTrail(path).verify()
 

@@ -267,6 +267,8 @@ def test_provider_smoke_writes_live_validation_artifact(tmp_path, monkeypatch) -
     payload = artifacts[0].read_text(encoding="utf-8")
     assert '"provider":"local-echo"' in payload
     assert '"config_hash"' in payload
+    assert '"validation_schema_version":1' in payload
+    assert '"passed":true' in payload
 
 
 def test_live_validation_artifact_must_match_current_commit_and_config(tmp_path, monkeypatch) -> None:
@@ -280,8 +282,18 @@ def test_live_validation_artifact_must_match_current_commit_and_config(tmp_path,
     (artifact_dir / "old.json").write_text('{"provider":"p","commit":"old","config_hash":"old"}\n', encoding="utf-8")
     current = {
         "provider": "p",
+        "recipe": "smoke-text-small",
+        "mode": "sync",
+        "started_at": "2026-01-01T00:00:00+00:00",
+        "ended_at": "2026-01-01T00:00:01+00:00",
         "commit": _git_commit(),
         "config_hash": _config_hash(root),
+        "governance_hash": "c" * 64,
+        "validation_schema_version": 1,
+        "passed": True,
+        "cleanup": {"required": False, "completed": None},
+        "cost": {"observed": None, "estimated": None},
+        "audit": {"event_ids": []},
     }
     (artifact_dir / "current.json").write_text(json.dumps(current), encoding="utf-8")
 

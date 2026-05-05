@@ -49,29 +49,28 @@ class AuditTrail:
                 return event
 
     def verify(self) -> bool:
-        if not self.path.exists():
+        paths = self._chain_paths()
+        if not paths:
             return True
         previous: str | None = None
-        with self.path.open("r", encoding="utf-8") as handle:
-            for line in handle:
-                event = AuditEvent.model_validate_json(line)
-                if event.previous_hash != previous:
-                    return False
-                actual = self._hash(event.model_dump(mode="json", exclude={"hash"}))
-                if event.hash != actual:
-                    return False
-                previous = event.hash
+        for path in paths:
+            with path.open("r", encoding="utf-8") as handle:
+                for line in handle:
+                    event = AuditEvent.model_validate_json(line)
+                    if event.previous_hash != previous:
+                        return False
+                    actual = self._hash(event.model_dump(mode="json", exclude={"hash"}))
+                    if event.hash != actual:
+                        return False
+                    previous = event.hash
         return True
 
     def _read_last_hash(self) -> str | None:
-        if not self.path.exists():
-            return None
-        last = None
-        with self.path.open("r", encoding="utf-8") as handle:
-            for line in handle:
-                if line.strip():
-                    last = AuditEvent.model_validate_json(line).hash
-        return last
+        for path in reversed(self._chain_paths()):
+            last = self._read_last_hash_from_path(path)
+            if last is not None:
+                return last
+        return None
 
     def rotate_if_needed(self, max_bytes: int) -> Path | None:
         if max_bytes <= 0 or not self.path.exists() or self.path.stat().st_size < max_bytes:
@@ -82,9 +81,35 @@ class AuditTrail:
                     return None
                 stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
                 rotated = self.path.with_name(f"{self.path.stem}.{stamp}{self.path.suffix}")
+                last_hash = self._read_last_hash_from_path(self.path)
                 os.replace(self.path, rotated)
-                self._last_hash_cache = None
+                self._last_hash_cache = last_hash
                 return rotated
+
+    def _chain_paths(self) -> list[Path]:
+        rotated = sorted(self.path.parent.glob(f"{self.path.stem}.*{self.path.suffix}"))
+        paths = [path for path in rotated if path.is_file()]
+        if self.path.exists():
+            paths.append(self.path)
+        return paths
+
+    @staticmethod
+    def _read_last_hash_from_path(path: Path) -> str | None:
+        if not path.exists() or path.stat().st_size == 0:
+            return None
+        with path.open("rb") as handle:
+            handle.seek(0, os.SEEK_END)
+            position = handle.tell()
+            buffer = b""
+            while position > 0:
+                size = min(8192, position)
+                position -= size
+                handle.seek(position)
+                buffer = handle.read(size) + buffer
+                lines = [line for line in buffer.splitlines() if line.strip()]
+                if len(lines) >= 2 or position == 0:
+                    return AuditEvent.model_validate_json(lines[-1]).hash if lines else None
+        return None
 
     @contextmanager
     def _file_lock(self):

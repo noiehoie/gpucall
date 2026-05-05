@@ -214,6 +214,7 @@ def test_split_learning_plan_uses_activation_ref_without_inline_payload() -> Non
     )
 
     payload = plan_payload(plan)
+    assert payload["data_classification"] == "restricted"
     assert payload["split_learning"]["activation_ref"]["uri"] == "s3://bucket/activation.bin"
     assert payload["inline_inputs"] == {}
 

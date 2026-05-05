@@ -31,8 +31,8 @@ response = client.chat.completions.create(
 
 The facade is intentionally thin. It is for lightweight text requests and
 compatibility. Large inputs must use the gpucall SDK DataRef upload path.
-The only accepted model name in v2.0 is `gpucall:auto`; provider and recipe
-selection remain gateway-owned.
+The accepted model names in v2.0 are `gpucall:auto` and the compatibility
+alias `gpucall:chat`; provider and recipe selection remain gateway-owned.
 
 Structured output validation is returned in:
 

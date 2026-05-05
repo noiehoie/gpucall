@@ -13,6 +13,7 @@ def plan_payload(plan: CompiledPlan) -> dict[str, Any]:
         "task": plan.task,
         "recipe": plan.recipe_name,
         "mode": plan.mode.value,
+        "data_classification": plan.data_classification.value,
         "tokenizer_family": plan.tokenizer_family,
         "token_budget": plan.token_budget,
         "max_tokens": plan.max_tokens,

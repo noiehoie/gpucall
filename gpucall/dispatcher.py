@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import hmac
 import json
 from datetime import datetime, timezone
 from time import monotonic
@@ -171,6 +172,7 @@ class Dispatcher:
             started = monotonic()
             handle: RemoteHandle | None = None
             try:
+                _enforce_pre_execution_security_gate(plan)
                 handle = await adapter.start(plan)
                 self.audit.append("lease.started", {"plan_id": plan.plan_id, "provider": provider, "remote_id": handle.remote_id})
                 async for event in adapter.stream(handle, plan):
@@ -333,6 +335,26 @@ def _enforce_pre_execution_security_gate(plan: CompiledPlan) -> None:
             raise ProviderError("key release grant is required before execution", retryable=False, status_code=412, code="KEY_RELEASE_REQUIRED")
         if grant.get("key_id") != key_release.get("key_id"):
             raise ProviderError("key release grant does not match required key_id", retryable=False, status_code=412, code="KEY_RELEASE_REQUIRED")
+        if not hmac.compare_digest(str(grant.get("policy_hash") or ""), str(key_release.get("policy_hash") or "")):
+            raise ProviderError("key release grant does not match required policy_hash", retryable=False, status_code=412, code="KEY_RELEASE_REQUIRED")
+        expires_at = _parse_datetime(grant.get("expires_at"))
+        if expires_at is None or expires_at <= datetime.now(timezone.utc):
+            raise ProviderError("key release grant is expired or missing expires_at", retryable=False, status_code=412, code="KEY_RELEASE_REQUIRED")
+
+
+def _parse_datetime(value: object) -> datetime | None:
+    if isinstance(value, datetime):
+        parsed = value
+    elif isinstance(value, str):
+        try:
+            parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+        except ValueError:
+            return None
+    else:
+        return None
+    if parsed.tzinfo is None:
+        return parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc)
 
 def _validate_provider_output(plan: CompiledPlan, result: ProviderResult) -> ProviderResult:
     if _requires_checked_inline_output(plan) and result.kind == "inline":

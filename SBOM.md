@@ -11,8 +11,10 @@ docker image inspect gpucall-gpucall > sbom-container-image.json
 Current direct runtime dependencies are declared in `pyproject.toml`:
 
 - boto3
+- cryptography
 - fastapi
 - httpx
+- jsonschema
 - pydantic
 - pyyaml
 - uvicorn
