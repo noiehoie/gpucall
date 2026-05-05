@@ -40,3 +40,24 @@ print(response["parsed"])
 The SDK automatically uploads large prompts through the gpucall object-store
 DataRef path. It does not depend on provider libraries such as Modal, RunPod, or
 boto3.
+
+## Recipe Draft Helper
+
+The SDK distribution also includes `gpucall-recipe-draft`, an operator-assist CLI for workloads that the gateway cannot route with its current recipes/providers.
+
+It does not change gateway routing and it does not bypass policy. The `intake` phase is deterministic and strips prompt bodies, DataRef URIs, presigned URLs, and secrets before any draft is produced.
+
+```bash
+gpucall-recipe-draft intake \
+  --error gpucall-error.json \
+  --task vision \
+  --intent understand_document_image \
+  --classification confidential \
+  --output intake.json
+
+gpucall-recipe-draft draft --input intake.json --output recipe-draft.json
+
+gpucall-recipe-draft llm-prompt --input intake.json --output llm-prompt.txt
+```
+
+Generated drafts are review artifacts for gpucall administrators, not production config.

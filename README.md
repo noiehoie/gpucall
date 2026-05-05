@@ -87,6 +87,22 @@ const result = await client.infer({ prompt: "hello" });
 
 When adapting another product or service to gpucall, use the one-shot migration prompt in [docs/EXTERNAL_SYSTEM_ADAPTATION_PROMPT.md](docs/EXTERNAL_SYSTEM_ADAPTATION_PROMPT.md). External systems should normally send only `task`, `mode`, and input data or `DataRef`; recipe and provider selection belong to the gateway.
 
+If a caller's workload is unknown to the installed recipes/providers, gpucall fails closed instead of guessing or routing to a weaker model. Use the SDK-distributed `gpucall-recipe-draft` helper to sanitize the failure payload and prepare a recipe/provider request for gpucall administrators. See [docs/RECIPE_DRAFT_TOOL.md](docs/RECIPE_DRAFT_TOOL.md).
+
+Unknown workloads return a structured governance error instead of being silently routed:
+
+- `422 NO_AUTO_SELECTABLE_RECIPE`: no installed recipe honestly describes the request.
+- `503 no eligible provider after policy, recipe, and circuit constraints`: a recipe exists, but no currently eligible provider can execute it.
+
+When this happens, run the independent helper:
+
+```bash
+gpucall-recipe-draft intake --error gpucall-error.json --intent <caller-intent> --output intake.json
+gpucall-recipe-draft draft --input intake.json --output recipe-draft.json
+```
+
+The helper prepares a recipe/provider draft so gpucall administrators can support the same workload class in future runs. It may use an approved LLM for drafting, but only after the deterministic intake phase removes prompt bodies, message bodies, DataRef URIs, presigned URLs, and secrets. Submit the sanitized intake and draft through your organization's approved gpucall operator channel. The draft is not production config; gpucall administrators review it, write canonical recipe/provider YAML, validate it, and deploy it for subsequent requests.
+
 ## Routing
 
 gpucall is a deterministic governance router, not a Modal-only proxy. Recipe and provider selection rules are documented in [docs/ROUTING_POLICY.md](docs/ROUTING_POLICY.md).

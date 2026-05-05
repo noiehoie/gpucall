@@ -14,8 +14,11 @@ dev = [
   "pytest-asyncio>=0.23",
 ]
 
+[project.scripts]
+gpucall-recipe-draft = "gpucall_recipe_draft.cli:main"
+
 [tool.setuptools.packages.find]
-include = ["gpucall_sdk*"]
+include = ["gpucall_sdk*", "gpucall_recipe_draft*"]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
