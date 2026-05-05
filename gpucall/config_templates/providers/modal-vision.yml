@@ -20,5 +20,5 @@ output_contract: plain-text
 stream_contract: none
 supports_vision: true
 target: gpucall-worker-json:run_inference_on_modal
-model: Salesforce/blip-image-captioning-base
+model: Salesforce/blip-vqa-base
 declared_model_max_len: 512

@@ -320,14 +320,18 @@ if modal is not None:
 
     def _load_vision_model(model_id: str) -> tuple[Any, Any, str]:
         global _TOP_LEVEL_VISION
-        if model_id != "Salesforce/blip-image-captioning-base":
+        allowed = {"Salesforce/blip-image-captioning-base", "Salesforce/blip-vqa-base"}
+        if model_id not in allowed:
             raise ValueError(f"vision model {model_id} is not allowed")
         if _TOP_LEVEL_VISION is not None and _TOP_LEVEL_VISION[2] == model_id:
             return _TOP_LEVEL_VISION
-        from transformers import BlipForConditionalGeneration, BlipProcessor
+        from transformers import BlipForConditionalGeneration, BlipForQuestionAnswering, BlipProcessor
 
         processor = BlipProcessor.from_pretrained(model_id)
-        model = BlipForConditionalGeneration.from_pretrained(model_id)
+        if model_id == "Salesforce/blip-vqa-base":
+            model = BlipForQuestionAnswering.from_pretrained(model_id)
+        else:
+            model = BlipForConditionalGeneration.from_pretrained(model_id)
         try:
             import torch
 
@@ -344,9 +348,11 @@ if modal is not None:
         from PIL import Image
 
         image = Image.open(io.BytesIO(image_body)).convert("RGB")
-        model_id = model or os.getenv("GPUCALL_MODAL_VISION_MODEL", "Salesforce/blip-image-captioning-base")
+        model_id = model or os.getenv("GPUCALL_MODAL_VISION_MODEL", "Salesforce/blip-vqa-base")
         processor, vision_model, _ = _load_vision_model(model_id)
         prompt = vision_prompt_from_payload(payload).strip()
+        if model_id == "Salesforce/blip-vqa-base" and not prompt:
+            prompt = "What is in the image?"
         if prompt:
             inputs = processor(image, prompt, return_tensors="pt")
         else:
