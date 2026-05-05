@@ -1,12 +1,12 @@
 name: vision-image-standard
 task: vision
-auto_select: false
+auto_select: true
 data_classification: confidential
 allowed_modes:
   - sync
   - async
 min_vram_gb: 24
-max_model_len: 32768
+max_model_len: 512
 timeout_seconds: 600
 lease_ttl_seconds: 900
 tokenizer_family: qwen

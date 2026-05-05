@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import hashlib
+import io
 import json
 import sys
 import types
@@ -101,6 +102,14 @@ def prompt_from_payload(payload: dict[str, Any]) -> str:
 
 
 def _fetch_data_ref_text(ref: dict[str, Any]) -> str:
+    body = _fetch_data_ref_bytes(ref)
+    content_type = str(ref.get("content_type") or "").lower()
+    if content_type and not (content_type.startswith("text/") or "json" in content_type):
+        return body.hex()
+    return body.decode("utf-8")
+
+
+def _fetch_data_ref_bytes(ref: dict[str, Any]) -> bytes:
     uri = str(ref["uri"])
     max_bytes = min(int(os.getenv("GPUCALL_WORKER_MAX_REF_BYTES", "16777216")), int(ref.get("bytes") or 16777216))
     parsed = urlparse(uri)
@@ -121,10 +130,7 @@ def _fetch_data_ref_text(ref: dict[str, Any]) -> str:
     expected = ref.get("sha256")
     if expected and hashlib.sha256(body).hexdigest() != expected:
         raise ValueError("data ref sha256 mismatch")
-    content_type = str(ref.get("content_type") or "").lower()
-    if content_type and not (content_type.startswith("text/") or "json" in content_type):
-        return body.hex()
-    return body.decode("utf-8")
+    return body
 
 
 def _fetch_s3_ref_bytes(bucket: str, key: str, max_bytes: int, ref: dict[str, Any]) -> bytes:
@@ -165,6 +171,7 @@ if modal is not None:
         .pip_install(
             "boto3",
             "cryptography",
+            "pillow",
             "vllm==0.6.3",
             "transformers==4.45.2",
             "huggingface-hub[hf_transfer]",
@@ -182,11 +189,13 @@ if modal is not None:
             "Qwen/Qwen2-0.5B-Instruct",
             "Qwen/Qwen2-1.5B-Instruct",
             "facebook/opt-125m",
+            "Salesforce/blip-image-captioning-base",
             "meta-llama/Llama-3.1-8B-Instruct",
         }
     )
     _TOP_LEVEL_LLM: Any = None
     _TOP_LEVEL_LOADED_ID: str | None = None
+    _TOP_LEVEL_VISION: tuple[Any, Any, str] | None = None
 
     def _load_top_level_llm(model_id: str, max_model_len: int) -> Any:
         global _TOP_LEVEL_LLM, _TOP_LEVEL_LOADED_ID
@@ -220,6 +229,8 @@ if modal is not None:
         return _TOP_LEVEL_LLM
 
     def _bounded_model_len(model_id: str, max_model_len: int) -> int:
+        if model_id == "Salesforce/blip-image-captioning-base":
+            return min(max_model_len, 512)
         if model_id == "facebook/opt-125m":
             return min(max_model_len, 2048)
         if model_id.startswith("Qwen/"):
@@ -283,14 +294,65 @@ if modal is not None:
         artifact_result = _execute_artifact_workload(payload)
         if artifact_result is not None:
             return json.dumps(artifact_result.get("artifact_manifest") or artifact_result, sort_keys=True, separators=(",", ":"))
+        if payload.get("task") == "vision":
+            return _generate_vision_text(payload, model)
         requested_model = model or os.getenv("GPUCALL_MODAL_VLLM_MODEL", "facebook/opt-125m")
         llm = _load_top_level_llm(requested_model, max_model_len)
         prompt = _format_prompt_for_model(llm, requested_model, payload)
         outputs = llm.generate([prompt], _sampling_params(payload), use_tqdm=False)
         return outputs[0].outputs[0].text.strip()
 
+    def _load_vision_model(model_id: str) -> tuple[Any, Any, str]:
+        global _TOP_LEVEL_VISION
+        if model_id != "Salesforce/blip-image-captioning-base":
+            raise ValueError(f"vision model {model_id} is not allowed")
+        if _TOP_LEVEL_VISION is not None and _TOP_LEVEL_VISION[2] == model_id:
+            return _TOP_LEVEL_VISION
+        from transformers import BlipForConditionalGeneration, BlipProcessor
+
+        processor = BlipProcessor.from_pretrained(model_id)
+        model = BlipForConditionalGeneration.from_pretrained(model_id)
+        try:
+            import torch
+
+            if torch.cuda.is_available():
+                model = model.to("cuda")
+        except Exception:
+            pass
+        _TOP_LEVEL_VISION = (processor, model, model_id)
+        return _TOP_LEVEL_VISION
+
+    def _generate_vision_text(payload: dict[str, Any], model: str | None) -> str:
+        image_ref = _first_image_ref(payload)
+        image_body = _fetch_data_ref_bytes(image_ref)
+        from PIL import Image
+
+        image = Image.open(io.BytesIO(image_body)).convert("RGB")
+        model_id = model or os.getenv("GPUCALL_MODAL_VISION_MODEL", "Salesforce/blip-image-captioning-base")
+        processor, vision_model, _ = _load_vision_model(model_id)
+        prompt = prompt_from_payload({**payload, "input_refs": []}).strip()
+        if prompt:
+            inputs = processor(image, prompt, return_tensors="pt")
+        else:
+            inputs = processor(image, return_tensors="pt")
+        try:
+            device = next(vision_model.parameters()).device
+            inputs = {key: value.to(device) for key, value in inputs.items()}
+        except Exception:
+            pass
+        output_ids = vision_model.generate(**inputs, max_new_tokens=int(payload.get("max_tokens") or 64))
+        text = processor.decode(output_ids[0], skip_special_tokens=True).strip()
+        return text or "image processed"
+
+    def _first_image_ref(payload: dict[str, Any]) -> dict[str, Any]:
+        for ref in payload.get("input_refs") or []:
+            if str(ref.get("content_type") or "").lower().startswith("image/"):
+                return ref
+        raise ValueError("vision task requires an image data_ref")
+
     @app.function(image=_VLLM_IMAGE, gpu="A10G", timeout=1800, scaledown_window=300)
     def run_inference_on_modal(payload: dict[str, Any], workload: str = "infer", **kwargs) -> str:
+        payload = {**payload, "task": workload or payload.get("task")}
         return _generate_text(payload, kwargs.get("model"), kwargs.get("max_model_len") or 32768)
 
     @app.function(image=_VLLM_IMAGE, gpu="A10G", timeout=1800, scaledown_window=300)
@@ -339,6 +401,8 @@ if modal is not None:
             artifact_result = _execute_artifact_workload(payload)
             if artifact_result is not None:
                 return json.dumps(artifact_result.get("artifact_manifest") or artifact_result, sort_keys=True, separators=(",", ":"))
+            if payload.get("task") == "vision":
+                return _generate_vision_text(payload, model)
             requested_model = model or os.getenv("GPUCALL_MODAL_VLLM_MODEL", "facebook/opt-125m")
             self._load_llm(requested_model, max_model_len)
             outputs = self._llm.generate([self._to_prompt(payload)], _sampling_params(payload), use_tqdm=False)
@@ -351,6 +415,7 @@ if modal is not None:
     class VllmWorkerT4(VllmWorkerBase):
         @modal.method()
         def run_inference_on_modal(self, payload: dict[str, Any], workload: str, **kwargs) -> str:
+            payload = {**payload, "task": workload or payload.get("task")}
             return self._generate(payload, kwargs.get("model"), kwargs.get("max_model_len") or 8192)
 
         @modal.method()
@@ -361,6 +426,7 @@ if modal is not None:
     class VllmWorkerA10G(VllmWorkerBase):
         @modal.method()
         def run_inference_on_modal(self, payload: dict[str, Any], workload: str, **kwargs) -> str:
+            payload = {**payload, "task": workload or payload.get("task")}
             return self._generate(payload, kwargs.get("model"), kwargs.get("max_model_len") or 32768)
 
         @modal.method()

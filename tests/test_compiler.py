@@ -218,12 +218,12 @@ def test_compiler_auto_selection_ignores_non_auto_recipes() -> None:
 def test_compiler_auto_selection_uses_request_content_type() -> None:
     compiler = build_compiler()
     compiler.providers = {
-        name: provider.model_copy(update={"input_contracts": ["text", "data_refs", "image"]})
+        name: provider.model_copy(update={"input_contracts": ["text", "data_refs", "image"], "max_model_len": 512})
         for name, provider in compiler.providers.items()
     }
     text_recipe = compiler.recipes["r1"].model_copy(update={"name": "text", "allowed_mime_prefixes": ["text/"]})
     image_recipe = compiler.recipes["r1"].model_copy(
-        update={"name": "image", "task": "vision", "allowed_mime_prefixes": ["image/"]}
+        update={"name": "image", "task": "vision", "allowed_mime_prefixes": ["image/"], "max_model_len": 512}
     )
     compiler.recipes = {"text": text_recipe, "image": image_recipe}
     request = TaskRequest(
@@ -240,7 +240,7 @@ def test_compiler_auto_selection_uses_request_content_type() -> None:
 def test_vision_recipe_allows_text_prompt_as_inline_companion() -> None:
     compiler = build_compiler()
     compiler.providers = {
-        name: provider.model_copy(update={"input_contracts": ["text", "data_refs", "image"]})
+        name: provider.model_copy(update={"input_contracts": ["text", "data_refs", "image"], "max_model_len": 512})
         for name, provider in compiler.providers.items()
     }
     vision = compiler.recipes["r1"].model_copy(
@@ -249,6 +249,7 @@ def test_vision_recipe_allows_text_prompt_as_inline_companion() -> None:
             "task": "vision",
             "allowed_mime_prefixes": ["image/"],
             "allowed_inline_mime_prefixes": ["text/"],
+            "max_model_len": 512,
         }
     )
     compiler.recipes = {"vision": vision}

@@ -26,6 +26,11 @@ def required_model_len(request: TaskRequest, recipe: Recipe, policy: Policy) -> 
     output_budget = token_budget(request, policy) or 0
     inline_bytes = sum(len(item.value.encode("utf-8")) for item in request.inline_inputs.values())
     message_bytes = sum(len(message.content.encode("utf-8")) for message in request.messages)
+    if recipe.task == "vision":
+        image_refs = [ref for ref in request.input_refs if str(ref.content_type or "").startswith("image/")]
+        non_image_bytes = sum(int(ref.bytes or 0) for ref in request.input_refs if ref not in image_refs)
+        estimated_input_tokens = math.ceil((inline_bytes + message_bytes + non_image_bytes) * float(policy.tokenizer_safety_multiplier))
+        return max(1, estimated_input_tokens + (256 * len(image_refs)) + output_budget)
     ref_bytes = sum(int(ref.bytes or 0) for ref in request.input_refs)
     estimated_input_tokens = math.ceil((inline_bytes + message_bytes + ref_bytes) * float(policy.tokenizer_safety_multiplier))
     return max(1, estimated_input_tokens + output_budget)
