@@ -465,7 +465,7 @@ def _provider_smoke_request(runtime, recipe, mode: ExecutionMode, provider: str)
         presigned = runtime.object_store.presign_put(
             PresignPutRequest(name="provider-smoke.png", bytes=len(image_body), sha256=digest, content_type="image/png")
         )
-        upload = httpx.put(presigned.upload_url, content=image_body, headers={"content-type": "image/png"}, timeout=30.0)
+        upload = httpx.put(str(presigned.upload_url), content=image_body, headers={"content-type": "image/png"}, timeout=30.0)
         upload.raise_for_status()
         input_refs.append(presigned.data_ref)
     return TaskRequest(
