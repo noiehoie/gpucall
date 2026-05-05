@@ -1,0 +1,15 @@
+name: mistral-small-3.2-24b-instruct-2506
+provider_model_id: mistralai/Mistral-Small-3.2-24B-Instruct-2506
+capabilities: [chat, instruction_following, summarization, translation, classification, reasoning, document_understanding, ocr, structured_output]
+max_model_len: 131072
+min_vram_gb: 80
+supported_engines: [runpod-vllm-openai]
+input_contracts: [text, chat_messages, image]
+output_contracts: [plain-text, json-object]
+supports_vision: true
+supports_guided_decoding: true
+supports_streaming: true
+source: https://docs.mistral.ai/models/model-cards/mistral-small-3-2-25-06
+evidence:
+  - Mistral model card lists 128k context and features including structured outputs, OCR, and Document QnA.
+production_ready: false

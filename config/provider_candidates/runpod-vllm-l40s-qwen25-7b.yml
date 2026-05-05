@@ -1,0 +1,17 @@
+name: runpod-vllm-l40s-qwen25-7b
+status: candidate
+adapter: runpod-vllm-serverless
+gpu: ADA_48_PRO
+vram_gb: 48
+max_model_len: 131072
+model_ref: qwen2.5-7b-instruct
+engine_ref: runpod-vllm-openai
+endpoint_contract: openai-chat-completions
+input_contracts: [chat_messages]
+output_contract: openai-chat-completions
+stream_contract: sse
+official_doc_refs:
+  - https://docs.runpod.io/references/gpu-types
+  - https://docs.runpod.io/serverless/workers/vllm/get-started
+live_validation_required: true
+notes: Candidate only; lower-cost 128K text endpoint if worker-vLLM handles configured context.

@@ -1,0 +1,13 @@
+name: runpod-vllm-openai
+kind: vllm
+version: worker-vllm
+input_contracts: [chat_messages]
+output_contracts: [openai-chat-completions, plain-text, json-object]
+supports_guided_decoding: true
+supports_streaming: true
+supports_multimodal: true
+supports_data_refs: false
+official_doc_refs:
+  - https://docs.runpod.io/serverless/workers/vllm/get-started
+  - https://docs.runpod.io/integrations/overview
+production_ready: false

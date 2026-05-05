@@ -1,0 +1,16 @@
+name: runpod-flash-a100-qwen25-7b
+status: candidate
+adapter: runpod-flash
+gpu: NVIDIA_A100_80GB_PCIe
+vram_gb: 80
+max_model_len: 131072
+model_ref: qwen2.5-7b-instruct
+engine_ref: runpod-flash-vllm
+endpoint_contract: openai-chat-completions
+input_contracts: [chat_messages]
+output_contract: openai-chat-completions
+stream_contract: sse
+official_doc_refs:
+  - https://docs.runpod.io/flash/configuration/gpu-types
+live_validation_required: true
+notes: Candidate only; requires Flash endpoint deployment and cleanup/cost artifact.

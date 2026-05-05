@@ -1,0 +1,15 @@
+name: qwen2.5-14b-instruct
+provider_model_id: Qwen/Qwen2.5-14B-Instruct
+capabilities: [chat, instruction_following, summarization, translation, classification, reasoning]
+max_model_len: 131072
+min_vram_gb: 48
+supported_engines: [modal-vllm, hyperstack-vllm, runpod-vllm-openai, local-ollama]
+input_contracts: [text, chat_messages]
+output_contracts: [plain-text, json-object]
+supports_vision: false
+supports_guided_decoding: true
+supports_streaming: true
+source: https://qwen.ai/blog?id=qwen2.5-llm
+evidence:
+  - Qwen2.5 model family includes 14B instruction-tuned model; Qwen states most models support 128K context.
+production_ready: false

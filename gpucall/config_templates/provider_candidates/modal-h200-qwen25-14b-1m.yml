@@ -1,0 +1,17 @@
+name: modal-h200-qwen25-14b-1m
+status: candidate
+adapter: modal
+gpu: H200
+vram_gb: 141
+max_model_len: 1048576
+model_ref: qwen2.5-14b-instruct-1m
+engine_ref: modal-vllm
+endpoint_contract: modal-function
+input_contracts: [text, chat_messages, data_refs]
+output_contract: plain-text
+stream_contract: none
+official_doc_refs:
+  - https://modal.com/docs/guide/gpu
+  - https://arxiv.org/abs/2501.15383
+live_validation_required: true
+notes: Candidate for 1M-token text workloads; must prove cost, timeout, and cleanup behavior under billable validation.

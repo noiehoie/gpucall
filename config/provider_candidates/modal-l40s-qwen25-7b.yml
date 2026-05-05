@@ -1,0 +1,16 @@
+name: modal-l40s-qwen25-7b
+status: candidate
+adapter: modal
+gpu: L40S
+vram_gb: 48
+max_model_len: 131072
+model_ref: qwen2.5-7b-instruct
+engine_ref: modal-vllm
+endpoint_contract: modal-function
+input_contracts: [text, chat_messages, data_refs]
+output_contract: plain-text
+stream_contract: none
+official_doc_refs:
+  - https://modal.com/docs/guide/gpu
+live_validation_required: true
+notes: Candidate only; useful lower-cost 128K text target if Modal L40S capacity is available.

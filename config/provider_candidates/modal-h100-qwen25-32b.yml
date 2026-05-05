@@ -1,0 +1,17 @@
+name: modal-h100-qwen25-32b
+status: candidate
+adapter: modal
+gpu: H100
+vram_gb: 80
+max_model_len: 32768
+model_ref: qwen2.5-32b-instruct
+engine_ref: modal-vllm
+endpoint_contract: modal-function
+input_contracts: [text, chat_messages, data_refs]
+output_contract: plain-text
+stream_contract: none
+official_doc_refs:
+  - https://modal.com/docs/guide/gpu
+  - https://huggingface.co/Qwen/Qwen2.5-32B-Instruct
+live_validation_required: true
+notes: Candidate only; conservative 32K context based on model card config.

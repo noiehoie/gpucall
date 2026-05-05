@@ -5,6 +5,8 @@ import sqlite3
 from pathlib import Path
 from typing import Any
 
+import yaml
+
 from gpucall.config import GpucallConfig
 
 
@@ -14,12 +16,14 @@ class SQLiteCapabilityCatalog:
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self._init()
 
-    def replace_from_config(self, config: GpucallConfig) -> None:
+    def replace_from_config(self, config: GpucallConfig, *, config_dir: str | Path | None = None) -> None:
+        root = Path(config_dir) if config_dir else None
         with sqlite3.connect(self.path) as conn:
             conn.execute("DELETE FROM recipes")
             conn.execute("DELETE FROM models")
             conn.execute("DELETE FROM engines")
             conn.execute("DELETE FROM providers")
+            conn.execute("DELETE FROM provider_candidates")
             for recipe in config.recipes.values():
                 conn.execute(
                     "INSERT INTO recipes(name, task, payload) VALUES (?, ?, ?)",
@@ -43,6 +47,22 @@ class SQLiteCapabilityCatalog:
                     """,
                     (provider.name, provider.adapter, provider.model_ref, provider.engine_ref, provider.model_dump_json()),
                 )
+            if root is not None:
+                for candidate in _load_candidate_payloads(root / "provider_candidates"):
+                    conn.execute(
+                        """
+                        INSERT INTO provider_candidates(name, adapter, model_ref, engine_ref, status, payload)
+                        VALUES (?, ?, ?, ?, ?, ?)
+                        """,
+                        (
+                            candidate.get("name"),
+                            candidate.get("adapter"),
+                            candidate.get("model_ref"),
+                            candidate.get("engine_ref"),
+                            candidate.get("status", "candidate"),
+                            json.dumps(candidate, ensure_ascii=False, sort_keys=True),
+                        ),
+                    )
 
     def snapshot(self) -> dict[str, Any]:
         with sqlite3.connect(self.path) as conn:
@@ -53,6 +73,9 @@ class SQLiteCapabilityCatalog:
                 "models": _rows(conn.execute("SELECT name, provider_model_id FROM models ORDER BY name")),
                 "engines": _rows(conn.execute("SELECT name, kind FROM engines ORDER BY name")),
                 "providers": _rows(conn.execute("SELECT name, adapter, model_ref, engine_ref FROM providers ORDER BY name")),
+                "provider_candidates": _rows(
+                    conn.execute("SELECT name, adapter, model_ref, engine_ref, status FROM provider_candidates ORDER BY name")
+                ),
             }
 
     def _init(self) -> None:
@@ -78,10 +101,37 @@ class SQLiteCapabilityCatalog:
                 )
                 """
             )
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS provider_candidates (
+                    name TEXT PRIMARY KEY,
+                    adapter TEXT NOT NULL,
+                    model_ref TEXT,
+                    engine_ref TEXT,
+                    status TEXT NOT NULL,
+                    payload TEXT NOT NULL
+                )
+                """
+            )
 
 
 def _rows(cursor: sqlite3.Cursor) -> list[dict[str, Any]]:
     return [dict(row) for row in cursor.fetchall()]
+
+
+def _load_candidate_payloads(root: Path) -> list[dict[str, Any]]:
+    payloads: list[dict[str, Any]] = []
+    if not root.exists():
+        return payloads
+    for path in sorted(root.glob("*.yml")):
+        with path.open("r", encoding="utf-8") as handle:
+            payload = yaml.safe_load(handle) or {}
+        if not isinstance(payload, dict):
+            raise ValueError(f"invalid candidate payload in {path}")
+        if not payload.get("name") or not payload.get("adapter"):
+            raise ValueError(f"candidate provider must define name and adapter: {path}")
+        payloads.append(payload)
+    return payloads
 
 
 def dumps_snapshot(snapshot: dict[str, Any]) -> str:

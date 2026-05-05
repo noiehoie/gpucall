@@ -584,7 +584,7 @@ def catalog_command(action: str, config_dir: Path, db: Path | None) -> None:
     path = db or (default_state_dir() / "capability-catalog.db")
     catalog = SQLiteCapabilityCatalog(path)
     if action == "build":
-        catalog.replace_from_config(load_config(config_dir))
+        catalog.replace_from_config(load_config(config_dir), config_dir=config_dir)
     print(dumps_snapshot(catalog.snapshot()), end="")
 
 

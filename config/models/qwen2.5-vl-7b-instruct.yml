@@ -1,0 +1,15 @@
+name: qwen2.5-vl-7b-instruct
+provider_model_id: Qwen/Qwen2.5-VL-7B-Instruct
+capabilities: [vision_language, visual_question_answering, document_understanding, ocr, chart_understanding, instruction_following]
+max_model_len: 32768
+min_vram_gb: 48
+supported_engines: [modal-transformers-vision, runpod-vllm-openai]
+input_contracts: [text, image, data_refs]
+output_contracts: [plain-text, json-object]
+supports_vision: true
+supports_guided_decoding: true
+supports_streaming: false
+source: https://huggingface.co/Qwen/Qwen2.5-VL-7B-Instruct
+evidence:
+  - Qwen2.5-VL card reports DocVQA, InfoVQA, ChartQA, TextVQA, and OCRBench evaluations.
+production_ready: false

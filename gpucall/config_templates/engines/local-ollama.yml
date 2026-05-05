@@ -1,0 +1,12 @@
+name: local-ollama
+kind: ollama
+version: null
+input_contracts: [text, chat_messages]
+output_contracts: [ollama-generate, plain-text]
+supports_guided_decoding: false
+supports_streaming: true
+supports_multimodal: false
+supports_data_refs: false
+official_doc_refs:
+  - https://github.com/ollama/ollama/blob/main/docs/api.md
+production_ready: false

@@ -17,6 +17,7 @@ config/
   models/*.yml
   engines/*.yml
   providers/*.yml
+  provider_candidates/*.yml
 ```
 
 Recipes contain abstract requirements:
@@ -52,6 +53,11 @@ Providers bind a real provider/GPU to a model and engine:
 - GPU / VRAM / region / trust profile
 - official endpoint and lifecycle contract
 
+Provider candidates are not production routing entries. They are a queue of plausible
+provider/model/engine tuples that need endpoint credentials, official-adapter
+conformance review, and billable live validation before they can be promoted into
+`providers/*.yml`.
+
 ## Catalog DB
 
 Build the SQLite catalog from config:
@@ -66,7 +72,7 @@ Default path:
 $XDG_STATE_HOME/gpucall/capability-catalog.db
 ```
 
-The DB is a deterministic materialization of YAML config. YAML remains the source of truth; the DB is for review, inspection, and operational tooling.
+The DB is a deterministic materialization of YAML config. YAML remains the source of truth; the DB is for review, inspection, and operational tooling. Active providers and candidate providers are stored separately so unvalidated candidates cannot enter production auto-routing.
 
 ## Admin Review
 
