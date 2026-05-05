@@ -1,0 +1,95 @@
+from __future__ import annotations
+
+import asyncio
+import os
+from typing import Any
+from uuid import uuid4
+
+from gpucall.domain import CompiledPlan, ProviderError
+from gpucall.providers.base import ProviderAdapter, RemoteHandle
+from gpucall.providers.lifecycle_only import LifecycleOnlyMixin
+from gpucall.providers.registry import ProviderAdapterDescriptor, register_adapter
+
+
+class OVHCloudPublicCloudInstanceAdapter(LifecycleOnlyMixin, ProviderAdapter):
+    def __init__(
+        self,
+        *,
+        name: str = "ovhcloud-public-cloud-instance",
+        endpoint: str | None = None,
+        service_name: str | None = None,
+        region: str | None = None,
+        flavor_id: str | None = None,
+        image_id: str | None = None,
+        ssh_key_id: str | None = None,
+        params: dict[str, Any] | None = None,
+    ) -> None:
+        self.name = name
+        self.endpoint = endpoint or os.getenv("OVH_ENDPOINT", "ovh-eu")
+        self.service_name = service_name or os.getenv("OVH_CLOUD_PROJECT_SERVICE_NAME", "")
+        self.region = region
+        self.flavor_id = flavor_id
+        self.image_id = image_id
+        self.ssh_key_id = ssh_key_id
+        self.params = params or {}
+
+    async def start(self, plan: CompiledPlan) -> RemoteHandle:
+        meta = await asyncio.to_thread(self._start_sync, plan)
+        return RemoteHandle(provider=self.name, remote_id=meta["instance_id"], expires_at=plan.expires_at(), meta=meta)
+
+    async def cancel_remote(self, handle: RemoteHandle) -> None:
+        await asyncio.to_thread(self._delete_sync, handle.remote_id)
+
+    def _client(self) -> Any:
+        try:
+            import ovh
+        except ImportError as exc:
+            raise ProviderError("ovh is required for ovhcloud-public-cloud-instance", retryable=False, status_code=501) from exc
+        return ovh.Client(endpoint=self.endpoint)
+
+    def _start_sync(self, plan: CompiledPlan) -> dict[str, Any]:
+        required = {
+            "service_name": self.service_name,
+            "region": self.region,
+            "flavor_id": self.flavor_id,
+            "image_id": self.image_id,
+            "ssh_key_id": self.ssh_key_id,
+        }
+        missing = [key for key, value in required.items() if not value]
+        if missing:
+            raise ProviderError(f"OVHcloud provider missing required fields: {', '.join(missing)}", retryable=False, status_code=400)
+        instance_name = str(self.params.get("instance_name") or f"gpucall-{plan.plan_id[:12]}-{uuid4().hex[:6]}")
+        body = {
+            "name": instance_name,
+            "region": self.region,
+            "flavorId": self.flavor_id,
+            "imageId": self.image_id,
+            "sshKeyId": self.ssh_key_id,
+        }
+        body.update(self.params.get("create_overrides", {}))
+        data = self._client().post(f"/cloud/project/{self.service_name}/instance", **body)
+        instance_id = data.get("id") if isinstance(data, dict) else None
+        if not instance_id:
+            raise ProviderError("OVHcloud response did not include instance id", retryable=True, status_code=502)
+        return {"instance_id": instance_id, "instance_name": instance_name, "service_name": self.service_name}
+
+    def _delete_sync(self, instance_id: str) -> None:
+        self._client().delete(f"/cloud/project/{self.service_name}/instance/{instance_id}")
+
+
+@register_adapter(
+    "ovhcloud-public-cloud-instance",
+    descriptor=ProviderAdapterDescriptor(endpoint_contract="ovhcloud-public-cloud-instance", output_contract="gpucall-provider-result"),
+)
+def build_ovhcloud_public_cloud_instance_adapter(spec, credentials):
+    ovhcloud = credentials.get("ovhcloud", {})
+    return OVHCloudPublicCloudInstanceAdapter(
+        name=spec.name,
+        endpoint=ovhcloud.get("endpoint"),
+        service_name=spec.project_id or ovhcloud.get("service_name"),
+        region=spec.region,
+        flavor_id=spec.instance,
+        image_id=spec.image,
+        ssh_key_id=spec.key_name,
+        params=spec.provider_params,
+    )

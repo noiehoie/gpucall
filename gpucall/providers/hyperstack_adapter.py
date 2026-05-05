@@ -554,6 +554,12 @@ def _hyperstack_environment_names(payload: dict[str, Any]) -> set[str]:
         output_contract="plain-text",
         config_validator=hyperstack_config_findings,
         catalog_validator=hyperstack_catalog_findings,
+        official_sources=(
+            "https://portal.hyperstack.cloud/knowledge/api-documentation",
+            "https://infrahub-doc.nexgencloud.com/docs/api-reference/authentication",
+            "https://portal.hyperstack.cloud/knowledge/how-do-i-enable-ssh-access-to-my-virtual-machine",
+            "https://portal.hyperstack.cloud/knowledge/how-do-i-check-the-billing-status-of-my-virtual-machines",
+        ),
     ),
 )
 def build_hyperstack_adapter(spec, credentials):

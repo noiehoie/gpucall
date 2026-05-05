@@ -43,7 +43,8 @@ def __getattr__(name: str) -> Any:
 
         return HyperstackAdapter
     if name in {"RunpodFlashAdapter", "RunpodServerlessAdapter"}:
-        from gpucall.providers.runpod_adapter import RunpodFlashAdapter, RunpodServerlessAdapter
+        from gpucall.providers.runpod_flash_adapter import RunpodFlashAdapter
+        from gpucall.providers.runpod_serverless_adapter import RunpodServerlessAdapter
 
         return {"RunpodFlashAdapter": RunpodFlashAdapter, "RunpodServerlessAdapter": RunpodServerlessAdapter}[name]
     if name in {
@@ -52,12 +53,10 @@ def __getattr__(name: str) -> Any:
         "OVHCloudPublicCloudInstanceAdapter",
         "ScalewayInstanceAdapter",
     }:
-        from gpucall.providers.cloud_vm_adapters import (
-            AzureComputeVMAdapter,
-            GCPConfidentialSpaceVMAdapter,
-            OVHCloudPublicCloudInstanceAdapter,
-            ScalewayInstanceAdapter,
-        )
+        from gpucall.providers.azure_compute_vm_adapter import AzureComputeVMAdapter
+        from gpucall.providers.gcp_confidential_space_adapter import GCPConfidentialSpaceVMAdapter
+        from gpucall.providers.ovhcloud_public_cloud_adapter import OVHCloudPublicCloudInstanceAdapter
+        from gpucall.providers.scaleway_instance_adapter import ScalewayInstanceAdapter
 
         return {
             "AzureComputeVMAdapter": AzureComputeVMAdapter,

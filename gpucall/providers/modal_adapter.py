@@ -275,6 +275,12 @@ class ModalAdapter(ProviderAdapter):
         output_contract="plain-text",
         required_auto_fields={"target": "Modal function target is not configured"},
         stream_required_fields={"stream_target": "modal stream mode requires explicit stream_target"},
+        official_sources=(
+            "https://modal.com/docs/reference/modal.Function#from_name",
+            "https://modal.com/docs/reference/modal.Function#remote",
+            "https://modal.com/docs/reference/modal.Function#remote_gen",
+            "https://modal.com/docs/reference/modal.Function#spawn",
+        ),
     ),
 )
 def build_modal_adapter(spec, _credentials):

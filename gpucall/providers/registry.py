@@ -27,6 +27,7 @@ class ProviderAdapterDescriptor:
     stream_required_fields: dict[str, str] = field(default_factory=dict)
     config_validator: ConfigValidator | None = None
     catalog_validator: CatalogValidator | None = None
+    official_sources: tuple[str, ...] = ()
 
 _ADAPTER_FACTORIES: dict[str, AdapterFactory] = {}
 _ALIASES: dict[str, str] = {}
@@ -64,12 +65,18 @@ def ensure_builtin_adapters_loaded() -> None:
     if _BUILTINS_LOADED:
         return
     _BUILTINS_LOADED = True
-    import gpucall.providers.cloud_vm_adapters  # noqa: F401
+    import gpucall.providers.azure_compute_vm_adapter  # noqa: F401
     import gpucall.providers.echo  # noqa: F401
+    import gpucall.providers.gcp_confidential_space_adapter  # noqa: F401
     import gpucall.providers.hyperstack_adapter  # noqa: F401
     import gpucall.providers.local_adapter  # noqa: F401
     import gpucall.providers.modal_adapter  # noqa: F401
-    import gpucall.providers.runpod_adapter  # noqa: F401
+    import gpucall.providers.ovhcloud_public_cloud_adapter  # noqa: F401
+    import gpucall.providers.runpod_flash_adapter  # noqa: F401
+    import gpucall.providers.runpod_flashboot_adapter  # noqa: F401
+    import gpucall.providers.runpod_serverless_adapter  # noqa: F401
+    import gpucall.providers.runpod_vllm_adapter  # noqa: F401
+    import gpucall.providers.scaleway_instance_adapter  # noqa: F401
 
 
 def build_registered_adapter(

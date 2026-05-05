@@ -8,7 +8,7 @@ import types
 
 import pytest
 
-from gpucall.domain import CompiledPlan, ExecutionMode, InlineValue, ProviderSpec
+from gpucall.domain import ChatMessage, CompiledPlan, ExecutionMode, InlineValue, ProviderSpec
 from gpucall.domain import ArtifactExportSpec, DataClassification
 from gpucall.providers.hyperstack_adapter import DEFAULT_HYPERSTACK_IMAGE, HyperstackAdapter
 from gpucall.providers import (
@@ -23,12 +23,10 @@ from gpucall.providers import (
 )
 from gpucall.providers.base import RemoteHandle
 from gpucall.providers.payloads import gpucall_provider_result, plan_payload
-from gpucall.providers.runpod_adapter import (
-    RunpodFlashAdapter,
-    RunpodServerlessAdapter,
-    RunpodVllmFlashBootAdapter,
-    RunpodVllmServerlessAdapter,
-)
+from gpucall.providers.runpod_flashboot_adapter import RunpodVllmFlashBootAdapter
+from gpucall.providers.runpod_flash_adapter import RunpodFlashAdapter
+from gpucall.providers.runpod_serverless_adapter import RunpodServerlessAdapter
+from gpucall.providers.runpod_vllm_adapter import RunpodVllmServerlessAdapter
 
 
 def test_router_core_does_not_hardcode_builtin_provider_names() -> None:
@@ -60,6 +58,47 @@ def test_router_core_does_not_hardcode_builtin_provider_names() -> None:
                 offenders.append(f"{path.relative_to(root)}:{token}")
 
     assert offenders == []
+
+
+def test_provider_contract_modules_are_separated_and_sourced() -> None:
+    from gpucall.providers.registry import adapter_descriptor
+
+    root = Path(__file__).resolve().parents[1]
+    runpod_shim = (root / "gpucall" / "providers" / "runpod_adapter.py").read_text(encoding="utf-8")
+    cloud_shim = (root / "gpucall" / "providers" / "cloud_vm_adapters.py").read_text(encoding="utf-8")
+    registry = (root / "gpucall" / "providers" / "registry.py").read_text(encoding="utf-8")
+
+    assert "@register_adapter" not in runpod_shim
+    assert "@register_adapter" not in cloud_shim
+    for module in (
+        "azure_compute_vm_adapter",
+        "gcp_confidential_space_adapter",
+        "ovhcloud_public_cloud_adapter",
+        "runpod_serverless_adapter",
+        "runpod_vllm_adapter",
+        "runpod_flash_adapter",
+        "runpod_flashboot_adapter",
+        "scaleway_instance_adapter",
+    ):
+        assert f"gpucall.providers.{module}" in registry
+
+    expected = {
+        "modal": "https://modal.com/docs/reference/modal.Function#from_name",
+        "runpod-serverless": "https://docs.runpod.io/serverless/endpoints/send-requests",
+        "runpod-vllm-serverless": "https://docs.runpod.io/serverless/vllm/openai-compatibility",
+        "runpod-flash": "https://docs.runpod.io/serverless/vllm/openai-compatibility",
+        "hyperstack": "https://portal.hyperstack.cloud/knowledge/api-documentation",
+    }
+    for adapter, source in expected.items():
+        descriptor = adapter_descriptor(adapter)
+        assert descriptor is not None
+        assert source in descriptor.official_sources
+
+    flashboot = adapter_descriptor("runpod-vllm-flashboot")
+    assert flashboot is not None
+    assert flashboot.endpoint_contract == "runpod-flash-sdk"
+    assert flashboot.output_contract == "gpucall-provider-result"
+    assert flashboot.production_eligible is False
 
 
 def test_factory_builds_configured_adapter_types() -> None:
@@ -116,7 +155,7 @@ def test_factory_builds_configured_adapter_types() -> None:
             cost_per_second=0,
             target="endpoint-1",
             image="runpod/worker-v1-vllm:v2.18.1",
-            endpoint_contract="openai-chat-completions",
+            endpoint_contract="runpod-flash-sdk",
             output_contract="openai-chat-completions",
             model="Qwen/Qwen2.5-1.5B-Instruct",
         ),
@@ -285,9 +324,9 @@ async def test_runpod_flash_cancel_without_owned_resource_is_noop(monkeypatch) -
         nonlocal called
         called = True
 
-    monkeypatch.setattr("gpucall.providers.runpod_adapter._runpod_flash_cleanup_resource_sync", cleanup)
-    adapter = RunpodFlashAdapter(api_key="test")
-    handle = RemoteHandle(provider="runpod-flash", remote_id="job", expires_at=plan_payload_plan().expires_at())
+    monkeypatch.setattr("gpucall.providers.runpod_flashboot_adapter.runpod_flash_cleanup_resource_sync", cleanup)
+    adapter = RunpodVllmFlashBootAdapter(api_key="test", model="Qwen/Qwen2.5-1.5B-Instruct")
+    handle = RemoteHandle(provider="runpod-vllm-flashboot", remote_id="job", expires_at=plan_payload_plan().expires_at())
 
     await adapter.cancel_remote(handle)
 
@@ -295,7 +334,12 @@ async def test_runpod_flash_cancel_without_owned_resource_is_noop(monkeypatch) -
 
 
 async def test_runpod_flash_stream_is_explicitly_unsupported() -> None:
-    adapter = RunpodFlashAdapter(api_key="rk_test", endpoint_id="endpoint-1")
+    adapter = RunpodFlashAdapter(
+        api_key="rk_test",
+        endpoint_id="endpoint-1",
+        endpoint_contract="openai-chat-completions",
+        model="Qwen/Qwen2.5-1.5B-Instruct",
+    )
     plan = plan_payload_plan().model_copy(update={"mode": ExecutionMode.STREAM})
 
     try:
@@ -332,7 +376,7 @@ async def test_runpod_flash_uses_deployed_runsync_rest_endpoint(monkeypatch) -> 
     monkeypatch.setitem(sys.modules, "requests.adapters", fake_adapters)
     monkeypatch.setitem(sys.modules, "urllib3.util.retry", fake_retry)
 
-    adapter = RunpodFlashAdapter(
+    adapter = RunpodVllmFlashBootAdapter(
         api_key="rk_test",
         endpoint_id="endpoint-1",
         model="Qwen/Qwen2.5-1.5B-Instruct",
@@ -348,37 +392,15 @@ async def test_runpod_flash_uses_deployed_runsync_rest_endpoint(monkeypatch) -> 
     assert calls[0][2]["input"]["max_model_len"] == 16384
 
 
-def test_runpod_flash_starts_deployed_jobs_with_run_not_runsync(monkeypatch) -> None:
-    calls: list[tuple[str, str, dict[str, object] | None]] = []
+def test_runpod_flashboot_declares_non_openai_contract() -> None:
+    from gpucall.providers.registry import adapter_descriptor
 
-    class FakeResponse:
-        status_code = 200
-        text = "{}"
+    descriptor = adapter_descriptor("runpod-vllm-flashboot")
 
-        def json(self) -> dict[str, object]:
-            return {"id": "job-1", "status": "IN_QUEUE"}
-
-    class FakeSession:
-        def mount(self, *_args, **_kwargs) -> None:
-            return None
-
-        def post(self, url: str, **kwargs):
-            calls.append(("POST", url, kwargs.get("json")))
-            return FakeResponse()
-
-    fake_requests = types.SimpleNamespace(Session=lambda: FakeSession())
-    fake_adapters = types.SimpleNamespace(HTTPAdapter=lambda **_kwargs: object())
-    fake_retry = types.SimpleNamespace(Retry=lambda **_kwargs: object())
-    monkeypatch.setitem(sys.modules, "requests", fake_requests)
-    monkeypatch.setitem(sys.modules, "requests.adapters", fake_adapters)
-    monkeypatch.setitem(sys.modules, "urllib3.util.retry", fake_retry)
-
-    adapter = RunpodFlashAdapter(api_key="rk_test", endpoint_id="endpoint-1")
-    job_id = adapter._start_endpoint_job_sync(plan_payload_plan(), "resource-1")
-
-    assert job_id == "job-1"
-    assert calls[0][1] == "https://api.runpod.ai/v2/endpoint-1/run"
-    assert calls[0][2]["input"]["resource_name"] == "resource-1"
+    assert descriptor is not None
+    assert descriptor.endpoint_contract == "runpod-flash-sdk"
+    assert descriptor.output_contract == "gpucall-provider-result"
+    assert descriptor.production_eligible is False
 
 
 async def test_runpod_flash_official_vllm_uses_openai_chat_route(monkeypatch) -> None:
@@ -417,7 +439,7 @@ async def test_runpod_flash_official_vllm_uses_openai_chat_route(monkeypatch) ->
         model="Qwen/Qwen2.5-1.5B-Instruct",
     )
 
-    plan = plan_payload_plan().model_copy(update={"messages": [{"role": "user", "content": "hello"}]})
+    plan = plan_payload_plan().model_copy(update={"messages": [ChatMessage(role="user", content="hello")]})
     handle = await adapter.start(plan)
     result = await adapter.wait(handle, plan)
 
@@ -463,7 +485,7 @@ async def test_runpod_flash_requires_official_worker_vllm_unless_experimental_en
         await adapter.start(plan_payload_plan())
     except Exception as exc:
         assert getattr(exc, "status_code", None) == 400
-        assert "official worker-vLLM" in str(exc)
+        assert "endpoint_contract=openai-chat-completions" in str(exc)
     else:  # pragma: no cover
         raise AssertionError("RunPod Flash accepted non-official production worker")
 

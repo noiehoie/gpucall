@@ -61,10 +61,12 @@ modes: [sync, async]
 endpoint: null
 target: ""
 image: null
+endpoint_contract: runpod-flash-sdk
+output_contract: gpucall-provider-result
 model: Qwen/Qwen2.5-1.5B-Instruct
 ```
 
-`model:` is the production-readiness declaration. Do not set it for stub or smoke endpoints. Once it is set, the provider can enter automatic routing if policy, recipe, mode, VRAM, context length, and circuit-breaker constraints all pass.
+`model:` is the production-readiness declaration for the stable worker-vLLM path. `runpod-vllm-flashboot` remains explicitly non-production-eligible until billable Flash SDK validation artifacts are present, because its contract is `runpod-flash-sdk`, not RunPod's OpenAI-compatible worker-vLLM route.
 
 ## FlashBoot Promotion Gate
 
