@@ -27,6 +27,7 @@ from gpucall.config import ConfigError, default_config_dir, default_state_dir, l
 from gpucall.configure import configure_command
 from gpucall.credentials import configured_credentials, credentials_path, load_credentials
 from gpucall.domain import ExecutionMode, JobState, PresignPutRequest, ProviderError, TaskRequest
+from gpucall.provider_audit import provider_audit_report
 from gpucall.provider_catalog import live_provider_catalog_findings
 from gpucall.providers.registry import adapter_descriptor
 from gpucall.registry import ObservedRegistry
@@ -92,6 +93,10 @@ def main() -> None:
     cost_audit = sub.add_parser("cost-audit")
     cost_audit.add_argument("--config-dir", type=Path, default=default_config_dir())
     cost_audit.add_argument("--live", action="store_true")
+    provider_audit = sub.add_parser("provider-audit")
+    provider_audit.add_argument("--config-dir", type=Path, default=default_config_dir())
+    provider_audit.add_argument("--recipe", default=None)
+    provider_audit.add_argument("--live", action="store_true")
     cleanup_audit = sub.add_parser("cleanup-audit")
     cleanup_audit.add_argument("--config-dir", type=Path, default=default_config_dir())
     security = sub.add_parser("security")
@@ -196,6 +201,8 @@ def main() -> None:
         audit_command(args.action, args.limit, args.max_bytes)
     elif args.command == "cost-audit":
         cost_audit_command(args.config_dir, live=args.live)
+    elif args.command == "provider-audit":
+        provider_audit_command(args.config_dir, recipe=args.recipe, live=args.live)
     elif args.command == "cleanup-audit":
         cleanup_audit_command(args.config_dir)
     elif args.command == "registry":
@@ -382,6 +389,8 @@ def build_launch_report(config_dir: Path, *, url: str | None = None, api_key: st
     provider_samples = _configured_registry_snapshot(config)
     cost_audit = _cost_audit_report(config, creds, config_dir=config_dir, live=profile == "production")
     cleanup_audit = _cleanup_audit_report(config)
+    provider_audit = provider_audit_report(config, config_dir=config_dir, live=False)
+    provider_tuple_gaps = _provider_tuple_validation_gaps(provider_audit) if profile == "production" else []
     live_cost_findings = _live_cost_audit_findings(cost_audit.get("live")) if profile == "production" else []
     gateway_smoke: dict[str, object] | None = None
     if url:
@@ -427,6 +436,7 @@ def build_launch_report(config_dir: Path, *, url: str | None = None, api_key: st
         "cost_audit_live_ok": not live_cost_findings,
         "cost_audit_live_findings": live_cost_findings,
         "cleanup_audit": cleanup_audit,
+        "provider_audit": _provider_audit_launch_summary(provider_audit),
     }
     required_paths = {
         "/healthz",
@@ -498,6 +508,8 @@ def build_launch_report(config_dir: Path, *, url: str | None = None, api_key: st
                     "required_adapters": required_live_adapters,
                 }
             )
+        if provider_tuple_gaps:
+            blockers.append({"check": "provider_tuple_validation", "recipes": provider_tuple_gaps})
     report: dict[str, object] = {
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "config_dir": str(config_dir),
@@ -519,6 +531,50 @@ def build_launch_report(config_dir: Path, *, url: str | None = None, api_key: st
         "go": not blockers,
     }
     return report
+
+
+def _provider_audit_launch_summary(provider_audit: dict[str, object]) -> dict[str, object]:
+    recipes = provider_audit.get("recipes") if isinstance(provider_audit, dict) else {}
+    summary: dict[str, object] = {"phase": provider_audit.get("phase") if isinstance(provider_audit, dict) else None, "recipes": {}}
+    if not isinstance(recipes, dict):
+        return summary
+    for name, row in sorted(recipes.items()):
+        if not isinstance(row, dict):
+            continue
+        summary["recipes"][name] = {
+            "routing_decision": (row.get("routing_decision") or {}).get("decision") if isinstance(row.get("routing_decision"), dict) else None,
+            "active_fit_count": row.get("active_fit_count"),
+            "production_ready_count": row.get("production_ready_count"),
+            "ready_for_validation_count": row.get("ready_for_validation_count"),
+            "candidate_fit_count": row.get("candidate_fit_count"),
+        }
+    return summary
+
+
+def _provider_tuple_validation_gaps(provider_audit: dict[str, object]) -> list[dict[str, object]]:
+    recipes = provider_audit.get("recipes") if isinstance(provider_audit, dict) else {}
+    if not isinstance(recipes, dict):
+        return [{"recipe": None, "decision": None, "reason": "provider audit report is malformed"}]
+    gaps: list[dict[str, object]] = []
+    for name, row in sorted(recipes.items()):
+        if not isinstance(row, dict):
+            gaps.append({"recipe": name, "decision": None, "reason": "recipe audit row is malformed"})
+            continue
+        decision = row.get("routing_decision") if isinstance(row.get("routing_decision"), dict) else {}
+        if decision.get("decision") == "ROUTABLE":
+            continue
+        gaps.append(
+            {
+                "recipe": name,
+                "decision": decision.get("decision"),
+                "reason": decision.get("reason"),
+                "active_fit_count": row.get("active_fit_count"),
+                "production_ready_count": row.get("production_ready_count"),
+                "ready_for_validation_count": row.get("ready_for_validation_count"),
+                "candidate_fit_count": row.get("candidate_fit_count"),
+            }
+        )
+    return gaps
 
 
 async def post_launch_report_command(config_dir: Path) -> None:
@@ -1230,6 +1286,11 @@ def cost_audit_command(config_dir: Path, *, live: bool = False) -> None:
     config = load_config(config_dir)
     creds = load_credentials()
     print(json.dumps(_cost_audit_report(config, creds, config_dir=config_dir, live=live), indent=2, sort_keys=True, default=str))
+
+
+def provider_audit_command(config_dir: Path, *, recipe: str | None = None, live: bool = False) -> None:
+    config = load_config(config_dir)
+    print(json.dumps(provider_audit_report(config, config_dir=config_dir, recipe_name=recipe, live=live), indent=2, sort_keys=True, default=str))
 
 
 def _cost_audit_report(config, creds: dict[str, dict[str, str]], *, config_dir: Path, live: bool = False) -> dict[str, object]:

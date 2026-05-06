@@ -74,6 +74,22 @@ $XDG_STATE_HOME/gpucall/capability-catalog.db
 
 The DB is a deterministic materialization of YAML config. YAML remains the source of truth; the DB is for review, inspection, and operational tooling. Active providers and candidate providers are stored separately so unvalidated candidates cannot enter production auto-routing.
 
+## Provider Tuple Audit
+
+Use the provider tuple audit before promoting provider candidates or changing routing:
+
+```bash
+gpucall provider-audit --config-dir config
+gpucall provider-audit --config-dir config --recipe text-infer-standard --live
+```
+
+The audit treats the recipe as the authority. It evaluates every active provider
+tuple and every `provider_candidates/*.yml` tuple against recipe requirements,
+model catalog declarations, engine catalog guarantees, provider/GPU metadata,
+official adapter contracts, endpoint configuration, and exact live validation
+artifacts. Candidate tuples that fit the recipe remain outside production routing
+until they have endpoint/lifecycle configuration and billable validation evidence.
+
 ## Admin Review
 
 Caller submissions are reviewed against recipes, models, engines, providers, policy, and live validation artifacts:
