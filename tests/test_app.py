@@ -59,6 +59,10 @@ def copy_config(tmp_path: Path) -> Path:
     for provider_path in (root / "providers").glob("*.yml"):
         if provider_path.name != "local-echo.yml":
             provider_path.unlink()
+    for split_dir in ("surfaces", "workers"):
+        for split_path in (root / split_dir).glob("*.yml"):
+            if split_path.name != "local-echo.yml":
+                split_path.unlink()
     for recipe_path in (root / "recipes").glob("*.yml"):
         if recipe_path.name not in {"smoke-text-small.yml", "text-infer-standard.yml"}:
             recipe_path.unlink()
@@ -308,7 +312,7 @@ def test_tenant_api_key_sets_tenant_header_and_usage(tmp_path, monkeypatch) -> N
 def test_tenant_budget_rejects_before_provider_execution(tmp_path, monkeypatch) -> None:
     monkeypatch.setenv("GPUCALL_TENANT_API_KEYS", "tenant-a:secret-a")
     root = copy_config(tmp_path)
-    provider_path = root / "providers" / "local-echo.yml"
+    provider_path = root / "surfaces" / "local-echo.yml"
     provider = yaml.safe_load(provider_path.read_text(encoding="utf-8"))
     provider["cost_per_second"] = 1
     provider_path.write_text(yaml.safe_dump(provider, sort_keys=False), encoding="utf-8")

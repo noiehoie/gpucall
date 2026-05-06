@@ -19,8 +19,8 @@ config/
   engines/*.yml
   surfaces/*.yml
   workers/*.yml
-  providers/*.yml
   provider_candidates/*.yml
+  providers/*.yml.example
 ```
 
 Recipes use the caller-facing v2 DSL and contain workload requirements:
@@ -57,18 +57,25 @@ Engines contain runtime guarantees:
 - streaming support
 - input/output contracts
 
-Providers bind a real provider/GPU to a model and engine:
+Provider accounts, execution surfaces, and workers are split so one API account
+can own multiple execution surfaces:
 
-- `model_ref`
-- `engine_ref`
-- execution surface: `iaas_vm`, `managed_endpoint`, `function_runtime`, `container_instance`, `cluster_runtime`, or local/test runtime
-- GPU / VRAM / region / trust profile
-- official endpoint and lifecycle contract
+- `accounts/*.yml`: credential reference, API base, billing scope, provider family.
+- `surfaces/*.yml`: execution surface, GPU / VRAM / region, price, stock state,
+  trust profile, lifecycle fields, and endpoint or VM shape.
+- `workers/*.yml`: model, engine, input/output/stream contracts, modes, target
+  function or endpoint contract.
+
+The loader joins `surfaces/*.yml` and `workers/*.yml` by `provider_name` and
+fails closed if a surface and worker are missing a counterpart or disagree on
+account, adapter, or execution surface. The joined tuple is the active provider
+surface eligible for production routing after policy, validation, circuit, and
+cleanup checks.
 
 Provider candidates are not production routing entries. They are a queue of plausible
 provider/model/engine tuples that need endpoint credentials, official-adapter
 conformance review, and billable live validation before they can be promoted into
-`providers/*.yml`.
+active `surfaces/*.yml` and `workers/*.yml`.
 
 ## Catalog DB
 
@@ -116,8 +123,8 @@ gpucall provider-audit --config-dir config
 gpucall provider-audit --config-dir config --recipe text-infer-standard --live
 ```
 
-The audit treats the recipe as the authority. It evaluates every active provider
-tuple and every `provider_candidates/*.yml` tuple against recipe requirements,
+The audit treats the recipe as the authority. It evaluates every active joined
+surface/worker tuple and every `provider_candidates/*.yml` tuple against recipe requirements,
 model catalog declarations, engine catalog guarantees, provider/GPU metadata,
 official adapter contracts, endpoint configuration, and exact live validation
 artifacts. Candidate tuples that fit the recipe remain outside production routing
@@ -154,9 +161,9 @@ The automated path is:
 1. Caller submission reaches the admin inbox.
 2. `gpucall-recipe-admin review` writes a recipe candidate and computes `required_provider_contract`.
 3. The reviewer matches that contract against `provider_candidates`.
-4. `gpucall-recipe-admin promote` creates an isolated promotion workspace containing the generated recipe and candidate provider YAML.
+4. `gpucall-recipe-admin promote` creates an isolated promotion workspace containing the generated recipe, candidate provider YAML, and split surface/worker YAML.
 5. An administrator or automation fills provider-specific endpoint credentials and runs billable validation.
-6. Only after validation evidence exists can the provider candidate be copied into `providers/*.yml` and made eligible for production routing.
+6. Only after validation evidence exists can the candidate be copied into active `surfaces/*.yml` and `workers/*.yml` and made eligible for production routing.
 
 Promotion command:
 

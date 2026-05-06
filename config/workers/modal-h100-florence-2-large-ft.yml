@@ -17,3 +17,6 @@ stream_contract: none
 target: gpucall-worker-vision-doc:run_inference_on_modal_vision_h100
 stream_target: null
 endpoint_contract: modal-function
+model: microsoft/Florence-2-large-ft
+provider_params: {}
+declared_model_max_len: 8192

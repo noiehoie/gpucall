@@ -17,3 +17,5 @@ stream_contract: none
 target: default-CANADA-1
 stream_target: null
 endpoint_contract: hyperstack-vm
+model: Qwen/Qwen2.5-1.5B-Instruct
+declared_model_max_len: 32768

@@ -349,21 +349,21 @@ def test_modal_stream_uses_explicit_deployed_remote_gen(monkeypatch) -> None:
 def test_modal_scaledown_metadata_matches_worker_defaults() -> None:
     root = Path(__file__).resolve().parents[1]
     worker = (root / "gpucall" / "providers" / "modal_worker.py").read_text(encoding="utf-8")
-    providers = {
+    surfaces = {
         path.name: yaml.safe_load(path.read_text(encoding="utf-8"))
         for path in [
-            root / "config" / "providers" / "modal.yml",
-            root / "config" / "providers" / "modal-vision.yml",
-            root / "config" / "providers" / "modal-h200x4-qwen25-14b-1m.yml",
+            root / "config" / "surfaces" / "modal-a10g.yml",
+            root / "config" / "surfaces" / "modal-vision-a10g.yml",
+            root / "config" / "surfaces" / "modal-h200x4-qwen25-14b-1m.yml",
         ]
     }
 
     assert 'GPUCALL_MODAL_A10G_SCALEDOWN_WINDOW", 60' in worker
     assert 'GPUCALL_MODAL_VISION_H100_SCALEDOWN_WINDOW", 60' in worker
     assert 'GPUCALL_MODAL_H200X4_SCALEDOWN_WINDOW", 300' in worker
-    assert providers["modal.yml"]["scaledown_window_seconds"] == 60
-    assert providers["modal-vision.yml"]["scaledown_window_seconds"] == 60
-    assert providers["modal-h200x4-qwen25-14b-1m.yml"]["scaledown_window_seconds"] == 300
+    assert surfaces["modal-a10g.yml"]["scaledown_window_seconds"] == 60
+    assert surfaces["modal-vision-a10g.yml"]["scaledown_window_seconds"] == 60
+    assert surfaces["modal-h200x4-qwen25-14b-1m.yml"]["scaledown_window_seconds"] == 300
 
 
 async def test_runpod_flash_cancel_without_owned_resource_is_noop(monkeypatch) -> None:

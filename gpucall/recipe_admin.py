@@ -309,6 +309,7 @@ def promote_candidate(
     _copy_config_tree(config_root, promotion_config, force=force)
     recipe_path = _write_yaml_guarded(promotion_config / "recipes" / f"{recipe['name']}.yml", recipe, force=force)
     provider_path = _write_yaml_guarded(promotion_config / "providers" / f"{provider['name']}.yml", provider, force=force)
+    surface_path, worker_path = _write_split_provider(promotion_config, provider, force=force)
     promotion_report: dict[str, Any] = {
         "schema_version": 1,
         "phase": "provider-candidate-promotion",
@@ -319,6 +320,8 @@ def promote_candidate(
         "promotion_config_dir": str(promotion_config),
         "generated_recipe_path": str(recipe_path),
         "generated_provider_path": str(provider_path),
+        "generated_surface_path": str(surface_path),
+        "generated_worker_path": str(worker_path),
         "validation": None,
         "activated": False,
         "activation_paths": {},
@@ -711,6 +714,76 @@ def _write_yaml_guarded(path: Path, payload: Mapping[str, Any], *, force: bool) 
         raise FileExistsError(f"refusing to overwrite existing file: {path}")
     path.write_text(to_yaml(payload), encoding="utf-8")
     return path
+
+
+def _write_split_provider(config_root: Path, provider: Mapping[str, Any], *, force: bool) -> tuple[Path, Path]:
+    name = str(provider["name"])
+    account_ref = _account_ref(str(provider.get("adapter") or ""))
+    surface = _drop_none(
+        {
+            "surface_ref": name,
+            "provider_name": name,
+            "account_ref": account_ref,
+            "adapter": provider.get("adapter"),
+            "execution_surface": provider.get("execution_surface"),
+            "max_data_classification": provider.get("max_data_classification"),
+            "trust_profile": provider.get("trust_profile"),
+            "gpu": provider.get("gpu"),
+            "vram_gb": provider.get("vram_gb"),
+            "max_model_len": provider.get("max_model_len"),
+            "cost_per_second": provider.get("cost_per_second"),
+            "expected_cold_start_seconds": provider.get("expected_cold_start_seconds"),
+            "scaledown_window_seconds": provider.get("scaledown_window_seconds"),
+            "min_billable_seconds": provider.get("min_billable_seconds"),
+            "billing_granularity_seconds": provider.get("billing_granularity_seconds"),
+            "endpoint": provider.get("endpoint"),
+            "region": provider.get("region"),
+            "zone": provider.get("zone"),
+            "instance": provider.get("instance"),
+            "image": provider.get("image"),
+            "key_name": provider.get("key_name"),
+            "ssh_remote_cidr": provider.get("ssh_remote_cidr"),
+            "lease_manifest_path": provider.get("lease_manifest_path"),
+            "supports_vision": provider.get("supports_vision"),
+            "stock_state": "configured",
+        }
+    )
+    worker = _drop_none(
+        {
+            "worker_ref": name,
+            "provider_name": name,
+            "account_ref": account_ref,
+            "adapter": provider.get("adapter"),
+            "execution_surface": provider.get("execution_surface"),
+            "model_ref": provider.get("model_ref"),
+            "engine_ref": provider.get("engine_ref"),
+            "modes": provider.get("modes"),
+            "input_contracts": provider.get("input_contracts"),
+            "output_contract": provider.get("output_contract"),
+            "stream_contract": provider.get("stream_contract"),
+            "target": provider.get("target"),
+            "stream_target": provider.get("stream_target"),
+            "endpoint_contract": provider.get("endpoint_contract"),
+            "model": provider.get("model"),
+            "declared_model_max_len": provider.get("declared_model_max_len"),
+            "provider_params": provider.get("provider_params") or {},
+        }
+    )
+    surface_path = _write_yaml_guarded(config_root / "surfaces" / f"{name}.yml", surface, force=force)
+    worker_path = _write_yaml_guarded(config_root / "workers" / f"{name}.yml", worker, force=force)
+    return surface_path, worker_path
+
+
+def _drop_none(payload: Mapping[str, Any]) -> dict[str, Any]:
+    return {key: value for key, value in payload.items() if value is not None}
+
+
+def _account_ref(adapter: str) -> str:
+    if adapter.startswith("runpod-"):
+        return "runpod"
+    if adapter in {"echo", "local-ollama"}:
+        return "local"
+    return adapter
 
 
 def _validate_config_dir(config_dir: Path) -> None:

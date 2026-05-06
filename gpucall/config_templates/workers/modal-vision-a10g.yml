@@ -17,3 +17,5 @@ stream_contract: none
 target: gpucall-worker-json:run_inference_on_modal
 stream_target: null
 endpoint_contract: modal-function
+model: Salesforce/blip-vqa-base
+declared_model_max_len: 512

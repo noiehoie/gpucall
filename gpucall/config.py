@@ -98,20 +98,70 @@ def load_recipes(config_dir: Path | None = None) -> dict[str, Recipe]:
 def load_providers(config_dir: Path | None = None) -> dict[str, ProviderSpec]:
     root = config_dir or default_config_dir()
     providers: dict[str, ProviderSpec] = {}
-    for path in sorted((root / "providers").glob("*.yml")):
-        provider = _load_provider(path)
-        if provider.name in providers:
-            raise ConfigError(f"duplicate provider name {provider.name!r} in {path}")
-        providers[provider.name] = provider
+    split_payloads = _load_split_provider_payloads(root)
+    if split_payloads:
+        for path, payload in split_payloads:
+            provider = _provider_from_payload(path, payload)
+            if provider.name in providers:
+                raise ConfigError(f"duplicate provider name {provider.name!r} in {path}")
+            providers[provider.name] = provider
+    else:
+        for path in sorted((root / "providers").glob("*.yml")):
+            provider = _load_provider(path)
+            if provider.name in providers:
+                raise ConfigError(f"duplicate provider name {provider.name!r} in {path}")
+            providers[provider.name] = provider
     if not providers:
-        raise ConfigError(f"no providers found in {root / 'providers'}")
+        raise ConfigError(f"no providers found in {root / 'surfaces'} or {root / 'providers'}")
     return providers
 
 
-def _load_provider(path: Path) -> ProviderSpec:
-    payload = _load_yaml(path)
-    if not isinstance(payload, dict):
-        raise ConfigError(f"invalid provider YAML in {path}: root must be a mapping")
+def _load_split_provider_payloads(root: Path) -> list[tuple[Path, dict[str, object]]]:
+    surfaces_root = root / "surfaces"
+    workers_root = root / "workers"
+    if not surfaces_root.exists() or not workers_root.exists():
+        return []
+    payloads: list[tuple[Path, dict[str, object]]] = []
+    workers: dict[str, tuple[Path, dict[str, object]]] = {}
+    for worker_path in sorted(workers_root.glob("*.yml")):
+        worker = _load_yaml(worker_path)
+        if not isinstance(worker, dict):
+            raise ConfigError(f"invalid worker YAML in {worker_path}: root must be a mapping")
+        provider_name = str(worker.get("provider_name") or worker.get("worker_ref") or worker_path.stem)
+        workers[provider_name] = (worker_path, worker)
+    for surface_path in sorted(surfaces_root.glob("*.yml")):
+        surface = _load_yaml(surface_path)
+        if not isinstance(surface, dict):
+            raise ConfigError(f"invalid surface YAML in {surface_path}: root must be a mapping")
+        provider_name = str(surface.get("provider_name") or surface.get("surface_ref") or surface_path.stem)
+        worker_entry = workers.get(provider_name)
+        if worker_entry is None:
+            raise ConfigError(f"surface {provider_name!r} has no matching worker YAML")
+        worker_path, worker = worker_entry
+        for field in ("account_ref", "adapter", "execution_surface"):
+            surface_value = surface.get(field)
+            worker_value = worker.get(field)
+            if surface_value is not None and worker_value is not None and surface_value != worker_value:
+                raise ConfigError(
+                    f"surface {surface_path} and worker {worker_path} disagree on {field}: "
+                    f"{surface_value!r} != {worker_value!r}"
+                )
+        payload: dict[str, object] = {**surface, **worker}
+        payload["name"] = provider_name
+        payload.pop("surface_ref", None)
+        payload.pop("worker_ref", None)
+        payload.pop("provider_name", None)
+        payload.pop("account_ref", None)
+        payload.pop("stock_state", None)
+        payloads.append((surface_path, payload))
+    surface_names = {str(item[1].get("name")) for item in payloads}
+    orphan_workers = sorted(name for name in workers if name not in surface_names)
+    if orphan_workers:
+        raise ConfigError(f"worker YAML has no matching surface YAML: {', '.join(orphan_workers)}")
+    return payloads
+
+
+def _provider_from_payload(path: Path, payload: dict[str, object]) -> ProviderSpec:
     if not payload.get("execution_surface"):
         adapter = str(payload.get("adapter") or "echo")
         descriptor = adapter_descriptor(adapter)
@@ -123,6 +173,12 @@ def _load_provider(path: Path) -> ProviderSpec:
     except ValidationError as exc:
         raise ConfigError(f"invalid {path}: {_validation_error_summary(exc)}") from exc
 
+
+def _load_provider(path: Path) -> ProviderSpec:
+    payload = _load_yaml(path)
+    if not isinstance(payload, dict):
+        raise ConfigError(f"invalid provider YAML in {path}: root must be a mapping")
+    return _provider_from_payload(path, payload)
 
 def load_models(config_dir: Path | None = None) -> dict[str, ModelSpec]:
     root = config_dir or default_config_dir()

@@ -10,3 +10,9 @@ region: null
 zone: null
 cost_per_second: 0.00045
 stock_state: configured
+billing_granularity_seconds: 1
+image: runpod/worker-v1-vllm:v2.18.1
+max_data_classification: confidential
+scaledown_window_seconds: 5
+min_billable_seconds: 1
+endpoint: null

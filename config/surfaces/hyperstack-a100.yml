@@ -10,3 +10,20 @@ region: null
 zone: null
 cost_per_second: 0.0012
 stock_state: configured
+key_name: gpucall-key
+instance: n3-A100x1
+billing_granularity_seconds: 60
+image: Ubuntu Server 22.04 LTS R570 CUDA 12.8 with Docker
+ssh_remote_cidr: 203.0.113.10/32
+max_data_classification: restricted
+scaledown_window_seconds: 0
+min_billable_seconds: 60
+trust_profile:
+  security_tier: encrypted_capsule
+  sovereign_jurisdiction: CA
+  dedicated_gpu: true
+  requires_attestation: false
+  supports_key_release: false
+  allows_worker_s3_credentials: false
+endpoint: https://infrahub-api.nexgencloud.com/v1
+lease_manifest_path: null

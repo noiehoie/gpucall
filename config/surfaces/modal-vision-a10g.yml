@@ -10,3 +10,16 @@ region: null
 zone: null
 cost_per_second: 0.00035
 stock_state: configured
+billing_granularity_seconds: 0
+max_data_classification: confidential
+scaledown_window_seconds: 60
+min_billable_seconds: 0
+trust_profile:
+  security_tier: encrypted_capsule
+  sovereign_jurisdiction: US
+  dedicated_gpu: false
+  requires_attestation: false
+  supports_key_release: false
+  allows_worker_s3_credentials: false
+endpoint: null
+supports_vision: true

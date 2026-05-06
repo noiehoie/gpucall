@@ -9,6 +9,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
+import yaml
 
 from gpucall.config import ConfigError, load_config
 from gpucall.cli import _provider_smoke_request
@@ -122,38 +123,21 @@ endpoint: null
 
 def test_load_config_rejects_provider_model_len_above_declared_model_capability(tmp_path) -> None:
     root = copy_config(tmp_path)
-    (root / "providers" / "hyperstack.yml").write_text(
-        """
-name: hyperstack-a100
-adapter: hyperstack
-max_data_classification: restricted
-gpu: A100
-vram_gb: 80
-max_model_len: 131072
-declared_model_max_len: 32768
-cost_per_second: 0.0012
-modes: [sync, async]
-target: default-CANADA-1
-model: Qwen/Qwen2.5-1.5B-Instruct
-instance: n3-A100x1
-image: Ubuntu Server 22.04 LTS R570 CUDA 12.8 with Docker
-key_name: gpucall-key
-lease_manifest_path: null
-ssh_remote_cidr: 203.0.113.0/24
-""".lstrip(),
-        encoding="utf-8",
-    )
+    surface_path = root / "surfaces" / "hyperstack-a100.yml"
+    surface = yaml.safe_load(surface_path.read_text(encoding="utf-8"))
+    surface["max_model_len"] = 131072
+    surface_path.write_text(yaml.safe_dump(surface, sort_keys=False), encoding="utf-8")
 
-    with pytest.raises(ConfigError, match="declared model capability"):
+    with pytest.raises(ConfigError, match="model catalog capability"):
         load_config(root)
 
 
 def test_load_config_rejects_hyperstack_all_open_ssh_cidr(tmp_path) -> None:
     root = copy_config(tmp_path)
-    provider_path = root / "providers" / "hyperstack.yml"
-    provider = provider_path.read_text(encoding="utf-8")
-    provider = provider.replace("ssh_remote_cidr: 203.0.113.10/32", "ssh_remote_cidr: 0.0.0.0/0")
-    provider_path.write_text(provider, encoding="utf-8")
+    surface_path = root / "surfaces" / "hyperstack-a100.yml"
+    surface = yaml.safe_load(surface_path.read_text(encoding="utf-8"))
+    surface["ssh_remote_cidr"] = "0.0.0.0/0"
+    surface_path.write_text(yaml.safe_dump(surface, sort_keys=False), encoding="utf-8")
 
     with pytest.raises(ConfigError, match="must not allow all addresses"):
         load_config(root)
@@ -161,11 +145,11 @@ def test_load_config_rejects_hyperstack_all_open_ssh_cidr(tmp_path) -> None:
 
 def test_load_config_validation_error_does_not_echo_secret_values(tmp_path) -> None:
     root = copy_config(tmp_path)
-    provider_path = root / "providers" / "modal.yml"
-    provider = provider_path.read_text(encoding="utf-8")
-    provider = provider.replace("vram_gb: 24", "vram_gb: secret-token-123")
-    provider += "\napi_key: secret-extra-456\n"
-    provider_path.write_text(provider, encoding="utf-8")
+    surface_path = root / "surfaces" / "modal-a10g.yml"
+    surface = yaml.safe_load(surface_path.read_text(encoding="utf-8"))
+    surface["vram_gb"] = "secret-token-123"
+    surface["api_key"] = "secret-extra-456"
+    surface_path.write_text(yaml.safe_dump(surface, sort_keys=False), encoding="utf-8")
 
     with pytest.raises(ConfigError) as exc_info:
         load_config(root)
@@ -439,7 +423,7 @@ def test_security_scan_rejects_secret_like_yaml(tmp_path) -> None:
     assert "bad.yml" in result.stdout
 
 
-def test_init_config_writes_flat_provider_files(tmp_path) -> None:
+def test_init_config_writes_split_provider_catalog_files(tmp_path) -> None:
     result = subprocess.run(
         [
             sys.executable,
@@ -453,12 +437,15 @@ def test_init_config_writes_flat_provider_files(tmp_path) -> None:
         text=True,
     )
 
-    provider = (tmp_path / "out" / "providers" / "modal.yml").read_text(encoding="utf-8")
+    surface = (tmp_path / "out" / "surfaces" / "modal-a10g.yml").read_text(encoding="utf-8")
+    worker = (tmp_path / "out" / "workers" / "modal-a10g.yml").read_text(encoding="utf-8")
     assert "initialized gpucall config" in result.stdout
     assert (tmp_path / "out" / "policy.yml").exists()
     assert (tmp_path / "out" / "recipes" / "vision-image-standard.yml").exists()
-    assert "config:" not in provider
-    assert "target:" in provider
+    assert "config:" not in surface
+    assert "execution_surface: function_runtime" in surface
+    assert "target:" in worker
+    assert "model_ref:" in worker
 
 
 def test_init_config_writes_valid_default_config(tmp_path) -> None:

@@ -38,7 +38,7 @@ def test_launch_report_is_go_for_sample_config(tmp_path, monkeypatch) -> None:
 def test_launch_report_blocks_missing_cost_metadata(tmp_path, monkeypatch) -> None:
     monkeypatch.setenv("GPUCALL_STATE_DIR", str(tmp_path / "state"))
     root = copy_config(tmp_path)
-    provider_path = root / "providers" / "modal.yml"
+    provider_path = root / "surfaces" / "modal-a10g.yml"
     provider = yaml.safe_load(provider_path.read_text(encoding="utf-8"))
     provider.pop("scaledown_window_seconds", None)
     provider_path.write_text(yaml.safe_dump(provider, sort_keys=False), encoding="utf-8")
@@ -88,11 +88,15 @@ def test_production_launch_report_blocks_without_live_requirements(tmp_path, mon
 def test_launch_report_blocks_smoke_provider_in_auto_recipe(tmp_path, monkeypatch) -> None:
     monkeypatch.setenv("GPUCALL_STATE_DIR", str(tmp_path / "state"))
     root = copy_config(tmp_path)
-    for path in (root / "providers").glob("*.yml"):
+    for path in (root / "surfaces").glob("*.yml"):
         provider = yaml.safe_load(path.read_text(encoding="utf-8"))
         provider["adapter"] = "echo"
-        provider.pop("model", None)
         path.write_text(yaml.safe_dump(provider, sort_keys=False), encoding="utf-8")
+    for path in (root / "workers").glob("*.yml"):
+        worker = yaml.safe_load(path.read_text(encoding="utf-8"))
+        worker["adapter"] = "echo"
+        worker.pop("model", None)
+        path.write_text(yaml.safe_dump(worker, sort_keys=False), encoding="utf-8")
 
     try:
         report = build_launch_report(root)
