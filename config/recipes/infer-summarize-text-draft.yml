@@ -1,0 +1,32 @@
+allowed_inline_mime_prefixes: []
+allowed_mime_prefixes:
+- text/
+allowed_modes:
+- sync
+artifact_export: false
+auto_select: true
+data_classification: confidential
+default_temperature: 0.7
+gpu: any
+guided_decoding: true
+lease_ttl_seconds: 900
+max_input_bytes: 1034240000
+max_model_len: 1010000
+min_vram_gb: 320
+name: infer-summarize-text-draft
+output_contract: plain-text
+output_validation_attempts: 1
+repetition_penalty: 1.05
+required_model_capabilities:
+- summarization
+requires_key_release: false
+stop_tokens:
+- <|im_end|>
+- <|endoftext|>
+structured_system_prompt: Return only valid JSON when response_format requests JSON.
+  Do not include markdown fences or prose.
+structured_temperature: 0.0
+system_prompt: Answer the user's request directly.
+task: infer
+timeout_seconds: 600
+tokenizer_family: qwen
