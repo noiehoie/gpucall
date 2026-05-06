@@ -243,10 +243,12 @@ def test_admin_review_matches_long_context_provider_candidates() -> None:
     report = review_artifact(artifact, config_dir="gpucall/config_templates")
 
     assert report["decision"] == "CANDIDATE_ONLY"
-    assert report["required_provider_contract"]["min_model_len"] == 1048576
+    assert report["required_provider_contract"]["min_model_len"] == 1010000
+    assert report["required_provider_contract"]["min_vram_gb"] == 320
     names = {match["name"] for match in report["provider_candidate_matches"]}
-    assert "modal-h200-qwen25-14b-1m" in names
-    assert "runpod-vllm-h200-qwen25-14b-1m" in names
+    assert "modal-h200x4-qwen25-14b-1m" in names
+    assert "modal-h200-qwen25-14b-1m" not in names
+    assert "runpod-vllm-h200-qwen25-14b-1m" not in names
     assert all("run gpucall provider-smoke" in " ".join(match["promotion_actions"]) for match in report["provider_candidate_matches"])
 
 
@@ -280,8 +282,8 @@ def test_promote_candidate_writes_isolated_config_without_activation(tmp_path) -
         activate=False,
     )
 
-    assert report["decision"] == "READY_FOR_ENDPOINT_CONFIGURATION"
-    assert report["config_valid"] is False
+    assert report["decision"] == "READY_FOR_BILLABLE_VALIDATION"
+    assert report["config_valid"] is True
     assert (tmp_path / "promotion" / "config" / "providers" / "modal-h100-qwen25-vl-7b.yml").exists()
     assert (tmp_path / "promotion" / "config" / "recipes" / "vision-understand-document-image-draft.yml").exists()
     provider = yaml.safe_load((tmp_path / "promotion" / "config" / "providers" / "modal-h100-qwen25-vl-7b.yml").read_text())

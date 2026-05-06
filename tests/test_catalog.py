@@ -21,7 +21,7 @@ def test_capability_catalog_materializes_config(tmp_path) -> None:
     assert {"name": "hyperstack-vllm", "kind": "vllm"} in snapshot["engines"]
     assert {"name": "runpod-vllm-openai", "kind": "vllm"} in snapshot["engines"]
     assert any(provider["name"] == "hyperstack-qwen-1m" and provider["model_ref"] == "qwen2.5-7b-instruct-1m" for provider in snapshot["providers"])
-    assert any(candidate["name"] == "runpod-vllm-h200-qwen25-14b-1m" for candidate in snapshot["provider_candidates"])
+    assert any(candidate["name"] == "modal-h200x4-qwen25-14b-1m" for candidate in snapshot["provider_candidates"])
 
 
 def test_catalog_cli_builds_sqlite_snapshot(tmp_path) -> None:

@@ -105,6 +105,7 @@ class ModalAdapter(ProviderAdapter):
         stream_function_name: str | None = None,
         model: str | None = None,
         max_model_len: int | None = None,
+        provider_params: dict[str, Any] | None = None,
         allow_ephemeral: bool = False,
     ) -> None:
         self.name = name
@@ -116,6 +117,7 @@ class ModalAdapter(ProviderAdapter):
         )
         self.model = model
         self.max_model_len = max_model_len
+        self.provider_params = dict(provider_params or {})
         self.allow_ephemeral = allow_ephemeral
         self._invocations: dict[str, Any] = {}
         self._streams: dict[str, Any] = {}
@@ -195,6 +197,7 @@ class ModalAdapter(ProviderAdapter):
                     plan.task,
                     max_model_len=self.max_model_len,
                     model=self.model,
+                    **self.provider_params,
                 )
                 with self._remote_lock:
                     self._invocations[remote_id] = invocation
@@ -214,6 +217,7 @@ class ModalAdapter(ProviderAdapter):
                         plan.task,
                         max_model_len=self.max_model_len,
                         model=self.model,
+                        **self.provider_params,
                     )
                     with self._remote_lock:
                         self._invocations[remote_id] = invocation
@@ -237,6 +241,7 @@ class ModalAdapter(ProviderAdapter):
                     plan.task,
                     max_model_len=self.max_model_len,
                     model=self.model,
+                    **self.provider_params,
                 )
                 with self._remote_lock:
                     self._streams[remote_id] = gen
@@ -254,6 +259,7 @@ class ModalAdapter(ProviderAdapter):
                         plan.task,
                         max_model_len=self.max_model_len,
                         model=self.model,
+                        **self.provider_params,
                     )
                     with self._remote_lock:
                         self._streams[remote_id] = gen
@@ -295,5 +301,6 @@ def build_modal_adapter(spec, _credentials):
         stream_function_name=stream_function_name,
         model=spec.model,
         max_model_len=spec.max_model_len,
+        provider_params=spec.provider_params,
         allow_ephemeral=False,
     )

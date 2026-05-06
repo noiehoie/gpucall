@@ -2,8 +2,8 @@ name: qwen2.5-14b-instruct-1m
 provider_model_id: Qwen/Qwen2.5-14B-Instruct-1M
 capabilities: [chat, instruction_following, summarization, translation, classification, reasoning, long_context]
 max_model_len: 1048576
-min_vram_gb: 160
-supported_engines: [hyperstack-vllm, runpod-vllm-openai]
+min_vram_gb: 320
+supported_engines: [hyperstack-vllm, modal-vllm, runpod-vllm-openai]
 input_contracts: [text, chat_messages]
 output_contracts: [plain-text, json-object]
 supports_vision: false
@@ -11,5 +11,6 @@ supports_guided_decoding: true
 supports_streaming: true
 source: https://arxiv.org/abs/2501.15383
 evidence:
-  - Qwen2.5-1M technical report says Qwen2.5-14B-Instruct-1M supports 1 million token contexts.
+  - Qwen2.5-1M model card says Qwen2.5-14B-Instruct-1M supports 1,010,000 token contexts.
+  - Qwen2.5-1M model card states 1M-token processing requires at least 320GB total VRAM.
 production_ready: false

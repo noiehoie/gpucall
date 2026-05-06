@@ -1148,7 +1148,7 @@ def _round_model_len(value: Any) -> int:
         required = int(value)
     except (TypeError, ValueError):
         required = 8192
-    for candidate in (8192, 32768, 65536, 131072, 262144, 524288, 1048576):
+    for candidate in (8192, 32768, 65536, 131072, 262144, 524288, 1010000):
         if required <= candidate:
             return candidate
     return required
@@ -1165,6 +1165,8 @@ def _default_vram(task: str, proposed: Mapping[str, Any]) -> int:
     capabilities = proposed.get("required_model_capabilities") or []
     max_model_len = _positive_int(proposed.get("max_model_len"), default=8192)
     base = 80 if task in {"vision", "video"} else 24
+    if max_model_len > 524288:
+        base = max(base, 320)
     if max_model_len > 131072:
         base = max(base, 80)
     if any(str(capability) in {"document_understanding", "video_understanding"} for capability in capabilities):

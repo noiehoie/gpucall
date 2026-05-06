@@ -200,12 +200,47 @@ if modal is not None:
         )
         .env({"HF_HUB_ENABLE_HF_TRANSFER": "1"})
     )
+    _QWEN_1M_IMAGE = (
+        modal.Image.from_registry("nvidia/cuda:12.1.1-devel-ubuntu22.04", add_python="3.11")
+        .apt_install("git", "ffmpeg")
+        .pip_install(
+            "boto3",
+            "cryptography",
+            "pillow",
+            "transformers>=4.49.0",
+            "accelerate",
+            "huggingface-hub[hf_transfer]",
+            "hf_transfer",
+            "pyairports",
+            "git+https://github.com/QwenLM/vllm.git@dev/dual-chunk-attn",
+        )
+        .env({"HF_HUB_ENABLE_HF_TRANSFER": "1"})
+    )
+    _VISION_IMAGE = (
+        modal.Image.from_registry("nvidia/cuda:12.1.1-devel-ubuntu22.04", add_python="3.11")
+        .apt_install("git", "ffmpeg")
+        .pip_install(
+            "boto3",
+            "cryptography",
+            "pillow",
+            "torch",
+            "torchvision",
+            "accelerate",
+            "transformers>=4.49.0",
+            "qwen-vl-utils==0.0.8",
+            "huggingface-hub[hf_transfer]",
+            "hf_transfer",
+            "pyairports",
+        )
+        .env({"HF_HUB_ENABLE_HF_TRANSFER": "1"})
+    )
 
     _ALLOWED_MODELS = frozenset(
         {
             "Qwen/Qwen2.5-0.5B-Instruct",
             "Qwen/Qwen2.5-1.5B-Instruct",
             "Qwen/Qwen2.5-7B-Instruct",
+            "Qwen/Qwen2.5-14B-Instruct-1M",
             "Qwen/Qwen2-0.5B-Instruct",
             "Qwen/Qwen2-1.5B-Instruct",
             "facebook/opt-125m",
@@ -218,7 +253,13 @@ if modal is not None:
     _TOP_LEVEL_LOADED_ID: str | None = None
     _TOP_LEVEL_VISION: tuple[Any, Any, str] | None = None
 
-    def _load_top_level_llm(model_id: str, max_model_len: int) -> Any:
+    def _load_top_level_llm(
+        model_id: str,
+        max_model_len: int,
+        *,
+        tensor_parallel_size: int = 1,
+        long_context: bool = False,
+    ) -> Any:
         global _TOP_LEVEL_LLM, _TOP_LEVEL_LOADED_ID
         if model_id not in _ALLOWED_MODELS:
             raise ValueError(f"model {model_id} is not allowed")
@@ -238,14 +279,23 @@ if modal is not None:
         from vllm import LLM
 
         max_model_len = _bounded_model_len(model_id, max_model_len)
-        _TOP_LEVEL_LLM = LLM(
-            model=model_id,
-            max_model_len=max_model_len,
-            gpu_memory_utilization=0.90,
-            trust_remote_code=True,
-            tensor_parallel_size=1,
-            disable_log_stats=True,
-        )
+        kwargs: dict[str, Any] = {
+            "model": model_id,
+            "max_model_len": max_model_len,
+            "gpu_memory_utilization": float(os.getenv("GPUCALL_MODAL_GPU_MEMORY_UTILIZATION", "0.85" if long_context else "0.90")),
+            "trust_remote_code": True,
+            "tensor_parallel_size": tensor_parallel_size,
+            "disable_log_stats": True,
+        }
+        if long_context:
+            kwargs.update(
+                {
+                    "enable_chunked_prefill": True,
+                    "max_num_batched_tokens": int(os.getenv("GPUCALL_MODAL_MAX_NUM_BATCHED_TOKENS", "131072")),
+                    "enforce_eager": True,
+                }
+            )
+        _TOP_LEVEL_LLM = LLM(**kwargs)
         _TOP_LEVEL_LOADED_ID = model_id
         return _TOP_LEVEL_LLM
 
@@ -254,6 +304,8 @@ if modal is not None:
             return min(max_model_len, 512)
         if model_id == "facebook/opt-125m":
             return min(max_model_len, 2048)
+        if model_id == "Qwen/Qwen2.5-14B-Instruct-1M":
+            return min(max_model_len, 1010000)
         if model_id.startswith("Qwen/"):
             return min(max_model_len, 32768)
         return min(max_model_len, 8192)
@@ -303,24 +355,49 @@ if modal is not None:
         sys.modules["pyairports"] = package
         sys.modules["pyairports.airports"] = airports
 
-    def _generate_text(payload: dict[str, Any], model: str | None, max_model_len: int) -> str:
+    def _generate_text(
+        payload: dict[str, Any],
+        model: str | None,
+        max_model_len: int,
+        *,
+        tensor_parallel_size: int = 1,
+        long_context: bool = False,
+    ) -> str:
         artifact_result = _execute_artifact_workload(payload)
         if artifact_result is not None:
             return json.dumps(artifact_result.get("artifact_manifest") or artifact_result, sort_keys=True, separators=(",", ":"))
         if payload.get("task") == "vision":
             return _generate_vision_text(payload, model)
         requested_model = model or os.getenv("GPUCALL_MODAL_VLLM_MODEL", "facebook/opt-125m")
-        llm = _load_top_level_llm(requested_model, max_model_len)
+        llm = _load_top_level_llm(
+            requested_model,
+            max_model_len,
+            tensor_parallel_size=tensor_parallel_size,
+            long_context=long_context,
+        )
         prompt = _format_prompt_for_model(llm, requested_model, payload)
         outputs = llm.generate([prompt], _sampling_params(payload), use_tqdm=False)
         return outputs[0].outputs[0].text.strip()
 
     def _load_vision_model(model_id: str) -> tuple[Any, Any, str]:
         global _TOP_LEVEL_VISION
-        allowed = {"Salesforce/blip-image-captioning-base", "Salesforce/blip-vqa-base"}
+        allowed = {
+            "Salesforce/blip-image-captioning-base",
+            "Salesforce/blip-vqa-base",
+            "Qwen/Qwen2.5-VL-3B-Instruct",
+            "Qwen/Qwen2.5-VL-7B-Instruct",
+        }
         if model_id not in allowed:
             raise ValueError(f"vision model {model_id} is not allowed")
         if _TOP_LEVEL_VISION is not None and _TOP_LEVEL_VISION[2] == model_id:
+            return _TOP_LEVEL_VISION
+        if model_id.startswith("Qwen/Qwen2.5-VL-"):
+            from transformers import AutoProcessor, Qwen2_5_VLForConditionalGeneration
+
+            processor = AutoProcessor.from_pretrained(model_id)
+            model = Qwen2_5_VLForConditionalGeneration.from_pretrained(model_id, torch_dtype="auto", device_map="auto")
+            model.eval()
+            _TOP_LEVEL_VISION = (processor, model, model_id)
             return _TOP_LEVEL_VISION
         from transformers import BlipForConditionalGeneration, BlipForQuestionAnswering, BlipProcessor
 
@@ -348,6 +425,27 @@ if modal is not None:
         model_id = model or os.getenv("GPUCALL_MODAL_VISION_MODEL", "Salesforce/blip-image-captioning-base")
         processor, vision_model, _ = _load_vision_model(model_id)
         prompt = vision_prompt_from_payload(payload).strip()
+        if model_id.startswith("Qwen/Qwen2.5-VL-"):
+            prompt = prompt or "Describe this image."
+            messages = [
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "image", "image": image},
+                        {"type": "text", "text": prompt},
+                    ],
+                }
+            ]
+            text = processor.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
+            inputs = processor(text=[text], images=[image], padding=True, return_tensors="pt")
+            try:
+                inputs = inputs.to("cuda")
+            except Exception:
+                pass
+            output_ids = vision_model.generate(**inputs, max_new_tokens=int(payload.get("max_tokens") or 256))
+            trimmed = [out_ids[len(in_ids) :] for in_ids, out_ids in zip(inputs.input_ids, output_ids)]
+            decoded = processor.batch_decode(trimmed, skip_special_tokens=True, clean_up_tokenization_spaces=False)
+            return (decoded[0] if decoded else "").strip() or "image processed"
         if model_id == "Salesforce/blip-vqa-base" and not prompt:
             prompt = "What is in the image?"
         if model_id == "Salesforce/blip-vqa-base" and prompt:
@@ -374,6 +472,22 @@ if modal is not None:
         payload = {**payload, "task": workload or payload.get("task")}
         return _generate_text(payload, kwargs.get("model"), kwargs.get("max_model_len") or 32768)
 
+    @app.function(image=_QWEN_1M_IMAGE, gpu="H200:4", timeout=3600, scaledown_window=300)
+    def run_inference_on_modal_h200x4(payload: dict[str, Any], workload: str = "infer", **kwargs) -> str:
+        payload = {**payload, "task": workload or payload.get("task")}
+        return _generate_text(
+            payload,
+            kwargs.get("model"),
+            kwargs.get("max_model_len") or 1010000,
+            tensor_parallel_size=int(kwargs.get("tensor_parallel_size") or 4),
+            long_context=True,
+        )
+
+    @app.function(image=_VISION_IMAGE, gpu="H100", timeout=1800, scaledown_window=300)
+    def run_inference_on_modal_vision_h100(payload: dict[str, Any], workload: str = "vision", **kwargs) -> str:
+        payload = {**payload, "task": workload or payload.get("task")}
+        return _generate_vision_text(payload, kwargs.get("model"))
+
     @app.function(image=_VLLM_IMAGE, gpu="A10G", timeout=1800, scaledown_window=300)
     def stream_inference_on_modal(payload: dict[str, Any], workload: str = "infer", **kwargs) -> Iterator[str]:
         raise RuntimeError("Modal true streaming is not implemented in gpucall v2.0")
@@ -382,7 +496,14 @@ if modal is not None:
         _llm: Any = None
         _loaded_id: str | None = None
 
-        def _load_llm(self, model_id: str, max_model_len: int) -> None:
+        def _load_llm(
+            self,
+            model_id: str,
+            max_model_len: int,
+            *,
+            tensor_parallel_size: int = 1,
+            long_context: bool = False,
+        ) -> None:
             if model_id not in _ALLOWED_MODELS:
                 raise ValueError(f"model {model_id} is not allowed")
             if self._loaded_id == model_id and self._llm is not None:
@@ -401,14 +522,23 @@ if modal is not None:
             from vllm import LLM
 
             max_model_len = _bounded_model_len(model_id, max_model_len)
-            self._llm = LLM(
-                model=model_id,
-                max_model_len=max_model_len,
-                gpu_memory_utilization=0.90,
-                trust_remote_code=True,
-                tensor_parallel_size=1,
-                disable_log_stats=True,
-            )
+            kwargs: dict[str, Any] = {
+                "model": model_id,
+                "max_model_len": max_model_len,
+                "gpu_memory_utilization": float(os.getenv("GPUCALL_MODAL_GPU_MEMORY_UTILIZATION", "0.85" if long_context else "0.90")),
+                "trust_remote_code": True,
+                "tensor_parallel_size": tensor_parallel_size,
+                "disable_log_stats": True,
+            }
+            if long_context:
+                kwargs.update(
+                    {
+                        "enable_chunked_prefill": True,
+                        "max_num_batched_tokens": int(os.getenv("GPUCALL_MODAL_MAX_NUM_BATCHED_TOKENS", "131072")),
+                        "enforce_eager": True,
+                    }
+                )
+            self._llm = LLM(**kwargs)
             self._loaded_id = model_id
 
         def _to_prompt(self, payload: dict[str, Any]) -> str:
@@ -416,14 +546,19 @@ if modal is not None:
                 return prompt_from_payload(payload)
             return _format_prompt_for_model(self._llm, self._loaded_id, payload)
 
-        def _generate(self, payload: dict[str, Any], model: str | None, max_model_len: int) -> str:
+        def _generate(self, payload: dict[str, Any], model: str | None, max_model_len: int, **kwargs) -> str:
             artifact_result = _execute_artifact_workload(payload)
             if artifact_result is not None:
                 return json.dumps(artifact_result.get("artifact_manifest") or artifact_result, sort_keys=True, separators=(",", ":"))
             if payload.get("task") == "vision":
                 return _generate_vision_text(payload, model)
             requested_model = model or os.getenv("GPUCALL_MODAL_VLLM_MODEL", "facebook/opt-125m")
-            self._load_llm(requested_model, max_model_len)
+            self._load_llm(
+                requested_model,
+                max_model_len,
+                tensor_parallel_size=int(kwargs.get("tensor_parallel_size") or 1),
+                long_context=bool(kwargs.get("long_context")),
+            )
             outputs = self._llm.generate([self._to_prompt(payload)], _sampling_params(payload), use_tqdm=False)
             return outputs[0].outputs[0].text.strip()
 
@@ -435,7 +570,8 @@ if modal is not None:
         @modal.method()
         def run_inference_on_modal(self, payload: dict[str, Any], workload: str, **kwargs) -> str:
             payload = {**payload, "task": workload or payload.get("task")}
-            return self._generate(payload, kwargs.get("model"), kwargs.get("max_model_len") or 8192)
+            worker_kwargs = {key: value for key, value in kwargs.items() if key not in {"model", "max_model_len"}}
+            return self._generate(payload, kwargs.get("model"), kwargs.get("max_model_len") or 8192, **worker_kwargs)
 
         @modal.method()
         def stream_inference_on_modal(self, payload: dict[str, Any], workload: str, **kwargs) -> Iterator[str]:
@@ -446,7 +582,8 @@ if modal is not None:
         @modal.method()
         def run_inference_on_modal(self, payload: dict[str, Any], workload: str, **kwargs) -> str:
             payload = {**payload, "task": workload or payload.get("task")}
-            return self._generate(payload, kwargs.get("model"), kwargs.get("max_model_len") or 32768)
+            worker_kwargs = {key: value for key, value in kwargs.items() if key not in {"model", "max_model_len"}}
+            return self._generate(payload, kwargs.get("model"), kwargs.get("max_model_len") or 32768, **worker_kwargs)
 
         @modal.method()
         def stream_inference_on_modal(self, payload: dict[str, Any], workload: str, **kwargs) -> Iterator[str]:

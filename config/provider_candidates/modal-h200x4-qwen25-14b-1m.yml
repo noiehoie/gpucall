@@ -1,0 +1,26 @@
+name: modal-h200x4-qwen25-14b-1m
+status: candidate
+adapter: modal
+gpu: H200:4
+vram_gb: 564
+max_model_len: 1010000
+cost_per_second: 0.00505
+modes: [sync, async]
+max_data_classification: confidential
+security_tier: encrypted_capsule
+sovereign_jurisdiction: US
+model_ref: qwen2.5-14b-instruct-1m
+engine_ref: modal-vllm
+endpoint_contract: modal-function
+input_contracts: [text, chat_messages, data_refs]
+output_contract: plain-text
+stream_contract: none
+target: gpucall-worker-json:run_inference_on_modal_h200x4
+provider_params:
+  tensor_parallel_size: 4
+  long_context: true
+official_doc_refs:
+  - https://modal.com/docs/guide/gpu
+  - https://huggingface.co/Qwen/Qwen2.5-14B-Instruct-1M
+live_validation_required: true
+notes: Candidate for 1M-token Qwen2.5-14B workloads. Uses Modal H200:4 because Qwen's model card requires at least 320GB total VRAM for 1M-token processing and recommends tensor_parallel_size=4 for the 14B model.
