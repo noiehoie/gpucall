@@ -146,6 +146,11 @@ class RunpodServerlessAdapter(ProviderAdapter):
     descriptor=ProviderAdapterDescriptor(
         endpoint_contract="runpod-serverless",
         output_contract="gpucall-provider-result",
+        production_eligible=False,
+        production_rejection_reason=(
+            "RunPod generic Serverless queue operations are official, but the gpucall-provider-result worker "
+            "contract is custom and must not be treated as the official worker-vLLM production route"
+        ),
         required_auto_fields={"target": "RunPod endpoint target is not configured"},
         official_sources=(
             "https://docs.runpod.io/serverless/endpoints/send-requests",

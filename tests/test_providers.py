@@ -122,6 +122,8 @@ def test_provider_descriptor_conformance_invariants() -> None:
             assert descriptor.official_sources, f"{name} is production-eligible without official sources"
 
     assert descriptors["echo"].production_eligible is False
+    assert descriptors["runpod-serverless"].production_eligible is False
+    assert "custom" in str(descriptors["runpod-serverless"].production_rejection_reason)
     for name in ("azure-compute-vm", "gcp-confidential-space-vm", "scaleway-instance", "ovhcloud-public-cloud-instance"):
         assert descriptors[name].production_eligible is False
         assert "lifecycle-only" in str(descriptors[name].production_rejection_reason)

@@ -26,6 +26,7 @@ from gpucall.configure import configure_command
 from gpucall.credentials import configured_credentials, credentials_path, load_credentials
 from gpucall.domain import ExecutionMode, JobState, PresignPutRequest, ProviderError, TaskRequest
 from gpucall.provider_catalog import live_provider_catalog_findings
+from gpucall.providers.registry import adapter_descriptor
 from gpucall.registry import ObservedRegistry
 from gpucall.audit import AuditTrail
 from gpucall.routing import provider_route_rejection_reason
@@ -479,6 +480,7 @@ async def provider_smoke_command(
 
 def _provider_smoke_base_summary(runtime, provider: str, recipe_name: str, mode: ExecutionMode) -> dict[str, object]:
     spec = runtime.compiler.providers.get(provider)
+    official_contract = _provider_official_contract(spec)
     return {
         "provider": provider,
         "recipe": recipe_name,
@@ -487,7 +489,86 @@ def _provider_smoke_base_summary(runtime, provider: str, recipe_name: str, mode:
         "engine_ref": getattr(spec, "engine_ref", None),
         "provider_model": getattr(spec, "model", None),
         "gpu": getattr(spec, "gpu", None),
+        "official_contract": official_contract,
+        "official_contract_hash": hashlib.sha256(
+            json.dumps(official_contract, sort_keys=True, separators=(",", ":"), default=str).encode("utf-8")
+        ).hexdigest(),
     }
+
+
+def _provider_official_contract(spec) -> dict[str, object]:
+    descriptor = adapter_descriptor(spec) if spec is not None else None
+    contract: dict[str, object] = {
+        "adapter": getattr(spec, "adapter", None),
+        "endpoint_contract": getattr(spec, "endpoint_contract", None),
+        "expected_endpoint_contract": getattr(descriptor, "endpoint_contract", None),
+        "output_contract": getattr(spec, "output_contract", None),
+        "expected_output_contract": getattr(descriptor, "output_contract", None),
+        "stream_contract": getattr(spec, "stream_contract", None),
+        "expected_stream_contract": getattr(descriptor, "stream_contract", None),
+        "input_contracts": list(getattr(spec, "input_contracts", []) or []),
+        "official_sources": list(getattr(descriptor, "official_sources", ()) or ()),
+        "production_eligible": bool(getattr(descriptor, "production_eligible", False)) if descriptor is not None else False,
+        "production_rejection_reason": getattr(descriptor, "production_rejection_reason", None),
+        "model": getattr(spec, "model", None),
+        "model_ref": getattr(spec, "model_ref", None),
+        "engine_ref": getattr(spec, "engine_ref", None),
+        "max_model_len": getattr(spec, "max_model_len", None),
+        "gpu": getattr(spec, "gpu", None),
+        "vram_gb": getattr(spec, "vram_gb", None),
+    }
+    adapter = str(getattr(spec, "adapter", "") or "")
+    if adapter == "modal":
+        app_name, function_name = _split_provider_target(getattr(spec, "target", None))
+        stream_app_name, stream_function_name = _split_provider_target(getattr(spec, "stream_target", None))
+        contract["modal"] = {
+            "target_app": app_name,
+            "target_function": function_name,
+            "stream_app": stream_app_name,
+            "stream_function": stream_function_name,
+            "provider_params": getattr(spec, "provider_params", None) or {},
+            "autoscaler_env": {
+                "GPUCALL_MODAL_A10G_MIN_CONTAINERS": os.getenv("GPUCALL_MODAL_A10G_MIN_CONTAINERS"),
+                "GPUCALL_MODAL_A10G_SCALEDOWN_WINDOW": os.getenv("GPUCALL_MODAL_A10G_SCALEDOWN_WINDOW"),
+                "GPUCALL_MODAL_H200X4_MIN_CONTAINERS": os.getenv("GPUCALL_MODAL_H200X4_MIN_CONTAINERS"),
+                "GPUCALL_MODAL_H200X4_SCALEDOWN_WINDOW": os.getenv("GPUCALL_MODAL_H200X4_SCALEDOWN_WINDOW"),
+                "GPUCALL_MODAL_VISION_H100_MIN_CONTAINERS": os.getenv("GPUCALL_MODAL_VISION_H100_MIN_CONTAINERS"),
+                "GPUCALL_MODAL_VISION_H100_SCALEDOWN_WINDOW": os.getenv("GPUCALL_MODAL_VISION_H100_SCALEDOWN_WINDOW"),
+            },
+        }
+    elif adapter == "runpod-vllm-serverless":
+        params = getattr(spec, "provider_params", None) or {}
+        contract["runpod_worker_vllm"] = {
+            "endpoint_id": getattr(spec, "target", None),
+            "base_url": str(getattr(spec, "endpoint", None) or "https://api.runpod.ai/v2"),
+            "chat_completions_path": "/openai/v1/chat/completions",
+            "health_path": "/health",
+            "image": getattr(spec, "image", None),
+            "worker_env": params.get("worker_env") if isinstance(params, dict) else None,
+            "data_refs_supported": "data_refs" in set(getattr(spec, "input_contracts", []) or []),
+        }
+    elif adapter == "hyperstack":
+        contract["hyperstack"] = {
+            "api_base": str(getattr(spec, "endpoint", None) or "https://infrahub-api.nexgencloud.com/v1"),
+            "auth_header": "api_key",
+            "environment_name": getattr(spec, "target", None),
+            "flavor_name": getattr(spec, "instance", None),
+            "image_name": getattr(spec, "image", None),
+            "key_name": getattr(spec, "key_name", None),
+            "ssh_remote_cidr": getattr(spec, "ssh_remote_cidr", None),
+            "create_payload_validated_by_official_sdk": True,
+            "security_rules_inline": True,
+            "worker_bootstrap_contract": "gpucall-managed-ssh-vllm",
+        }
+    return contract
+
+
+def _split_provider_target(target: object) -> tuple[str | None, str | None]:
+    text = str(target or "")
+    if ":" not in text:
+        return (text or None), None
+    app, fn = text.split(":", 1)
+    return app or None, fn or None
 
 
 def _provider_smoke_error(exc: ProviderError) -> dict[str, object]:
@@ -752,7 +833,18 @@ def _latest_live_validation_artifact(config_dir: Path | None = None) -> dict[str
 
 
 def _live_validation_artifact_valid(data: dict[str, object]) -> bool:
-    required = {"provider", "recipe", "mode", "started_at", "ended_at", "commit", "config_hash", "governance_hash"}
+    required = {
+        "provider",
+        "recipe",
+        "mode",
+        "started_at",
+        "ended_at",
+        "commit",
+        "config_hash",
+        "governance_hash",
+        "official_contract",
+        "official_contract_hash",
+    }
     if not required.issubset(data):
         return False
     if data.get("validation_schema_version") != 1:
@@ -764,6 +856,22 @@ def _live_validation_artifact_valid(data: dict[str, object]) -> bool:
     if not isinstance(data.get("cost"), dict):
         return False
     if not isinstance(data.get("audit"), dict):
+        return False
+    contract = data.get("official_contract")
+    if not isinstance(contract, dict):
+        return False
+    if not contract.get("endpoint_contract") or contract.get("endpoint_contract") != contract.get("expected_endpoint_contract"):
+        return False
+    if not contract.get("output_contract") or contract.get("output_contract") != contract.get("expected_output_contract"):
+        return False
+    if contract.get("stream_contract") != contract.get("expected_stream_contract"):
+        return False
+    if not contract.get("official_sources"):
+        return False
+    computed = hashlib.sha256(
+        json.dumps(contract, sort_keys=True, separators=(",", ":"), default=str).encode("utf-8")
+    ).hexdigest()
+    if data.get("official_contract_hash") != computed:
         return False
     return True
 

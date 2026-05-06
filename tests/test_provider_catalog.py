@@ -103,3 +103,50 @@ def test_runpod_vllm_provider_requires_official_worker_contract() -> None:
         assert "provider_params.worker_env" in str(exc)
     else:
         raise AssertionError("RunPod worker-vLLM provider accepted missing official worker_env contract")
+
+
+def test_modal_provider_requires_deployed_function_target() -> None:
+    provider = ProviderSpec(
+        name="modal-a10g",
+        adapter="modal",
+        gpu="A10G",
+        vram_gb=24,
+        max_model_len=8192,
+        cost_per_second=0.00035,
+        modes=["sync"],
+        target="gpucall-worker-json",
+        endpoint_contract="modal-function",
+        input_contracts=["text", "chat_messages"],
+        output_contract="plain-text",
+        stream_contract="none",
+        model="Qwen/Qwen2.5-1.5B-Instruct",
+    )
+    recipe = Recipe(
+        name="text-infer-light",
+        task="infer",
+        allowed_modes=["sync"],
+        min_vram_gb=8,
+        max_model_len=8192,
+        timeout_seconds=30,
+        lease_ttl_seconds=60,
+        tokenizer_family="qwen",
+    )
+    config = GpucallConfig(
+        policy=Policy(
+            version="test",
+            inline_bytes_limit=8192,
+            default_lease_ttl_seconds=60,
+            max_lease_ttl_seconds=120,
+            max_timeout_seconds=60,
+            providers={"allow": ["modal-a10g"], "deny": []},
+        ),
+        recipes={recipe.name: recipe},
+        providers={provider.name: provider},
+    )
+
+    try:
+        validate_config(config)
+    except ConfigError as exc:
+        assert "target must be '<modal-app>:<function>'" in str(exc)
+    else:
+        raise AssertionError("Modal provider accepted a non-deployed-function target")

@@ -340,6 +340,8 @@ def test_provider_smoke_writes_live_validation_artifact(tmp_path, monkeypatch) -
     assert '"config_hash"' in payload
     assert '"validation_schema_version":1' in payload
     assert '"passed":true' in payload
+    assert '"official_contract"' in payload
+    assert '"official_contract_hash"' in payload
 
 
 def test_live_validation_artifact_must_match_current_commit_and_config(tmp_path, monkeypatch) -> None:
@@ -365,7 +367,21 @@ def test_live_validation_artifact_must_match_current_commit_and_config(tmp_path,
         "cleanup": {"required": False, "completed": None},
         "cost": {"observed": None, "estimated": None},
         "audit": {"event_ids": []},
+        "official_contract": {
+            "endpoint_contract": "echo",
+            "expected_endpoint_contract": "echo",
+            "output_contract": "plain-text",
+            "expected_output_contract": "plain-text",
+            "stream_contract": "none",
+            "expected_stream_contract": "none",
+            "official_sources": ["local-test-source"],
+        },
     }
+    import hashlib
+
+    current["official_contract_hash"] = hashlib.sha256(
+        json.dumps(current["official_contract"], sort_keys=True, separators=(",", ":")).encode("utf-8")
+    ).hexdigest()
     (artifact_dir / "current.json").write_text(json.dumps(current), encoding="utf-8")
 
     latest = _latest_live_validation_artifact(config_dir=root)
