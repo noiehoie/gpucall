@@ -199,6 +199,7 @@ if modal is not None:
         .pip_install(
             "boto3",
             "cryptography",
+            "pydantic>=2.7",
             "pillow",
             "vllm==0.6.3",
             "transformers==4.45.2",
@@ -215,6 +216,7 @@ if modal is not None:
         .pip_install(
             "boto3",
             "cryptography",
+            "pydantic>=2.7",
             "pillow",
             "transformers==4.51.3",
             "accelerate",
@@ -231,6 +233,7 @@ if modal is not None:
         .pip_install(
             "boto3",
             "cryptography",
+            "pydantic>=2.7",
             "pillow",
             "torch",
             "torchvision",
