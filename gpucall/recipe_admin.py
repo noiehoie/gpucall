@@ -728,10 +728,16 @@ def _run_provider_validation(provider: str, recipe: str, config_dir: Path, *, va
         "sync",
         "--write-artifact",
     ]
-    env = None
+    env = dict(os.environ)
+    credentials = config_dir / "credentials.yml"
+    if credentials.exists() and not env.get("GPUCALL_CREDENTIALS"):
+        env["GPUCALL_CREDENTIALS"] = str(credentials)
+    modal_config = config_dir / ".modal.toml"
+    if modal_config.exists() and not env.get("MODAL_CONFIG_PATH"):
+        env["MODAL_CONFIG_PATH"] = str(modal_config)
     if validation_dir is not None:
         state_dir = Path(validation_dir).expanduser().parent
-        env = {**dict(os.environ), "GPUCALL_STATE_DIR": str(state_dir)}
+        env["GPUCALL_STATE_DIR"] = str(state_dir)
     completed = subprocess.run(command, capture_output=True, text=True, env=env, check=False)
     result: dict[str, Any] = {
         "command": command,

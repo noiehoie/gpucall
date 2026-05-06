@@ -207,12 +207,12 @@ if modal is not None:
             "boto3",
             "cryptography",
             "pillow",
-            "transformers>=4.49.0",
+            "transformers==4.51.3",
             "accelerate",
+            "vllm==0.8.5",
             "huggingface-hub[hf_transfer]",
             "hf_transfer",
             "pyairports",
-            "git+https://github.com/QwenLM/vllm.git@dev/dual-chunk-attn",
         )
         .env({"HF_HUB_ENABLE_HF_TRANSFER": "1"})
     )
@@ -226,7 +226,7 @@ if modal is not None:
             "torch",
             "torchvision",
             "accelerate",
-            "transformers>=4.49.0",
+            "transformers==4.51.3",
             "qwen-vl-utils==0.0.8",
             "huggingface-hub[hf_transfer]",
             "hf_transfer",
