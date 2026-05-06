@@ -1,6 +1,9 @@
 services:
   gpucall:
-    build: .
+    build:
+      context: .
+      args:
+        GPUCALL_GIT_COMMIT: ${GPUCALL_GIT_COMMIT:-}
     user: "${GPUCALL_UID:-1000}:${GPUCALL_GID:-1000}"
     restart: unless-stopped
     ports:
@@ -9,6 +12,7 @@ services:
       HOME: /config
       PYTHONDONTWRITEBYTECODE: "1"
       GPUCALL_CREDENTIALS: /config/credentials.yml
+      GPUCALL_GIT_COMMIT: ${GPUCALL_GIT_COMMIT:-}
       GPUCALL_STATE_DIR: /state
       XDG_CACHE_HOME: /cache
       GPUCALL_API_KEYS: ${GPUCALL_API_KEYS:-}

@@ -702,6 +702,16 @@ def _provider_smoke_passed(summary: dict[str, object]) -> bool:
 
 
 def _git_commit() -> str | None:
+    env_commit = os.getenv("GPUCALL_GIT_COMMIT")
+    if env_commit:
+        return env_commit
+    build_commit = PROJECT_ROOT / "BUILD_COMMIT"
+    try:
+        value = build_commit.read_text(encoding="utf-8").strip()
+        if value:
+            return value
+    except OSError:
+        pass
     head = PROJECT_ROOT / ".git" / "HEAD"
     try:
         value = head.read_text(encoding="utf-8").strip()

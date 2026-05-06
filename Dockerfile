@@ -1,6 +1,8 @@
 FROM python:3.12-slim
 
 WORKDIR /app
+ARG GPUCALL_GIT_COMMIT=""
+RUN printf "%s" "$GPUCALL_GIT_COMMIT" > /app/BUILD_COMMIT
 COPY pyproject.toml ./
 COPY gpucall ./gpucall
 RUN pip install --no-cache-dir ".[providers]"
