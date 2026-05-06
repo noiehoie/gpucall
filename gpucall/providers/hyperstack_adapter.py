@@ -304,16 +304,62 @@ class HyperstackAdapter(ProviderAdapter):
         sg_rule_id = meta.get("sg_rule_id")
         if sg_rule_id:
             self._delete_sg_rule_sync(session, str(vm_id), str(sg_rule_id))
+        delete_accepted = False
         for attempt in range(5):
             try:
-                response = session.delete(f"{self.base_url}/core/virtual-machines/{vm_id}", headers=self._headers(), timeout=10)
+                response = session.delete(f"{self.base_url}/core/virtual-machines/{vm_id}", headers=self._headers(), timeout=30)
                 if response.status_code in {200, 202, 204, 404}:
-                    self._record_lease({"event": "destroyed", "vm_id": vm_id, "destroyed_at": datetime.now(timezone.utc).isoformat()})
+                    delete_accepted = True
+                    self._record_lease(
+                        {
+                            "event": "destroy.requested",
+                            "vm_id": vm_id,
+                            "destroy_requested_at": datetime.now(timezone.utc).isoformat(),
+                            "status_code": response.status_code,
+                        }
+                    )
+                    if self._wait_vm_absent(session, str(vm_id)):
+                        self._record_lease(
+                            {"event": "destroyed", "vm_id": vm_id, "destroyed_at": datetime.now(timezone.utc).isoformat()}
+                        )
+                    else:
+                        self._record_lease(
+                            {
+                                "event": "destroy.pending",
+                                "vm_id": vm_id,
+                                "recorded_at": datetime.now(timezone.utc).isoformat(),
+                            }
+                        )
                     return
             except Exception:
+                if self._wait_vm_absent(session, str(vm_id), deadline_seconds=15):
+                    self._record_lease({"event": "destroyed", "vm_id": vm_id, "destroyed_at": datetime.now(timezone.utc).isoformat()})
+                    return
                 pass
             time.sleep(2**attempt)
+        if delete_accepted:
+            self._record_lease({"event": "destroy.pending", "vm_id": vm_id, "recorded_at": datetime.now(timezone.utc).isoformat()})
+            return
         raise ProviderError(f"CRITICAL LEAK: failed to destroy Hyperstack VM {vm_id}", retryable=True, status_code=500)
+
+    def _wait_vm_absent(self, session: Any, vm_id: str, *, deadline_seconds: float = 90) -> bool:
+        deadline = time.monotonic() + deadline_seconds
+        while time.monotonic() < deadline:
+            try:
+                response = session.get(f"{self.base_url}/core/virtual-machines/{vm_id}", headers=self._headers(), timeout=20)
+                if response.status_code == 404:
+                    return True
+                if response.status_code == 200:
+                    instance = response.json().get("instance") or {}
+                    status = str(instance.get("status") or "").upper()
+                    if status in {"DELETED", "NOT_FOUND"}:
+                        return True
+                elif response.status_code in {400, 410}:
+                    return True
+            except Exception:
+                pass
+            time.sleep(5)
+        return False
 
     def _delete_sg_rule_sync(self, session: Any, vm_id: str, sg_rule_id: str) -> None:
         try:

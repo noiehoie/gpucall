@@ -70,6 +70,14 @@ class RunpodVllmServerlessAdapter(ProviderAdapter):
             raise ProviderError("RunPod worker-vLLM does not fetch DataRef inputs; falling back", retryable=True, status_code=502)
         if not plan.messages:
             raise ProviderError("RunPod worker-vLLM openai-chat-completions contract requires compiled messages", retryable=True, status_code=502)
+        health = self._health_sync()
+        if runpod_vllm_health_rejection_reason(health):
+            raise ProviderError(
+                "RunPod worker-vLLM endpoint is not ready: " + runpod_vllm_health_rejection_reason(health),
+                retryable=True,
+                status_code=503,
+                code="PROVIDER_CAPACITY_UNAVAILABLE",
+            )
         response = requests_session().post(
             f"{self.base_url}/{self.endpoint_id}/openai/v1/chat/completions",
             headers=self._headers(),
@@ -102,6 +110,34 @@ class RunpodVllmServerlessAdapter(ProviderAdapter):
 
     def _headers(self) -> dict[str, str]:
         return {"authorization": f"Bearer {self.api_key}", "content-type": "application/json", "accept": "application/json"}
+
+    def _health_sync(self) -> dict[str, Any]:
+        response = requests_session().get(
+            f"{self.base_url}/{self.endpoint_id}/health",
+            headers=self._headers(),
+            timeout=30,
+        )
+        return json_or_error(response, "RunPod worker-vLLM health check failed")
+
+
+def runpod_vllm_health_rejection_reason(health: dict[str, Any]) -> str | None:
+    workers = health.get("workers") if isinstance(health, dict) else None
+    if not isinstance(workers, dict):
+        return "health response did not include workers"
+    ready = int(workers.get("ready") or 0)
+    running = int(workers.get("running") or 0)
+    initializing = int(workers.get("initializing") or 0)
+    throttled = int(workers.get("throttled") or 0)
+    unhealthy = int(workers.get("unhealthy") or 0)
+    if unhealthy > 0:
+        return "workers.unhealthy is non-zero"
+    if ready + running > 0:
+        return None
+    if initializing > 0:
+        return "workers are still initializing"
+    if throttled > 0:
+        return "workers are throttled and no ready worker is available"
+    return "no ready worker is available"
 
 
 def runpod_vllm_config_findings(provider: Any) -> list[str]:

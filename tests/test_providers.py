@@ -26,7 +26,7 @@ from gpucall.providers.payloads import gpucall_provider_result, plan_payload
 from gpucall.providers.runpod_flashboot_adapter import RunpodVllmFlashBootAdapter
 from gpucall.providers.runpod_flash_adapter import RunpodFlashAdapter
 from gpucall.providers.runpod_serverless_adapter import RunpodServerlessAdapter
-from gpucall.providers.runpod_vllm_adapter import RunpodVllmServerlessAdapter
+from gpucall.providers.runpod_vllm_adapter import RunpodVllmServerlessAdapter, runpod_vllm_health_rejection_reason
 
 
 def test_router_core_does_not_hardcode_builtin_provider_names() -> None:
@@ -442,9 +442,20 @@ async def test_runpod_flash_official_vllm_uses_openai_chat_route(monkeypatch) ->
                 "usage": {"completion_tokens": 3, "prompt_tokens_details": None},
             }
 
+    class FakeHealthResponse:
+        status_code = 200
+        text = "{}"
+
+        def json(self) -> dict[str, object]:
+            return {"workers": {"ready": 1, "running": 0, "initializing": 0, "throttled": 0, "unhealthy": 0}}
+
     class FakeSession:
         def mount(self, *_args, **_kwargs) -> None:
             return None
+
+        def get(self, url: str, **_kwargs):
+            calls.append(("GET", url, None))
+            return FakeHealthResponse()
 
         def post(self, url: str, **kwargs):
             calls.append(("POST", url, kwargs.get("json")))
@@ -471,10 +482,17 @@ async def test_runpod_flash_official_vllm_uses_openai_chat_route(monkeypatch) ->
 
     assert result.value == "flash llm ok"
     assert result.usage == {"completion_tokens": 3}
-    assert calls[0][1] == "https://api.runpod.ai/v2/endpoint-1/openai/v1/chat/completions"
-    assert calls[0][2]["model"] == "Qwen/Qwen2.5-1.5B-Instruct"
-    assert calls[0][2]["messages"] == [{"role": "user", "content": "hello"}]
-    assert calls[0][2]["stream"] is False
+    assert calls[0][1] == "https://api.runpod.ai/v2/endpoint-1/health"
+    assert calls[1][1] == "https://api.runpod.ai/v2/endpoint-1/openai/v1/chat/completions"
+    assert calls[1][2]["model"] == "Qwen/Qwen2.5-1.5B-Instruct"
+    assert calls[1][2]["messages"] == [{"role": "user", "content": "hello"}]
+    assert calls[1][2]["stream"] is False
+
+
+def test_runpod_worker_vllm_health_rejects_throttled_endpoint() -> None:
+    health = {"workers": {"idle": 0, "initializing": 0, "ready": 0, "running": 0, "throttled": 1, "unhealthy": 0}}
+
+    assert runpod_vllm_health_rejection_reason(health) == "workers are throttled and no ready worker is available"
 
 
 async def test_runpod_flash_official_vllm_rejects_data_refs_for_failover() -> None:
@@ -862,6 +880,29 @@ def test_hyperstack_manifest_tracks_active_and_destroyed_leases(tmp_path) -> Non
     adapter._record_lease({"event": "destroyed", "vm_id": "vm-1"})
 
     assert adapter._active_manifest_leases() == []
+
+
+def test_hyperstack_destroy_records_pending_after_accepted_delete(monkeypatch, tmp_path) -> None:
+    events: list[dict[str, object]] = []
+
+    class FakeDeleteResponse:
+        status_code = 200
+
+    class FakeSession:
+        def delete(self, *_args, **_kwargs):
+            return FakeDeleteResponse()
+
+    adapter = HyperstackAdapter(
+        api_key="test", lease_manifest_path=str(tmp_path / "leases.jsonl"), ssh_remote_cidr="203.0.113.0/24"
+    )
+    monkeypatch.setattr(adapter, "_session", lambda: FakeSession())
+    monkeypatch.setattr(adapter, "_wait_vm_absent", lambda *_args, **_kwargs: False)
+    monkeypatch.setattr(adapter, "_record_lease", lambda event: events.append(event))
+
+    adapter._destroy_sync({"vm_id": "vm-1"})
+
+    assert events[0]["event"] == "destroy.requested"
+    assert events[1]["event"] == "destroy.pending"
 
 
 def test_hyperstack_create_payload_uses_official_fields(monkeypatch, tmp_path) -> None:
