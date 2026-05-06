@@ -5,7 +5,7 @@ import json
 import pytest
 import yaml
 
-from gpucall.recipe_admin import canonical_recipe_from_artifact, main, process_inbox, recipe_request_status, review_artifact
+from gpucall.recipe_admin import canonical_recipe_from_artifact, main, process_inbox, promote_candidate, recipe_request_status, review_artifact
 
 
 def test_admin_materializes_intake_to_canonical_recipe() -> None:
@@ -248,3 +248,43 @@ def test_admin_review_matches_long_context_provider_candidates() -> None:
     assert "modal-h200-qwen25-14b-1m" in names
     assert "runpod-vllm-h200-qwen25-14b-1m" in names
     assert all("run gpucall provider-smoke" in " ".join(match["promotion_actions"]) for match in report["provider_candidate_matches"])
+
+
+def test_promote_candidate_writes_isolated_config_without_activation(tmp_path) -> None:
+    artifact = {
+        "phase": "deterministic-quality-feedback-intake",
+        "sanitized_request": {
+            "task": "vision",
+            "mode": "sync",
+            "intent": "understand_document_image",
+            "classification": "confidential",
+            "expected_output": "headline_list",
+            "desired_capabilities": ["document_understanding", "visual_question_answering", "instruction_following"],
+            "quality_feedback": {"kind": "insufficient_ocr", "observed_output_kind": "short_answer"},
+        },
+        "redaction_report": {
+            "prompt_body_forwarded": False,
+            "output_body_forwarded": False,
+            "data_ref_uri_forwarded": False,
+            "presigned_url_forwarded": False,
+        },
+    }
+    review = review_artifact(artifact, config_dir="gpucall/config_templates")
+
+    report = promote_candidate(
+        review=review,
+        candidate_name="modal-h100-qwen25-vl-7b",
+        config_dir="gpucall/config_templates",
+        work_dir=tmp_path / "promotion",
+        run_validation=False,
+        activate=False,
+    )
+
+    assert report["decision"] == "READY_FOR_ENDPOINT_CONFIGURATION"
+    assert report["config_valid"] is False
+    assert (tmp_path / "promotion" / "config" / "providers" / "modal-h100-qwen25-vl-7b.yml").exists()
+    assert (tmp_path / "promotion" / "config" / "recipes" / "vision-understand-document-image-draft.yml").exists()
+    provider = yaml.safe_load((tmp_path / "promotion" / "config" / "providers" / "modal-h100-qwen25-vl-7b.yml").read_text())
+    assert provider["model"] == "Qwen/Qwen2.5-VL-7B-Instruct"
+    assert provider["model_ref"] == "qwen2.5-vl-7b-instruct"
+    assert report["activated"] is False

@@ -101,8 +101,29 @@ The automated path is:
 1. Caller submission reaches the admin inbox.
 2. `gpucall-recipe-admin review` writes a recipe candidate and computes `required_provider_contract`.
 3. The reviewer matches that contract against `provider_candidates`.
-4. An administrator or automation fills provider-specific endpoint credentials and runs billable `provider-smoke --write-artifact`.
-5. Only after validation evidence exists can the provider candidate be copied into `providers/*.yml` and made eligible for production routing.
+4. `gpucall-recipe-admin promote` creates an isolated promotion workspace containing the generated recipe and candidate provider YAML.
+5. An administrator or automation fills provider-specific endpoint credentials and runs billable validation.
+6. Only after validation evidence exists can the provider candidate be copied into `providers/*.yml` and made eligible for production routing.
+
+Promotion command:
+
+```bash
+gpucall-recipe-admin promote \
+  --review /path/to/review.json \
+  --candidate modal-h100-qwen25-vl-7b \
+  --config-dir config \
+  --work-dir /tmp/gpucall-promotion
+```
+
+Possible promotion decisions:
+
+- `READY_FOR_ENDPOINT_CONFIGURATION`: generated provider YAML exists, but provider-specific required fields such as endpoint id or Modal target are still missing.
+- `READY_FOR_BILLABLE_VALIDATION`: generated config validates, but no matching live validation artifact exists.
+- `VALIDATION_FAILED`: `--run-validation` was requested and the billable smoke failed.
+- `VALIDATED_READY_TO_ACTIVATE`: matching validation exists and the provider can be activated.
+- `ACTIVATED`: validated recipe/provider were copied into the active config directory.
+
+Activation is refused unless the exact generated recipe/provider/model/engine tuple has a matching live validation artifact.
 
 Possible decisions:
 

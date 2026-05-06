@@ -3,8 +3,10 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import os
 import re
 import shutil
+import subprocess
 import sys
 import time
 from collections.abc import Mapping
@@ -59,6 +61,17 @@ def main(argv: list[str] | None = None) -> int:
     review.add_argument("--validation-dir", help="provider live validation artifact directory")
     review.add_argument("--output", "-o", help="write review report JSON")
 
+    promote = subcommands.add_parser("promote", help="prepare, validate, and optionally activate a provider candidate from a review report")
+    promote.add_argument("--review", required=True, help="admin review JSON produced by gpucall-recipe-admin review")
+    promote.add_argument("--candidate", help="candidate name; defaults to the first provider_candidate_matches entry")
+    promote.add_argument("--config-dir", required=True, help="active gpucall config directory")
+    promote.add_argument("--work-dir", required=True, help="promotion workspace for generated config and reports")
+    promote.add_argument("--validation-dir", help="provider live validation artifact directory")
+    promote.add_argument("--run-validation", action="store_true", help="run billable gpucall provider-smoke in the promotion workspace")
+    promote.add_argument("--activate", action="store_true", help="copy validated recipe/provider into the active config directory")
+    promote.add_argument("--force", action="store_true", help="overwrite generated or active recipe/provider files")
+    promote.add_argument("--output", "-o", help="write promotion report JSON")
+
     process = subcommands.add_parser("process-inbox", help="process file-based recipe request submissions once")
     process.add_argument("--inbox-dir", required=True)
     process.add_argument("--output-dir", required=True)
@@ -107,6 +120,19 @@ def main(argv: list[str] | None = None) -> int:
             _load_json(args.input),
             config_dir=args.config_dir,
             validation_dir=args.validation_dir,
+        )
+        _write_json(report, args.output)
+        return 0
+    if args.command == "promote":
+        report = promote_candidate(
+            review=_load_json(args.review),
+            candidate_name=args.candidate,
+            config_dir=args.config_dir,
+            work_dir=args.work_dir,
+            validation_dir=args.validation_dir,
+            run_validation=args.run_validation,
+            activate=args.activate,
+            force=args.force,
         )
         _write_json(report, args.output)
         return 0
@@ -248,6 +274,105 @@ def review_artifact(
         report["blockers"].append({"check": "review_exception", "reason": str(exc)})
     _finalize_review_decision(report)
     return report
+
+
+def promote_candidate(
+    *,
+    review: Mapping[str, Any],
+    candidate_name: str | None,
+    config_dir: str | Path,
+    work_dir: str | Path,
+    validation_dir: str | Path | None = None,
+    run_validation: bool = False,
+    activate: bool = False,
+    force: bool = False,
+) -> dict[str, Any]:
+    config_root = Path(config_dir).expanduser()
+    workspace = Path(work_dir).expanduser()
+    if not config_root.exists():
+        raise FileNotFoundError(f"config_dir does not exist: {config_root}")
+    candidate = _select_review_candidate(review, candidate_name)
+    recipe = _mapping(review.get("canonical_recipe"))
+    if not recipe:
+        raise ValueError("review does not contain canonical_recipe")
+    active_config = load_config(config_root)
+    candidate_path = candidate.get("path")
+    if not candidate_path:
+        raise ValueError("candidate match does not include source path")
+    candidate_payload = _load_yaml_file(Path(str(candidate_path)))
+    provider = _provider_from_candidate(candidate_payload, active_config=active_config)
+    started = datetime.now(timezone.utc).isoformat()
+    promotion_config = workspace / "config"
+    reports = workspace / "reports"
+    reports.mkdir(parents=True, exist_ok=True)
+    _copy_config_tree(config_root, promotion_config, force=force)
+    recipe_path = _write_yaml_guarded(promotion_config / "recipes" / f"{recipe['name']}.yml", recipe, force=force)
+    provider_path = _write_yaml_guarded(promotion_config / "providers" / f"{provider['name']}.yml", provider, force=force)
+    promotion_report: dict[str, Any] = {
+        "schema_version": 1,
+        "phase": "provider-candidate-promotion",
+        "started_at": started,
+        "candidate": candidate,
+        "recipe": recipe["name"],
+        "provider": provider["name"],
+        "promotion_config_dir": str(promotion_config),
+        "generated_recipe_path": str(recipe_path),
+        "generated_provider_path": str(provider_path),
+        "validation": None,
+        "activated": False,
+        "activation_paths": {},
+        "next_actions": [
+            f"run gpucall validate-config --config-dir {promotion_config}",
+            f"run gpucall provider-smoke {provider['name']} --config-dir {promotion_config} --recipe {recipe['name']} --mode sync --write-artifact",
+            "rerun gpucall-recipe-admin review with the validation artifact directory",
+            "activate only after validation passes for the exact recipe/provider/model/engine tuple",
+        ],
+    }
+    try:
+        _validate_config_dir(promotion_config)
+        promotion_report["config_valid"] = True
+    except ConfigError as exc:
+        promotion_report["config_valid"] = False
+        promotion_report["config_error"] = str(exc)
+        promotion_report["decision"] = "READY_FOR_ENDPOINT_CONFIGURATION"
+        promotion_report["next_actions"].insert(
+            0,
+            "fill provider-specific required fields in the generated provider YAML, then rerun promote with --run-validation",
+        )
+        if run_validation or activate:
+            raise ValueError("refusing validation/activation because generated promotion config is not valid: " + str(exc)) from exc
+        return promotion_report
+    if run_validation:
+        validation = _run_provider_validation(provider["name"], recipe["name"], promotion_config, validation_dir=validation_dir)
+        promotion_report["validation"] = validation
+        if validation.get("returncode") != 0 or validation.get("passed") is not True:
+            promotion_report["decision"] = "VALIDATION_FAILED"
+            return promotion_report
+    else:
+        existing_validation = _find_validation_for_promotion(
+            provider=provider["name"],
+            recipe=recipe["name"],
+            model_ref=provider.get("model_ref"),
+            engine_ref=provider.get("engine_ref"),
+            config_dir=promotion_config,
+            validation_dir=Path(validation_dir).expanduser() if validation_dir else None,
+        )
+        promotion_report["validation"] = existing_validation
+        if not existing_validation.get("matched"):
+            promotion_report["decision"] = "READY_FOR_BILLABLE_VALIDATION"
+            if activate:
+                raise ValueError("refusing to activate without matching live validation artifact")
+            return promotion_report
+    if activate:
+        active_recipe = _write_yaml_guarded(config_root / "recipes" / f"{recipe['name']}.yml", recipe, force=force)
+        active_provider = _write_yaml_guarded(config_root / "providers" / f"{provider['name']}.yml", provider, force=force)
+        _validate_config_dir(config_root)
+        promotion_report["activated"] = True
+        promotion_report["activation_paths"] = {"recipe": str(active_recipe), "provider": str(active_provider)}
+        promotion_report["decision"] = "ACTIVATED"
+    else:
+        promotion_report["decision"] = "VALIDATED_READY_TO_ACTIVATE"
+    return promotion_report
 
 
 def process_inbox(
@@ -503,6 +628,170 @@ def _candidate_match(candidate: Mapping[str, Any], *, config: Any, contract: Map
         "promotion_rank": _candidate_rank(candidate, contract=contract),
         "promotion_actions": _promotion_actions(candidate),
     }
+
+
+def _select_review_candidate(review: Mapping[str, Any], candidate_name: str | None) -> Mapping[str, Any]:
+    matches = review.get("provider_candidate_matches")
+    if not isinstance(matches, list) or not matches:
+        raise ValueError("review does not contain provider_candidate_matches")
+    if candidate_name is None:
+        selected = matches[0]
+        if not isinstance(selected, Mapping):
+            raise ValueError("invalid provider_candidate_matches entry")
+        return selected
+    for match in matches:
+        if isinstance(match, Mapping) and match.get("name") == candidate_name:
+            return match
+    raise ValueError(f"candidate {candidate_name!r} is not present in review provider_candidate_matches")
+
+
+def _provider_from_candidate(candidate: Mapping[str, Any], *, active_config: Any) -> dict[str, Any]:
+    name = str(candidate.get("name") or "")
+    model_ref = str(candidate.get("model_ref") or "")
+    engine_ref = str(candidate.get("engine_ref") or "")
+    if not name or not model_ref or not engine_ref:
+        raise ValueError("candidate must define name, model_ref, and engine_ref")
+    model = active_config.models.get(model_ref)
+    if model is None:
+        raise ValueError(f"candidate references unknown model_ref {model_ref!r}")
+    source: dict[str, Any] = {
+        "name": name,
+        "adapter": str(candidate.get("adapter") or ""),
+        "max_data_classification": str(candidate.get("max_data_classification") or "confidential"),
+        "trust_profile": {
+            "security_tier": str(candidate.get("security_tier") or "encrypted_capsule"),
+            "sovereign_jurisdiction": candidate.get("sovereign_jurisdiction") or "unknown",
+            "dedicated_gpu": bool(candidate.get("dedicated_gpu", False)),
+            "requires_attestation": bool(candidate.get("requires_attestation", False)),
+            "supports_key_release": bool(candidate.get("supports_key_release", False)),
+            "allows_worker_s3_credentials": bool(candidate.get("allows_worker_s3_credentials", False)),
+        },
+        "gpu": str(candidate.get("gpu") or "unknown"),
+        "vram_gb": _positive_int(candidate.get("vram_gb"), default=1),
+        "max_model_len": _positive_int(candidate.get("max_model_len"), default=model.max_model_len),
+        "cost_per_second": float(candidate.get("cost_per_second") or 0.0),
+        "modes": _strings(candidate.get("modes") or ["sync", "async"]),
+        "endpoint": candidate.get("endpoint"),
+        "endpoint_contract": candidate.get("endpoint_contract"),
+        "input_contracts": _strings(candidate.get("input_contracts")),
+        "output_contract": candidate.get("output_contract"),
+        "stream_contract": candidate.get("stream_contract") or "none",
+        "supports_vision": bool(model.supports_vision),
+        "target": candidate.get("target") or "",
+        "stream_target": candidate.get("stream_target"),
+        "model": model.provider_model_id,
+        "declared_model_max_len": model.max_model_len,
+        "model_ref": model_ref,
+        "engine_ref": engine_ref,
+        "provider_params": dict(candidate.get("provider_params") or {}),
+    }
+    for key in ("project_id", "region", "zone", "resource_group", "network", "subnet", "service_account", "instance", "image", "key_name", "ssh_remote_cidr", "lease_manifest_path"):
+        if key in candidate:
+            source[key] = candidate.get(key)
+    ProviderSpec.model_validate(source)
+    return source
+
+
+def _copy_config_tree(source: Path, destination: Path, *, force: bool) -> None:
+    if destination.exists():
+        if not force:
+            raise FileExistsError(f"promotion config already exists: {destination}")
+        shutil.rmtree(destination)
+    ignore = shutil.ignore_patterns("*.db", "*.db-shm", "*.db-wal", "__pycache__")
+    shutil.copytree(source, destination, ignore=ignore)
+
+
+def _write_yaml_guarded(path: Path, payload: Mapping[str, Any], *, force: bool) -> Path:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    if path.exists() and not force:
+        raise FileExistsError(f"refusing to overwrite existing file: {path}")
+    path.write_text(to_yaml(payload), encoding="utf-8")
+    return path
+
+
+def _validate_config_dir(config_dir: Path) -> None:
+    load_config(config_dir)
+
+
+def _run_provider_validation(provider: str, recipe: str, config_dir: Path, *, validation_dir: str | Path | None) -> dict[str, Any]:
+    command = [
+        sys.executable,
+        "-m",
+        "gpucall.cli",
+        "provider-smoke",
+        provider,
+        "--config-dir",
+        str(config_dir),
+        "--recipe",
+        recipe,
+        "--mode",
+        "sync",
+        "--write-artifact",
+    ]
+    env = None
+    if validation_dir is not None:
+        state_dir = Path(validation_dir).expanduser().parent
+        env = {**dict(os.environ), "GPUCALL_STATE_DIR": str(state_dir)}
+    completed = subprocess.run(command, capture_output=True, text=True, env=env, check=False)
+    result: dict[str, Any] = {
+        "command": command,
+        "returncode": completed.returncode,
+        "stdout": completed.stdout,
+        "stderr": completed.stderr,
+        "passed": False,
+    }
+    if completed.stdout.strip():
+        try:
+            payload = json.loads(completed.stdout)
+            result["artifact"] = payload
+            result["passed"] = payload.get("passed") is True
+        except json.JSONDecodeError:
+            result["parse_error"] = "provider-smoke stdout was not JSON"
+    return result
+
+
+def _find_validation_for_promotion(
+    *,
+    provider: str,
+    recipe: str,
+    model_ref: str | None,
+    engine_ref: str | None,
+    config_dir: Path,
+    validation_dir: Path | None,
+) -> dict[str, Any]:
+    root = validation_dir or (default_state_dir() / "provider-validation")
+    result = {"dir": str(root), "matched": []}
+    if not root.exists():
+        result["reason"] = "validation artifact directory does not exist"
+        return result
+    expected_hash = _config_hash(config_dir)
+    expected_commit = _git_commit(Path.cwd())
+    matched: list[dict[str, Any]] = []
+    for path in sorted(root.glob("*.json"), key=lambda item: item.stat().st_mtime, reverse=True):
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except Exception:
+            continue
+        if data.get("validation_schema_version") != 1 or data.get("passed") is not True:
+            continue
+        if data.get("provider") != provider or data.get("recipe") != recipe:
+            continue
+        if data.get("model_ref") != model_ref or data.get("engine_ref") != engine_ref:
+            continue
+        if data.get("config_hash") != expected_hash:
+            continue
+        if expected_commit and data.get("commit") != expected_commit:
+            continue
+        matched.append({"path": str(path), "provider": provider, "recipe": recipe})
+    result["matched"] = matched
+    return result
+
+
+def _load_yaml_file(path: Path) -> dict[str, Any]:
+    payload = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+    if not isinstance(payload, dict):
+        raise ValueError(f"YAML root must be a mapping: {path}")
+    return payload
 
 
 def _candidate_rank(candidate: Mapping[str, Any], *, contract: Mapping[str, Any]) -> int:
