@@ -1206,6 +1206,32 @@ def test_hyperstack_wait_active_ignores_private_fixed_ip(monkeypatch, tmp_path) 
     assert calls == 2
 
 
+def test_hyperstack_wait_active_retries_transient_api_timeout(monkeypatch, tmp_path) -> None:
+    calls = 0
+
+    class FakeResponse:
+        status_code = 200
+
+        def json(self) -> dict[str, object]:
+            return {"instance": {"status": "ACTIVE", "floating_ip": "203.0.113.10"}}
+
+    class FakeSession:
+        def get(self, *_args, **_kwargs):
+            nonlocal calls
+            calls += 1
+            if calls == 1:
+                raise TimeoutError("slow official API")
+            return FakeResponse()
+
+    monkeypatch.setattr("gpucall.providers.hyperstack_adapter.time.sleep", lambda _seconds: None)
+    adapter = HyperstackAdapter(
+        api_key="test", lease_manifest_path=str(tmp_path / "leases.jsonl"), ssh_remote_cidr="203.0.113.0/24"
+    )
+
+    assert adapter._wait_active(FakeSession(), "vm-1") == "203.0.113.10"
+    assert calls == 2
+
+
 def _fake_ssh():
     class FakeChannel:
         def exit_status_ready(self) -> bool:

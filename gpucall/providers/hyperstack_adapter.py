@@ -198,19 +198,28 @@ class HyperstackAdapter(ProviderAdapter):
 
     def _wait_active(self, session: Any, vm_id: str) -> str:
         deadline = time.monotonic() + 600
+        last_error: str | None = None
         while time.monotonic() < deadline:
-            response = session.get(f"{self.base_url}/core/virtual-machines/{vm_id}", headers=self._headers(), timeout=5)
-            if response.status_code == 200:
-                instance = response.json().get("instance", {})
-                status = instance.get("status")
-                if status == "ACTIVE":
-                    ip = instance.get("floating_ip") or instance.get("public_ip") or instance.get("access_ip")
-                    if ip:
-                        return str(ip)
-                if status == "ERROR":
-                    raise ProviderError(f"Hyperstack VM {vm_id} entered ERROR", retryable=False, status_code=502)
+            try:
+                response = session.get(f"{self.base_url}/core/virtual-machines/{vm_id}", headers=self._headers(), timeout=30)
+                if response.status_code == 200:
+                    instance = response.json().get("instance", {})
+                    status = instance.get("status")
+                    if status == "ACTIVE":
+                        ip = instance.get("floating_ip") or instance.get("public_ip") or instance.get("access_ip")
+                        if ip:
+                            return str(ip)
+                    if status == "ERROR":
+                        raise ProviderError(f"Hyperstack VM {vm_id} entered ERROR", retryable=False, status_code=502)
+                elif response.status_code >= 500:
+                    last_error = f"status {response.status_code}"
+            except ProviderError:
+                raise
+            except Exception as exc:
+                last_error = type(exc).__name__
             time.sleep(10)
-        raise ProviderError(f"Hyperstack VM {vm_id} did not become ACTIVE", retryable=True, status_code=504)
+        suffix = f" (last API error: {last_error})" if last_error else ""
+        raise ProviderError(f"Hyperstack VM {vm_id} did not become ACTIVE{suffix}", retryable=True, status_code=504)
 
     def _ensure_ssh_rule(self, session: Any, vm_id: str) -> str | None:
         response = session.post(
