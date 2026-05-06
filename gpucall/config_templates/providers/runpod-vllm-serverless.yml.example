@@ -14,3 +14,5 @@ input_contracts: [chat_messages]
 output_contract: openai-chat-completions
 stream_contract: none
 model: Qwen/Qwen2.5-1.5B-Instruct
+model_ref: qwen2.5-1.5b-instruct
+engine_ref: runpod-vllm-openai
