@@ -3,11 +3,13 @@ from __future__ import annotations
 import hashlib
 import json
 from datetime import datetime, timezone
+from math import ceil
 
 from gpucall.domain import (
     CompileArtifact,
     CompiledPlan,
     DataClassification,
+    CostPolicy,
     EngineSpec,
     ExecutionMode,
     KeyReleaseRequirement,
@@ -117,6 +119,7 @@ class GovernanceCompiler:
             "token_budget": compiled_token_budget,
         }
         selected_provider = self.providers[provider_chain[0]]
+        plan.attestations["cost_estimate"] = self._cost_estimate(selected_provider, request, recipe, timeout)
         plan.attestations["security_gate"] = self._security_gate(recipe, selected_provider)
         if request.artifact_export is not None or recipe.requires_key_release:
             plan.attestations["key_release_requirement"] = self._key_release_requirement(
@@ -335,6 +338,14 @@ class GovernanceCompiler:
             )
             if reason is not None:
                 continue
+            cost_reason = self._provider_cost_rejection_reason(
+                provider=spec,
+                request=request,
+                recipe=recipe,
+                auto_selected=auto_selected,
+            )
+            if cost_reason is not None:
+                continue
             eligible.append(name)
         return eligible
 
@@ -355,6 +366,13 @@ class GovernanceCompiler:
             )
             if reason is None and not self.registry.is_available(name):
                 reason = "provider is unavailable due to circuit breaker"
+            if reason is None:
+                reason = self._provider_cost_rejection_reason(
+                    provider=spec,
+                    request=request,
+                    recipe=recipe,
+                    auto_selected=auto_selected,
+                )
             if reason is not None:
                 rejected[name] = reason
         return rejected
@@ -367,6 +385,108 @@ class GovernanceCompiler:
 
     def _required_model_len(self, request: TaskRequest, recipe: Recipe) -> int:
         return required_model_len(request, recipe, self.policy)
+
+    def _provider_cost_rejection_reason(
+        self,
+        *,
+        provider: ProviderSpec,
+        request: TaskRequest,
+        recipe: Recipe,
+        auto_selected: bool,
+    ) -> str | None:
+        if not auto_selected:
+            return None
+        timeout = min(request.timeout_seconds or recipe.timeout_seconds, self.policy.max_timeout_seconds)
+        estimate = self._cost_estimate(provider, request, recipe, timeout)
+        policy = self._effective_cost_policy(recipe)
+        explicit_budget = any(
+            value is not None
+            for value in (
+                policy.max_estimated_cost_usd,
+                policy.max_cold_start_cost_usd,
+                policy.max_idle_cost_usd,
+            )
+        )
+        if policy.max_cold_start_cost_usd is not None and estimate["cold_start_cost_usd"] > float(policy.max_cold_start_cost_usd):
+            return (
+                f"estimated cold start cost {estimate['cold_start_cost_usd']:.4f} exceeds "
+                f"max_cold_start_cost_usd {float(policy.max_cold_start_cost_usd):.4f}"
+            )
+        if policy.max_idle_cost_usd is not None and estimate["idle_cost_usd"] > float(policy.max_idle_cost_usd):
+            return (
+                f"estimated idle cost {estimate['idle_cost_usd']:.4f} exceeds "
+                f"max_idle_cost_usd {float(policy.max_idle_cost_usd):.4f}"
+            )
+        if policy.max_estimated_cost_usd is not None and estimate["estimated_cost_usd"] > float(policy.max_estimated_cost_usd):
+            return (
+                f"estimated cost {estimate['estimated_cost_usd']:.4f} exceeds "
+                f"max_estimated_cost_usd {float(policy.max_estimated_cost_usd):.4f}"
+            )
+        require_budget = policy.require_budget_for_high_cost_provider
+        if require_budget is None:
+            require_budget = True
+        threshold = policy.high_cost_threshold_usd
+        if threshold is None:
+            threshold = 5.0
+        if require_budget and not explicit_budget and estimate["estimated_cost_usd"] > float(threshold):
+            return (
+                f"estimated cost {estimate['estimated_cost_usd']:.4f} exceeds high_cost_threshold_usd "
+                f"{float(threshold):.4f} without explicit budget"
+            )
+        return None
+
+    def _cost_estimate(
+        self,
+        provider: ProviderSpec,
+        request: TaskRequest,
+        recipe: Recipe,
+        timeout_seconds: int,
+    ) -> dict[str, float | int | str]:
+        cold_start_seconds = float(provider.expected_cold_start_seconds or recipe.expected_cold_start_seconds or 0)
+        idle_seconds = float(provider.scaledown_window_seconds or 0)
+        runtime_seconds = float(timeout_seconds)
+        billable_seconds = cold_start_seconds + runtime_seconds + idle_seconds
+        if provider.min_billable_seconds is not None:
+            billable_seconds = max(billable_seconds, float(provider.min_billable_seconds))
+        if provider.billing_granularity_seconds:
+            granularity = float(provider.billing_granularity_seconds)
+            billable_seconds = ceil(billable_seconds / granularity) * granularity
+        cost_per_second = float(provider.cost_per_second)
+        return {
+            "method": "cost_per_second_times_cold_start_runtime_and_idle_estimate",
+            "provider": provider.name,
+            "cost_per_second": cost_per_second,
+            "cold_start_seconds": cold_start_seconds,
+            "runtime_seconds": runtime_seconds,
+            "idle_seconds": idle_seconds,
+            "billable_seconds": billable_seconds,
+            "cold_start_cost_usd": cost_per_second * cold_start_seconds,
+            "idle_cost_usd": cost_per_second * idle_seconds,
+            "estimated_cost_usd": cost_per_second * billable_seconds,
+        }
+
+    def _effective_cost_policy(self, recipe: Recipe) -> CostPolicy:
+        base = self.policy.cost_policy
+        override = recipe.cost_policy
+        if override is None:
+            return base
+        return CostPolicy(
+            max_estimated_cost_usd=override.max_estimated_cost_usd
+            if override.max_estimated_cost_usd is not None
+            else base.max_estimated_cost_usd,
+            max_cold_start_cost_usd=override.max_cold_start_cost_usd
+            if override.max_cold_start_cost_usd is not None
+            else base.max_cold_start_cost_usd,
+            max_idle_cost_usd=override.max_idle_cost_usd
+            if override.max_idle_cost_usd is not None
+            else base.max_idle_cost_usd,
+            require_budget_for_high_cost_provider=override.require_budget_for_high_cost_provider
+            if override.require_budget_for_high_cost_provider is not None
+            else base.require_budget_for_high_cost_provider,
+            high_cost_threshold_usd=override.high_cost_threshold_usd
+            if override.high_cost_threshold_usd is not None
+            else base.high_cost_threshold_usd,
+        )
 
     @staticmethod
     def _inline_mime_prefixes(recipe: Recipe) -> list[str]:

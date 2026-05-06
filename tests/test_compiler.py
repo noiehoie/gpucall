@@ -5,7 +5,7 @@ import pytest
 from gpucall.compiler import GovernanceCompiler, GovernanceError
 from datetime import datetime, timedelta, timezone
 
-from gpucall.domain import DataRef, ExecutionMode, Policy, ProviderPolicy, ProviderSpec, Recipe, TaskRequest
+from gpucall.domain import CostPolicy, DataRef, ExecutionMode, Policy, ProviderPolicy, ProviderSpec, Recipe, TaskRequest
 from gpucall.registry import ObservedRegistry
 from gpucall.domain import ProviderObservation
 
@@ -37,7 +37,7 @@ def build_compiler() -> GovernanceCompiler:
             gpu="L4",
             vram_gb=24,
             max_model_len=100,
-            cost_per_second=1,
+            cost_per_second=0.001,
             modes=[ExecutionMode.SYNC, ExecutionMode.ASYNC],
             target="app:fn",
             model="test-model-small",
@@ -48,7 +48,7 @@ def build_compiler() -> GovernanceCompiler:
             gpu="L4",
             vram_gb=24,
             max_model_len=100,
-            cost_per_second=1,
+            cost_per_second=0.001,
             modes=[ExecutionMode.SYNC, ExecutionMode.ASYNC],
             target="app:fn",
             model="test-model-large",
@@ -440,6 +440,71 @@ def test_provider_chain_filters_by_request_weight() -> None:
     plan = compiler.compile(request)
 
     assert plan.provider_chain == ["p2"]
+
+
+def test_high_cost_provider_requires_explicit_budget_for_auto_select() -> None:
+    compiler = build_compiler()
+    compiler.providers = {
+        "p1": compiler.providers["p1"].model_copy(
+            update={
+                "cost_per_second": 0.00505,
+                "expected_cold_start_seconds": 1000,
+                "scaledown_window_seconds": 300,
+            }
+        )
+    }
+    request = TaskRequest(task="infer", mode="sync", recipe="r1")
+
+    with pytest.raises(GovernanceError) as exc:
+        compiler.compile(request)
+
+    assert exc.value.code == "NO_ELIGIBLE_PROVIDER"
+    assert "without explicit budget" in exc.value.context["provider_rejections"]["p1"]
+
+
+def test_recipe_budget_allows_high_cost_provider_when_within_limit() -> None:
+    compiler = build_compiler()
+    compiler.providers = {
+        "p1": compiler.providers["p1"].model_copy(
+            update={
+                "cost_per_second": 0.00505,
+                "expected_cold_start_seconds": 1000,
+                "scaledown_window_seconds": 300,
+            }
+        )
+    }
+    compiler.recipes["r1"] = compiler.recipes["r1"].model_copy(
+        update={"cost_policy": CostPolicy(max_estimated_cost_usd=7.0)}
+    )
+    request = TaskRequest(task="infer", mode="sync", recipe="r1")
+
+    plan = compiler.compile(request)
+
+    assert plan.provider_chain == ["p1"]
+    assert plan.attestations["cost_estimate"]["estimated_cost_usd"] == pytest.approx(6.6155)
+
+
+def test_recipe_budget_rejects_provider_when_estimate_exceeds_limit() -> None:
+    compiler = build_compiler()
+    compiler.providers = {
+        "p1": compiler.providers["p1"].model_copy(
+            update={
+                "cost_per_second": 0.00505,
+                "expected_cold_start_seconds": 1000,
+                "scaledown_window_seconds": 300,
+            }
+        )
+    }
+    compiler.recipes["r1"] = compiler.recipes["r1"].model_copy(
+        update={"cost_policy": CostPolicy(max_estimated_cost_usd=1.0)}
+    )
+    request = TaskRequest(task="infer", mode="sync", recipe="r1")
+
+    with pytest.raises(GovernanceError) as exc:
+        compiler.compile(request)
+
+    assert exc.value.code == "NO_ELIGIBLE_PROVIDER"
+    assert "max_estimated_cost_usd" in exc.value.context["provider_rejections"]["p1"]
 
 
 def test_requested_provider_must_be_eligible() -> None:

@@ -248,6 +248,16 @@ class ProviderPolicy(BaseModel):
     max_data_classification: DataClassification = DataClassification.CONFIDENTIAL
 
 
+class CostPolicy(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    max_estimated_cost_usd: NonNegativeFloat | None = None
+    max_cold_start_cost_usd: NonNegativeFloat | None = None
+    max_idle_cost_usd: NonNegativeFloat | None = None
+    require_budget_for_high_cost_provider: bool | None = None
+    high_cost_threshold_usd: NonNegativeFloat | None = None
+
+
 class Policy(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -258,6 +268,7 @@ class Policy(BaseModel):
     max_timeout_seconds: PositiveInt
     tokenizer_safety_multiplier: NonNegativeFloat = 1.25
     providers: ProviderPolicy
+    cost_policy: CostPolicy = Field(default_factory=CostPolicy)
     security: SecurityPolicy = Field(default_factory=SecurityPolicy)
     immutable_audit: bool = True
 
@@ -292,6 +303,7 @@ class Recipe(BaseModel):
     required_model_capabilities: list[str] = Field(default_factory=list)
     output_contract: str | None = None
     expected_cold_start_seconds: PositiveInt | None = None
+    cost_policy: CostPolicy | None = None
 
 
 InputContract = Literal["text", "chat_messages", "data_refs", "image", "activation_refs", "artifact_refs"]
@@ -343,6 +355,10 @@ class ProviderSpec(BaseModel):
     vram_gb: PositiveInt
     max_model_len: PositiveInt
     cost_per_second: NonNegativeFloat
+    expected_cold_start_seconds: PositiveInt | None = None
+    scaledown_window_seconds: NonNegativeFloat | None = None
+    min_billable_seconds: NonNegativeFloat | None = None
+    billing_granularity_seconds: NonNegativeFloat | None = None
     modes: list[ExecutionMode] = Field(default_factory=lambda: [ExecutionMode.ASYNC])
     endpoint: AnyHttpUrl | None = None
     project_id: str | None = None

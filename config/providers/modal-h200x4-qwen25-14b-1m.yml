@@ -12,6 +12,8 @@ gpu: H200:4
 vram_gb: 564
 max_model_len: 1010000
 cost_per_second: 0.00505
+expected_cold_start_seconds: 600
+scaledown_window_seconds: 300
 modes:
 - sync
 - async

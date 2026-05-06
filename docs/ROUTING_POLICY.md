@@ -20,7 +20,10 @@ task endpoints unless `GPUCALL_ALLOW_CALLER_ROUTING=1` is explicitly enabled.
    tokens, and the policy tokenizer safety multiplier.
 4. Filter providers whose `max_model_len`, `vram_gb`, modes, and data
    classification cannot satisfy that request.
-5. Rank the remaining provider list with `ObservedRegistry`.
+5. Apply deterministic cost policy. Budget fields are optional; when no explicit
+   budget is present, high-cost providers are not auto-selected once their
+   estimated cold-start + runtime + idle cost exceeds the policy threshold.
+6. Rank the remaining provider list with `ObservedRegistry`.
 
 ## Input Contract Preservation
 
