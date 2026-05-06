@@ -99,32 +99,15 @@ class HyperstackAdapter(ProviderAdapter):
         session = self._session()
         vm_name = f"gpucall-managed-{plan.plan_id[:12]}-{uuid4().hex[:8]}"
         self._record_lease({"event": "provision.requested", "vm_name": vm_name, "plan_id": plan.plan_id, "expires_at": plan.expires_at().isoformat()})
+        create_payload = self._create_instances_payload(vm_name, plan)
         response = session.post(
             f"{self.base_url}/core/virtual-machines",
             headers=self._headers(),
-            json={
-                "name": vm_name,
-                "environment_name": self.environment_name,
-                "image_name": self.image_name,
-                "flavor_name": self.flavor_name,
-                "key_name": self.key_name,
-                "count": 1,
-                "assign_floating_ip": True,
-                "create_bootable_volume": False,
-                "enable_port_randomization": False,
-                "labels": ["gpucall-managed", f"gpucall-plan-{plan.plan_id[:12]}"],
-            },
+            json=create_payload,
             timeout=10,
         )
         if response.status_code not in {200, 201, 202}:
-            retryable = response.status_code in {404, 409, 423, 429, 500, 502, 503, 504}
-            code = "PROVIDER_PROVISION_UNAVAILABLE" if retryable else "PROVIDER_PROVISION_FAILED"
-            raise ProviderError(
-                f"Hyperstack provision failed: {response.status_code}",
-                retryable=retryable,
-                status_code=503 if retryable else 502,
-                code=code,
-            )
+            raise _hyperstack_response_error(response, action="provision")
         data = response.json()
         instances = data.get("instances") or []
         vm_id = (instances[0].get("id") if instances else None) or data.get("id") or data.get("instance", {}).get("id")
@@ -142,9 +125,6 @@ class HyperstackAdapter(ProviderAdapter):
         sg_rule_id: str | None = None
         try:
             ip_address = self._wait_active(session, vm_id)
-            sg_rule_id = self._ensure_ssh_rule(session, vm_id)
-            if sg_rule_id:
-                self._record_lease({"event": "sg_rule.created", "vm_id": vm_id, "sg_rule_id": sg_rule_id})
             ssh = self._connect_ssh(ip_address)
             model = self.model or "Qwen/Qwen2.5-1.5B-Instruct"
             max_model_len = self.max_model_len or plan.token_budget or 32768
@@ -182,6 +162,31 @@ class HyperstackAdapter(ProviderAdapter):
         except Exception:
             self._destroy_sync({"vm_id": vm_id, "sg_rule_id": sg_rule_id})
             raise
+
+    def _create_instances_payload(self, vm_name: str, plan: CompiledPlan) -> dict[str, Any]:
+        payload: dict[str, Any] = {
+            "name": vm_name,
+            "environment_name": self.environment_name,
+            "image_name": self.image_name,
+            "flavor_name": self.flavor_name,
+            "key_name": self.key_name,
+            "count": 1,
+            "assign_floating_ip": True,
+            "create_bootable_volume": False,
+            "enable_port_randomization": False,
+            "labels": ["gpucall-managed", f"gpucall-plan-{plan.plan_id[:12]}"],
+            "security_rules": [
+                {
+                    "direction": "ingress",
+                    "ethertype": "IPv4",
+                    "protocol": "tcp",
+                    "remote_ip_prefix": self.ssh_remote_cidr,
+                    "port_range_min": 22,
+                    "port_range_max": 22,
+                }
+            ],
+        }
+        return _validate_hyperstack_create_instances_payload(payload)
 
     def _upload_worker_files(self, ssh: Any, plan: CompiledPlan) -> None:
         payload = json.dumps(plan_payload(plan), separators=(",", ":"))
@@ -244,11 +249,7 @@ class HyperstackAdapter(ProviderAdapter):
                 return None
             return _extract_sg_rule_id(data)
         retryable = response.status_code in {429, 500, 502, 503, 504}
-        raise ProviderError(
-            f"Hyperstack SSH security rule failed: {response.status_code}",
-            retryable=retryable,
-            status_code=502 if response.status_code >= 500 else response.status_code,
-        )
+        raise _hyperstack_response_error(response, action="SSH security rule", retryable=retryable)
 
     def _connect_ssh(self, ip_address: str):
         try:
@@ -670,6 +671,91 @@ def _extract_sg_rule_id(data: dict[str, Any]) -> str | None:
         if candidate is not None and str(candidate):
             return str(candidate)
     return None
+
+
+def _validate_hyperstack_create_instances_payload(payload: dict[str, Any]) -> dict[str, Any]:
+    try:
+        from hyperstack.models.create_instances_payload import CreateInstancesPayload  # type: ignore
+    except ImportError as exc:
+        raise ProviderError(
+            "official Hyperstack SDK is required for VM create payload validation",
+            retryable=False,
+            status_code=501,
+            code="PROVIDER_SDK_MISSING",
+        ) from exc
+    try:
+        instance = CreateInstancesPayload.from_dict(payload)
+        if instance is None:
+            raise ValueError("empty payload")
+        return instance.to_dict()
+    except Exception as exc:
+        raise ProviderError(
+            f"Hyperstack create payload failed official SDK validation: {type(exc).__name__}",
+            retryable=False,
+            status_code=500,
+            code="PROVIDER_CONTRACT_INVALID",
+        ) from exc
+
+
+def _hyperstack_response_error(response: Any, *, action: str, retryable: bool | None = None) -> ProviderError:
+    if retryable is None:
+        retryable = response.status_code in {404, 409, 423, 429, 500, 502, 503, 504}
+    code = "PROVIDER_PROVISION_UNAVAILABLE" if retryable else "PROVIDER_PROVISION_FAILED"
+    raw = _redacted_hyperstack_error_body(response)
+    detail = _hyperstack_error_detail(response)
+    message = f"Hyperstack {action} failed: {response.status_code}"
+    if detail:
+        message += f" ({detail})"
+    return ProviderError(
+        message,
+        retryable=retryable,
+        status_code=503 if retryable else 502,
+        code=code,
+        raw_output=raw,
+    )
+
+
+def _hyperstack_error_detail(response: Any) -> str | None:
+    try:
+        data = response.json()
+    except Exception:
+        text = str(getattr(response, "text", "") or "").strip()
+        return text[:160] if text else None
+    if not isinstance(data, dict):
+        return None
+    for key in ("error_reason", "message", "detail", "error"):
+        value = data.get(key)
+        if isinstance(value, str) and value.strip():
+            return value.strip()[:160]
+    return None
+
+
+def _redacted_hyperstack_error_body(response: Any) -> str | None:
+    try:
+        data = response.json()
+    except Exception:
+        text = str(getattr(response, "text", "") or "")
+        return text[:2000] if text else None
+    redacted = _redact_hyperstack_error(data)
+    try:
+        return json.dumps(redacted, ensure_ascii=True, sort_keys=True, separators=(",", ":"))[:4000]
+    except TypeError:
+        return None
+
+
+def _redact_hyperstack_error(value: Any) -> Any:
+    if isinstance(value, dict):
+        out: dict[str, Any] = {}
+        for key, item in value.items():
+            lowered = str(key).lower()
+            if any(part in lowered for part in ("api_key", "token", "secret", "password", "authorization")):
+                out[str(key)] = "<redacted>"
+            else:
+                out[str(key)] = _redact_hyperstack_error(item)
+        return out
+    if isinstance(value, list):
+        return [_redact_hyperstack_error(item) for item in value]
+    return value
 
 
 def _sftp_write_text(sftp: Any, path: str, value: str) -> None:

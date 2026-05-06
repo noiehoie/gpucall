@@ -145,3 +145,13 @@ Provider implementation work must proceed in this order:
 4. Reject unsupported plans explicitly.
 5. Validate with billable live artifacts before production routing.
 6. Make launch checks fail closed when official-contract evidence is missing.
+
+## Implementation Lesson: 2026-05-06
+
+Provider adapters must be implemented from official documentation, official SDKs,
+or official repositories before live testing. A working smoke path is not
+evidence of official conformance. For Hyperstack specifically, VM create payloads
+must be validated through the official SDK/OpenAPI `CreateInstancesPayload`
+contract, and provider error bodies must be redacted and preserved. Discarding
+provider 400 bodies or inventing unofficial post-create lifecycle steps wastes
+billable validation time and hides the actual provider-side failure reason.

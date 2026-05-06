@@ -1191,13 +1191,14 @@ wheels = [
 
 [[package]]
 name = "gpucall"
-version = "2.0.3"
+version = "2.0.4"
 source = { editable = "." }
 dependencies = [
     { name = "boto3" },
     { name = "cryptography" },
     { name = "fastapi" },
     { name = "httpx" },
+    { name = "hyperstack" },
     { name = "jsonschema" },
     { name = "pydantic" },
     { name = "pyyaml" },
@@ -1230,6 +1231,7 @@ requires-dist = [
     { name = "fastapi", specifier = ">=0.111" },
     { name = "google-cloud-compute", marker = "extra == 'providers'", specifier = ">=1.19" },
     { name = "httpx", specifier = ">=0.27" },
+    { name = "hyperstack", specifier = ">=1.51.2a0" },
     { name = "jsonschema", specifier = ">=4.26.0" },
     { name = "modal", marker = "extra == 'providers'", specifier = ">=1.0" },
     { name = "ovh", marker = "extra == 'providers'", specifier = ">=1.2" },
@@ -1425,6 +1427,21 @@ source = { registry = "https://pypi.org/simple" }
 sdist = { url = "https://files.pythonhosted.org/packages/02/e7/94f8232d4a74cc99514c13a9f995811485a6903d48e5d952771ef6322e30/hyperframe-6.1.0.tar.gz", hash = "sha256:f630908a00854a7adeabd6382b43923a4c4cd4b821fcb527e6ab9e15382a3b08", size = 26566, upload-time = "2025-01-22T21:41:49.302Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/48/30/47d0bf6072f7252e6521f3447ccfa40b421b6824517f82854703d0f5a98b/hyperframe-6.1.0-py3-none-any.whl", hash = "sha256:b03380493a519fce58ea5af42e4a42317bf9bd425596f7a0835ffce80f1a42e5", size = 13007, upload-time = "2025-01-22T21:41:47.295Z" },
+]
+
+[[package]]
+name = "hyperstack"
+version = "1.51.2a0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "pydantic" },
+    { name = "python-dateutil" },
+    { name = "typing-extensions" },
+    { name = "urllib3" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/e1/ba/49b4c014a95875b4ea2eb8482a47cb410494e53ff3ab2d745fbf18a62559/hyperstack-1.51.2a0.tar.gz", hash = "sha256:886f9bca14ab204336965fbf81f9de5f3a29f3538387f43cac4bc5d4f7169b6b", size = 235891, upload-time = "2026-04-21T15:32:40.474Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/5c/21/e9639c65ec8ca9dc05d1e922d03ab63570c6a6884df17f02c84d92a4b3bc/hyperstack-1.51.2a0-py3-none-any.whl", hash = "sha256:ceec69f2dcfc50fb0861c2abe0c988db7e749e151e10f9682521ee0f4dfeb78f", size = 677012, upload-time = "2026-04-21T15:32:38.889Z" },
 ]
 
 [[package]]

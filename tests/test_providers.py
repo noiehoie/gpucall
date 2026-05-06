@@ -938,7 +938,16 @@ def test_hyperstack_create_payload_uses_official_fields(monkeypatch, tmp_path) -
     assert posted["assign_floating_ip"] is True
     assert posted["enable_port_randomization"] is False
     assert posted["labels"] == ["gpucall-managed", f"gpucall-plan-{plan.plan_id[:12]}"]
-    assert "security_rules" not in posted
+    assert posted["security_rules"] == [
+        {
+            "direction": "ingress",
+            "ethertype": "IPv4",
+            "protocol": "tcp",
+            "remote_ip_prefix": "203.0.113.0/24",
+            "port_range_min": 22,
+            "port_range_max": 22,
+        }
+    ]
 
 
 def test_hyperstack_create_payload_uses_configured_image_without_aliasing(monkeypatch, tmp_path) -> None:
@@ -977,10 +986,10 @@ def test_hyperstack_create_payload_uses_configured_image_without_aliasing(monkey
 def test_hyperstack_provision_404_is_retryable_for_fallback(monkeypatch, tmp_path) -> None:
     class FakeResponse:
         status_code = 404
-        text = "flavor not found"
+        text = '{"status":false,"message":"flavor not found","error_reason":"not_found"}'
 
         def json(self) -> dict[str, object]:
-            return {}
+            return {"status": False, "message": "flavor not found", "error_reason": "not_found"}
 
     class FakeSession:
         def mount(self, *_args, **_kwargs) -> None:
@@ -1000,8 +1009,50 @@ def test_hyperstack_provision_404_is_retryable_for_fallback(monkeypatch, tmp_pat
         assert getattr(exc, "retryable", None) is True
         assert getattr(exc, "status_code", None) == 503
         assert getattr(exc, "code", None) == "PROVIDER_PROVISION_UNAVAILABLE"
+        assert "not_found" in str(exc)
+        assert '"message":"flavor not found"' in getattr(exc, "raw_output", "")
     else:  # pragma: no cover
         raise AssertionError("Hyperstack 404 unexpectedly provisioned")
+
+
+def test_hyperstack_provision_400_preserves_redacted_error_body(monkeypatch, tmp_path) -> None:
+    class FakeResponse:
+        status_code = 400
+        text = "{}"
+
+        def json(self) -> dict[str, object]:
+            return {
+                "status": False,
+                "message": "Image does not exist",
+                "error_reason": "not_found",
+                "api_key": "secret",
+            }
+
+    class FakeSession:
+        def mount(self, *_args, **_kwargs) -> None:
+            return None
+
+        def post(self, _url: str, **_kwargs):
+            return FakeResponse()
+
+    adapter = HyperstackAdapter(
+        api_key="test", lease_manifest_path=str(tmp_path / "leases.jsonl"), ssh_remote_cidr="203.0.113.0/24"
+    )
+    monkeypatch.setattr(adapter, "_session", lambda: FakeSession())
+
+    try:
+        adapter._provision_and_start(plan_payload_plan())
+    except Exception as exc:
+        assert getattr(exc, "retryable", None) is False
+        assert getattr(exc, "status_code", None) == 502
+        assert getattr(exc, "code", None) == "PROVIDER_PROVISION_FAILED"
+        assert "not_found" in str(exc)
+        raw = getattr(exc, "raw_output", "")
+        assert '"message":"Image does not exist"' in raw
+        assert '"api_key":"<redacted>"' in raw
+        assert "secret" not in raw
+    else:  # pragma: no cover
+        raise AssertionError("Hyperstack 400 unexpectedly provisioned")
 
 
 def test_hyperstack_worker_script_invokes_vllm_not_smoke_output(monkeypatch, tmp_path) -> None:
