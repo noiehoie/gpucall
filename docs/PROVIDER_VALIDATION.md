@@ -36,7 +36,46 @@ Record for each provider:
 - cost observed on provider dashboard
 - audit trail validity after execution
 
-Production `launch-check --profile production` requires a JSON artifact under `$XDG_STATE_HOME/gpucall/provider-validation/` whose `commit` equals the current git HEAD and whose `config_hash` equals the active config directory. The artifact should include provider, recipe, commit, config hash, start/end timestamps, cleanup result, estimated or observed cost, and audit event IDs.
+Production `launch-check --profile production` requires one valid JSON artifact per required live adapter under `$XDG_STATE_HOME/gpucall/provider-validation/`. Artifacts are bound to the current git HEAD and active config directory; stale artifacts do not satisfy the gate.
+
+Required top-level fields:
+
+```json
+{
+  "validation_schema_version": 1,
+  "provider": "modal-a10g",
+  "recipe": "text-infer-standard",
+  "mode": "sync",
+  "passed": true,
+  "started_at": "2026-05-07T00:00:00+00:00",
+  "ended_at": "2026-05-07T00:01:00+00:00",
+  "commit": "<current git HEAD>",
+  "config_hash": "<active config hash>",
+  "governance_hash": "<compiled plan governance hash>",
+  "official_contract": {},
+  "official_contract_hash": "<sha256 of canonical official_contract JSON>",
+  "cleanup": {},
+  "cost": {},
+  "audit": {}
+}
+```
+
+`official_contract` must include:
+
+- `adapter`
+- `endpoint_contract`
+- `expected_endpoint_contract`
+- `output_contract`
+- `expected_output_contract`
+- `stream_contract`
+- `expected_stream_contract`
+- `official_sources`
+
+The observed `endpoint_contract`, `output_contract`, and `stream_contract` must equal their expected values. `official_sources` must name the official provider documentation or official repository material used for the contract. `official_contract_hash` is the SHA-256 of the canonical JSON encoding of `official_contract` with sorted keys and compact separators.
+
+`cleanup` must be an object. If cleanup is required, set `{"required": true, "completed": true, ...}` only after the provider-side resource is actually absent. `gpucall cleanup-audit` rejects missing cleanup objects and rejects artifacts where cleanup is required but not completed.
+
+`cost` must be an object containing the estimated or observed billable resource cost. `audit` must be an object containing the related audit event identifiers.
 
 ## Artifact and Split-Learning Worker Paths
 

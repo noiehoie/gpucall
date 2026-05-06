@@ -12,6 +12,10 @@ gpu: L4
 vram_gb: 24
 max_model_len: 32768
 cost_per_second: 0
+expected_cold_start_seconds: null
+scaledown_window_seconds: 0
+min_billable_seconds: 0
+billing_granularity_seconds: 0
 modes: [sync, async, stream]
 endpoint: null
 input_contracts: [text, chat_messages, data_refs]

@@ -7,6 +7,7 @@ import sys
 import types
 
 import pytest
+import yaml
 
 from gpucall.domain import ChatMessage, CompiledPlan, ExecutionMode, InlineValue, ProviderSpec
 from gpucall.domain import ArtifactExportSpec, DataClassification
@@ -343,6 +344,26 @@ def test_modal_stream_uses_explicit_deployed_remote_gen(monkeypatch) -> None:
     assert calls["function_name"] == "stream_inference_on_modal"
     assert calls["args"][1] == "infer"
     assert calls["kwargs"]["max_model_len"] == 100
+
+
+def test_modal_scaledown_metadata_matches_worker_defaults() -> None:
+    root = Path(__file__).resolve().parents[1]
+    worker = (root / "gpucall" / "providers" / "modal_worker.py").read_text(encoding="utf-8")
+    providers = {
+        path.name: yaml.safe_load(path.read_text(encoding="utf-8"))
+        for path in [
+            root / "config" / "providers" / "modal.yml",
+            root / "config" / "providers" / "modal-vision.yml",
+            root / "config" / "providers" / "modal-h200x4-qwen25-14b-1m.yml",
+        ]
+    }
+
+    assert 'GPUCALL_MODAL_A10G_SCALEDOWN_WINDOW", 60' in worker
+    assert 'GPUCALL_MODAL_VISION_H100_SCALEDOWN_WINDOW", 60' in worker
+    assert 'GPUCALL_MODAL_H200X4_SCALEDOWN_WINDOW", 300' in worker
+    assert providers["modal.yml"]["scaledown_window_seconds"] == 60
+    assert providers["modal-vision.yml"]["scaledown_window_seconds"] == 60
+    assert providers["modal-h200x4-qwen25-14b-1m.yml"]["scaledown_window_seconds"] == 300
 
 
 async def test_runpod_flash_cancel_without_owned_resource_is_noop(monkeypatch) -> None:

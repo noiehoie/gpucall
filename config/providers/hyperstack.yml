@@ -12,6 +12,9 @@ gpu: A100
 vram_gb: 80
 max_model_len: 32768
 cost_per_second: 0.0012
+scaledown_window_seconds: 0
+min_billable_seconds: 60
+billing_granularity_seconds: 60
 modes: [sync, async]
 endpoint: https://infrahub-api.nexgencloud.com/v1
 endpoint_contract: hyperstack-vm

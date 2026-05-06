@@ -445,6 +445,8 @@ class GovernanceCompiler:
         cold_start_seconds = float(provider.expected_cold_start_seconds or recipe.expected_cold_start_seconds or 0)
         idle_seconds = float(provider.scaledown_window_seconds or 0)
         runtime_seconds = float(timeout_seconds)
+        standing_cost_seconds = float(provider.standing_cost_window_seconds or 0)
+        endpoint_cost_seconds = float(provider.endpoint_cost_window_seconds or 0)
         billable_seconds = cold_start_seconds + runtime_seconds + idle_seconds
         if provider.min_billable_seconds is not None:
             billable_seconds = max(billable_seconds, float(provider.min_billable_seconds))
@@ -452,17 +454,29 @@ class GovernanceCompiler:
             granularity = float(provider.billing_granularity_seconds)
             billable_seconds = ceil(billable_seconds / granularity) * granularity
         cost_per_second = float(provider.cost_per_second)
+        execution_cost_usd = cost_per_second * billable_seconds
+        standing_cost_per_second = float(provider.standing_cost_per_second or 0)
+        endpoint_cost_per_second = float(provider.endpoint_cost_per_second or 0)
+        standing_cost_usd = standing_cost_per_second * standing_cost_seconds
+        endpoint_cost_usd = endpoint_cost_per_second * endpoint_cost_seconds
         return {
-            "method": "cost_per_second_times_cold_start_runtime_and_idle_estimate",
+            "method": "cost_per_second_times_cold_start_runtime_idle_and_standing_estimate",
             "provider": provider.name,
             "cost_per_second": cost_per_second,
             "cold_start_seconds": cold_start_seconds,
             "runtime_seconds": runtime_seconds,
             "idle_seconds": idle_seconds,
             "billable_seconds": billable_seconds,
+            "standing_cost_per_second": standing_cost_per_second,
+            "standing_cost_seconds": standing_cost_seconds,
+            "endpoint_cost_per_second": endpoint_cost_per_second,
+            "endpoint_cost_seconds": endpoint_cost_seconds,
             "cold_start_cost_usd": cost_per_second * cold_start_seconds,
             "idle_cost_usd": cost_per_second * idle_seconds,
-            "estimated_cost_usd": cost_per_second * billable_seconds,
+            "standing_cost_usd": standing_cost_usd,
+            "endpoint_cost_usd": endpoint_cost_usd,
+            "execution_cost_usd": execution_cost_usd,
+            "estimated_cost_usd": execution_cost_usd + standing_cost_usd + endpoint_cost_usd,
         }
 
     def _effective_cost_policy(self, recipe: Recipe) -> CostPolicy:

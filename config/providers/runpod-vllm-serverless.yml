@@ -5,6 +5,9 @@ gpu: AMPERE_16
 vram_gb: 16
 max_model_len: 8192
 cost_per_second: 0.00045
+scaledown_window_seconds: 5
+min_billable_seconds: 1
+billing_granularity_seconds: 1
 modes:
   - sync
   - async

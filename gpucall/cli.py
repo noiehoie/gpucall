@@ -6,6 +6,7 @@ import hashlib
 import json
 import os
 import shutil
+import subprocess
 import sys
 from pathlib import Path
 from datetime import datetime, timezone
@@ -86,6 +87,11 @@ def main() -> None:
     audit.add_argument("action", choices=["verify", "tail", "rotate"])
     audit.add_argument("--limit", type=int, default=20)
     audit.add_argument("--max-bytes", type=int, default=100 * 1024 * 1024)
+    cost_audit = sub.add_parser("cost-audit")
+    cost_audit.add_argument("--config-dir", type=Path, default=default_config_dir())
+    cost_audit.add_argument("--live", action="store_true")
+    cleanup_audit = sub.add_parser("cleanup-audit")
+    cleanup_audit.add_argument("--config-dir", type=Path, default=default_config_dir())
     security = sub.add_parser("security")
     security.add_argument("action", choices=["scan-secrets"])
     security.add_argument("--config-dir", type=Path, default=default_config_dir())
@@ -174,6 +180,10 @@ def main() -> None:
         asyncio.run(jobs_command(args.job_id, args.limit, scrub_inputs=args.scrub_inputs, expire_stale=args.expire_stale))
     elif args.command == "audit":
         audit_command(args.action, args.limit, args.max_bytes)
+    elif args.command == "cost-audit":
+        cost_audit_command(args.config_dir, live=args.live)
+    elif args.command == "cleanup-audit":
+        cleanup_audit_command(args.config_dir)
     elif args.command == "registry":
         registry_command(args.action)
     elif args.command == "catalog":
@@ -262,6 +272,9 @@ def build_launch_report(config_dir: Path, *, url: str | None = None, api_key: st
     routing_hygiene = _routing_hygiene_findings(config)
     routing_summary = _routing_decision_summary(config)
     provider_samples = _configured_registry_snapshot(config)
+    cost_audit = _cost_audit_report(config, creds, config_dir=config_dir, live=profile == "production")
+    cleanup_audit = _cleanup_audit_report(config)
+    live_cost_findings = _live_cost_audit_findings(cost_audit.get("live")) if profile == "production" else []
     gateway_smoke: dict[str, object] | None = None
     if url:
         try:
@@ -296,6 +309,10 @@ def build_launch_report(config_dir: Path, *, url: str | None = None, api_key: st
             "provider_validation": (PROJECT_ROOT / "docs" / "PROVIDER_VALIDATION.md").exists(),
         },
         "launch_profile": profile,
+        "cost_audit": cost_audit,
+        "cost_audit_live_ok": not live_cost_findings,
+        "cost_audit_live_findings": live_cost_findings,
+        "cleanup_audit": cleanup_audit,
     }
     required_paths = {
         "/healthz",
@@ -318,6 +335,13 @@ def build_launch_report(config_dir: Path, *, url: str | None = None, api_key: st
         blockers.append({"check": "routing_hygiene", "findings": routing_hygiene})
     if not checks["audit_chain_valid"]:
         blockers.append({"check": "audit_chain", "valid": False})
+    incomplete_cost_metadata = [
+        row for row in cost_audit["providers"] if isinstance(row, dict) and row.get("metadata_complete") is not True
+    ]
+    if incomplete_cost_metadata:
+        blockers.append({"check": "cost_metadata", "providers": incomplete_cost_metadata})
+    if cleanup_audit.get("ok") is not True:
+        blockers.append({"check": "cleanup_audit", "summary": cleanup_audit})
     secrets = checks["secrets_present"]
     required_live_adapters = _required_live_validation_adapters(config)
     live_artifacts = _live_validation_artifacts_by_adapter(config, config_dir=config_dir)
@@ -333,6 +357,8 @@ def build_launch_report(config_dir: Path, *, url: str | None = None, api_key: st
         "audit_chain_valid": checks["audit_chain_valid"],
     }
     if production:
+        if live_cost_findings:
+            blockers.append({"check": "provider_live_cost_audit", "findings": live_cost_findings})
         if not secrets["gateway_auth"]:
             blockers.append({"check": "gateway_auth", "configured": False})
         if config.object_store is None or not secrets["object_store"]:
@@ -1002,6 +1028,255 @@ def audit_command(action: str, limit: int, max_bytes: int) -> None:
         suffix = "," if index < len(lines) - 1 else ""
         print(f"  {line}{suffix}")
     print("]")
+
+
+def cost_audit_command(config_dir: Path, *, live: bool = False) -> None:
+    config = load_config(config_dir)
+    creds = load_credentials()
+    print(json.dumps(_cost_audit_report(config, creds, config_dir=config_dir, live=live), indent=2, sort_keys=True, default=str))
+
+
+def _cost_audit_report(config, creds: dict[str, dict[str, str]], *, config_dir: Path, live: bool = False) -> dict[str, object]:
+    report: dict[str, object] = {
+        "generated_at": datetime.now(timezone.utc).isoformat(),
+        "config_dir": str(config_dir),
+        "credentials_path": str(credentials_path()),
+        "providers": [_provider_cost_audit_row(provider) for provider in sorted(config.providers.values(), key=lambda item: item.name)],
+    }
+    if live:
+        report["live"] = _live_cost_audit(config.providers, creds)
+    return report
+
+
+def cleanup_audit_command(config_dir: Path) -> None:
+    config = load_config(config_dir)
+    print(json.dumps(_cleanup_audit_report(config), indent=2, sort_keys=True, default=str))
+
+
+def _cleanup_audit_report(config) -> dict[str, object]:
+    lease_path = Path(os.getenv("GPUCALL_HYPERSTACK_LEASE_MANIFEST", str(default_state_dir() / "hyperstack_leases.jsonl"))).expanduser()
+    active_hyperstack = _active_hyperstack_leases_from_manifest(lease_path)
+    validation = _provider_validation_cleanup_summary(config)
+    return {
+        "generated_at": datetime.now(timezone.utc).isoformat(),
+        "ok": not active_hyperstack and validation["invalid_cleanup_artifacts"] == [],
+        "hyperstack": {
+            "lease_manifest_path": str(lease_path),
+            "active_manifest_leases": active_hyperstack,
+        },
+        "provider_validation": validation,
+    }
+
+
+def _active_hyperstack_leases_from_manifest(path: Path) -> list[dict[str, object]]:
+    if not path.exists():
+        return []
+    active: dict[str, dict[str, object]] = {}
+    for line in path.read_text(encoding="utf-8").splitlines():
+        if not line.strip():
+            continue
+        try:
+            row = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        vm_id = row.get("vm_id")
+        if not vm_id:
+            continue
+        key = str(vm_id)
+        if row.get("event") == "destroyed":
+            active.pop(key, None)
+        elif row.get("event") == "provision.created":
+            active[key] = row
+    return list(active.values())
+
+
+def _provider_validation_cleanup_summary(config) -> dict[str, object]:
+    root = default_state_dir() / "provider-validation"
+    if not root.exists():
+        return {"artifact_count": 0, "invalid_cleanup_artifacts": []}
+    invalid: list[dict[str, object]] = []
+    count = 0
+    for path in sorted(root.glob("*.json")):
+        count += 1
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except Exception as exc:
+            invalid.append({"path": str(path), "reason": f"invalid json: {type(exc).__name__}"})
+            continue
+        cleanup = data.get("cleanup")
+        if not isinstance(cleanup, dict):
+            invalid.append({"path": str(path), "provider": data.get("provider"), "reason": "missing cleanup object"})
+            continue
+        if cleanup.get("required") is True and cleanup.get("completed") is not True:
+            invalid.append({"path": str(path), "provider": data.get("provider"), "cleanup": cleanup})
+    return {"artifact_count": count, "invalid_cleanup_artifacts": invalid}
+
+
+def _provider_cost_audit_row(provider) -> dict[str, object]:
+    cost_fields = {
+        "cost_per_second": float(provider.cost_per_second),
+        "expected_cold_start_seconds": provider.expected_cold_start_seconds,
+        "scaledown_window_seconds": provider.scaledown_window_seconds,
+        "min_billable_seconds": provider.min_billable_seconds,
+        "billing_granularity_seconds": provider.billing_granularity_seconds,
+        "standing_cost_per_second": provider.standing_cost_per_second,
+        "standing_cost_window_seconds": provider.standing_cost_window_seconds,
+        "endpoint_cost_per_second": provider.endpoint_cost_per_second,
+        "endpoint_cost_window_seconds": provider.endpoint_cost_window_seconds,
+    }
+    required = ["scaledown_window_seconds", "min_billable_seconds", "billing_granularity_seconds"]
+    missing = [key for key in required if cost_fields[key] is None and float(provider.cost_per_second) > 0]
+    return {
+        "name": provider.name,
+        "adapter": provider.adapter,
+        "target": provider.target,
+        "gpu": provider.gpu,
+        "cost": cost_fields,
+        "metadata_complete": not missing,
+        "missing_metadata": missing,
+    }
+
+
+def _live_cost_audit(providers: dict[str, object], creds: dict[str, dict[str, str]]) -> dict[str, object]:
+    return {
+        "modal": _modal_live_cost_audit(providers),
+        "runpod": _runpod_live_cost_audit(providers, creds),
+        "hyperstack": _hyperstack_live_cost_audit(providers, creds),
+    }
+
+
+def _live_cost_audit_findings(live: object) -> list[dict[str, object]]:
+    if not isinstance(live, dict):
+        return [{"provider": "provider-cost", "reason": "missing live cost audit"}]
+    findings: list[dict[str, object]] = []
+    for provider_name, section in sorted(live.items()):
+        if not isinstance(section, dict) or section.get("configured") is not True:
+            continue
+        if section.get("ok") is False:
+            findings.append({"provider": provider_name, "reason": section.get("error") or "live cost audit failed"})
+        for command_name in ("app_list", "billing_today", "virtual_machines"):
+            command_result = section.get(command_name)
+            if isinstance(command_result, dict) and command_result.get("ok") is False:
+                findings.append(
+                    {
+                        "provider": provider_name,
+                        "check": command_name,
+                        "status_code": command_result.get("status_code"),
+                        "returncode": command_result.get("returncode"),
+                        "reason": command_result.get("error") or command_result.get("stderr") or "live cost audit failed",
+                    }
+                )
+        endpoints = section.get("endpoints")
+        if isinstance(endpoints, list):
+            for endpoint in endpoints:
+                if not isinstance(endpoint, dict):
+                    continue
+                health = endpoint.get("health")
+                if isinstance(health, dict) and health.get("ok") is False:
+                    findings.append(
+                        {
+                            "provider": provider_name,
+                            "endpoint_id": endpoint.get("endpoint_id"),
+                            "check": "endpoint_health",
+                            "status_code": health.get("status_code"),
+                            "reason": health.get("error") or "endpoint health audit failed",
+                        }
+                    )
+    return findings
+
+
+def _modal_live_cost_audit(providers: dict[str, object]) -> dict[str, object]:
+    if not any(getattr(provider, "adapter", "") == "modal" for provider in providers.values()):
+        return {"configured": False}
+    modal = shutil.which("modal")
+    if modal is None:
+        return {"configured": True, "ok": False, "error": "modal CLI not found"}
+    return {
+        "configured": True,
+        "app_list": _run_jsonish_command([modal, "app", "list"], timeout=30),
+        "billing_today": _run_jsonish_command(
+            [modal, "billing", "report", "--for", "today", "--resolution", "h", "--tz", "Asia/Tokyo", "--json"],
+            timeout=60,
+        ),
+    }
+
+
+def _runpod_live_cost_audit(providers: dict[str, object], creds: dict[str, dict[str, str]]) -> dict[str, object]:
+    runpod_providers = [
+        provider
+        for provider in providers.values()
+        if str(getattr(provider, "adapter", "")).startswith("runpod") and getattr(provider, "target", None)
+    ]
+    if not runpod_providers:
+        return {"configured": False}
+    api_key = creds.get("runpod", {}).get("api_key")
+    if not api_key:
+        return {"configured": True, "ok": False, "error": "RunPod api_key is not configured"}
+    rows: list[dict[str, object]] = []
+    for provider in runpod_providers:
+        base_url = str(getattr(provider, "endpoint", None) or "https://api.runpod.ai/v2").rstrip("/")
+        endpoint_id = str(getattr(provider, "target"))
+        rows.append(
+            {
+                "provider": getattr(provider, "name", ""),
+                "endpoint_id": endpoint_id,
+                "health": _http_json(
+                    f"{base_url}/{endpoint_id}/health",
+                    headers={"authorization": f"Bearer {api_key}", "accept": "application/json"},
+                ),
+            }
+        )
+    return {"configured": True, "endpoints": rows}
+
+
+def _hyperstack_live_cost_audit(providers: dict[str, object], creds: dict[str, dict[str, str]]) -> dict[str, object]:
+    hyperstack_providers = [provider for provider in providers.values() if getattr(provider, "adapter", "") == "hyperstack"]
+    if not hyperstack_providers:
+        return {"configured": False}
+    api_key = creds.get("hyperstack", {}).get("api_key")
+    if not api_key:
+        return {"configured": True, "ok": False, "error": "Hyperstack api_key is not configured"}
+    base_url = str(getattr(hyperstack_providers[0], "endpoint", None) or "https://infrahub-api.nexgencloud.com/v1").rstrip("/")
+    return {
+        "configured": True,
+        "virtual_machines": _http_json(
+            f"{base_url}/core/virtual-machines",
+            headers={"api_key": api_key, "accept": "application/json", "content-type": "application/json"},
+        ),
+    }
+
+
+def _run_jsonish_command(command: list[str], *, timeout: int) -> dict[str, object]:
+    try:
+        completed = subprocess.run(command, check=False, capture_output=True, text=True, timeout=timeout)
+    except Exception as exc:
+        return {"ok": False, "error": f"{type(exc).__name__}: {exc}"}
+    stdout = completed.stdout.strip()
+    payload: object = stdout
+    if stdout:
+        try:
+            payload = json.loads(stdout)
+        except json.JSONDecodeError:
+            payload = stdout
+    return {
+        "ok": completed.returncode == 0,
+        "returncode": completed.returncode,
+        "stdout": payload,
+        "stderr": completed.stderr.strip(),
+    }
+
+
+def _http_json(url: str, *, headers: dict[str, str]) -> dict[str, object]:
+    try:
+        response = httpx.get(url, headers=headers, timeout=30)
+        payload: object
+        try:
+            payload = response.json()
+        except ValueError:
+            payload = response.text
+        return {"ok": 200 <= response.status_code < 300, "status_code": response.status_code, "body": payload}
+    except Exception as exc:
+        return {"ok": False, "error": f"{type(exc).__name__}: {exc}"}
 
 
 def security_command(action: str, config_dir: Path) -> None:

@@ -359,6 +359,10 @@ class ProviderSpec(BaseModel):
     scaledown_window_seconds: NonNegativeFloat | None = None
     min_billable_seconds: NonNegativeFloat | None = None
     billing_granularity_seconds: NonNegativeFloat | None = None
+    standing_cost_per_second: NonNegativeFloat | None = None
+    standing_cost_window_seconds: NonNegativeFloat | None = None
+    endpoint_cost_per_second: NonNegativeFloat | None = None
+    endpoint_cost_window_seconds: NonNegativeFloat | None = None
     modes: list[ExecutionMode] = Field(default_factory=lambda: [ExecutionMode.ASYNC])
     endpoint: AnyHttpUrl | None = None
     project_id: str | None = None

@@ -17,6 +17,8 @@
 gpucall configure
 gpucall doctor
 gpucall explain-config text-infer-standard --mode async
+gpucall cost-audit
+gpucall cleanup-audit
 gpucall launch-check --profile static
 ```
 
@@ -35,6 +37,8 @@ cd /opt/gpucall
 docker compose -p gpucall up -d --build
 gpucall smoke
 gpucall audit verify
+gpucall cost-audit --live
+gpucall cleanup-audit
 gpucall launch-check --profile production --url http://127.0.0.1:18088
 ```
 
@@ -48,6 +52,8 @@ gpucall launch-check --profile production --url http://127.0.0.1:18088
 - vision smoke only when object store can provide an image DataRef
 
 Production auto-selected recipes must not include `local-echo` or smoke/stub providers. Stub endpoints such as a RunPod endpoint returning a fixed `Hello World` response must be named as smoke providers and referenced only by explicit smoke recipes.
+
+Provider validation artifacts under `$XDG_STATE_HOME/gpucall/provider-validation/` must match the current commit and config hash, include official contract checks, and include cleanup, cost, and audit objects.
 
 ## Liveness Seed
 
@@ -94,6 +100,9 @@ console.log(await client.infer({ prompt: "hello" }));
 ## Launch Gate
 
 - `gpucall smoke` succeeds.
+- `gpucall cost-audit` has complete billing metadata for every billable provider.
+- `gpucall cost-audit --live` can read provider-side cost or resource state for every configured live provider.
+- `gpucall cleanup-audit` returns `ok: true`.
 - `gpucall launch-check --profile production --url ...` returns `go: true`.
 - `gpucall audit verify` returns `valid: true`.
 - object store is `true` in `/readyz`.

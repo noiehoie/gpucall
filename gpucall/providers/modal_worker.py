@@ -549,7 +549,7 @@ if modal is not None:
         image=_VLLM_IMAGE,
         gpu="A10G",
         timeout=1800,
-        scaledown_window=_env_int("GPUCALL_MODAL_A10G_SCALEDOWN_WINDOW", 300),
+        scaledown_window=_env_int("GPUCALL_MODAL_A10G_SCALEDOWN_WINDOW", 60),
         min_containers=_env_int("GPUCALL_MODAL_A10G_MIN_CONTAINERS", 0),
     )
     def run_inference_on_modal(payload: dict[str, Any], workload: str = "infer", **kwargs) -> str:
@@ -577,7 +577,7 @@ if modal is not None:
         image=_VISION_IMAGE,
         gpu="H100",
         timeout=1800,
-        scaledown_window=_env_int("GPUCALL_MODAL_VISION_H100_SCALEDOWN_WINDOW", 300),
+        scaledown_window=_env_int("GPUCALL_MODAL_VISION_H100_SCALEDOWN_WINDOW", 60),
         min_containers=_env_int("GPUCALL_MODAL_VISION_H100_MIN_CONTAINERS", 0),
     )
     def run_inference_on_modal_vision_h100(payload: dict[str, Any], workload: str = "vision", **kwargs) -> str:
@@ -588,7 +588,7 @@ if modal is not None:
         image=_VLLM_IMAGE,
         gpu="A10G",
         timeout=1800,
-        scaledown_window=_env_int("GPUCALL_MODAL_A10G_SCALEDOWN_WINDOW", 300),
+        scaledown_window=_env_int("GPUCALL_MODAL_A10G_SCALEDOWN_WINDOW", 60),
         min_containers=_env_int("GPUCALL_MODAL_A10G_MIN_CONTAINERS", 0),
     )
     def stream_inference_on_modal(payload: dict[str, Any], workload: str = "infer", **kwargs) -> Iterator[str]:
@@ -667,7 +667,7 @@ if modal is not None:
         def _stream(self, payload: dict[str, Any], model: str | None, max_model_len: int) -> Iterator[str]:
             raise RuntimeError("Modal true streaming is not implemented in gpucall v2.0")
 
-    @app.cls(image=_VLLM_IMAGE, gpu="T4", timeout=1800, scaledown_window=300)
+    @app.cls(image=_VLLM_IMAGE, gpu="T4", timeout=1800, scaledown_window=60)
     class VllmWorkerT4(VllmWorkerBase):
         @modal.method()
         def run_inference_on_modal(self, payload: dict[str, Any], workload: str, **kwargs) -> str:
@@ -679,7 +679,7 @@ if modal is not None:
         def stream_inference_on_modal(self, payload: dict[str, Any], workload: str, **kwargs) -> Iterator[str]:
             yield from self._stream(payload, kwargs.get("model"), kwargs.get("max_model_len") or 8192)
 
-    @app.cls(image=_VLLM_IMAGE, gpu="A10G", timeout=1800, scaledown_window=300)
+    @app.cls(image=_VLLM_IMAGE, gpu="A10G", timeout=1800, scaledown_window=60)
     class VllmWorkerA10G(VllmWorkerBase):
         @modal.method()
         def run_inference_on_modal(self, payload: dict[str, Any], workload: str, **kwargs) -> str:

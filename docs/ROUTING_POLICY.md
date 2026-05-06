@@ -22,7 +22,8 @@ task endpoints unless `GPUCALL_ALLOW_CALLER_ROUTING=1` is explicitly enabled.
    classification cannot satisfy that request.
 5. Apply deterministic cost policy. Budget fields are optional; when no explicit
    budget is present, high-cost providers are not auto-selected once their
-   estimated cold-start + runtime + idle cost exceeds the policy threshold.
+   estimated cold-start + runtime + idle + standing endpoint cost exceeds the
+   policy threshold.
 6. Rank the remaining provider list with `ObservedRegistry`.
 
 ## Input Contract Preservation
@@ -57,6 +58,44 @@ real model output for the same TaskRequest contract.
 `model:` is treated as the production-readiness declaration for external GPU
 workers. A provider without `model:` is considered provisionable/testable but
 not a production inference target.
+
+## Cost Metadata
+
+Provider YAML must describe provider billing mechanics that affect routing:
+
+- `scaledown_window_seconds`: billed idle/runtime window after useful work.
+- `min_billable_seconds`: minimum billable execution unit.
+- `billing_granularity_seconds`: billing rounding interval.
+- `standing_cost_per_second` and `standing_cost_window_seconds`: always-on or
+  standby workers that accrue cost independent of a single request.
+- `endpoint_cost_per_second` and `endpoint_cost_window_seconds`: endpoint or
+  fixed service cost that must be budgeted with the route.
+
+Official sources used for the current defaults:
+
+- Modal billing: no minimum usage-time increments; autoscaler defaults to scale
+  to zero and `scaledown_window` defaults to 60 seconds. Idle containers can
+  still be billed while they are kept warm.
+  https://modal.com/docs/guide/billing
+  https://modal.com/docs/guide/cold-start
+- RunPod Serverless: workers are billed from start until stop, rounded to the
+  nearest second; idle timeout duration is part of compute cost and defaults to
+  5 seconds. Flex idle state is not billed; Active workers run continuously.
+  https://docs.runpod.io/serverless/pricing
+  https://docs.runpod.io/serverless/workers/overview
+- Hyperstack: public pricing states billing cycles are accurate to the minute.
+  https://www.hyperstack.cloud/
+
+Run:
+
+```bash
+gpucall cost-audit
+gpucall cost-audit --live
+```
+
+The static report lists configured billing metadata and missing fields. The live
+report queries Modal billing/app state, RunPod endpoint health, and Hyperstack
+VM inventory when credentials and provider tools are available.
 
 ## Caller Notification
 

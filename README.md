@@ -9,9 +9,13 @@ gpucall init
 gpucall configure
 gpucall validate-config
 gpucall doctor
+gpucall cost-audit
+gpucall cleanup-audit
 gpucall launch-check --profile static
 docker compose -p gpucall up -d --build
 gpucall smoke
+gpucall cost-audit --live
+gpucall cleanup-audit
 gpucall launch-check --profile production --url http://127.0.0.1:18088
 gpucall audit verify
 ```
@@ -147,13 +151,17 @@ Provider outages, remote capacity exhaustion, authentication failures, and provi
 ```bash
 gpucall validate-config
 gpucall doctor
+gpucall cost-audit
+gpucall cleanup-audit
 gpucall launch-check --profile static
 gpucall seed-liveness text-infer-standard --count 100
 gpucall registry show
 gpucall smoke
+gpucall cost-audit --live
+gpucall cleanup-audit
 gpucall launch-check --profile production --url http://127.0.0.1:18088
 gpucall audit verify
 gpucall post-launch-report
 ```
 
-Production launch checks require gateway auth, object-store credentials, a live gateway smoke result, and a provider-validation JSON artifact. Static launch checks remain available for local config validation.
+Production launch checks require gateway auth, object-store credentials, a live gateway smoke result, complete provider cost metadata, live provider cost/resource audit access, cleanup audit success, and provider-validation JSON artifacts. Static launch checks remain available for local config validation.

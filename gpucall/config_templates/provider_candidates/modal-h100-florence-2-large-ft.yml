@@ -5,6 +5,9 @@ gpu: H100
 vram_gb: 80
 max_model_len: 8192
 cost_per_second: 0.00213
+scaledown_window_seconds: 60
+min_billable_seconds: 0
+billing_granularity_seconds: 0
 modes: [sync, async]
 max_data_classification: confidential
 security_tier: encrypted_capsule

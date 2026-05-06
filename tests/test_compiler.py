@@ -507,6 +507,50 @@ def test_recipe_budget_rejects_provider_when_estimate_exceeds_limit() -> None:
     assert "max_estimated_cost_usd" in exc.value.context["provider_rejections"]["p1"]
 
 
+def test_standing_provider_cost_counts_toward_budget_guard() -> None:
+    compiler = build_compiler()
+    compiler.providers = {
+        "p1": compiler.providers["p1"].model_copy(
+            update={
+                "cost_per_second": 0.0,
+                "standing_cost_per_second": 0.001,
+                "standing_cost_window_seconds": 7200,
+                "endpoint_cost_per_second": 0.001,
+                "endpoint_cost_window_seconds": 3600,
+            }
+        )
+    }
+    request = TaskRequest(task="infer", mode="sync", recipe="r1")
+
+    with pytest.raises(GovernanceError) as exc:
+        compiler.compile(request)
+
+    assert exc.value.code == "NO_ELIGIBLE_PROVIDER"
+    assert "without explicit budget" in exc.value.context["provider_rejections"]["p1"]
+
+
+def test_standing_provider_cost_is_reported_in_attestation() -> None:
+    compiler = build_compiler()
+    compiler.providers = {
+        "p1": compiler.providers["p1"].model_copy(
+            update={
+                "cost_per_second": 0.0,
+                "standing_cost_per_second": 0.001,
+                "standing_cost_window_seconds": 7200,
+            }
+        )
+    }
+    compiler.recipes["r1"] = compiler.recipes["r1"].model_copy(
+        update={"cost_policy": CostPolicy(max_estimated_cost_usd=8.0)}
+    )
+    request = TaskRequest(task="infer", mode="sync", recipe="r1")
+
+    plan = compiler.compile(request)
+
+    assert plan.attestations["cost_estimate"]["standing_cost_usd"] == pytest.approx(7.2)
+    assert plan.attestations["cost_estimate"]["estimated_cost_usd"] == pytest.approx(7.2)
+
+
 def test_requested_provider_must_be_eligible() -> None:
     compiler = build_compiler()
     request = TaskRequest(task="infer", mode="sync", recipe="r1", requested_provider="missing")
