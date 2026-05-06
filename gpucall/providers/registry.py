@@ -134,6 +134,23 @@ def registered_adapter_descriptors() -> dict[str, ProviderAdapterDescriptor]:
     return dict(sorted(_DESCRIPTORS.items()))
 
 
+def provider_family_for_adapter(adapter: str) -> str:
+    adapter = _normalize(adapter)
+    if adapter.startswith("runpod-"):
+        return "runpod"
+    if adapter == "azure-compute-vm":
+        return "azure"
+    if adapter == "gcp-confidential-space-vm":
+        return "gcp"
+    if adapter == "ovhcloud-public-cloud-instance":
+        return "ovhcloud"
+    if adapter == "scaleway-instance":
+        return "scaleway"
+    if adapter in {"echo", "local-ollama"}:
+        return "local"
+    return adapter
+
+
 def _normalize(value: str) -> str:
     return value.strip().lower()
 

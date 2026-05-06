@@ -276,6 +276,10 @@ def test_standard_config_routes_news_sized_prompts_to_long_recipes(tmp_path) -> 
 
     assert large_plan.recipe_name == "text-infer-large"
     assert large_plan.provider_chain[0] == "hyperstack-qwen-1m"
+    artifact = large_plan.attestations["compile_artifact"]
+    assert artifact["selected_tuple"]["provider"] == "hyperstack-qwen-1m"
+    assert artifact["selected_tuple"]["execution_surface"] == "iaas_vm"
+    assert artifact["selected_tuple_hash"]
     assert ultralong_plan.recipe_name == "text-infer-ultralong"
     assert ultralong_plan.provider_chain[0] == "hyperstack-qwen-1m"
 

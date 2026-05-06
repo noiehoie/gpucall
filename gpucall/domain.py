@@ -201,6 +201,8 @@ class CompileArtifact(BaseModel):
     policy_hash: str
     recipe_hash: str
     provider_contract_hash: str
+    selected_tuple_hash: str | None = None
+    selected_tuple: dict[str, Any] | None = None
     governance_hash: str
 
 

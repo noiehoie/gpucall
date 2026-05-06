@@ -21,6 +21,7 @@ from gpucall.domain import (
     TaskRequest,
 )
 from gpucall.domain import ChatMessage, ResponseFormatType
+from gpucall.providers.registry import provider_family_for_adapter
 from gpucall.registry import ObservedRegistry
 from gpucall.routing import classification_rank, is_production_route_candidate, provider_route_rejection_reason, required_model_len, token_budget
 
@@ -119,6 +120,8 @@ class GovernanceCompiler:
             "token_budget": compiled_token_budget,
         }
         selected_provider = self.providers[provider_chain[0]]
+        selected_tuple = self._execution_tuple(recipe=recipe, provider=selected_provider)
+        plan.attestations["selected_execution_tuple"] = selected_tuple
         plan.attestations["cost_estimate"] = self._cost_estimate(selected_provider, request, recipe, timeout)
         plan.attestations["security_gate"] = self._security_gate(recipe, selected_provider)
         if request.artifact_export is not None or recipe.requires_key_release:
@@ -133,6 +136,7 @@ class GovernanceCompiler:
             request=request,
             recipe=recipe,
             provider_chain=provider_chain,
+            selected_tuple=selected_tuple,
             governance_hash=governance_hash,
         ).model_dump(mode="json")
         return plan
@@ -568,6 +572,7 @@ class GovernanceCompiler:
         request: TaskRequest,
         recipe: Recipe,
         provider_chain: list[str],
+        selected_tuple: dict[str, object],
         governance_hash: str,
     ) -> CompileArtifact:
         return CompileArtifact(
@@ -577,8 +582,43 @@ class GovernanceCompiler:
             provider_contract_hash=self._stable_hash(
                 {name: self.providers[name].model_dump(mode="json") for name in provider_chain if name in self.providers}
             ),
+            selected_tuple_hash=self._stable_hash(selected_tuple),
+            selected_tuple=selected_tuple,
             governance_hash=governance_hash,
         )
+
+    def _execution_tuple(self, *, recipe: Recipe, provider: ProviderSpec) -> dict[str, object]:
+        return {
+            "recipe": recipe.name,
+            "provider": provider.name,
+            "account_ref": provider_family_for_adapter(provider.adapter),
+            "adapter": provider.adapter,
+            "execution_surface": provider.execution_surface.value if provider.execution_surface else None,
+            "resource": {
+                "gpu": provider.gpu,
+                "vram_gb": provider.vram_gb,
+                "max_model_len": provider.max_model_len,
+                "cost_per_second": provider.cost_per_second,
+                "region": provider.region,
+                "zone": provider.zone,
+            },
+            "worker": {
+                "model_ref": provider.model_ref,
+                "engine_ref": provider.engine_ref,
+                "modes": [mode.value for mode in provider.modes],
+                "input_contracts": list(provider.input_contracts),
+                "output_contract": provider.output_contract,
+                "stream_contract": provider.stream_contract,
+                "target_configured": bool(provider.target),
+            },
+            "contract": {
+                "data_classification": recipe.data_classification.value,
+                "context_budget_tokens": recipe.context_budget_tokens,
+                "required_model_len": recipe.max_model_len,
+                "min_vram_gb": recipe.min_vram_gb,
+                "output_contract": recipe.output_contract,
+            },
+        }
 
     def _security_gate(self, recipe: Recipe, provider: ProviderSpec) -> dict[str, object]:
         profile = provider.trust_profile
