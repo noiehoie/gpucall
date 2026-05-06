@@ -455,11 +455,9 @@ if modal is not None:
             import torch
 
             task_prompt = "<OCR>" if _looks_like_document_prompt(prompt) else "<MORE_DETAILED_CAPTION>"
-            text_input = "" if task_prompt == "<OCR>" else prompt
-            florence_prompt = task_prompt + text_input
             device = next(vision_model.parameters()).device
             torch_dtype = torch.float16 if getattr(device, "type", "") == "cuda" else torch.float32
-            inputs = processor(text=florence_prompt, images=image, return_tensors="pt").to(device, torch_dtype)
+            inputs = processor(text=task_prompt, images=image, return_tensors="pt").to(device, torch_dtype)
             generated_ids = vision_model.generate(
                 input_ids=inputs["input_ids"],
                 pixel_values=inputs["pixel_values"],
