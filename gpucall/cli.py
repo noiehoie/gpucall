@@ -14,6 +14,7 @@ from importlib.resources import files
 
 import httpx
 import uvicorn
+import yaml
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if __package__ in (None, ""):
@@ -32,6 +33,7 @@ from gpucall.registry import ObservedRegistry
 from gpucall.audit import AuditTrail
 from gpucall.routing import provider_route_rejection_reason
 from gpucall.sqlite_store import SQLiteJobStore
+from gpucall.tenant import TenantUsageLedger
 
 
 def main() -> None:
@@ -104,8 +106,20 @@ def main() -> None:
     launch_check.add_argument("--profile", choices=["static", "production"], default="production")
     post_launch = sub.add_parser("post-launch-report")
     post_launch.add_argument("--config-dir", type=Path, default=default_config_dir())
+    release_check = sub.add_parser("release-check")
+    release_check.add_argument("--config-dir", type=Path, default=default_config_dir())
+    release_check.add_argument("--output-dir", type=Path, default=default_state_dir() / "release")
     configure = sub.add_parser("configure")
     configure.add_argument("--config-dir", type=Path, default=default_config_dir())
+    admin = sub.add_parser("admin")
+    admin.add_argument("action", choices=["status", "tenant-list", "tenant-create", "tenant-usage"])
+    admin.add_argument("--config-dir", type=Path, default=default_config_dir())
+    admin.add_argument("--name", default=None)
+    admin.add_argument("--requests-per-minute", type=int, default=None)
+    admin.add_argument("--daily-budget-usd", type=float, default=None)
+    admin.add_argument("--monthly-budget-usd", type=float, default=None)
+    admin.add_argument("--max-request-estimated-cost-usd", type=float, default=None)
+    admin.add_argument("--object-prefix", default=None)
     args = parser.parse_args()
 
     if args.command == "serve":
@@ -196,8 +210,21 @@ def main() -> None:
         launch_check_command(args.config_dir, url=args.url, api_key=args.api_key, profile=args.profile)
     elif args.command == "post-launch-report":
         asyncio.run(post_launch_report_command(args.config_dir))
+    elif args.command == "release-check":
+        release_check_command(args.config_dir, args.output_dir)
     elif args.command == "configure":
         configure_command(args.config_dir)
+    elif args.command == "admin":
+        admin_command(
+            args.action,
+            args.config_dir,
+            name=args.name,
+            requests_per_minute=args.requests_per_minute,
+            daily_budget_usd=args.daily_budget_usd,
+            monthly_budget_usd=args.monthly_budget_usd,
+            max_request_estimated_cost_usd=args.max_request_estimated_cost_usd,
+            object_prefix=args.object_prefix,
+        )
 
 
 def init_config(config_dir: Path, *, force: bool = False) -> None:
@@ -251,7 +278,64 @@ def doctor_config(config_dir: Path, *, live_provider_catalog: bool = False) -> N
 
 def validate_config_command(config_dir: Path) -> None:
     config = load_config(config_dir)
-    print(json.dumps({"valid": True, "recipes": sorted(config.recipes), "providers": sorted(config.providers)}, indent=2, sort_keys=True))
+    print(
+        json.dumps(
+            {"valid": True, "recipes": sorted(config.recipes), "providers": sorted(config.providers), "tenants": sorted(config.tenants)},
+            indent=2,
+            sort_keys=True,
+        )
+    )
+
+
+def admin_command(
+    action: str,
+    config_dir: Path,
+    *,
+    name: str | None,
+    requests_per_minute: int | None,
+    daily_budget_usd: float | None,
+    monthly_budget_usd: float | None,
+    max_request_estimated_cost_usd: float | None,
+    object_prefix: str | None,
+) -> None:
+    if action == "tenant-create":
+        if not name:
+            raise SystemExit("admin tenant-create requires --name")
+        path = config_dir / "tenants" / f"{name}.yml"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        if path.exists():
+            raise SystemExit(f"tenant already exists: {name}")
+        payload = {
+            "name": name,
+            "requests_per_minute": requests_per_minute or 120,
+            "daily_budget_usd": daily_budget_usd if daily_budget_usd is not None else 25.0,
+            "monthly_budget_usd": monthly_budget_usd if monthly_budget_usd is not None else 500.0,
+            "max_request_estimated_cost_usd": max_request_estimated_cost_usd if max_request_estimated_cost_usd is not None else 10.0,
+            "object_prefix": object_prefix or name,
+        }
+        path.write_text(yaml.safe_dump(payload, sort_keys=False), encoding="utf-8")
+        print(json.dumps({"created": name, "path": str(path), "credential_action": "add auth.tenant_keys entry outside YAML"}, indent=2))
+        return
+    config = load_config(config_dir)
+    if action == "tenant-list":
+        print(json.dumps({"tenants": {name: tenant.model_dump(mode="json") for name, tenant in sorted(config.tenants.items())}}, indent=2, sort_keys=True))
+        return
+    if action == "tenant-usage":
+        ledger = TenantUsageLedger(default_state_dir() / "tenant_usage.db")
+        print(json.dumps({"tenants": ledger.summary(config.tenants)}, indent=2, sort_keys=True))
+        return
+    if action == "status":
+        report = {
+            "config_valid": True,
+            "tenant_count": len(config.tenants),
+            "tenants": sorted(config.tenants),
+            "state_dir": str(default_state_dir()),
+            "credentials_path": str(credentials_path()),
+            "tenant_usage_db": str(default_state_dir() / "tenant_usage.db"),
+        }
+        print(json.dumps(report, indent=2, sort_keys=True))
+        return
+    raise SystemExit(f"unknown admin action: {action}")
 
 
 def launch_check_command(config_dir: Path, *, url: str | None = None, api_key: str | None = None, profile: str = "production") -> None:
@@ -260,6 +344,30 @@ def launch_check_command(config_dir: Path, *, url: str | None = None, api_key: s
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(report, indent=2, sort_keys=True, default=str) + "\n", encoding="utf-8")
     print(json.dumps({**report, "report_path": str(path)}, indent=2, sort_keys=True, default=str))
+
+
+def release_check_command(config_dir: Path, output_dir: Path) -> None:
+    output_dir.mkdir(parents=True, exist_ok=True)
+    config = load_config(config_dir)
+    openapi_path = output_dir / "openapi.json"
+    manifest_path = output_dir / "release-manifest.json"
+    launch_report = build_launch_report(config_dir, profile="static")
+    openapi_path.write_text(json.dumps(create_app(config_dir).openapi(), indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    manifest = {
+        "schema_version": 1,
+        "generated_at": datetime.now(timezone.utc).isoformat(),
+        "commit": _git_commit(),
+        "config_hash": _config_hash(config_dir),
+        "policy_version": config.policy.version,
+        "providers": sorted(config.providers),
+        "recipes": sorted(config.recipes),
+        "tenants": sorted(config.tenants),
+        "static_launch_go": launch_report["go"],
+        "static_launch_blockers": launch_report["blockers"],
+        "artifacts": {"openapi": str(openapi_path)},
+    }
+    manifest_path.write_text(json.dumps(manifest, indent=2, sort_keys=True, default=str) + "\n", encoding="utf-8")
+    print(json.dumps({**manifest, "manifest_path": str(manifest_path)}, indent=2, sort_keys=True, default=str))
 
 
 def build_launch_report(config_dir: Path, *, url: str | None = None, api_key: str | None = None, profile: str = "production") -> dict[str, object]:
@@ -310,6 +418,11 @@ def build_launch_report(config_dir: Path, *, url: str | None = None, api_key: st
             "provider_validation": (PROJECT_ROOT / "docs" / "PROVIDER_VALIDATION.md").exists(),
         },
         "launch_profile": profile,
+        "tenant_governance": {
+            "tenant_count": len(config.tenants),
+            "tenants": sorted(config.tenants),
+            "usage_db": str(default_state_dir() / "tenant_usage.db"),
+        },
         "cost_audit": cost_audit,
         "cost_audit_live_ok": not live_cost_findings,
         "cost_audit_live_findings": live_cost_findings,
@@ -365,6 +478,8 @@ def build_launch_report(config_dir: Path, *, url: str | None = None, api_key: st
     if production:
         if live_cost_findings:
             blockers.append({"check": "provider_live_cost_audit", "findings": live_cost_findings})
+        if not config.tenants:
+            blockers.append({"check": "tenant_governance", "configured": False})
         if not secrets["gateway_auth"]:
             blockers.append({"check": "gateway_auth", "configured": False})
         if config.object_store is None or not secrets["object_store"]:
@@ -1442,9 +1557,10 @@ def _gateway_api_key() -> str | None:
 
 def _secret_presence_summary(creds: dict[str, dict[str, str]]) -> dict[str, bool | list[str]]:
     configured = sorted(set(configured_credentials()))
+    auth = creds.get("auth", {})
     return {
         "configured": configured,
-        "gateway_auth": bool(creds.get("auth", {}).get("api_keys") or os.getenv("GPUCALL_API_KEYS")),
+        "gateway_auth": bool(auth.get("api_keys") or auth.get("tenant_keys") or os.getenv("GPUCALL_API_KEYS") or os.getenv("GPUCALL_TENANT_API_KEYS")),
         "object_store": bool(creds.get("aws", {}).get("access_key_id") and creds.get("aws", {}).get("secret_access_key")),
     }
 

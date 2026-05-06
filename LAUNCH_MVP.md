@@ -20,6 +20,7 @@ gpucall explain-config text-infer-standard --mode async
 gpucall cost-audit
 gpucall cleanup-audit
 gpucall launch-check --profile static
+gpucall release-check
 ```
 
 Expected `doctor` signals before launch:
@@ -103,6 +104,7 @@ console.log(await client.infer({ prompt: "hello" }));
 - `gpucall cost-audit` has complete billing metadata for every billable provider.
 - `gpucall cost-audit --live` can read provider-side cost or resource state for every configured live provider.
 - `gpucall cleanup-audit` returns `ok: true`.
+- tenant governance is configured, and tenant keys live in credentials or environment variables, not YAML.
 - `gpucall launch-check --profile production --url ...` returns `go: true`.
 - `provider_live_validation.capacity_unavailable_adapters` is acceptable only for retryable external capacity failures with no leaked resources.
 - `gpucall audit verify` returns `valid: true`.

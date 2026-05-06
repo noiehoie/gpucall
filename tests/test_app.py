@@ -29,13 +29,24 @@ class ChangingPresignObjectStore:
 
     def presign_get(self, request):
         self.calls += 1
-        ref = request.data_ref.model_copy(
-            update={
-                "uri": f"https://storage.example/input.txt?X-Amz-Signature=secret-{self.calls}",
-                "gateway_presigned": True,
-            }
-        )
+        data = request.data_ref.model_dump(mode="json")
+        data.update({"uri": f"https://storage.example/input.txt?X-Amz-Signature=secret-{self.calls}", "gateway_presigned": True})
+        ref = DataRef.model_validate(data)
         return PresignGetResponse(download_url=str(ref.uri), data_ref=ref)
+
+
+class TenantPrefixObjectStore:
+    def __init__(self) -> None:
+        self.tenant_prefix = None
+
+    def presign_put(self, request, *, tenant_prefix=None):
+        self.tenant_prefix = tenant_prefix
+        from gpucall.domain import DataRef, PresignPutResponse
+
+        return PresignPutResponse(
+            upload_url="https://storage.example/upload",
+            data_ref=DataRef(uri=f"s3://bucket/gpucall/tenants/{tenant_prefix}/object.txt", sha256=request.sha256, bytes=request.bytes),
+        )
 
 
 def copy_config(tmp_path: Path) -> Path:
@@ -273,6 +284,70 @@ def test_api_key_auth_when_configured(tmp_path, monkeypatch) -> None:
 
     assert unauthorized.status_code == 401
     assert authorized.status_code == 200
+
+
+def test_tenant_api_key_sets_tenant_header_and_usage(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("GPUCALL_TENANT_API_KEYS", "tenant-a:secret-a")
+    root = copy_config(tmp_path)
+    tenant_path = root / "tenants" / "tenant-a.yml"
+    tenant_path.write_text(
+        "name: tenant-a\nrequests_per_minute: 120\ndaily_budget_usd: 10\nmonthly_budget_usd: 100\nobject_prefix: tenant-a\n",
+        encoding="utf-8",
+    )
+    with TestClient(create_app(root)) as client:
+        response = client.post(
+            "/v2/tasks/sync",
+            json={"task": "infer", "mode": "sync"},
+            headers={"authorization": "Bearer secret-a"},
+        )
+
+    assert response.status_code == 200
+    assert response.headers["X-GPUCall-Tenant"] == "tenant-a"
+
+
+def test_tenant_budget_rejects_before_provider_execution(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("GPUCALL_TENANT_API_KEYS", "tenant-a:secret-a")
+    root = copy_config(tmp_path)
+    provider_path = root / "providers" / "local-echo.yml"
+    provider = yaml.safe_load(provider_path.read_text(encoding="utf-8"))
+    provider["cost_per_second"] = 1
+    provider_path.write_text(yaml.safe_dump(provider, sort_keys=False), encoding="utf-8")
+    policy_path = root / "policy.yml"
+    policy = yaml.safe_load(policy_path.read_text(encoding="utf-8"))
+    policy["cost_policy"]["require_budget_for_high_cost_provider"] = False
+    policy_path.write_text(yaml.safe_dump(policy, sort_keys=False), encoding="utf-8")
+    tenant_path = root / "tenants" / "tenant-a.yml"
+    tenant_path.write_text(
+        "name: tenant-a\nrequests_per_minute: 120\nmax_request_estimated_cost_usd: 0.01\nobject_prefix: tenant-a\n",
+        encoding="utf-8",
+    )
+    with TestClient(create_app(root)) as client:
+        response = client.post(
+            "/v2/tasks/sync",
+            json={"task": "infer", "mode": "sync"},
+            headers={"authorization": "Bearer secret-a"},
+        )
+
+    assert response.status_code == 402
+    assert response.json()["code"] == "TENANT_BUDGET_EXCEEDED"
+
+
+def test_tenant_object_prefix_is_applied_to_presign_put(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("GPUCALL_TENANT_API_KEYS", "tenant-a:secret-a")
+    root = copy_config(tmp_path)
+    tenant_path = root / "tenants" / "tenant-a.yml"
+    tenant_path.write_text("name: tenant-a\nobject_prefix: tenant-a\n", encoding="utf-8")
+    store = TenantPrefixObjectStore()
+    with TestClient(create_app(root)) as client:
+        client.app.state.runtime.object_store = store
+        response = client.post(
+            "/v2/objects/presign-put",
+            json={"name": "input.txt", "bytes": 1, "sha256": "a" * 64},
+            headers={"authorization": "Bearer secret-a"},
+        )
+
+    assert response.status_code == 200
+    assert store.tenant_prefix == "tenant-a"
 
 
 def test_production_auth_fails_closed_without_configured_key(tmp_path, monkeypatch) -> None:

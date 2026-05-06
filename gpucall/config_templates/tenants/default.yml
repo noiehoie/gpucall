@@ -1,0 +1,6 @@
+name: default
+requests_per_minute: 120
+daily_budget_usd: 25.0
+monthly_budget_usd: 500.0
+max_request_estimated_cost_usd: 10.0
+object_prefix: default

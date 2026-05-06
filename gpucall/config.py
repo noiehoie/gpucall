@@ -7,7 +7,7 @@ from typing import TypeVar
 import yaml
 from pydantic import BaseModel, ValidationError
 
-from gpucall.domain import EngineSpec, ModelSpec, ObjectStoreConfig, Policy, ProviderSpec, Recipe
+from gpucall.domain import EngineSpec, ModelSpec, ObjectStoreConfig, Policy, ProviderSpec, Recipe, TenantSpec
 from gpucall.providers.registry import adapter_descriptor
 from gpucall.routing import provider_route_rejection_reason
 
@@ -25,6 +25,7 @@ class GpucallConfig(BaseModel):
     models: dict[str, ModelSpec] = {}
     engines: dict[str, EngineSpec] = {}
     object_store: ObjectStoreConfig | None = None
+    tenants: dict[str, TenantSpec] = {}
 
 
 def default_config_dir() -> Path:
@@ -138,6 +139,7 @@ def load_config(config_dir: Path | None = None) -> GpucallConfig:
         models=load_models(root),
         engines=load_engines(root),
         object_store=load_object_store(root),
+        tenants=load_tenants(root),
     )
     validate_config(config)
     return config
@@ -149,6 +151,20 @@ def load_object_store(config_dir: Path | None = None) -> ObjectStoreConfig | Non
     if not path.exists():
         return None
     return load_model(path, ObjectStoreConfig)
+
+
+def load_tenants(config_dir: Path | None = None) -> dict[str, TenantSpec]:
+    root = config_dir or default_config_dir()
+    directory = root / "tenants"
+    if not directory.exists():
+        return {}
+    tenants: dict[str, TenantSpec] = {}
+    for path in sorted(directory.glob("*.yml")):
+        tenant = load_model(path, TenantSpec)
+        if tenant.name in tenants:
+            raise ConfigError(f"duplicate tenant name {tenant.name!r} in {path}")
+        tenants[tenant.name] = tenant
+    return tenants
 
 
 def validate_config(config: GpucallConfig) -> None:

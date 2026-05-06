@@ -29,6 +29,15 @@ from gpucall.providers.factory import build_adapters
 from gpucall.registry import ObservedRegistry
 from gpucall.routing import route_warning_tags
 from gpucall.sqlite_store import SQLiteIdempotencyStore, SQLiteJobStore
+from gpucall.tenant import (
+    TenantBudgetError,
+    TenantUsageLedger,
+    enforce_tenant_budget,
+    legacy_api_keys,
+    tenant_for_api_key,
+    tenant_identity,
+    tenant_key_map,
+)
 
 
 class Runtime(BaseModel):
@@ -41,6 +50,8 @@ class Runtime(BaseModel):
     reconciler: ProviderReconciler
     artifact_registry: SQLiteArtifactRegistry
     object_store: ObjectStore | None = None
+    tenants: dict[str, Any] = {}
+    tenant_usage: Any = None
     metrics: dict[str, Any] = {}
 
 
@@ -98,6 +109,8 @@ def build_runtime(config_dir: Path) -> Runtime:
         reconciler=reconciler,
         artifact_registry=artifact_registry,
         object_store=object_store,
+        tenants=config.tenants,
+        tenant_usage=TenantUsageLedger(state_dir / "tenant_usage.db"),
         metrics={"requests": {}, "latency_ms": []},
     )
 
@@ -191,7 +204,8 @@ def create_app(config_dir: Path | None = None) -> FastAPI:
 
     @app.middleware("http")
     async def api_key_auth(request: Request, call_next):
-        configured = [key.strip() for key in (os.getenv("GPUCALL_API_KEYS") or configured_api_keys).split(",") if key.strip()]
+        tenant_keys = tenant_key_map()
+        configured = legacy_api_keys() + list(tenant_keys)
         if request.url.path in {"/healthz", "/readyz"}:
             return await call_next(request)
         if not configured:
@@ -203,16 +217,21 @@ def create_app(config_dir: Path | None = None) -> FastAPI:
         if not any(hmac.compare_digest(token, key) for key in configured):
             return error_response(401, "unauthorized")
         request.state.api_key = token
+        request.state.tenant_id = tenant_for_api_key(token)
         return await call_next(request)
 
     @app.middleware("http")
     async def basic_rate_limit(request: Request, call_next):
         if request.url.path in {"/healthz", "/readyz"}:
             return await call_next(request)
-        identity = getattr(request.state, "api_key", None) or request.client.host if request.client else "unknown"
+        tenant_id = getattr(request.state, "tenant_id", None)
+        client_host = request.client.host if request.client else "unknown"
+        identity = tenant_id or getattr(request.state, "api_key", None) or client_host
+        tenant = app.state.runtime.tenants.get(tenant_id) if tenant_id and hasattr(app.state, "runtime") else None
+        effective_rpm = int(tenant.requests_per_minute) if tenant is not None and tenant.requests_per_minute else requests_per_minute
         now = time.monotonic()
         window = [stamp for stamp in rate_limit.get(identity, []) if now - stamp < 60.0]
-        if len(window) >= requests_per_minute:
+        if len(window) >= effective_rpm:
             return error_response(429, "rate limit exceeded")
         window.append(now)
         rate_limit[identity] = window
@@ -239,6 +258,7 @@ def create_app(config_dir: Path | None = None) -> FastAPI:
         return {
             "status": "ready",
             "object_store": runtime.object_store is not None,
+            "tenants_configured": sorted(runtime.tenants),
             "recipes": {
                 name: {
                     "task": recipe.task,
@@ -261,7 +281,7 @@ def create_app(config_dir: Path | None = None) -> FastAPI:
 
     @app.get("/metrics")
     async def metrics(runtime: Runtime = Depends(runtime_dep)) -> dict[str, object]:
-        if not (os.getenv("GPUCALL_API_KEYS") or configured_api_keys) and not _public_metrics_enabled():
+        if not (os.getenv("GPUCALL_API_KEYS") or configured_api_keys or os.getenv("GPUCALL_TENANT_API_KEYS") or tenant_key_map()) and not _public_metrics_enabled():
             raise HTTPException(status_code=403, detail="metrics require authentication or GPUCALL_PUBLIC_METRICS=1")
         latencies = runtime.metrics.get("latency_ms", [])
         avg = sum(latencies) / len(latencies) if latencies else 0.0
@@ -292,6 +312,7 @@ def create_app(config_dir: Path | None = None) -> FastAPI:
             )
             if cached is not None:
                 return JSONResponse(status_code=cached[0], content=cached[1], headers=cached[2])
+            enforce_request_budget(runtime, http_request, plan)
             request = worker_readable_request(request, runtime)
             plan = plan_with_worker_refs(plan, request.input_refs, split_learning=request.split_learning)
             result = await runtime.dispatcher.execute_sync(plan)
@@ -311,17 +332,20 @@ def create_app(config_dir: Path | None = None) -> FastAPI:
                 identity=idempotency_identity(http_request),
                 max_entries=idempotency_cache_max,
             )
-            return JSONResponse(status_code=200, content=content, headers=headers)
+            return JSONResponse(status_code=200, content=content, headers=tenant_headers(headers, http_request))
         except GovernanceError as exc:
             return governance_error_response(exc, request=request)
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         except ProviderError as exc:
             return provider_error_response(exc, request=request)
+        except TenantBudgetError as exc:
+            return tenant_budget_error_response(exc, request=request)
 
     @app.post("/v1/chat/completions")
     async def openai_chat_completions(
         request: OpenAIChatCompletionRequest,
+        http_request: Request,
         runtime: Runtime = Depends(runtime_dep),
     ) -> JSONResponse:
         if request.stream:
@@ -349,16 +373,17 @@ def create_app(config_dir: Path | None = None) -> FastAPI:
             temperature=request.temperature,
             response_format=request.response_format,
             metadata=request.metadata,
-        )
+            )
         try:
             plan = runtime.compiler.compile(task_request)
+            enforce_request_budget(runtime, http_request, plan)
             result = await runtime.dispatcher.execute_sync(plan)
             headers = warning_headers(plan, runtime.compiler.providers)
             if result.output_validated is not None:
                 headers["X-GPUCall-Output-Validated"] = "true" if result.output_validated else "false"
             return JSONResponse(
                 status_code=200,
-                headers=headers,
+                headers=tenant_headers(headers, http_request),
                 content=openai_chat_response(
                     request.model,
                     result.value or "",
@@ -387,6 +412,8 @@ def create_app(config_dir: Path | None = None) -> FastAPI:
                 headers=headers,
                 gpucall_failure_artifact=build_provider_failure_artifact(exc, task_request),
             )
+        except TenantBudgetError as exc:
+            return openai_error_response(exc.status_code, str(exc), code=exc.code.lower())
 
     @app.post("/v2/tasks/async")
     async def task_async(
@@ -408,6 +435,7 @@ def create_app(config_dir: Path | None = None) -> FastAPI:
             )
             if cached is not None:
                 return JSONResponse(status_code=cached[0], content=cached[1], headers=cached[2])
+            enforce_request_budget(runtime, http_request, plan)
             request = worker_readable_request(request, runtime)
             plan = plan_with_worker_refs(plan, request.input_refs, split_learning=request.split_learning)
             owner_identity = idempotency_identity(http_request)
@@ -432,20 +460,23 @@ def create_app(config_dir: Path | None = None) -> FastAPI:
             return JSONResponse(
                 status_code=202,
                 content=content,
-                headers=headers,
+                headers=tenant_headers(headers, http_request),
             )
         except GovernanceError as exc:
             return governance_error_response(exc, request=request)
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
+        except TenantBudgetError as exc:
+            return tenant_budget_error_response(exc, request=request)
 
     @app.post("/v2/tasks/stream")
-    async def task_stream(request: TaskRequest, runtime: Runtime = Depends(runtime_dep)) -> StreamingResponse:
+    async def task_stream(request: TaskRequest, http_request: Request, runtime: Runtime = Depends(runtime_dep)) -> StreamingResponse:
         if request.mode is not ExecutionMode.STREAM:
             raise HTTPException(status_code=400, detail="use /v2/tasks/stream with mode=stream")
         try:
             enforce_gateway_owned_routing(request)
             plan = runtime.compiler.compile(request)
+            enforce_request_budget(runtime, http_request, plan)
             request = worker_readable_request(request, runtime)
             plan = plan_with_worker_refs(plan, request.input_refs, split_learning=request.split_learning)
         except GovernanceError as exc:
@@ -461,7 +492,7 @@ def create_app(config_dir: Path | None = None) -> FastAPI:
             events(),
             media_type="text/event-stream",
             status_code=200,
-            headers=warning_headers(plan, runtime.compiler.providers),
+            headers=tenant_headers(warning_headers(plan, runtime.compiler.providers), http_request),
         )
 
     @app.get("/v2/jobs/{job_id}")
@@ -474,10 +505,10 @@ def create_app(config_dir: Path | None = None) -> FastAPI:
         return job
 
     @app.post("/v2/objects/presign-put")
-    async def presign_put(request: PresignPutRequest, runtime: Runtime = Depends(runtime_dep)) -> PresignPutResponse:
+    async def presign_put(request: PresignPutRequest, http_request: Request, runtime: Runtime = Depends(runtime_dep)) -> PresignPutResponse:
         if runtime.object_store is None:
             raise HTTPException(status_code=503, detail="object store is not configured")
-        return runtime.object_store.presign_put(request)
+        return runtime.object_store.presign_put(request, tenant_prefix=object_tenant_prefix(runtime, http_request))
 
     @app.post("/v2/objects/presign-get")
     async def presign_get(request: PresignGetRequest, runtime: Runtime = Depends(runtime_dep)) -> PresignGetResponse:
@@ -489,10 +520,10 @@ def create_app(config_dir: Path | None = None) -> FastAPI:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     @app.post("/v2/results/presign-put")
-    async def result_presign_put(request: PresignPutRequest, runtime: Runtime = Depends(runtime_dep)) -> PresignPutResponse:
+    async def result_presign_put(request: PresignPutRequest, http_request: Request, runtime: Runtime = Depends(runtime_dep)) -> PresignPutResponse:
         if runtime.object_store is None:
             raise HTTPException(status_code=503, detail="object store is not configured")
-        return runtime.object_store.presign_put(request)
+        return runtime.object_store.presign_put(request, tenant_prefix=object_tenant_prefix(runtime, http_request))
 
     return app
 
@@ -508,6 +539,60 @@ async def recover_interrupted_jobs(runtime: Runtime) -> None:
 def warning_headers(plan, providers=None) -> dict[str, str]:
     warnings = route_warning_tags(plan, providers)
     return {"X-GPUCall-Warning": ", ".join(warnings)} if warnings else {}
+
+
+def tenant_headers(headers: dict[str, str], request: Request) -> dict[str, str]:
+    tenant_id = getattr(request.state, "tenant_id", None)
+    if not tenant_id:
+        return headers
+    return {**headers, "X-GPUCall-Tenant": str(tenant_id)}
+
+
+def enforce_request_budget(runtime: Runtime, request: Request, plan: Any) -> None:
+    api_key = getattr(request.state, "api_key", None)
+    tenant_id = getattr(request.state, "tenant_id", None)
+    tenant_name = tenant_identity(tenant_id, api_key)
+    tenant = runtime.tenants.get(tenant_name) or runtime.tenants.get("default")
+    cost = getattr(plan, "attestations", {}).get("cost_estimate", {}) if getattr(plan, "attestations", None) else {}
+    estimated = float(cost.get("estimated_cost_usd") or 0)
+    provider_chain = list(getattr(plan, "provider_chain", []) or [])
+    enforce_tenant_budget(
+        tenant_id=tenant_name,
+        tenant=tenant,
+        ledger=runtime.tenant_usage,
+        estimated_cost_usd=estimated,
+        provider=provider_chain[0] if provider_chain else None,
+        recipe=getattr(plan, "recipe_name", None),
+        plan_id=getattr(plan, "plan_id", None),
+    )
+
+
+def object_tenant_prefix(runtime: Runtime, request: Request) -> str | None:
+    api_key = getattr(request.state, "api_key", None)
+    tenant_id = getattr(request.state, "tenant_id", None)
+    tenant_name = tenant_identity(tenant_id, api_key)
+    tenant = runtime.tenants.get(tenant_name) or runtime.tenants.get("default")
+    if tenant is not None and tenant.object_prefix:
+        return tenant.object_prefix
+    return tenant_name if tenant_name != "anonymous" else None
+
+
+def tenant_budget_error_response(exc: TenantBudgetError, *, request: TaskRequest | None = None) -> JSONResponse:
+    return JSONResponse(
+        status_code=exc.status_code,
+        content={
+            "detail": str(exc),
+            "code": exc.code,
+            "failure_artifact": {
+                "schema_version": 1,
+                "failure_kind": "tenant_budget",
+                "code": exc.code,
+                "message": str(exc),
+                "safe_request_summary": safe_request_summary(request),
+                "redaction_guarantee": redaction_guarantee(),
+            },
+        },
+    )
 
 
 def enforce_gateway_owned_routing(request: TaskRequest) -> None:

@@ -12,6 +12,7 @@ gpucall doctor
 gpucall cost-audit
 gpucall cleanup-audit
 gpucall launch-check --profile static
+gpucall release-check
 docker compose -p gpucall up -d --build
 gpucall smoke
 gpucall cost-audit --live
@@ -57,6 +58,10 @@ gpucall security scan-secrets
 ```
 
 Provider YAML should contain resource shape and routing metadata only.
+
+## SaaS v1 Operations
+
+External SaaS operation uses tenant quota YAML plus credentials-managed tenant API keys. See [docs/SAAS_V1_OPERATIONS.md](docs/SAAS_V1_OPERATIONS.md).
 
 ## Python SDK
 

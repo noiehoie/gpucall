@@ -404,6 +404,17 @@ class ObjectStoreConfig(BaseModel):
     presign_ttl_seconds: PositiveInt = 900
 
 
+class TenantSpec(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    name: str
+    requests_per_minute: PositiveInt | None = None
+    daily_budget_usd: NonNegativeFloat | None = None
+    monthly_budget_usd: NonNegativeFloat | None = None
+    max_request_estimated_cost_usd: NonNegativeFloat | None = None
+    object_prefix: str | None = None
+
+
 class PresignPutRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 

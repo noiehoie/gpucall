@@ -29,8 +29,8 @@ class ObjectStore:
             kwargs["region_name"] = aws["region"]
         self.client = boto3.client("s3", **kwargs)
 
-    def presign_put(self, request: PresignPutRequest) -> PresignPutResponse:
-        key = self._key_for(request.name)
+    def presign_put(self, request: PresignPutRequest, *, tenant_prefix: str | None = None) -> PresignPutResponse:
+        key = self._key_for(request.name, tenant_prefix=tenant_prefix)
         upload_url = self.client.generate_presigned_url(
             "put_object",
             Params={
@@ -72,9 +72,14 @@ class ObjectStore:
         worker_ref = DataRef.model_validate(worker_ref_data)
         return PresignGetResponse(download_url=download_url, data_ref=worker_ref)
 
-    def _key_for(self, name: str) -> str:
+    def _key_for(self, name: str, *, tenant_prefix: str | None = None) -> str:
         clean = PurePosixPath(name).name or "object"
-        return f"{self.config.prefix.rstrip('/')}/{uuid4().hex}/{clean}"
+        prefix = self.config.prefix.rstrip("/")
+        if tenant_prefix:
+            safe_tenant = PurePosixPath(tenant_prefix).name
+            if safe_tenant:
+                prefix = f"{prefix}/tenants/{safe_tenant}"
+        return f"{prefix}/{uuid4().hex}/{clean}"
 
     def _validate_ref(self, ref: DataRef) -> None:
         if ref.expires_at is not None and ref.expires_at <= datetime.now(timezone.utc):
