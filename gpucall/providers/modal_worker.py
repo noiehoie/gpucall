@@ -121,6 +121,28 @@ def vision_prompt_from_payload(payload: dict[str, Any]) -> str:
     return ""
 
 
+def _looks_like_document_prompt(prompt: str) -> bool:
+    lowered = prompt.lower()
+    markers = (
+        "ocr",
+        "headline",
+        "headlines",
+        "document",
+        "newspaper",
+        "text",
+        "article",
+        "記事",
+        "新聞",
+        "見出し",
+        "ヘッドライン",
+        "紙面",
+        "文字",
+        "読取",
+        "読み取",
+    )
+    return any(marker in lowered for marker in markers)
+
+
 def _fetch_data_ref_text(ref: dict[str, Any]) -> str:
     body = _fetch_data_ref_bytes(ref)
     content_type = str(ref.get("content_type") or "").lower()
@@ -509,11 +531,6 @@ if modal is not None:
         output_ids = vision_model.generate(**inputs, max_new_tokens=int(payload.get("max_tokens") or 64))
         text = processor.decode(output_ids[0], skip_special_tokens=True).strip()
         return text or "image processed"
-
-    def _looks_like_document_prompt(prompt: str) -> bool:
-        lowered = prompt.lower()
-        markers = ("ocr", "headline", "document", "newspaper", "text", "記事", "新聞", "見出し", "紙面", "文字")
-        return any(marker in lowered for marker in markers)
 
     def _first_image_ref(payload: dict[str, Any]) -> dict[str, Any]:
         for ref in payload.get("input_refs") or []:

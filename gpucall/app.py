@@ -121,7 +121,7 @@ def create_app(config_dir: Path | None = None) -> FastAPI:
             await runtime.reconciler.stop()
             await runtime.reaper.stop()
 
-    app = FastAPI(title="gpucall v2.0", version="2.0.0", lifespan=lifespan)
+    app = FastAPI(title="gpucall v2.0", version="2.0.1", lifespan=lifespan)
     max_request_bytes = int(os.getenv("GPUCALL_MAX_REQUEST_BYTES", "1048576"))
     configured_api_keys = load_credentials().get("auth", {}).get("api_keys", "")
     idempotency_cache = SQLiteIdempotencyStore(default_state_dir() / "idempotency.db")
@@ -364,6 +364,7 @@ def create_app(config_dir: Path | None = None) -> FastAPI:
                     result.value or "",
                     result.usage,
                     gpucall=public_plan_summary(plan, runtime.compiler.providers),
+                    output_validated=result.output_validated,
                 ),
             )
         except GovernanceError as exc:
@@ -837,7 +838,12 @@ def error_response(status_code: int, detail: str, *, code: str | None = None) ->
 
 
 def openai_chat_response(
-    model: str, content: str, usage: dict[str, int], *, gpucall: dict[str, Any] | None = None
+    model: str,
+    content: str,
+    usage: dict[str, int],
+    *,
+    gpucall: dict[str, Any] | None = None,
+    output_validated: bool | None = None,
 ) -> dict[str, Any]:
     now = int(time.time())
     payload: dict[str, Any] = {
@@ -856,6 +862,8 @@ def openai_chat_response(
     }
     if gpucall is not None:
         payload["gpucall"] = gpucall
+    if output_validated is not None:
+        payload["output_validated"] = output_validated
     return payload
 
 
@@ -872,6 +880,7 @@ def public_plan_summary(plan: Any, providers: dict[str, Any] | None = None) -> d
         "governance_hash": attestations.get("governance_hash"),
         "system_prompt_transform": attestations.get("system_prompt_transform"),
         "output_validation_attempts": getattr(plan, "output_validation_attempts", None),
+        "timeout_seconds": getattr(plan, "timeout_seconds", None),
     }
 
 

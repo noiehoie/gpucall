@@ -775,6 +775,26 @@ def test_openai_chat_completions_sets_output_validated_header_for_json(tmp_path)
     assert "raw_output" not in response.json()["error"]
 
 
+def test_openai_chat_completions_exposes_output_validated_in_body(tmp_path, monkeypatch) -> None:
+    async def fake_execute_sync(_plan):
+        return ProviderResult(kind="inline", value='{"ok": true}', output_validated=True)
+
+    with TestClient(create_app(copy_config(tmp_path))) as client:
+        monkeypatch.setattr(client.app.state.runtime.dispatcher, "execute_sync", fake_execute_sync)
+        response = client.post(
+            "/v1/chat/completions",
+            json={
+                "model": "gpucall:auto",
+                "messages": [{"role": "user", "content": "return json"}],
+                "response_format": {"type": "json_object"},
+            },
+        )
+
+    assert response.status_code == 200
+    assert response.headers["x-gpucall-output-validated"] == "true"
+    assert response.json()["output_validated"] is True
+
+
 def test_openai_chat_completions_includes_gpucall_plan_metadata(tmp_path) -> None:
     with TestClient(create_app(copy_config(tmp_path))) as client:
         response = client.post(

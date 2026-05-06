@@ -59,6 +59,7 @@ def main() -> None:
     seed.add_argument("recipe_name")
     seed.add_argument("--config-dir", type=Path, default=default_config_dir())
     seed.add_argument("--count", type=int, default=3)
+    seed.add_argument("--interval", type=float, default=0.0, help="seconds to sleep between seeds; with --count 0, run until interrupted")
     smoke = sub.add_parser("smoke")
     smoke.add_argument("--url", default="http://127.0.0.1:18088")
     smoke.add_argument("--api-key", default=None)
@@ -155,7 +156,7 @@ def main() -> None:
     elif args.command == "validate-config":
         validate_config_command(args.config_dir)
     elif args.command == "seed-liveness":
-        asyncio.run(seed_liveness(args.config_dir, args.recipe_name, args.count))
+        asyncio.run(seed_liveness(args.config_dir, args.recipe_name, args.count, interval=args.interval))
     elif args.command == "smoke":
         smoke_gateway(args.url, api_key=args.api_key, recipe=args.recipe)
     elif args.command == "provider-smoke":
@@ -387,13 +388,13 @@ async def post_launch_report_command(config_dir: Path) -> None:
     print(json.dumps({**report, "report_path": str(path)}, indent=2, sort_keys=True, default=str))
 
 
-async def seed_liveness(config_dir: Path, recipe_name: str, count: int) -> None:
+async def seed_liveness(config_dir: Path, recipe_name: str, count: int, *, interval: float = 0.0) -> None:
     runtime = build_runtime(config_dir)
     recipe = runtime.compiler.recipes.get(recipe_name)
     if recipe is None:
         raise SystemExit(f"unknown recipe: {recipe_name}")
     completed = 0
-    for _ in range(count):
+    while count <= 0 or completed < count:
         request = TaskRequest(
             task=recipe.task,
             mode=ExecutionMode.SYNC,
@@ -403,6 +404,8 @@ async def seed_liveness(config_dir: Path, recipe_name: str, count: int) -> None:
         plan = runtime.compiler.compile(request)
         await runtime.dispatcher.execute_sync(plan)
         completed += 1
+        if interval > 0 and (count <= 0 or completed < count):
+            await asyncio.sleep(interval)
     print(json.dumps({"recipe": recipe_name, "seed_jobs": completed}, indent=2, sort_keys=True))
 
 

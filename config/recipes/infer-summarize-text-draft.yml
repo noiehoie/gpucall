@@ -30,3 +30,4 @@ system_prompt: Answer the user's request directly.
 task: infer
 timeout_seconds: 600
 tokenizer_family: qwen
+expected_cold_start_seconds: 600

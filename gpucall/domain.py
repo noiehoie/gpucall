@@ -291,6 +291,7 @@ class Recipe(BaseModel):
     requires_key_release: bool = False
     required_model_capabilities: list[str] = Field(default_factory=list)
     output_contract: str | None = None
+    expected_cold_start_seconds: PositiveInt | None = None
 
 
 InputContract = Literal["text", "chat_messages", "data_refs", "image", "activation_refs", "artifact_refs"]

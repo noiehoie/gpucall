@@ -5,6 +5,7 @@ import json
 from gpucall.providers.modal_worker import (
     _format_prompt_for_model,
     _json_object_guided_schema,
+    _looks_like_document_prompt,
     vision_prompt_from_payload,
 )
 
@@ -91,3 +92,7 @@ def test_vision_prompt_excludes_gateway_system_prompt() -> None:
 
     assert prompt == "この画像に写っている新聞紙名を答えよ"
     assert "vision request directly" not in prompt
+
+
+def test_florence_document_prompt_detects_japanese_headline_request() -> None:
+    assert _looks_like_document_prompt("この新聞紙面の主要ヘッドライン上位3件を日本語で箇条書きにせよ。")
