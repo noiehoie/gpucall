@@ -733,8 +733,12 @@ def _run_provider_validation(provider: str, recipe: str, config_dir: Path, *, va
     if credentials.exists() and not env.get("GPUCALL_CREDENTIALS"):
         env["GPUCALL_CREDENTIALS"] = str(credentials)
     modal_config = config_dir / ".modal.toml"
-    if modal_config.exists() and not env.get("MODAL_CONFIG_PATH"):
-        env["MODAL_CONFIG_PATH"] = str(modal_config)
+    if not env.get("MODAL_CONFIG_PATH"):
+        explicit_modal = env.get("GPUCALL_MODAL_CONFIG_FILE")
+        if explicit_modal:
+            env["MODAL_CONFIG_PATH"] = explicit_modal
+        elif modal_config.exists() and modal_config.stat().st_size > 0:
+            env["MODAL_CONFIG_PATH"] = str(modal_config)
     if validation_dir is not None:
         state_dir = Path(validation_dir).expanduser().parent
         env["GPUCALL_STATE_DIR"] = str(state_dir)
