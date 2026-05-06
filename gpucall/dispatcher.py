@@ -520,13 +520,17 @@ class ProviderReconciler:
 
 def _provider_error_audit(exc: ProviderError) -> dict[str, object]:
     detail = str(exc)
-    return {
+    payload: dict[str, object] = {
         "code": exc.code or "PROVIDER_ERROR",
         "status_code": exc.status_code,
         "retryable": exc.retryable,
         "message_sha256": hashlib.sha256(detail.encode("utf-8")).hexdigest(),
         "message_bytes": len(detail.encode("utf-8")),
     }
+    if exc.raw_output is not None:
+        payload["raw_output_sha256"] = hashlib.sha256(exc.raw_output.encode("utf-8")).hexdigest()
+        payload["raw_output_bytes"] = len(exc.raw_output.encode("utf-8"))
+    return payload
 
 
 def _exception_audit(exc: Exception, *, retryable: bool) -> dict[str, object]:

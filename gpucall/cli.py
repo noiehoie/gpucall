@@ -24,7 +24,7 @@ from gpucall.compiler import GovernanceCompiler
 from gpucall.config import ConfigError, default_config_dir, default_state_dir, load_config
 from gpucall.configure import configure_command
 from gpucall.credentials import configured_credentials, credentials_path, load_credentials
-from gpucall.domain import ExecutionMode, JobState, PresignPutRequest, TaskRequest
+from gpucall.domain import ExecutionMode, JobState, PresignPutRequest, ProviderError, TaskRequest
 from gpucall.provider_catalog import live_provider_catalog_findings
 from gpucall.registry import ObservedRegistry
 from gpucall.audit import AuditTrail
@@ -427,48 +427,54 @@ async def provider_smoke_command(
     if request.input_refs or request.split_learning is not None:
         worker_request = worker_readable_request(request, runtime)
         plan = plan_with_worker_refs(plan, worker_request.input_refs, split_learning=worker_request.split_learning)
-    summary: dict[str, object]
-    if mode is ExecutionMode.STREAM:
-        chunks = []
-        stream = runtime.dispatcher.execute_stream(plan)
-        try:
-            while len(chunks) < 2:
-                try:
-                    chunks.append(await asyncio.wait_for(stream.__anext__(), timeout=10.0))
-                except StopAsyncIteration:
-                    break
-        finally:
-            await stream.aclose()
+    try:
+        summary: dict[str, object]
+        if mode is ExecutionMode.STREAM:
+            chunks = []
+            stream = runtime.dispatcher.execute_stream(plan)
+            try:
+                while len(chunks) < 2:
+                    try:
+                        chunks.append(await asyncio.wait_for(stream.__anext__(), timeout=10.0))
+                    except StopAsyncIteration:
+                        break
+            finally:
+                await stream.aclose()
+            summary = _provider_smoke_base_summary(runtime, provider, recipe_name, mode)
+            summary.update({"chunks": len(chunks), "sample": chunks[:2]})
+            _finish_provider_smoke_summary(summary, started_at=started_at, config_dir=config_dir, plan=plan, write_artifact=write_artifact)
+            return
+        if mode is ExecutionMode.ASYNC:
+            job = await runtime.dispatcher.submit_async(plan)
+            deadline = asyncio.get_running_loop().time() + plan.timeout_seconds
+            current = job
+            while asyncio.get_running_loop().time() < deadline:
+                loaded = await runtime.jobs.get(job.job_id)
+                if loaded is not None:
+                    current = loaded
+                    if loaded.state in {JobState.COMPLETED, JobState.FAILED, JobState.CANCELLED, JobState.EXPIRED}:
+                        break
+                await asyncio.sleep(1.0)
+            summary = {
+                **_provider_smoke_base_summary(runtime, provider, recipe_name, mode),
+                "provider": provider,
+                "recipe": recipe_name,
+                "mode": mode.value,
+                "job_id": job.job_id,
+                "state": current.state.value,
+                "completed": current.state is JobState.COMPLETED,
+            }
+            _finish_provider_smoke_summary(summary, started_at=started_at, config_dir=config_dir, plan=plan, write_artifact=write_artifact)
+            return
+        result = await runtime.dispatcher.execute_sync(plan)
         summary = _provider_smoke_base_summary(runtime, provider, recipe_name, mode)
-        summary.update({"chunks": len(chunks), "sample": chunks[:2]})
+        summary["result"] = result.model_dump(mode="json")
         _finish_provider_smoke_summary(summary, started_at=started_at, config_dir=config_dir, plan=plan, write_artifact=write_artifact)
-        return
-    if mode is ExecutionMode.ASYNC:
-        job = await runtime.dispatcher.submit_async(plan)
-        deadline = asyncio.get_running_loop().time() + plan.timeout_seconds
-        current = job
-        while asyncio.get_running_loop().time() < deadline:
-            loaded = await runtime.jobs.get(job.job_id)
-            if loaded is not None:
-                current = loaded
-                if loaded.state in {JobState.COMPLETED, JobState.FAILED, JobState.CANCELLED, JobState.EXPIRED}:
-                    break
-            await asyncio.sleep(1.0)
-        summary = {
-            **_provider_smoke_base_summary(runtime, provider, recipe_name, mode),
-            "provider": provider,
-            "recipe": recipe_name,
-            "mode": mode.value,
-            "job_id": job.job_id,
-            "state": current.state.value,
-            "completed": current.state is JobState.COMPLETED,
-        }
+    except ProviderError as exc:
+        summary = _provider_smoke_base_summary(runtime, provider, recipe_name, mode)
+        summary["error"] = _provider_smoke_error(exc)
         _finish_provider_smoke_summary(summary, started_at=started_at, config_dir=config_dir, plan=plan, write_artifact=write_artifact)
-        return
-    result = await runtime.dispatcher.execute_sync(plan)
-    summary = _provider_smoke_base_summary(runtime, provider, recipe_name, mode)
-    summary["result"] = result.model_dump(mode="json")
-    _finish_provider_smoke_summary(summary, started_at=started_at, config_dir=config_dir, plan=plan, write_artifact=write_artifact)
+        raise SystemExit(1) from exc
 
 
 def _provider_smoke_base_summary(runtime, provider: str, recipe_name: str, mode: ExecutionMode) -> dict[str, object]:
@@ -482,6 +488,19 @@ def _provider_smoke_base_summary(runtime, provider: str, recipe_name: str, mode:
         "provider_model": getattr(spec, "model", None),
         "gpu": getattr(spec, "gpu", None),
     }
+
+
+def _provider_smoke_error(exc: ProviderError) -> dict[str, object]:
+    error: dict[str, object] = {
+        "message": str(exc),
+        "code": exc.code or "PROVIDER_ERROR",
+        "status_code": exc.status_code,
+        "retryable": exc.retryable,
+    }
+    if exc.raw_output is not None:
+        error["provider_error_body_redacted"] = exc.raw_output
+        error["provider_error_body_sha256"] = hashlib.sha256(exc.raw_output.encode("utf-8")).hexdigest()
+    return error
 
 
 def _provider_smoke_request(runtime, recipe, mode: ExecutionMode, provider: str) -> TaskRequest:

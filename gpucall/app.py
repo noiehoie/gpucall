@@ -600,7 +600,7 @@ def build_governance_failure_artifact(exc: GovernanceError, request: TaskRequest
 
 
 def build_provider_failure_artifact(exc: ProviderError, request: TaskRequest | None = None) -> dict[str, Any]:
-    return {
+    artifact: dict[str, Any] = {
         "schema_version": 1,
         "failure_id": f"pf-{uuid4().hex}",
         "failure_kind": "provider_runtime",
@@ -615,6 +615,14 @@ def build_provider_failure_artifact(exc: ProviderError, request: TaskRequest | N
         "rejection_matrix": {},
         "redaction_guarantee": redaction_guarantee(),
     }
+    if exc.raw_output is not None and provider_error_body_is_safe_for_artifact(exc):
+        artifact["provider_error_body_redacted"] = exc.raw_output
+        artifact["provider_error_body_sha256"] = hashlib.sha256(exc.raw_output.encode("utf-8")).hexdigest()
+    return artifact
+
+
+def provider_error_body_is_safe_for_artifact(exc: ProviderError) -> bool:
+    return (exc.code or "") in {"PROVIDER_PROVISION_FAILED", "PROVIDER_PROVISION_UNAVAILABLE"}
 
 
 def governance_failure_kind(exc: GovernanceError) -> str:
