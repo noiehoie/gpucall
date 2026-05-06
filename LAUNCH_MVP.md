@@ -104,6 +104,7 @@ console.log(await client.infer({ prompt: "hello" }));
 - `gpucall cost-audit --live` can read provider-side cost or resource state for every configured live provider.
 - `gpucall cleanup-audit` returns `ok: true`.
 - `gpucall launch-check --profile production --url ...` returns `go: true`.
+- `provider_live_validation.capacity_unavailable_adapters` is acceptable only for retryable external capacity failures with no leaked resources.
 - `gpucall audit verify` returns `valid: true`.
 - object store is `true` in `/readyz`.
 - unauthenticated task requests return `401`.

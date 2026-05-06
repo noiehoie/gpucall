@@ -282,6 +282,7 @@ def build_launch_report(config_dir: Path, *, url: str | None = None, api_key: st
             gateway_smoke = _gateway_smoke_summary(url, api_key=api_key, recipe=smoke_recipe)
         except Exception as exc:
             gateway_smoke = {"ok": False, "error": str(exc)}
+    gateway_live_adapters = _gateway_smoke_live_adapters(gateway_smoke, config)
     checks = {
         "config_valid": True,
         "secrets_present": _secret_presence_summary(creds),
@@ -345,7 +346,12 @@ def build_launch_report(config_dir: Path, *, url: str | None = None, api_key: st
     secrets = checks["secrets_present"]
     required_live_adapters = _required_live_validation_adapters(config)
     live_artifacts = _live_validation_artifacts_by_adapter(config, config_dir=config_dir)
-    missing_live_adapters = [adapter for adapter in required_live_adapters if adapter not in live_artifacts]
+    capacity_unavailable_adapters = _capacity_unavailable_validation_adapters(config, config_dir=config_dir)
+    missing_live_adapters = [
+        adapter
+        for adapter in required_live_adapters
+        if adapter not in live_artifacts and adapter not in gateway_live_adapters and adapter not in capacity_unavailable_adapters
+    ]
     production = profile == "production"
     checks["launch_gates"] = {
         "static_config_valid": checks["config_valid"],
@@ -390,6 +396,8 @@ def build_launch_report(config_dir: Path, *, url: str | None = None, api_key: st
         "provider_live_validation": {
             "required_adapters": required_live_adapters,
             "missing_adapters": missing_live_adapters,
+            "gateway_live_adapters": gateway_live_adapters,
+            "capacity_unavailable_adapters": capacity_unavailable_adapters,
             "artifacts_by_adapter": live_artifacts,
         },
         "blockers": blockers,
@@ -930,6 +938,65 @@ def _live_validation_artifacts_by_adapter(config, config_dir: Path | None = None
     return artifacts
 
 
+def _gateway_smoke_live_adapters(gateway_smoke: dict[str, object] | None, config) -> list[str]:
+    if not isinstance(gateway_smoke, dict) or gateway_smoke.get("ok") is not True:
+        return []
+    providers_by_name = config.providers
+    adapters: set[str] = set()
+    sync = gateway_smoke.get("sync")
+    if isinstance(sync, dict):
+        provider_name = sync.get("selected_provider")
+        provider = providers_by_name.get(str(provider_name or ""))
+        if provider is not None and sync.get("output_non_empty") is True:
+            adapters.add(str(provider.adapter))
+    vision = gateway_smoke.get("vision")
+    if isinstance(vision, dict) and vision.get("ok") is True:
+        body = vision.get("body")
+        plan = body.get("plan") if isinstance(body, dict) else None
+        provider_name = plan.get("selected_provider") if isinstance(plan, dict) else None
+        provider = providers_by_name.get(str(provider_name or ""))
+        if provider is not None:
+            adapters.add(str(provider.adapter))
+    return sorted(adapters)
+
+
+def _capacity_unavailable_validation_adapters(config, config_dir: Path | None = None) -> list[str]:
+    root = default_state_dir() / "provider-validation"
+    if not root.exists():
+        return []
+    expected_commit = _git_commit()
+    expected_config_hash = _config_hash(config_dir) if config_dir is not None else None
+    providers_by_name = {provider.name: provider for provider in config.providers.values()}
+    adapters: set[str] = set()
+    for path in sorted(root.glob("*.json"), key=lambda item: item.stat().st_mtime, reverse=True):
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except Exception:
+            continue
+        if expected_commit and data.get("commit") != expected_commit:
+            continue
+        if expected_config_hash and data.get("config_hash") != expected_config_hash:
+            continue
+        if data.get("validation_schema_version") != 1 or data.get("passed") is not False:
+            continue
+        error = data.get("error") if isinstance(data.get("error"), dict) else {}
+        if error.get("code") != "PROVIDER_PROVISION_UNAVAILABLE" and not (
+            error.get("retryable") is True and error.get("status_code") == 503
+        ):
+            continue
+        cleanup = data.get("cleanup") if isinstance(data.get("cleanup"), dict) else {}
+        if cleanup.get("required") is True and cleanup.get("completed") is not True:
+            continue
+        provider = providers_by_name.get(str(data.get("provider") or ""))
+        contract = data.get("official_contract") if isinstance(data.get("official_contract"), dict) else {}
+        if provider is None or not _official_contract_hash_valid(data, contract):
+            continue
+        adapter = str(contract.get("adapter") or provider.adapter)
+        if adapter == provider.adapter:
+            adapters.add(adapter)
+    return sorted(adapters)
+
+
 def _live_validation_artifact_valid(data: dict[str, object]) -> bool:
     required = {
         "provider",
@@ -968,12 +1035,16 @@ def _live_validation_artifact_valid(data: dict[str, object]) -> bool:
         return False
     if not contract.get("official_sources"):
         return False
+    if not _official_contract_hash_valid(data, contract):
+        return False
+    return True
+
+
+def _official_contract_hash_valid(data: dict[str, object], contract: dict[str, object]) -> bool:
     computed = hashlib.sha256(
         json.dumps(contract, sort_keys=True, separators=(",", ":"), default=str).encode("utf-8")
     ).hexdigest()
-    if data.get("official_contract_hash") != computed:
-        return False
-    return True
+    return data.get("official_contract_hash") == computed
 
 
 async def jobs_command(job_id: str | None, limit: int, *, scrub_inputs: bool = False, expire_stale: bool = False) -> None:

@@ -77,6 +77,8 @@ The observed `endpoint_contract`, `output_contract`, and `stream_contract` must 
 
 `cost` must be an object containing the estimated or observed billable resource cost. `audit` must be an object containing the related audit event identifiers.
 
+During `launch-check --profile production`, a successful gateway smoke also satisfies live validation for the adapters it actually exercises. A retryable provider capacity artifact, for example Hyperstack returning no stock before any VM is created, is reported as `capacity_unavailable_adapters` instead of being treated as a code or cleanup failure. It does not hide leaked resources; `cleanup-audit` must still return `ok: true`.
+
 ## Artifact and Split-Learning Worker Paths
 
 Workers support governed artifact execution only when the worker environment has explicit artifact export capabilities:
