@@ -45,6 +45,13 @@ endpoint: null
 target: "<runpod endpoint id>"
 image: runpod/worker-v1-vllm:v2.18.1
 model: Qwen/Qwen2.5-1.5B-Instruct
+provider_params:
+  worker_env:
+    MODEL_NAME: Qwen/Qwen2.5-1.5B-Instruct
+    OPENAI_SERVED_MODEL_NAME_OVERRIDE: Qwen/Qwen2.5-1.5B-Instruct
+    MAX_MODEL_LEN: "8192"
+    GPU_MEMORY_UTILIZATION: "0.95"
+    MAX_CONCURRENCY: "30"
 ```
 
 FlashBoot candidate:
@@ -92,6 +99,10 @@ For `runpod-vllm-serverless`, use RunPod's official worker-vLLM image first. Set
 - `MAX_MODEL_LEN`
 - `GPU_MEMORY_UTILIZATION`
 - `MAX_CONCURRENCY`
+
+These values must be represented in `provider_params.worker_env` so gpucall can
+validate the declared provider contract against the official worker-vLLM
+deployment contract before production routing.
 
 Use a container disk large enough for the image and model cache. Keep `workersMin=0` unless intentionally warming the endpoint with explicit cost approval.
 

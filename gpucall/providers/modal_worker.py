@@ -213,6 +213,13 @@ def _prefetch_qwen25_vl_3b() -> None:
     snapshot_download("microsoft/Florence-2-large-ft")
 
 
+def _env_int(name: str, default: int) -> int:
+    try:
+        return max(int(os.getenv(name, str(default))), 0)
+    except ValueError:
+        return default
+
+
 if modal is not None:
     app = modal.App(os.getenv("GPUCALL_MODAL_WORKER_APP_NAME", "gpucall-worker-json"))
     _VLLM_IMAGE = (
@@ -538,12 +545,24 @@ if modal is not None:
                 return ref
         raise ValueError("vision task requires an image data_ref")
 
-    @app.function(image=_VLLM_IMAGE, gpu="A10G", timeout=1800, scaledown_window=300)
+    @app.function(
+        image=_VLLM_IMAGE,
+        gpu="A10G",
+        timeout=1800,
+        scaledown_window=_env_int("GPUCALL_MODAL_A10G_SCALEDOWN_WINDOW", 300),
+        min_containers=_env_int("GPUCALL_MODAL_A10G_MIN_CONTAINERS", 0),
+    )
     def run_inference_on_modal(payload: dict[str, Any], workload: str = "infer", **kwargs) -> str:
         payload = {**payload, "task": workload or payload.get("task")}
         return _generate_text(payload, kwargs.get("model"), kwargs.get("max_model_len") or 32768)
 
-    @app.function(image=_QWEN_1M_IMAGE, gpu="H200:4", timeout=3600, scaledown_window=300)
+    @app.function(
+        image=_QWEN_1M_IMAGE,
+        gpu="H200:4",
+        timeout=3600,
+        scaledown_window=_env_int("GPUCALL_MODAL_H200X4_SCALEDOWN_WINDOW", 300),
+        min_containers=_env_int("GPUCALL_MODAL_H200X4_MIN_CONTAINERS", 0),
+    )
     def run_inference_on_modal_h200x4(payload: dict[str, Any], workload: str = "infer", **kwargs) -> str:
         payload = {**payload, "task": workload or payload.get("task")}
         return _generate_text(
@@ -554,12 +573,24 @@ if modal is not None:
             long_context=True,
         )
 
-    @app.function(image=_VISION_IMAGE, gpu="H100", timeout=1800, scaledown_window=300)
+    @app.function(
+        image=_VISION_IMAGE,
+        gpu="H100",
+        timeout=1800,
+        scaledown_window=_env_int("GPUCALL_MODAL_VISION_H100_SCALEDOWN_WINDOW", 300),
+        min_containers=_env_int("GPUCALL_MODAL_VISION_H100_MIN_CONTAINERS", 0),
+    )
     def run_inference_on_modal_vision_h100(payload: dict[str, Any], workload: str = "vision", **kwargs) -> str:
         payload = {**payload, "task": workload or payload.get("task")}
         return _generate_vision_text(payload, kwargs.get("model"))
 
-    @app.function(image=_VLLM_IMAGE, gpu="A10G", timeout=1800, scaledown_window=300)
+    @app.function(
+        image=_VLLM_IMAGE,
+        gpu="A10G",
+        timeout=1800,
+        scaledown_window=_env_int("GPUCALL_MODAL_A10G_SCALEDOWN_WINDOW", 300),
+        min_containers=_env_int("GPUCALL_MODAL_A10G_MIN_CONTAINERS", 0),
+    )
     def stream_inference_on_modal(payload: dict[str, Any], workload: str = "infer", **kwargs) -> Iterator[str]:
         raise RuntimeError("Modal true streaming is not implemented in gpucall v2.0")
 

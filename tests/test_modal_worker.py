@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 
 from gpucall.providers.modal_worker import (
+    _env_int,
     _format_prompt_for_model,
     _json_object_guided_schema,
     _looks_like_document_prompt,
@@ -96,3 +97,10 @@ def test_vision_prompt_excludes_gateway_system_prompt() -> None:
 
 def test_florence_document_prompt_detects_japanese_headline_request() -> None:
     assert _looks_like_document_prompt("この新聞紙面の主要ヘッドライン上位3件を日本語で箇条書きにせよ。")
+
+
+def test_modal_autoscaler_env_int_is_non_negative(monkeypatch) -> None:
+    monkeypatch.setenv("GPUCALL_MODAL_H200X4_MIN_CONTAINERS", "1")
+    assert _env_int("GPUCALL_MODAL_H200X4_MIN_CONTAINERS", 0) == 1
+    monkeypatch.setenv("GPUCALL_MODAL_H200X4_MIN_CONTAINERS", "-1")
+    assert _env_int("GPUCALL_MODAL_H200X4_MIN_CONTAINERS", 0) == 0
