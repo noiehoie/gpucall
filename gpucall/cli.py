@@ -482,7 +482,14 @@ def _provider_smoke_base_summary(runtime, provider: str, recipe_name: str, mode:
 
 
 def _provider_smoke_request(runtime, recipe, mode: ExecutionMode, provider: str) -> TaskRequest:
-    inline_inputs = {"prompt": {"value": "gpucall provider smoke", "content_type": "text/plain"}}
+    spec = runtime.compiler.providers.get(provider)
+    input_contracts = set(getattr(spec, "input_contracts", []) or [])
+    inline_inputs = {}
+    messages = []
+    if "chat_messages" in input_contracts and "text" not in input_contracts:
+        messages = [{"role": "user", "content": "gpucall provider smoke"}]
+    else:
+        inline_inputs = {"prompt": {"value": "gpucall provider smoke", "content_type": "text/plain"}}
     input_refs = []
     if recipe.task == "vision":
         if runtime.object_store is None:
@@ -500,6 +507,7 @@ def _provider_smoke_request(runtime, recipe, mode: ExecutionMode, provider: str)
         mode=mode,
         recipe=recipe.name,
         requested_provider=provider,
+        messages=messages,
         inline_inputs=inline_inputs,
         input_refs=input_refs,
     )

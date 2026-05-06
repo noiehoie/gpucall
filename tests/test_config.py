@@ -6,12 +6,14 @@ import sys
 import os
 import json
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
 from gpucall.config import ConfigError, load_config
+from gpucall.cli import _provider_smoke_request
 from gpucall.compiler import GovernanceCompiler
-from gpucall.domain import DataRef, ExecutionMode, SecurityTier, TaskRequest
+from gpucall.domain import DataRef, ExecutionMode, ProviderSpec, SecurityTier, TaskRequest
 from gpucall.registry import ObservedRegistry
 
 
@@ -254,6 +256,37 @@ def test_standard_config_routes_news_sized_prompts_to_long_recipes(tmp_path) -> 
     assert large_plan.provider_chain[0] == "hyperstack-qwen-1m"
     assert ultralong_plan.recipe_name == "text-infer-ultralong"
     assert ultralong_plan.provider_chain[0] == "hyperstack-qwen-1m"
+
+
+def test_provider_smoke_uses_chat_messages_for_chat_only_provider(tmp_path) -> None:
+    config = load_config(copy_config(tmp_path))
+    recipe = config.recipes["text-infer-light"]
+    provider = ProviderSpec(
+        name="runpod-vllm-serverless",
+        adapter="runpod-vllm-serverless",
+        max_data_classification="confidential",
+        gpu="AMPERE_16",
+        vram_gb=16,
+        max_model_len=8192,
+        cost_per_second=0.00045,
+        modes=["sync", "async"],
+        target="endpoint",
+        model="Qwen/Qwen2.5-1.5B-Instruct",
+        input_contracts=["chat_messages"],
+        output_contract="openai-chat-completions",
+        endpoint_contract="openai-chat-completions",
+        stream_contract="none",
+        model_ref="qwen2.5-1.5b-instruct",
+        engine_ref="runpod-vllm-openai",
+    )
+    runtime = SimpleNamespace(compiler=SimpleNamespace(providers={provider.name: provider}))
+
+    request = _provider_smoke_request(runtime, recipe, ExecutionMode.SYNC, provider.name)
+
+    assert request.messages
+    assert request.messages[0].role == "user"
+    assert request.messages[0].content == "gpucall provider smoke"
+    assert request.inline_inputs == {}
 
 
 def test_validate_config_cli(tmp_path) -> None:

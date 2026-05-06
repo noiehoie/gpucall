@@ -10,6 +10,7 @@ min_vram_gb: 16
 supported_engines:
   - modal-vllm
   - hyperstack-vllm
+  - runpod-vllm-openai
 input_contracts: [text, chat_messages, data_refs]
 output_contracts: [plain-text, json_object]
 supports_vision: false
