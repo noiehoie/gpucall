@@ -1,0 +1,23 @@
+name: modal-h100-florence-2-large-ft
+status: candidate
+adapter: modal
+gpu: H100
+vram_gb: 80
+max_model_len: 8192
+cost_per_second: 0.00213
+modes: [sync, async]
+max_data_classification: confidential
+security_tier: encrypted_capsule
+sovereign_jurisdiction: US
+model_ref: microsoft-florence-2-large-ft
+engine_ref: modal-transformers-vision
+endpoint_contract: modal-function
+input_contracts: [image, data_refs, text]
+output_contract: plain-text
+stream_contract: none
+target: gpucall-worker-json:run_inference_on_modal_vision_h100
+official_doc_refs:
+  - https://modal.com/docs/guide/gpu
+  - https://huggingface.co/microsoft/Florence-2-large-ft
+live_validation_required: true
+notes: Candidate for document-image OCR/caption workloads where Qwen VLM cold-start validation is too slow.

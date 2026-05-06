@@ -1,0 +1,15 @@
+name: microsoft-florence-2-large-ft
+provider_model_id: microsoft/Florence-2-large-ft
+capabilities: [vision_language, visual_question_answering, document_understanding, ocr, image_captioning, instruction_following]
+max_model_len: 8192
+min_vram_gb: 16
+supported_engines: [modal-transformers-vision]
+input_contracts: [text, image, data_refs]
+output_contracts: [plain-text, json-object]
+supports_vision: true
+supports_guided_decoding: false
+supports_streaming: false
+source: https://huggingface.co/microsoft/Florence-2-large-ft
+evidence:
+  - Hugging Face model card documents Florence-2-large-ft as a 0.77B fine-tuned model for downstream vision tasks including captioning, VQA/TextVQA, and OCR.
+production_ready: false

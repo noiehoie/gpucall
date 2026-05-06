@@ -188,6 +188,7 @@ def _prefetch_qwen25_vl_3b() -> None:
     from huggingface_hub import snapshot_download
 
     snapshot_download("Qwen/Qwen2.5-VL-3B-Instruct")
+    snapshot_download("microsoft/Florence-2-large-ft")
 
 
 if modal is not None:
@@ -394,6 +395,7 @@ if modal is not None:
             "Salesforce/blip-vqa-base",
             "Qwen/Qwen2.5-VL-3B-Instruct",
             "Qwen/Qwen2.5-VL-7B-Instruct",
+            "microsoft/Florence-2-large-ft",
         }
         if model_id not in allowed:
             raise ValueError(f"vision model {model_id} is not allowed")
@@ -404,6 +406,17 @@ if modal is not None:
 
             processor = AutoProcessor.from_pretrained(model_id)
             model = Qwen2_5_VLForConditionalGeneration.from_pretrained(model_id, torch_dtype="auto", device_map="auto")
+            model.eval()
+            _TOP_LEVEL_VISION = (processor, model, model_id)
+            return _TOP_LEVEL_VISION
+        if model_id == "microsoft/Florence-2-large-ft":
+            import torch
+            from transformers import AutoModelForCausalLM, AutoProcessor
+
+            device = "cuda:0" if torch.cuda.is_available() else "cpu"
+            torch_dtype = torch.float16 if torch.cuda.is_available() else torch.float32
+            processor = AutoProcessor.from_pretrained(model_id, trust_remote_code=True)
+            model = AutoModelForCausalLM.from_pretrained(model_id, torch_dtype=torch_dtype, trust_remote_code=True).to(device)
             model.eval()
             _TOP_LEVEL_VISION = (processor, model, model_id)
             return _TOP_LEVEL_VISION
@@ -433,6 +446,31 @@ if modal is not None:
         model_id = model or os.getenv("GPUCALL_MODAL_VISION_MODEL", "Salesforce/blip-image-captioning-base")
         processor, vision_model, _ = _load_vision_model(model_id)
         prompt = vision_prompt_from_payload(payload).strip()
+        if model_id == "microsoft/Florence-2-large-ft":
+            import torch
+
+            task_prompt = "<OCR>" if _looks_like_document_prompt(prompt) else "<MORE_DETAILED_CAPTION>"
+            text_input = "" if task_prompt == "<OCR>" else prompt
+            florence_prompt = task_prompt + text_input
+            device = next(vision_model.parameters()).device
+            torch_dtype = torch.float16 if getattr(device, "type", "") == "cuda" else torch.float32
+            inputs = processor(text=florence_prompt, images=image, return_tensors="pt").to(device, torch_dtype)
+            generated_ids = vision_model.generate(
+                input_ids=inputs["input_ids"],
+                pixel_values=inputs["pixel_values"],
+                max_new_tokens=int(payload.get("max_tokens") or 1024),
+                do_sample=False,
+                num_beams=3,
+            )
+            generated_text = processor.batch_decode(generated_ids, skip_special_tokens=False)[0]
+            parsed = processor.post_process_generation(generated_text, task=task_prompt, image_size=(image.width, image.height))
+            if isinstance(parsed, dict):
+                value = parsed.get(task_prompt)
+                if isinstance(value, str):
+                    return value.strip()
+                if value is not None:
+                    return json.dumps(value, ensure_ascii=False, sort_keys=True)
+            return generated_text.strip() or "image processed"
         if model_id.startswith("Qwen/Qwen2.5-VL-"):
             prompt = prompt or "Describe this image."
             messages = [
@@ -468,6 +506,11 @@ if modal is not None:
         output_ids = vision_model.generate(**inputs, max_new_tokens=int(payload.get("max_tokens") or 64))
         text = processor.decode(output_ids[0], skip_special_tokens=True).strip()
         return text or "image processed"
+
+    def _looks_like_document_prompt(prompt: str) -> bool:
+        lowered = prompt.lower()
+        markers = ("ocr", "headline", "document", "newspaper", "text", "記事", "新聞", "見出し", "紙面", "文字")
+        return any(marker in lowered for marker in markers)
 
     def _first_image_ref(payload: dict[str, Any]) -> dict[str, Any]:
         for ref in payload.get("input_refs") or []:
