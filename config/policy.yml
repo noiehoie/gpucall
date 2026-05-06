@@ -2,7 +2,7 @@ version: "2026-04-30"
 inline_bytes_limit: 8192
 default_lease_ttl_seconds: 300
 max_lease_ttl_seconds: 3600
-max_timeout_seconds: 600
+max_timeout_seconds: 1800
 tokenizer_safety_multiplier: 1.25
 immutable_audit: true
 security:
