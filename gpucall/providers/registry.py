@@ -1,10 +1,10 @@
 from __future__ import annotations
 
 from collections.abc import Callable
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Any
 
-from gpucall.domain import ProviderSpec
+from gpucall.domain import ExecutionSurface, ProviderSpec
 from gpucall.plugin_loader import load_entry_point_group
 from gpucall.providers.base import ProviderAdapter
 
@@ -15,6 +15,7 @@ CatalogValidator = Callable[[list[ProviderSpec], dict[str, dict[str, str]]], lis
 
 @dataclass(frozen=True)
 class ProviderAdapterDescriptor:
+    execution_surface: ExecutionSurface | None = None
     endpoint_contract: str | None = None
     output_contract: str | None = None
     stream_contract: str | None = "none"
@@ -33,6 +34,20 @@ _ADAPTER_FACTORIES: dict[str, AdapterFactory] = {}
 _ALIASES: dict[str, str] = {}
 _DESCRIPTORS: dict[str, ProviderAdapterDescriptor] = {}
 _BUILTINS_LOADED = False
+_DEFAULT_EXECUTION_SURFACES = {
+    "azure-compute-vm": ExecutionSurface.IAAS_VM,
+    "echo": ExecutionSurface.LOCAL_RUNTIME,
+    "gcp-confidential-space-vm": ExecutionSurface.IAAS_VM,
+    "hyperstack": ExecutionSurface.IAAS_VM,
+    "local-ollama": ExecutionSurface.LOCAL_RUNTIME,
+    "modal": ExecutionSurface.FUNCTION_RUNTIME,
+    "ovhcloud-public-cloud-instance": ExecutionSurface.IAAS_VM,
+    "runpod-flash": ExecutionSurface.MANAGED_ENDPOINT,
+    "runpod-serverless": ExecutionSurface.MANAGED_ENDPOINT,
+    "runpod-vllm-flashboot": ExecutionSurface.FUNCTION_RUNTIME,
+    "runpod-vllm-serverless": ExecutionSurface.MANAGED_ENDPOINT,
+    "scaleway-instance": ExecutionSurface.IAAS_VM,
+}
 
 
 def register_adapter(
@@ -48,13 +63,16 @@ def register_adapter(
         for name in names:
             normalized = _normalize(name)
             _ADAPTER_FACTORIES[normalized] = factory
-            if descriptor is not None:
-                _DESCRIPTORS[normalized] = descriptor
+            normalized_descriptor = _descriptor_for(normalized, descriptor)
+            if normalized_descriptor is not None:
+                _DESCRIPTORS[normalized] = normalized_descriptor
         for alias in aliases:
             normalized_alias = _normalize(alias)
-            _ALIASES[normalized_alias] = _normalize(canonical)
-            if descriptor is not None:
-                _DESCRIPTORS[normalized_alias] = descriptor
+            normalized_canonical = _normalize(canonical)
+            _ALIASES[normalized_alias] = normalized_canonical
+            normalized_descriptor = _descriptor_for(normalized_canonical, descriptor)
+            if normalized_descriptor is not None:
+                _DESCRIPTORS[normalized_alias] = normalized_descriptor
         return factory
 
     return decorator
@@ -118,3 +136,14 @@ def registered_adapter_descriptors() -> dict[str, ProviderAdapterDescriptor]:
 
 def _normalize(value: str) -> str:
     return value.strip().lower()
+
+
+def _descriptor_for(adapter: str, descriptor: ProviderAdapterDescriptor | None) -> ProviderAdapterDescriptor | None:
+    default_surface = _DEFAULT_EXECUTION_SURFACES.get(adapter)
+    if descriptor is None:
+        if default_surface is None:
+            return None
+        return ProviderAdapterDescriptor(execution_surface=default_surface)
+    if descriptor.execution_surface is None and default_surface is not None:
+        return replace(descriptor, execution_surface=default_surface)
+    return descriptor

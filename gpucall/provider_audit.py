@@ -83,6 +83,7 @@ def _recipe_audit(config: Any, *, config_dir: Path, recipe: Recipe, candidates: 
         "production_ready_count": len(production_ready),
         "ready_for_validation_count": len(validation_ready),
         "candidate_fit_count": len(candidate_fit),
+        "surfaces": _surface_summary(active_rows, candidate_rows),
         "routing_decision": _routing_decision(production_ready, validation_ready, candidate_fit),
         "active_providers": active_rows,
         "candidate_tuples": candidate_rows,
@@ -224,6 +225,7 @@ def _provider_from_candidate(candidate: Mapping[str, Any], config: Any) -> Provi
     payload = {
         "name": name,
         "adapter": str(candidate.get("adapter") or ""),
+        "execution_surface": candidate.get("execution_surface") or _surface_for_adapter(str(candidate.get("adapter") or "")),
         "max_data_classification": str(candidate.get("max_data_classification") or "confidential"),
         "trust_profile": {
             "security_tier": str(candidate.get("security_tier") or "encrypted_capsule"),
@@ -282,6 +284,7 @@ def _official_contract(provider: ProviderSpec) -> dict[str, Any]:
     descriptor = adapter_descriptor(provider)
     return {
         "adapter": provider.adapter,
+        "execution_surface": provider.execution_surface.value if provider.execution_surface else None,
         "endpoint_contract": provider.endpoint_contract,
         "expected_endpoint_contract": getattr(descriptor, "endpoint_contract", None),
         "output_contract": provider.output_contract,
@@ -365,6 +368,7 @@ def _tuple_summary(provider: ProviderSpec | None) -> dict[str, Any]:
     return {
         "provider": provider.name,
         "adapter": provider.adapter,
+        "execution_surface": provider.execution_surface.value if provider.execution_surface else None,
         "gpu": provider.gpu,
         "vram_gb": provider.vram_gb,
         "model_ref": provider.model_ref,
@@ -380,6 +384,7 @@ def _candidate_tuple_summary(candidate: Mapping[str, Any]) -> dict[str, Any]:
     return {
         "provider": candidate.get("name"),
         "adapter": candidate.get("adapter"),
+        "execution_surface": candidate.get("execution_surface") or _surface_for_adapter(str(candidate.get("adapter") or "")),
         "gpu": candidate.get("gpu"),
         "vram_gb": candidate.get("vram_gb"),
         "model_ref": candidate.get("model_ref"),
@@ -405,6 +410,25 @@ def _strings(value: Any) -> list[str]:
     if value is None:
         return []
     return [str(value)]
+
+
+def _surface_for_adapter(adapter: str) -> str | None:
+    descriptor = adapter_descriptor(adapter)
+    if descriptor is None or descriptor.execution_surface is None:
+        return None
+    return descriptor.execution_surface.value
+
+
+def _surface_summary(active_rows: list[dict[str, Any]], candidate_rows: list[dict[str, Any]]) -> dict[str, Any]:
+    summary: dict[str, Any] = {"active": {}, "candidate": {}}
+    for bucket, rows in (("active", active_rows), ("candidate", candidate_rows)):
+        counts: dict[str, int] = {}
+        for row in rows:
+            tuple_data = row.get("tuple") if isinstance(row.get("tuple"), dict) else {}
+            surface = str(tuple_data.get("execution_surface") or "unknown")
+            counts[surface] = counts.get(surface, 0) + 1
+        summary[bucket] = dict(sorted(counts.items()))
+    return summary
 
 
 def _config_hash(config_dir: Path) -> str:

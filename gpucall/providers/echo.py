@@ -18,7 +18,16 @@ class EchoProvider(ProviderAdapter):
         self.cancelled: set[str] = set()
 
     async def start(self, plan: CompiledPlan) -> RemoteHandle:
-        return RemoteHandle(provider=self.name, remote_id=uuid4().hex, expires_at=plan.expires_at())
+        return RemoteHandle(
+            provider=self.name,
+            remote_id=uuid4().hex,
+            expires_at=plan.expires_at(),
+            account_ref="local",
+            execution_surface="local_runtime",
+            resource_kind="local_invocation",
+            cleanup_required=False,
+            reaper_eligible=False,
+        )
 
     async def wait(self, handle: RemoteHandle, plan: CompiledPlan) -> ProviderResult:
         if datetime.now(timezone.utc) >= handle.expires_at:

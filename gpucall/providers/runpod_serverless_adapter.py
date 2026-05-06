@@ -45,6 +45,11 @@ class RunpodServerlessAdapter(ProviderAdapter):
             provider=self.name,
             remote_id=run_request["job_id"],
             expires_at=plan.expires_at(),
+            account_ref="runpod",
+            execution_surface="managed_endpoint",
+            resource_kind="serverless_job",
+            cleanup_required=True,
+            reaper_eligible=False,
             meta=run_request,
         )
 

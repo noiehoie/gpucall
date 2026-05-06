@@ -27,6 +27,7 @@ from gpucall.config import ConfigError, default_config_dir, default_state_dir, l
 from gpucall.configure import configure_command
 from gpucall.credentials import configured_credentials, credentials_path, load_credentials
 from gpucall.domain import ExecutionMode, JobState, PresignPutRequest, ProviderError, TaskRequest
+from gpucall.execution_catalog import build_resource_catalog_snapshot, dumps_candidates, dumps_snapshot as dumps_execution_snapshot, generate_tuple_candidates
 from gpucall.provider_audit import provider_audit_report
 from gpucall.provider_catalog import live_provider_catalog_findings
 from gpucall.providers.registry import adapter_descriptor
@@ -86,6 +87,10 @@ def main() -> None:
     catalog.add_argument("action", choices=["build", "show"])
     catalog.add_argument("--config-dir", type=Path, default=default_config_dir())
     catalog.add_argument("--db", type=Path, default=None)
+    execution_catalog = sub.add_parser("execution-catalog")
+    execution_catalog.add_argument("action", choices=["snapshot", "candidates"])
+    execution_catalog.add_argument("--config-dir", type=Path, default=default_config_dir())
+    execution_catalog.add_argument("--recipe", default=None)
     audit = sub.add_parser("audit")
     audit.add_argument("action", choices=["verify", "tail", "rotate"])
     audit.add_argument("--limit", type=int, default=20)
@@ -209,6 +214,8 @@ def main() -> None:
         registry_command(args.action)
     elif args.command == "catalog":
         catalog_command(args.action, args.config_dir, args.db)
+    elif args.command == "execution-catalog":
+        execution_catalog_command(args.action, args.config_dir, recipe=args.recipe)
     elif args.command == "security":
         security_command(args.action, args.config_dir)
     elif args.command == "openapi":
@@ -717,6 +724,7 @@ def _provider_official_contract(spec) -> dict[str, object]:
     descriptor = adapter_descriptor(spec) if spec is not None else None
     contract: dict[str, object] = {
         "adapter": getattr(spec, "adapter", None),
+        "execution_surface": getattr(getattr(spec, "execution_surface", None), "value", getattr(spec, "execution_surface", None)),
         "endpoint_contract": getattr(spec, "endpoint_contract", None),
         "expected_endpoint_contract": getattr(descriptor, "endpoint_contract", None),
         "output_contract": getattr(spec, "output_contract", None),
@@ -924,6 +932,20 @@ def catalog_command(action: str, config_dir: Path, db: Path | None) -> None:
     if action == "build":
         catalog.replace_from_config(load_config(config_dir), config_dir=config_dir)
     print(dumps_snapshot(catalog.snapshot()), end="")
+
+
+def execution_catalog_command(action: str, config_dir: Path, *, recipe: str | None = None) -> None:
+    config = load_config(config_dir)
+    snapshot = build_resource_catalog_snapshot(config, config_dir=config_dir)
+    if action == "snapshot":
+        print(dumps_execution_snapshot(snapshot), end="")
+        return
+    selected_recipe = None
+    if recipe is not None:
+        selected_recipe = config.recipes.get(recipe)
+        if selected_recipe is None:
+            raise SystemExit(f"unknown recipe: {recipe}")
+    print(dumps_candidates(generate_tuple_candidates(snapshot, recipe=selected_recipe)), end="")
 
 
 def smoke_gateway(url: str, *, api_key: str | None, recipe: str) -> None:
@@ -1386,6 +1408,7 @@ def _provider_cost_audit_row(provider) -> dict[str, object]:
     return {
         "name": provider.name,
         "adapter": provider.adapter,
+        "execution_surface": provider.execution_surface.value if provider.execution_surface else None,
         "target": provider.target,
         "gpu": provider.gpu,
         "cost": cost_fields,

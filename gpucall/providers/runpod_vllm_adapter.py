@@ -50,6 +50,11 @@ class RunpodVllmServerlessAdapter(ProviderAdapter):
             provider=self.name,
             remote_id=f"openai-{plan.plan_id}",
             expires_at=plan.expires_at(),
+            account_ref="runpod",
+            execution_surface="managed_endpoint",
+            resource_kind="endpoint_request",
+            cleanup_required=False,
+            reaper_eligible=False,
             meta={"official_vllm": True},
         )
 

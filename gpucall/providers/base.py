@@ -9,11 +9,19 @@ from gpucall.domain import CompiledPlan, ProviderError
 
 
 @dataclass(frozen=True)
-class RemoteHandle:
+class ResourceLease:
     provider: str
     remote_id: str
     expires_at: datetime
+    account_ref: str | None = None
+    execution_surface: str | None = None
+    resource_kind: str = "remote_execution"
+    cleanup_required: bool = True
+    reaper_eligible: bool = False
     meta: dict[str, Any] = field(default_factory=dict)
+
+
+RemoteHandle = ResourceLease
 
 
 class ProviderAdapter(ABC):

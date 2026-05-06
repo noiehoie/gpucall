@@ -89,7 +89,7 @@ class Dispatcher:
                     handle = await adapter.start(plan)
                     self.audit.append(
                         "lease.started",
-                        {"plan_id": plan.plan_id, "provider": provider, "remote_id": handle.remote_id, "attempt": attempt},
+                        {**_lease_audit(handle), "plan_id": plan.plan_id, "provider": provider, "attempt": attempt},
                     )
                     result = await asyncio.wait_for(adapter.wait(handle, plan), timeout=plan.timeout_seconds)
                     result = _validate_and_register_provider_output(self, plan, result)
@@ -174,7 +174,7 @@ class Dispatcher:
             try:
                 _enforce_pre_execution_security_gate(plan)
                 handle = await adapter.start(plan)
-                self.audit.append("lease.started", {"plan_id": plan.plan_id, "provider": provider, "remote_id": handle.remote_id})
+                self.audit.append("lease.started", {**_lease_audit(handle), "plan_id": plan.plan_id, "provider": provider})
                 async for event in adapter.stream(handle, plan):
                     yield _validate_stream_event(plan, event)
                 self.registry.record(
@@ -223,7 +223,7 @@ class Dispatcher:
         provider: str,
         attempt: int | None = None,
     ) -> None:
-        payload: dict[str, object] = {"plan_id": plan_id, "provider": provider, "remote_id": handle.remote_id}
+        payload: dict[str, object] = {**_lease_audit(handle), "plan_id": plan_id, "provider": provider}
         if attempt is not None:
             payload["attempt"] = attempt
         try:
@@ -286,6 +286,17 @@ def _storage_safe_plan(plan: CompiledPlan) -> CompiledPlan:
     return plan.model_copy(
         update={"input_refs": [], "inline_inputs": {}, "messages": [], "system_prompt": None, "attestations": attestations}
     )
+
+
+def _lease_audit(handle: RemoteHandle) -> dict[str, object]:
+    return {
+        "remote_id": handle.remote_id,
+        "account_ref": handle.account_ref,
+        "execution_surface": handle.execution_surface,
+        "resource_kind": handle.resource_kind,
+        "cleanup_required": handle.cleanup_required,
+        "reaper_eligible": handle.reaper_eligible,
+    }
 
 
 def _job_error_message(exc: ProviderError) -> str:

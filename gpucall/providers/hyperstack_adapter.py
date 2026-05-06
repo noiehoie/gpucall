@@ -63,6 +63,11 @@ class HyperstackAdapter(ProviderAdapter):
             provider=self.name,
             remote_id=meta["vm_id"],
             expires_at=plan.expires_at(),
+            account_ref="hyperstack",
+            execution_surface="iaas_vm",
+            resource_kind="vm",
+            cleanup_required=True,
+            reaper_eligible=True,
             meta=meta,
         )
 

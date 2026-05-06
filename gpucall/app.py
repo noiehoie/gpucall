@@ -270,6 +270,7 @@ def create_app(config_dir: Path | None = None) -> FastAPI:
             "providers": {
                 name: {
                     "adapter": provider.adapter,
+                    "execution_surface": provider.execution_surface.value if provider.execution_surface else None,
                     "max_model_len": provider.max_model_len,
                     "model": provider.model,
                     "modes": [mode.value for mode in provider.modes],

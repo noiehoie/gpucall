@@ -50,6 +50,7 @@ Providers bind a real provider/GPU to a model and engine:
 
 - `model_ref`
 - `engine_ref`
+- execution surface: `iaas_vm`, `managed_endpoint`, `function_runtime`, `container_instance`, `cluster_runtime`, or local/test runtime
 - GPU / VRAM / region / trust profile
 - official endpoint and lifecycle contract
 
@@ -74,6 +75,27 @@ $XDG_STATE_HOME/gpucall/capability-catalog.db
 
 The DB is a deterministic materialization of YAML config. YAML remains the source of truth; the DB is for review, inspection, and operational tooling. Active providers and candidate providers are stored separately so unvalidated candidates cannot enter production auto-routing.
 
+## Execution Catalog
+
+The execution catalog is the provider-independent view used for tuple generation.
+It separates provider accounts from execution surfaces:
+
+- Provider account: credential and billing scope such as `runpod`, `modal`, or `hyperstack`.
+- Resource snapshot: GPU, region, VRAM, price, and configured/candidate stock state.
+- Worker contract: input/output/stream contracts, model, engine, modes, and endpoint/function configuration.
+- Tuple candidate: account + surface + resource + worker + model + engine, pinned to a snapshot id.
+
+Generate the current snapshot and deterministic tuple drafts:
+
+```bash
+gpucall execution-catalog snapshot --config-dir config
+gpucall execution-catalog candidates --config-dir config --recipe text-infer-standard
+```
+
+The snapshot is a candidate-selection cache, not live truth. Production execution
+still requires endpoint/lifecycle configuration, policy checks, billable live
+validation for the exact tuple, and cleanup guarantees.
+
 ## Provider Tuple Audit
 
 Use the provider tuple audit before promoting provider candidates or changing routing:
@@ -89,6 +111,10 @@ model catalog declarations, engine catalog guarantees, provider/GPU metadata,
 official adapter contracts, endpoint configuration, and exact live validation
 artifacts. Candidate tuples that fit the recipe remain outside production routing
 until they have endpoint/lifecycle configuration and billable validation evidence.
+The audit also reports surface distribution so Modal function-runtime candidates,
+RunPod managed endpoints, and Hyperstack VM routes are compared as different
+official execution surfaces instead of pretending they are equivalent provider
+wrappers.
 
 ## Admin Review
 

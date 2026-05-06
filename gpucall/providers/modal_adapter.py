@@ -131,7 +131,16 @@ class ModalAdapter(ProviderAdapter):
                     retryable=False,
                     status_code=501,
                 )
-        return RemoteHandle(provider=self.name, remote_id=uuid4().hex, expires_at=plan.expires_at())
+        return RemoteHandle(
+            provider=self.name,
+            remote_id=uuid4().hex,
+            expires_at=plan.expires_at(),
+            account_ref="modal",
+            execution_surface="function_runtime",
+            resource_kind="function_invocation",
+            cleanup_required=True,
+            reaper_eligible=False,
+        )
 
     async def wait(self, handle: RemoteHandle, plan: CompiledPlan) -> ProviderResult:
         try:

@@ -18,6 +18,7 @@ import yaml
 
 from gpucall.config import ConfigError, default_state_dir, load_config
 from gpucall.domain import ExecutionMode, ProviderSpec, Recipe
+from gpucall.providers.registry import adapter_descriptor
 from gpucall.routing import provider_route_rejection_reason
 
 
@@ -541,6 +542,7 @@ def _provider_review_row(provider: ProviderSpec, reason: str | None) -> dict[str
         "eligible": reason is None,
         "reason": reason,
         "adapter": provider.adapter,
+        "execution_surface": provider.execution_surface.value if provider.execution_surface else _surface_for_adapter(provider.adapter),
         "model": provider.model,
         "model_ref": provider.model_ref,
         "engine_ref": provider.engine_ref,
@@ -618,6 +620,7 @@ def _candidate_match(candidate: Mapping[str, Any], *, config: Any, contract: Map
         "name": candidate.get("name"),
         "path": candidate.get("_path"),
         "adapter": candidate.get("adapter"),
+        "execution_surface": candidate.get("execution_surface") or _surface_for_adapter(str(candidate.get("adapter") or "")),
         "gpu": candidate.get("gpu"),
         "vram_gb": candidate.get("vram_gb"),
         "max_model_len": candidate.get("max_model_len"),
@@ -657,6 +660,7 @@ def _provider_from_candidate(candidate: Mapping[str, Any], *, active_config: Any
     source: dict[str, Any] = {
         "name": name,
         "adapter": str(candidate.get("adapter") or ""),
+        "execution_surface": candidate.get("execution_surface") or _surface_for_adapter(str(candidate.get("adapter") or "")),
         "max_data_classification": str(candidate.get("max_data_classification") or "confidential"),
         "trust_profile": {
             "security_tier": str(candidate.get("security_tier") or "encrypted_capsule"),
@@ -827,6 +831,13 @@ def _strings(value: Any) -> list[str]:
     if value is None:
         return []
     return [str(value)]
+
+
+def _surface_for_adapter(adapter: str) -> str | None:
+    descriptor = adapter_descriptor(adapter)
+    if descriptor is None or descriptor.execution_surface is None:
+        return None
+    return descriptor.execution_surface.value
 
 
 def _candidate_output_satisfies(candidate_contract: str, required_contract: str) -> bool:

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from gpucall.providers.base import ProviderAdapter, RemoteHandle
+from gpucall.providers.base import ProviderAdapter, RemoteHandle, ResourceLease
 
 __all__ = [
     "AzureComputeVMAdapter",
@@ -14,6 +14,7 @@ __all__ = [
     "OVHCloudPublicCloudInstanceAdapter",
     "ProviderAdapter",
     "RemoteHandle",
+    "ResourceLease",
     "RunpodFlashAdapter",
     "RunpodServerlessAdapter",
     "ScalewayInstanceAdapter",

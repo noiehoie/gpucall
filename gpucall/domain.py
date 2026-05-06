@@ -53,6 +53,17 @@ class SecurityTier(StrEnum):
     SPLIT_LEARNING = "split_learning"
 
 
+class ExecutionSurface(StrEnum):
+    LOCAL_RUNTIME = "local_runtime"
+    IAAS_VM = "iaas_vm"
+    CONTAINER_INSTANCE = "container_instance"
+    MANAGED_ENDPOINT = "managed_endpoint"
+    FUNCTION_RUNTIME = "function_runtime"
+    SANDBOX_RUNTIME = "sandbox_runtime"
+    CLUSTER_RUNTIME = "cluster_runtime"
+    LIFECYCLE_ONLY = "lifecycle_only"
+
+
 class ProviderTrustProfile(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -349,6 +360,7 @@ class ProviderSpec(BaseModel):
 
     name: str
     adapter: str = "echo"
+    execution_surface: ExecutionSurface | None = None
     max_data_classification: DataClassification = DataClassification.CONFIDENTIAL
     trust_profile: ProviderTrustProfile = Field(default_factory=ProviderTrustProfile)
     gpu: str

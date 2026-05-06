@@ -99,13 +99,29 @@ def load_providers(config_dir: Path | None = None) -> dict[str, ProviderSpec]:
     root = config_dir or default_config_dir()
     providers: dict[str, ProviderSpec] = {}
     for path in sorted((root / "providers").glob("*.yml")):
-        provider = load_model(path, ProviderSpec)
+        provider = _load_provider(path)
         if provider.name in providers:
             raise ConfigError(f"duplicate provider name {provider.name!r} in {path}")
         providers[provider.name] = provider
     if not providers:
         raise ConfigError(f"no providers found in {root / 'providers'}")
     return providers
+
+
+def _load_provider(path: Path) -> ProviderSpec:
+    payload = _load_yaml(path)
+    if not isinstance(payload, dict):
+        raise ConfigError(f"invalid provider YAML in {path}: root must be a mapping")
+    if not payload.get("execution_surface"):
+        adapter = str(payload.get("adapter") or "echo")
+        descriptor = adapter_descriptor(adapter)
+        if descriptor is not None and descriptor.execution_surface is not None:
+            payload = dict(payload)
+            payload["execution_surface"] = descriptor.execution_surface.value
+    try:
+        return ProviderSpec.model_validate(payload)
+    except ValidationError as exc:
+        raise ConfigError(f"invalid {path}: {_validation_error_summary(exc)}") from exc
 
 
 def load_models(config_dir: Path | None = None) -> dict[str, ModelSpec]:
@@ -235,6 +251,16 @@ def validate_config(config: GpucallConfig) -> None:
                 f"{provider.declared_model_max_len}"
             )
         descriptor = adapter_descriptor(provider)
+        if (
+            descriptor is not None
+            and descriptor.execution_surface is not None
+            and provider.execution_surface is not None
+            and provider.execution_surface != descriptor.execution_surface
+        ):
+            raise ConfigError(
+                f"provider {provider.name!r} execution_surface {provider.execution_surface!r} does not match adapter "
+                f"{provider.adapter!r} surface {descriptor.execution_surface!r}"
+            )
         requires_contracts = descriptor.requires_contracts if descriptor is not None else True
         if requires_contracts:
             if not provider.endpoint_contract:

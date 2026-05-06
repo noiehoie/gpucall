@@ -234,10 +234,11 @@ async def test_dispatcher_does_not_fail_over_non_retryable_provider(tmp_path) ->
 @pytest.mark.asyncio
 async def test_dispatcher_cleanup_runs_after_wait_failure(tmp_path) -> None:
     bad = FailingProvider("bad", retryable=True)
+    audit_path = tmp_path / "audit.jsonl"
     dispatcher = Dispatcher(
         adapters={"bad": bad},
         registry=ObservedRegistry(),
-        audit=AuditTrail(tmp_path / "audit.jsonl"),
+        audit=AuditTrail(audit_path),
         jobs=JobStore(),
     )
 
@@ -245,6 +246,10 @@ async def test_dispatcher_cleanup_runs_after_wait_failure(tmp_path) -> None:
         await dispatcher.execute_sync(plan(["bad"]))
 
     assert bad.cancelled
+    events = [json.loads(line) for line in audit_path.read_text(encoding="utf-8").splitlines()]
+    cleanup = [event for event in events if event["event_type"] == "lease.cleaned_up"][0]["payload"]
+    assert cleanup["execution_surface"] == "local_runtime"
+    assert cleanup["cleanup_required"] is False
 
 
 @pytest.mark.asyncio

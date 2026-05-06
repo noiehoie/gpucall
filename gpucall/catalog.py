@@ -8,6 +8,7 @@ from typing import Any
 import yaml
 
 from gpucall.config import GpucallConfig
+from gpucall.providers.registry import adapter_descriptor
 
 
 class SQLiteCapabilityCatalog:
@@ -42,21 +43,29 @@ class SQLiteCapabilityCatalog:
             for provider in config.providers.values():
                 conn.execute(
                     """
-                    INSERT INTO providers(name, adapter, model_ref, engine_ref, payload)
-                    VALUES (?, ?, ?, ?, ?)
+                    INSERT INTO providers(name, adapter, execution_surface, model_ref, engine_ref, payload)
+                    VALUES (?, ?, ?, ?, ?, ?)
                     """,
-                    (provider.name, provider.adapter, provider.model_ref, provider.engine_ref, provider.model_dump_json()),
+                    (
+                        provider.name,
+                        provider.adapter,
+                        provider.execution_surface.value if provider.execution_surface else None,
+                        provider.model_ref,
+                        provider.engine_ref,
+                        provider.model_dump_json(),
+                    ),
                 )
             if root is not None:
                 for candidate in _load_candidate_payloads(root / "provider_candidates"):
                     conn.execute(
                         """
-                        INSERT INTO provider_candidates(name, adapter, model_ref, engine_ref, status, payload)
-                        VALUES (?, ?, ?, ?, ?, ?)
+                        INSERT INTO provider_candidates(name, adapter, execution_surface, model_ref, engine_ref, status, payload)
+                        VALUES (?, ?, ?, ?, ?, ?, ?)
                         """,
                         (
                             candidate.get("name"),
                             candidate.get("adapter"),
+                            candidate.get("execution_surface") or _surface_for_adapter(str(candidate.get("adapter") or "")),
                             candidate.get("model_ref"),
                             candidate.get("engine_ref"),
                             candidate.get("status", "candidate"),
@@ -72,9 +81,13 @@ class SQLiteCapabilityCatalog:
                 "recipes": _rows(conn.execute("SELECT name, task FROM recipes ORDER BY name")),
                 "models": _rows(conn.execute("SELECT name, provider_model_id FROM models ORDER BY name")),
                 "engines": _rows(conn.execute("SELECT name, kind FROM engines ORDER BY name")),
-                "providers": _rows(conn.execute("SELECT name, adapter, model_ref, engine_ref FROM providers ORDER BY name")),
+                "providers": _rows(
+                    conn.execute("SELECT name, adapter, execution_surface, model_ref, engine_ref FROM providers ORDER BY name")
+                ),
                 "provider_candidates": _rows(
-                    conn.execute("SELECT name, adapter, model_ref, engine_ref, status FROM provider_candidates ORDER BY name")
+                    conn.execute(
+                        "SELECT name, adapter, execution_surface, model_ref, engine_ref, status FROM provider_candidates ORDER BY name"
+                    )
                 ),
             }
 
@@ -95,17 +108,20 @@ class SQLiteCapabilityCatalog:
                 CREATE TABLE IF NOT EXISTS providers (
                     name TEXT PRIMARY KEY,
                     adapter TEXT NOT NULL,
+                    execution_surface TEXT,
                     model_ref TEXT,
                     engine_ref TEXT,
                     payload TEXT NOT NULL
                 )
                 """
             )
+            _ensure_column(conn, "providers", "execution_surface", "TEXT")
             conn.execute(
                 """
                 CREATE TABLE IF NOT EXISTS provider_candidates (
                     name TEXT PRIMARY KEY,
                     adapter TEXT NOT NULL,
+                    execution_surface TEXT,
                     model_ref TEXT,
                     engine_ref TEXT,
                     status TEXT NOT NULL,
@@ -113,10 +129,24 @@ class SQLiteCapabilityCatalog:
                 )
                 """
             )
+            _ensure_column(conn, "provider_candidates", "execution_surface", "TEXT")
 
 
 def _rows(cursor: sqlite3.Cursor) -> list[dict[str, Any]]:
     return [dict(row) for row in cursor.fetchall()]
+
+
+def _ensure_column(conn: sqlite3.Connection, table: str, column: str, declaration: str) -> None:
+    existing = {str(row[1]) for row in conn.execute(f"PRAGMA table_info({table})")}
+    if column not in existing:
+        conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {declaration}")
+
+
+def _surface_for_adapter(adapter: str) -> str | None:
+    descriptor = adapter_descriptor(adapter)
+    if descriptor is None or descriptor.execution_surface is None:
+        return None
+    return descriptor.execution_surface.value
 
 
 def _load_candidate_payloads(root: Path) -> list[dict[str, Any]]:

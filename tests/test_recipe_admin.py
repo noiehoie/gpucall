@@ -219,6 +219,7 @@ def test_admin_review_outputs_provider_contract_when_existing_providers_are_insu
     assert report["required_provider_contract"]["quality_failure_to_correct"]["kind"] == "insufficient_ocr"
     assert any(match["name"] == "modal-h100-qwen25-vl-7b" for match in report["provider_candidate_matches"])
     assert all(match["eligible"] is True for match in report["provider_candidate_matches"])
+    assert all(match["execution_surface"] == "function_runtime" for match in report["provider_candidate_matches"])
 
 
 def test_admin_review_matches_long_context_provider_candidates() -> None:

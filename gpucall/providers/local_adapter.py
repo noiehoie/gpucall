@@ -23,7 +23,16 @@ class LocalOllamaAdapter(ProviderAdapter):
         self.model = model
 
     async def start(self, plan: CompiledPlan) -> RemoteHandle:
-        return RemoteHandle(provider=self.name, remote_id=uuid4().hex, expires_at=plan.expires_at())
+        return RemoteHandle(
+            provider=self.name,
+            remote_id=uuid4().hex,
+            expires_at=plan.expires_at(),
+            account_ref="local",
+            execution_surface="local_runtime",
+            resource_kind="local_process",
+            cleanup_required=True,
+            reaper_eligible=False,
+        )
 
     async def wait(self, handle: RemoteHandle, plan: CompiledPlan) -> ProviderResult:
         prompt = self._prompt_from_plan(plan)

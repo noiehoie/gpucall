@@ -41,7 +41,17 @@ class OVHCloudPublicCloudInstanceAdapter(LifecycleOnlyMixin, ProviderAdapter):
 
     async def start(self, plan: CompiledPlan) -> RemoteHandle:
         meta = await asyncio.to_thread(self._start_sync, plan)
-        return RemoteHandle(provider=self.name, remote_id=meta["instance_id"], expires_at=plan.expires_at(), meta=meta)
+        return RemoteHandle(
+            provider=self.name,
+            remote_id=meta["instance_id"],
+            expires_at=plan.expires_at(),
+            account_ref="ovhcloud",
+            execution_surface="iaas_vm",
+            resource_kind="vm",
+            cleanup_required=True,
+            reaper_eligible=True,
+            meta=meta,
+        )
 
     async def cancel_remote(self, handle: RemoteHandle) -> None:
         await asyncio.to_thread(self._delete_sync, handle.remote_id)

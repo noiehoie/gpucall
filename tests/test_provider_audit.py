@@ -39,8 +39,13 @@ def test_provider_audit_reports_active_and_candidate_tuples(tmp_path) -> None:
     assert recipe["routing_decision"]["decision"] in {"ROUTABLE", "READY_FOR_VALIDATION", "CANDIDATE_ONLY"}
     assert any(row["name"] == "modal-a10g" for row in recipe["active_providers"])
     assert any(row["name"] == "runpod-vllm-l40s-qwen25-7b" for row in recipe["candidate_tuples"])
+    assert recipe["surfaces"]["active"]["function_runtime"] >= 1
+    assert recipe["surfaces"]["active"]["iaas_vm"] >= 1
+    assert recipe["surfaces"]["candidate"]["managed_endpoint"] >= 1
     assert all("production_decision" in row for row in recipe["active_providers"])
     assert all("production_decision" in row for row in recipe["candidate_tuples"])
+    assert all("execution_surface" in row["tuple"] for row in recipe["active_providers"])
+    assert all("execution_surface" in row["tuple"] for row in recipe["candidate_tuples"])
 
 
 def test_provider_audit_fails_closed_for_unknown_recipe(tmp_path) -> None:

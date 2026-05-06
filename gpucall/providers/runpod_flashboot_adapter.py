@@ -49,6 +49,11 @@ class RunpodVllmFlashBootAdapter(ProviderAdapter):
             provider=self.name,
             remote_id=resource_name,
             expires_at=plan.expires_at(),
+            account_ref="runpod",
+            execution_surface="function_runtime",
+            resource_kind="function_runtime",
+            cleanup_required=True,
+            reaper_eligible=True,
             meta={"resource_name": resource_name, "flash_function": True},
         )
 
