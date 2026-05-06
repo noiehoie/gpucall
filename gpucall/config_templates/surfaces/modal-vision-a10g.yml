@@ -1,0 +1,12 @@
+surface_ref: modal-vision-a10g
+provider_name: modal-vision-a10g
+account_ref: modal
+adapter: modal
+execution_surface: function_runtime
+gpu: A10G
+vram_gb: 24
+max_model_len: 512
+region: null
+zone: null
+cost_per_second: 0.00035
+stock_state: configured

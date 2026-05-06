@@ -1,0 +1,12 @@
+surface_ref: hyperstack-a100
+provider_name: hyperstack-a100
+account_ref: hyperstack
+adapter: hyperstack
+execution_surface: iaas_vm
+gpu: A100
+vram_gb: 80
+max_model_len: 32768
+region: null
+zone: null
+cost_per_second: 0.0012
+stock_state: configured

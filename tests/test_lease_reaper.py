@@ -1,0 +1,26 @@
+from __future__ import annotations
+
+import json
+
+from gpucall.lease_reaper import active_manifest_leases, lease_reaper_report
+
+
+def test_lease_reaper_reports_active_manifest_leases(tmp_path) -> None:
+    manifest = tmp_path / "leases.jsonl"
+    manifest.write_text(
+        "\n".join(
+            [
+                json.dumps({"event": "provision.created", "provider": "hyperstack", "vm_id": "vm-1"}),
+                json.dumps({"event": "provision.created", "provider": "hyperstack", "vm_id": "vm-2"}),
+                json.dumps({"event": "destroyed", "provider": "hyperstack", "vm_id": "vm-1"}),
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    assert [lease["vm_id"] for lease in active_manifest_leases(manifest)] == ["vm-2"]
+    report = lease_reaper_report(manifest_path=manifest)
+    assert report["ok"] is False
+    assert report["active_lease_count"] == 1
+    assert report["actions"][0]["status"] == "dry_run"

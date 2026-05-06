@@ -13,7 +13,7 @@ import pytest
 from gpucall.config import ConfigError, load_config
 from gpucall.cli import _provider_smoke_request
 from gpucall.compiler import GovernanceCompiler
-from gpucall.domain import DataRef, ExecutionMode, ProviderSpec, SecurityTier, TaskRequest
+from gpucall.domain import DataRef, ExecutionMode, ProviderSpec, Recipe, SecurityTier, TaskRequest
 from gpucall.registry import ObservedRegistry
 
 
@@ -22,6 +22,28 @@ def copy_config(tmp_path: Path) -> Path:
     root = tmp_path / "config"
     shutil.copytree(source, root)
     return root
+
+
+def test_recipe_v2_rejects_provider_resource_fields() -> None:
+    with pytest.raises(ValueError, match="provider resource fields"):
+        Recipe.model_validate(
+            {
+                "name": "bad-v2",
+                "recipe_schema_version": 2,
+                "task": "infer",
+                "intent": "bad",
+                "data_classification": "confidential",
+                "allowed_modes": ["sync"],
+                "context_budget_tokens": 8192,
+                "resource_class": "light",
+                "min_vram_gb": 16,
+                "max_model_len": 8192,
+                "gpu": "A10G",
+                "timeout_seconds": 30,
+                "lease_ttl_seconds": 60,
+                "tokenizer_family": "qwen",
+            }
+        )
 
 
 def test_load_config_rejects_recipe_without_capable_provider(tmp_path) -> None:

@@ -1,36 +1,39 @@
-allowed_inline_mime_prefixes:
-- text/
-allowed_mime_prefixes:
-- image/
-allowed_modes:
-- sync
-artifact_export: false
+name: vision-understand-document-image-draft
+recipe_schema_version: 2
+task: vision
+intent: understand_document_image
 auto_select: true
 data_classification: confidential
-default_temperature: 0.2
-gpu: any
-guided_decoding: true
+allowed_modes:
+- sync
+context_budget_tokens: 8192
+resource_class: document_vision
+latency_class: long_running
+quality_floor: draft
+timeout_seconds: 1800
 lease_ttl_seconds: 2100
+tokenizer_family: qwen
 max_input_bytes: 16777216
-max_model_len: 8192
-min_vram_gb: 80
-name: vision-understand-document-image-draft
-output_contract: plain-text
-output_validation_attempts: 1
+allowed_mime_prefixes:
+- image/
+allowed_inline_mime_prefixes:
+- text/
+default_temperature: 0.2
+structured_temperature: 0.0
+structured_system_prompt: Return only valid JSON when response_format requests JSON.
+  Do not include markdown fences or prose.
+system_prompt: Answer the user's vision request directly from the supplied image and
+  prompt.
+stop_tokens:
+- <|im_end|>
+- <|endoftext|>
 repetition_penalty: 1.05
+guided_decoding: true
+output_validation_attempts: 1
+artifact_export: false
+requires_key_release: false
 required_model_capabilities:
 - document_understanding
 - visual_question_answering
 - instruction_following
-requires_key_release: false
-stop_tokens:
-- <|im_end|>
-- <|endoftext|>
-structured_system_prompt: Return only valid JSON when response_format requests JSON.
-  Do not include markdown fences or prose.
-structured_temperature: 0.0
-system_prompt: Answer the user's vision request directly from the supplied image and
-  prompt.
-task: vision
-timeout_seconds: 1800
-tokenizer_family: qwen
+output_contract: plain-text

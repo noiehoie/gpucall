@@ -1,0 +1,4 @@
+account_ref: local
+provider_family: local
+credential_ref: local
+billing_scope: null

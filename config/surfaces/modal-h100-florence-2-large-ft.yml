@@ -1,0 +1,12 @@
+surface_ref: modal-h100-florence-2-large-ft
+provider_name: modal-h100-florence-2-large-ft
+account_ref: modal
+adapter: modal
+execution_surface: function_runtime
+gpu: H100
+vram_gb: 80
+max_model_len: 8192
+region: null
+zone: null
+cost_per_second: 0.00213
+stock_state: configured

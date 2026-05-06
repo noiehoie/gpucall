@@ -13,20 +13,31 @@ The gateway then requires live validation evidence before an administrator treat
 
 ```text
 config/
+  accounts/*.yml
   recipes/*.yml
   models/*.yml
   engines/*.yml
+  surfaces/*.yml
+  workers/*.yml
   providers/*.yml
   provider_candidates/*.yml
 ```
 
-Recipes contain abstract requirements:
+Recipes use the caller-facing v2 DSL and contain workload requirements:
 
+- `recipe_schema_version: 2`
+- `intent`
+- `context_budget_tokens`
+- `resource_class`
+- `latency_class`
+- `quality_floor`
 - `required_model_capabilities`
-- `max_model_len`
-- `min_vram_gb`
 - input/output contracts
 - classification and allowed modes
+
+Recipes must not declare provider resource fields such as `gpu`,
+`min_vram_gb`, or `max_model_len`. The loader derives the internal provider
+contract from the v2 workload fields.
 
 Models contain semantic and resource declarations:
 
@@ -78,7 +89,7 @@ The DB is a deterministic materialization of YAML config. YAML remains the sourc
 ## Execution Catalog
 
 The execution catalog is the provider-independent view used for tuple generation.
-It separates provider accounts from execution surfaces:
+It separates provider accounts, execution surfaces, and workers:
 
 - Provider account: credential and billing scope such as `runpod`, `modal`, or `hyperstack`.
 - Resource snapshot: GPU, region, VRAM, price, and configured/candidate stock state.

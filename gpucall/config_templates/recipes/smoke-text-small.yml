@@ -1,30 +1,33 @@
 name: smoke-text-small
+recipe_schema_version: 2
 task: infer
+intent: smoke_test
 auto_select: false
 data_classification: internal
 allowed_modes:
-  - sync
-  - async
-min_vram_gb: 1
-max_model_len: 32768
+- sync
+- async
+context_budget_tokens: 32768
+resource_class: smoke
+latency_class: interactive
+quality_floor: smoke
 timeout_seconds: 600
 lease_ttl_seconds: 900
 tokenizer_family: qwen
-gpu: any
 max_input_bytes: 16777216
 allowed_mime_prefixes:
-  - text/
+- text/
 default_temperature: 0.7
 structured_temperature: 0.0
-structured_system_prompt: "Return only valid JSON when response_format requests JSON. Do not include markdown fences or prose."
-system_prompt: "Answer the user's request directly."
+structured_system_prompt: Return only valid JSON when response_format requests JSON.
+  Do not include markdown fences or prose.
+system_prompt: Answer the user's request directly.
 stop_tokens:
-  - "<|im_end|>"
-  - "<|endoftext|>"
+- <|im_end|>
+- <|endoftext|>
 repetition_penalty: 1.05
 guided_decoding: true
 output_validation_attempts: 1
-
 required_model_capabilities:
-  - instruction_following
+- instruction_following
 output_contract: plain-text

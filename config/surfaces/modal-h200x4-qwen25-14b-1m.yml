@@ -1,0 +1,12 @@
+surface_ref: modal-h200x4-qwen25-14b-1m
+provider_name: modal-h200x4-qwen25-14b-1m
+account_ref: modal
+adapter: modal
+execution_surface: function_runtime
+gpu: H200:4
+vram_gb: 564
+max_model_len: 1010000
+region: null
+zone: null
+cost_per_second: 0.00505
+stock_state: configured

@@ -1,0 +1,20 @@
+worker_ref: local-echo
+provider_name: local-echo
+account_ref: local
+adapter: echo
+execution_surface: local_runtime
+model_ref: local-echo-model
+engine_ref: local-echo-engine
+modes:
+- sync
+- async
+- stream
+input_contracts:
+- text
+- chat_messages
+- data_refs
+output_contract: gpucall-provider-result
+stream_contract: token-incremental
+target: null
+stream_target: null
+endpoint_contract: null

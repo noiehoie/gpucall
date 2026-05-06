@@ -28,6 +28,7 @@ from gpucall.configure import configure_command
 from gpucall.credentials import configured_credentials, credentials_path, load_credentials
 from gpucall.domain import ExecutionMode, JobState, PresignPutRequest, ProviderError, TaskRequest
 from gpucall.execution_catalog import build_resource_catalog_snapshot, dumps_candidates, dumps_snapshot as dumps_execution_snapshot, generate_tuple_candidates
+from gpucall.lease_reaper import active_manifest_leases, lease_reaper_report
 from gpucall.provider_audit import provider_audit_report
 from gpucall.provider_catalog import live_provider_catalog_findings
 from gpucall.providers.registry import adapter_descriptor
@@ -104,6 +105,9 @@ def main() -> None:
     provider_audit.add_argument("--live", action="store_true")
     cleanup_audit = sub.add_parser("cleanup-audit")
     cleanup_audit.add_argument("--config-dir", type=Path, default=default_config_dir())
+    lease_reaper = sub.add_parser("lease-reaper")
+    lease_reaper.add_argument("--manifest", type=Path, default=None)
+    lease_reaper.add_argument("--apply", action="store_true")
     security = sub.add_parser("security")
     security.add_argument("action", choices=["scan-secrets"])
     security.add_argument("--config-dir", type=Path, default=default_config_dir())
@@ -210,6 +214,8 @@ def main() -> None:
         provider_audit_command(args.config_dir, recipe=args.recipe, live=args.live)
     elif args.command == "cleanup-audit":
         cleanup_audit_command(args.config_dir)
+    elif args.command == "lease-reaper":
+        lease_reaper_command(args.manifest, apply=args.apply)
     elif args.command == "registry":
         registry_command(args.action)
     elif args.command == "catalog":
@@ -1332,6 +1338,11 @@ def cleanup_audit_command(config_dir: Path) -> None:
     print(json.dumps(_cleanup_audit_report(config), indent=2, sort_keys=True, default=str))
 
 
+def lease_reaper_command(manifest: Path | None, *, apply: bool) -> None:
+    path = manifest or Path(os.getenv("GPUCALL_HYPERSTACK_LEASE_MANIFEST", str(default_state_dir() / "hyperstack_leases.jsonl"))).expanduser()
+    print(json.dumps(lease_reaper_report(manifest_path=path, apply=apply), indent=2, sort_keys=True, default=str))
+
+
 def _cleanup_audit_report(config) -> dict[str, object]:
     lease_path = Path(os.getenv("GPUCALL_HYPERSTACK_LEASE_MANIFEST", str(default_state_dir() / "hyperstack_leases.jsonl"))).expanduser()
     active_hyperstack = _active_hyperstack_leases_from_manifest(lease_path)
@@ -1348,25 +1359,7 @@ def _cleanup_audit_report(config) -> dict[str, object]:
 
 
 def _active_hyperstack_leases_from_manifest(path: Path) -> list[dict[str, object]]:
-    if not path.exists():
-        return []
-    active: dict[str, dict[str, object]] = {}
-    for line in path.read_text(encoding="utf-8").splitlines():
-        if not line.strip():
-            continue
-        try:
-            row = json.loads(line)
-        except json.JSONDecodeError:
-            continue
-        vm_id = row.get("vm_id")
-        if not vm_id:
-            continue
-        key = str(vm_id)
-        if row.get("event") == "destroyed":
-            active.pop(key, None)
-        elif row.get("event") == "provision.created":
-            active[key] = row
-    return list(active.values())
+    return active_manifest_leases(path)
 
 
 def _provider_validation_cleanup_summary(config) -> dict[str, object]:

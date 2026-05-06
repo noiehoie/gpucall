@@ -11,6 +11,7 @@ gpucall validate-config
 gpucall doctor
 gpucall provider-audit
 gpucall execution-catalog candidates --recipe text-infer-standard
+gpucall lease-reaper
 gpucall cost-audit
 gpucall cleanup-audit
 gpucall launch-check --profile static

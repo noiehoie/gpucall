@@ -64,6 +64,31 @@ class ExecutionSurface(StrEnum):
     LIFECYCLE_ONLY = "lifecycle_only"
 
 
+class RecipeLatencyClass(StrEnum):
+    INTERACTIVE = "interactive"
+    STANDARD = "standard"
+    BATCH = "batch"
+    LONG_RUNNING = "long_running"
+
+
+class RecipeQualityFloor(StrEnum):
+    SMOKE = "smoke"
+    DRAFT = "draft"
+    STANDARD = "standard"
+    HIGH = "high"
+    LOSSLESS = "lossless"
+
+
+class RecipeResourceClass(StrEnum):
+    SMOKE = "smoke"
+    LIGHT = "light"
+    STANDARD = "standard"
+    LARGE = "large"
+    EXLARGE = "exlarge"
+    ULTRALONG = "ultralong"
+    DOCUMENT_VISION = "document_vision"
+
+
 class ProviderTrustProfile(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -289,6 +314,13 @@ class Recipe(BaseModel):
 
     name: str
     task: str
+    recipe_schema_version: PositiveInt = 1
+    intent: str | None = None
+    context_budget_tokens: PositiveInt | None = None
+    resource_class: RecipeResourceClass | None = None
+    latency_class: RecipeLatencyClass = RecipeLatencyClass.STANDARD
+    quality_floor: RecipeQualityFloor = RecipeQualityFloor.STANDARD
+    cost_ceiling_usd: NonNegativeFloat | None = None
     auto_select: bool = True
     data_classification: DataClassification = DataClassification.CONFIDENTIAL
     allowed_modes: list[ExecutionMode]
@@ -315,6 +347,30 @@ class Recipe(BaseModel):
     output_contract: str | None = None
     expected_cold_start_seconds: PositiveInt | None = None
     cost_policy: CostPolicy | None = None
+
+    @model_validator(mode="before")
+    @classmethod
+    def derive_internal_contract(cls, data: Any) -> Any:
+        if not isinstance(data, dict):
+            return data
+        payload = dict(data)
+        schema_version = int(payload.get("recipe_schema_version") or 1)
+        old_resource_fields = {"gpu", "min_vram_gb", "max_model_len"}
+        if schema_version >= 2:
+            present = old_resource_fields & set(payload)
+            if present:
+                raise ValueError("recipe_schema_version=2 must not declare provider resource fields: " + ", ".join(sorted(present)))
+            context_budget = int(payload.get("context_budget_tokens") or _context_budget_for(payload))
+            payload["max_model_len"] = context_budget
+            payload["min_vram_gb"] = _vram_for_recipe(payload, context_budget)
+            payload["gpu"] = None
+            if "max_input_bytes" not in payload:
+                payload["max_input_bytes"] = _max_input_bytes_for(payload, context_budget)
+            if "timeout_seconds" not in payload:
+                payload["timeout_seconds"] = _timeout_for_recipe(payload, context_budget)
+            if "lease_ttl_seconds" not in payload:
+                payload["lease_ttl_seconds"] = _lease_for_recipe(payload, context_budget)
+        return payload
 
 
 InputContract = Literal["text", "chat_messages", "data_refs", "image", "activation_refs", "artifact_refs"]
@@ -527,6 +583,60 @@ class ProviderResult(BaseModel):
     artifact_manifest: ArtifactManifest | None = None
     usage: dict[str, int] = Field(default_factory=dict)
     output_validated: bool | None = None
+
+
+def _context_budget_for(payload: dict[str, Any]) -> int:
+    resource_class = str(payload.get("resource_class") or "")
+    return {
+        "smoke": 32768,
+        "light": 8192,
+        "standard": 32768,
+        "large": 65536,
+        "exlarge": 131072,
+        "ultralong": 524288,
+        "document_vision": 8192,
+    }.get(resource_class, 8192)
+
+
+def _vram_for_recipe(payload: dict[str, Any], context_budget: int) -> int:
+    resource_class = str(payload.get("resource_class") or "")
+    if resource_class == "smoke":
+        return 1
+    if resource_class == "light":
+        return 16
+    if resource_class in {"standard", "document_vision"}:
+        return 80 if resource_class == "document_vision" else 24
+    if resource_class in {"large", "exlarge", "ultralong"}:
+        return 80
+    if context_budget > 524288:
+        return 320
+    if context_budget > 32768:
+        return 80
+    if context_budget > 8192:
+        return 24
+    return 16
+
+
+def _max_input_bytes_for(payload: dict[str, Any], context_budget: int) -> int:
+    if str(payload.get("task") or "") == "vision":
+        return 16 * 1024 * 1024
+    return max(1024 * 1024, min(1024 * 1024 * 1024, context_budget * 1024))
+
+
+def _timeout_for_recipe(payload: dict[str, Any], context_budget: int) -> int:
+    latency_class = str(payload.get("latency_class") or "standard")
+    if latency_class == "long_running":
+        return 1800
+    if latency_class == "batch":
+        return 900
+    if context_budget >= 131072:
+        return 600
+    return 180
+
+
+def _lease_for_recipe(payload: dict[str, Any], context_budget: int) -> int:
+    timeout = _timeout_for_recipe(payload, context_budget)
+    return max(timeout + 60, 240)
 
 
 class JobRecord(BaseModel):

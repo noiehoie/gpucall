@@ -1,0 +1,17 @@
+worker_ref: runpod-vllm-serverless
+provider_name: runpod-vllm-serverless
+account_ref: runpod
+adapter: runpod-vllm-serverless
+execution_surface: managed_endpoint
+model_ref: qwen2.5-1.5b-instruct
+engine_ref: runpod-vllm-openai
+modes:
+- sync
+- async
+input_contracts:
+- chat_messages
+output_contract: openai-chat-completions
+stream_contract: none
+target: RUNPOD_ENDPOINT_ID_PLACEHOLDER
+stream_target: null
+endpoint_contract: openai-chat-completions

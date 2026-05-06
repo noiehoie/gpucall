@@ -1,0 +1,12 @@
+surface_ref: local-echo
+provider_name: local-echo
+account_ref: local
+adapter: echo
+execution_surface: local_runtime
+gpu: L4
+vram_gb: 24
+max_model_len: 32768
+region: null
+zone: null
+cost_per_second: 0
+stock_state: configured
