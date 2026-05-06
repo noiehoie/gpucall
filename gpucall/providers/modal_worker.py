@@ -183,6 +183,13 @@ def _ambient_s3_allowed(ref: dict[str, Any]) -> bool:
     return os.getenv("GPUCALL_WORKER_ALLOW_AMBIENT_S3", "").strip().lower() in {"1", "true", "yes", "on"}
 
 
+def _prefetch_qwen25_vl_3b() -> None:
+    os.environ.setdefault("HF_HUB_ENABLE_HF_TRANSFER", "1")
+    from huggingface_hub import snapshot_download
+
+    snapshot_download("Qwen/Qwen2.5-VL-3B-Instruct")
+
+
 if modal is not None:
     app = modal.App(os.getenv("GPUCALL_MODAL_WORKER_APP_NAME", "gpucall-worker-json"))
     _VLLM_IMAGE = (
@@ -199,6 +206,7 @@ if modal is not None:
             "pyairports",
         )
         .env({"HF_HUB_ENABLE_HF_TRANSFER": "1"})
+        .run_function(_prefetch_qwen25_vl_3b, timeout=3600)
     )
     _QWEN_1M_IMAGE = (
         modal.Image.from_registry("nvidia/cuda:12.1.1-devel-ubuntu22.04", add_python="3.11")
