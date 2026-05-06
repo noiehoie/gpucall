@@ -223,6 +223,7 @@ def review_artifact(
         "blockers": [],
         "warnings": [],
         "provider_matrix": {},
+        "provider_candidate_matches": [],
         "required_provider_contract": {},
         "live_validation": {"matched": []},
     }
@@ -371,6 +372,11 @@ def _review_config_and_providers(
     report["provider_matrix"] = provider_matrix
     report["eligible_providers"] = eligible
     if not eligible:
+        report["provider_candidate_matches"] = _candidate_matches(
+            config_dir=config_dir,
+            config=config,
+            contract=report.get("required_provider_contract") or {},
+        )
         report["warnings"].append({"check": "provider_fit", "reason": "no provider satisfies recipe, policy, mode, and contract requirements"})
         report["warnings"].append(
             {
@@ -423,6 +429,122 @@ def _provider_review_row(provider: ProviderSpec, reason: str | None) -> dict[str
         "output_contract": provider.output_contract,
         "stream_contract": provider.stream_contract,
     }
+
+
+def _candidate_matches(*, config_dir: Path | None, config: Any, contract: Mapping[str, Any]) -> list[dict[str, Any]]:
+    candidates = _load_provider_candidates(config_dir)
+    matches: list[dict[str, Any]] = []
+    for candidate in candidates:
+        result = _candidate_match(candidate, config=config, contract=contract)
+        if result["eligible"]:
+            matches.append(result)
+    return sorted(matches, key=lambda item: (item["promotion_rank"], item["name"]))
+
+
+def _load_provider_candidates(config_dir: Path | None) -> list[dict[str, Any]]:
+    if config_dir is None:
+        return []
+    root = config_dir / "provider_candidates"
+    if not root.exists():
+        return []
+    candidates: list[dict[str, Any]] = []
+    for path in sorted(root.glob("*.yml")):
+        payload = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+        if not isinstance(payload, dict):
+            continue
+        payload["_path"] = str(path)
+        candidates.append(payload)
+    return candidates
+
+
+def _candidate_match(candidate: Mapping[str, Any], *, config: Any, contract: Mapping[str, Any]) -> dict[str, Any]:
+    reasons: list[str] = []
+    model_ref = str(candidate.get("model_ref") or "")
+    engine_ref = str(candidate.get("engine_ref") or "")
+    model = config.models.get(model_ref)
+    engine = config.engines.get(engine_ref)
+    if candidate.get("status") not in {None, "candidate", "ready_for_validation"}:
+        reasons.append("candidate status is not eligible for promotion planning")
+    if model is None:
+        reasons.append("candidate model_ref is not present in model catalog")
+    if engine is None:
+        reasons.append("candidate engine_ref is not present in engine catalog")
+    if _positive_int(candidate.get("max_model_len"), default=0) < _positive_int(contract.get("min_model_len"), default=0):
+        reasons.append("candidate max_model_len is below required contract")
+    if _positive_int(candidate.get("vram_gb"), default=0) < _positive_int(contract.get("min_vram_gb"), default=0):
+        reasons.append("candidate vram_gb is below required contract")
+    missing_inputs = sorted(set(_strings(contract.get("input_contracts"))) - set(_strings(candidate.get("input_contracts"))))
+    if missing_inputs:
+        reasons.append("candidate input_contracts missing: " + ", ".join(missing_inputs))
+    missing_modes = sorted(set(_strings(contract.get("modes"))) - set(_strings(candidate.get("modes") or contract.get("modes"))))
+    if missing_modes:
+        reasons.append("candidate modes missing: " + ", ".join(missing_modes))
+    if model is not None:
+        missing_capabilities = sorted(set(_strings(contract.get("model_capabilities"))) - set(model.capabilities))
+        if missing_capabilities:
+            reasons.append("candidate model capabilities missing: " + ", ".join(missing_capabilities))
+    if not _candidate_output_satisfies(str(candidate.get("output_contract") or ""), str(contract.get("output_contract") or "")):
+        reasons.append("candidate output_contract does not satisfy required contract")
+    if not _classification_satisfies(str(candidate.get("max_data_classification") or "confidential"), str(contract.get("max_data_classification") or "confidential")):
+        reasons.append("candidate max_data_classification is below required contract")
+    eligible = not reasons
+    return {
+        "eligible": eligible,
+        "name": candidate.get("name"),
+        "path": candidate.get("_path"),
+        "adapter": candidate.get("adapter"),
+        "gpu": candidate.get("gpu"),
+        "vram_gb": candidate.get("vram_gb"),
+        "max_model_len": candidate.get("max_model_len"),
+        "model_ref": model_ref or None,
+        "engine_ref": engine_ref or None,
+        "endpoint_contract": candidate.get("endpoint_contract"),
+        "missing": reasons,
+        "promotion_rank": _candidate_rank(candidate, contract=contract),
+        "promotion_actions": _promotion_actions(candidate),
+    }
+
+
+def _candidate_rank(candidate: Mapping[str, Any], *, contract: Mapping[str, Any]) -> int:
+    vram_overhead = _positive_int(candidate.get("vram_gb"), default=0) - _positive_int(contract.get("min_vram_gb"), default=0)
+    len_overhead = _positive_int(candidate.get("max_model_len"), default=0) - _positive_int(contract.get("min_model_len"), default=0)
+    return max(vram_overhead, 0) * 10_000_000 + max(len_overhead, 0)
+
+
+def _promotion_actions(candidate: Mapping[str, Any]) -> list[str]:
+    name = str(candidate.get("name") or "<candidate>")
+    return [
+        f"review official adapter conformance for {name}",
+        f"create active provider YAML from provider_candidates/{name}.yml only after credentials/endpoint ids are filled",
+        f"run gpucall provider-smoke {name} --write-artifact against a billable endpoint",
+        "rerun gpucall-recipe-admin review with --validation-dir pointing to provider-validation artifacts",
+        "promote to production auto-routing only after review returns READY_FOR_PRODUCTION or AUTO_SELECT_SAFE",
+    ]
+
+
+def _strings(value: Any) -> list[str]:
+    if isinstance(value, list):
+        return [str(item) for item in value]
+    if value is None:
+        return []
+    return [str(value)]
+
+
+def _candidate_output_satisfies(candidate_contract: str, required_contract: str) -> bool:
+    if not required_contract:
+        return True
+    if candidate_contract == required_contract:
+        return True
+    if required_contract == "plain-text" and candidate_contract in {"openai-chat-completions", "gpucall-provider-result"}:
+        return True
+    if required_contract in {"json-object", "json_schema"} and candidate_contract in {"openai-chat-completions", "gpucall-provider-result"}:
+        return True
+    return False
+
+
+def _classification_satisfies(candidate: str, required: str) -> bool:
+    order = {"public": 0, "internal": 1, "confidential": 2, "restricted": 3}
+    return order.get(candidate, 0) >= order.get(required, 2)
 
 
 def provider_contract_requirements(artifact: Mapping[str, Any], recipe: Recipe) -> dict[str, Any]:

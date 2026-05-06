@@ -84,6 +84,26 @@ gpucall-recipe-admin review \
   --config-dir config
 ```
 
+If active providers are insufficient, the report includes `required_provider_contract`.
+If `provider_candidates/*.yml` contains tuples that satisfy that contract, the same
+report includes `provider_candidate_matches`. These matches are promotion plans,
+not routing entries.
+
+Each candidate match carries:
+
+- candidate name and source path
+- model/engine/provider tuple
+- fit rank
+- promotion actions
+
+The automated path is:
+
+1. Caller submission reaches the admin inbox.
+2. `gpucall-recipe-admin review` writes a recipe candidate and computes `required_provider_contract`.
+3. The reviewer matches that contract against `provider_candidates`.
+4. An administrator or automation fills provider-specific endpoint credentials and runs billable `provider-smoke --write-artifact`.
+5. Only after validation evidence exists can the provider candidate be copied into `providers/*.yml` and made eligible for production routing.
+
 Possible decisions:
 
 - `REJECT`: unsafe or malformed submission.
