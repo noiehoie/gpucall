@@ -42,6 +42,11 @@ def test_production_launch_report_blocks_without_live_requirements(tmp_path, mon
     assert "gateway_auth" in checks
     assert "gateway_live_smoke" in checks
     assert "provider_live_validation" in checks
+    provider_live_validation = report["provider_live_validation"]
+    assert provider_live_validation["missing_adapters"] == provider_live_validation["required_adapters"]
+    assert "modal" in provider_live_validation["required_adapters"]
+    assert "runpod-vllm-serverless" in provider_live_validation["required_adapters"]
+    assert "hyperstack" in provider_live_validation["required_adapters"]
 
 
 def test_launch_report_blocks_smoke_provider_in_auto_recipe(tmp_path, monkeypatch) -> None:

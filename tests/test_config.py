@@ -368,6 +368,7 @@ def test_live_validation_artifact_must_match_current_commit_and_config(tmp_path,
         "cost": {"observed": None, "estimated": None},
         "audit": {"event_ids": []},
         "official_contract": {
+            "adapter": "echo",
             "endpoint_contract": "echo",
             "expected_endpoint_contract": "echo",
             "output_contract": "plain-text",

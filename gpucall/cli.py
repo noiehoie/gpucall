@@ -319,7 +319,9 @@ def build_launch_report(config_dir: Path, *, url: str | None = None, api_key: st
     if not checks["audit_chain_valid"]:
         blockers.append({"check": "audit_chain", "valid": False})
     secrets = checks["secrets_present"]
-    live_artifact = _latest_live_validation_artifact(config_dir=config_dir)
+    required_live_adapters = _required_live_validation_adapters(config)
+    live_artifacts = _live_validation_artifacts_by_adapter(config, config_dir=config_dir)
+    missing_live_adapters = [adapter for adapter in required_live_adapters if adapter not in live_artifacts]
     production = profile == "production"
     checks["launch_gates"] = {
         "static_config_valid": checks["config_valid"],
@@ -327,7 +329,7 @@ def build_launch_report(config_dir: Path, *, url: str | None = None, api_key: st
         "object_store_required": production,
         "object_store_configured": config.object_store is not None and bool(secrets["object_store"]),
         "gateway_live_smoke_passed": bool(gateway_smoke and gateway_smoke.get("ok") is True),
-        "provider_live_validation_passed": live_artifact is not None,
+        "provider_live_validation_passed": not missing_live_adapters,
         "audit_chain_valid": checks["audit_chain_valid"],
     }
     if production:
@@ -341,8 +343,14 @@ def build_launch_report(config_dir: Path, *, url: str | None = None, api_key: st
             blockers.append({"check": "gateway_live_smoke", "passed": False, "summary": gateway_smoke})
         elif gateway_smoke.get("auth_required") is not True:
             blockers.append({"check": "gateway_auth_enforced", "auth_required": gateway_smoke.get("auth_required")})
-        if live_artifact is None:
-            blockers.append({"check": "provider_live_validation", "artifact": None})
+        if missing_live_adapters:
+            blockers.append(
+                {
+                    "check": "provider_live_validation",
+                    "missing_adapters": missing_live_adapters,
+                    "required_adapters": required_live_adapters,
+                }
+            )
     report: dict[str, object] = {
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "config_dir": str(config_dir),
@@ -353,7 +361,11 @@ def build_launch_report(config_dir: Path, *, url: str | None = None, api_key: st
         "checks": checks,
         "registry": provider_samples,
         "gateway_smoke": gateway_smoke,
-        "provider_live_validation": live_artifact,
+        "provider_live_validation": {
+            "required_adapters": required_live_adapters,
+            "missing_adapters": missing_live_adapters,
+            "artifacts_by_adapter": live_artifacts,
+        },
         "blockers": blockers,
         "go": not blockers,
     }
@@ -832,6 +844,56 @@ def _latest_live_validation_artifact(config_dir: Path | None = None) -> dict[str
     return None
 
 
+def _required_live_validation_adapters(config) -> list[str]:
+    adapters: set[str] = set()
+    for provider in config.providers.values():
+        descriptor = adapter_descriptor(provider)
+        if descriptor is None:
+            continue
+        if descriptor.local_execution or not descriptor.production_eligible:
+            continue
+        adapters.add(str(provider.adapter))
+    return sorted(adapters)
+
+
+def _live_validation_artifacts_by_adapter(config, config_dir: Path | None = None) -> dict[str, object]:
+    root = default_state_dir() / "provider-validation"
+    if not root.exists():
+        return {}
+    expected_commit = _git_commit()
+    expected_config_hash = _config_hash(config_dir) if config_dir is not None else None
+    providers_by_name = {provider.name: provider for provider in config.providers.values()}
+    required_adapters = set(_required_live_validation_adapters(config))
+    artifacts: dict[str, object] = {}
+    candidates = sorted(root.glob("*.json"), key=lambda path: path.stat().st_mtime, reverse=True)
+    for path in candidates:
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except Exception:
+            data = {}
+        if expected_commit and data.get("commit") != expected_commit:
+            continue
+        if expected_config_hash and data.get("config_hash") != expected_config_hash:
+            continue
+        if not _live_validation_artifact_valid(data):
+            continue
+        provider = providers_by_name.get(str(data.get("provider") or ""))
+        if provider is None:
+            continue
+        contract = data.get("official_contract") if isinstance(data.get("official_contract"), dict) else {}
+        adapter = str(contract.get("adapter") or provider.adapter)
+        if adapter != provider.adapter:
+            continue
+        if adapter not in required_adapters or adapter in artifacts:
+            continue
+        artifacts[adapter] = {
+            "path": str(path),
+            "mtime": datetime.fromtimestamp(path.stat().st_mtime, timezone.utc).isoformat(),
+            "data": data,
+        }
+    return artifacts
+
+
 def _live_validation_artifact_valid(data: dict[str, object]) -> bool:
     required = {
         "provider",
@@ -859,6 +921,8 @@ def _live_validation_artifact_valid(data: dict[str, object]) -> bool:
         return False
     contract = data.get("official_contract")
     if not isinstance(contract, dict):
+        return False
+    if not contract.get("adapter"):
         return False
     if not contract.get("endpoint_contract") or contract.get("endpoint_contract") != contract.get("expected_endpoint_contract"):
         return False
