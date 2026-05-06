@@ -698,11 +698,13 @@ def _validate_hyperstack_create_instances_payload(payload: dict[str, Any]) -> di
 
 
 def _hyperstack_response_error(response: Any, *, action: str, retryable: bool | None = None) -> ProviderError:
+    detail = _hyperstack_error_detail(response)
     if retryable is None:
         retryable = response.status_code in {404, 409, 423, 429, 500, 502, 503, 504}
+        if _hyperstack_error_is_capacity_unavailable(detail):
+            retryable = True
     code = "PROVIDER_PROVISION_UNAVAILABLE" if retryable else "PROVIDER_PROVISION_FAILED"
     raw = _redacted_hyperstack_error_body(response)
-    detail = _hyperstack_error_detail(response)
     message = f"Hyperstack {action} failed: {response.status_code}"
     if detail:
         message += f" ({detail})"
@@ -715,6 +717,13 @@ def _hyperstack_response_error(response: Any, *, action: str, retryable: bool | 
     )
 
 
+def _hyperstack_error_is_capacity_unavailable(detail: str | None) -> bool:
+    if not detail:
+        return False
+    lowered = detail.lower()
+    return "not enough stock" in lowered or "unable to launch" in lowered or "insufficient stock" in lowered
+
+
 def _hyperstack_error_detail(response: Any) -> str | None:
     try:
         data = response.json()
@@ -723,11 +732,12 @@ def _hyperstack_error_detail(response: Any) -> str | None:
         return text[:160] if text else None
     if not isinstance(data, dict):
         return None
-    for key in ("error_reason", "message", "detail", "error"):
+    parts: list[str] = []
+    for key in ("message", "detail", "error", "error_reason"):
         value = data.get(key)
-        if isinstance(value, str) and value.strip():
-            return value.strip()[:160]
-    return None
+        if isinstance(value, str) and value.strip() and value.strip() not in parts:
+            parts.append(value.strip())
+    return "; ".join(parts)[:160] if parts else None
 
 
 def _redacted_hyperstack_error_body(response: Any) -> str | None:

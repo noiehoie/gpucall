@@ -1055,6 +1055,41 @@ def test_hyperstack_provision_400_preserves_redacted_error_body(monkeypatch, tmp
         raise AssertionError("Hyperstack 400 unexpectedly provisioned")
 
 
+def test_hyperstack_stock_400_is_retryable_capacity_unavailable(monkeypatch, tmp_path) -> None:
+    class FakeResponse:
+        status_code = 400
+        text = "{}"
+
+        def json(self) -> dict[str, object]:
+            return {
+                "status": False,
+                "message": "Not Enough Stock of A100-80G-PCIe. Unable to launch virtual-machines.",
+                "error_reason": "bad_request",
+            }
+
+    class FakeSession:
+        def mount(self, *_args, **_kwargs) -> None:
+            return None
+
+        def post(self, _url: str, **_kwargs):
+            return FakeResponse()
+
+    adapter = HyperstackAdapter(
+        api_key="test", lease_manifest_path=str(tmp_path / "leases.jsonl"), ssh_remote_cidr="203.0.113.0/24"
+    )
+    monkeypatch.setattr(adapter, "_session", lambda: FakeSession())
+
+    try:
+        adapter._provision_and_start(plan_payload_plan())
+    except Exception as exc:
+        assert getattr(exc, "retryable", None) is True
+        assert getattr(exc, "status_code", None) == 503
+        assert getattr(exc, "code", None) == "PROVIDER_PROVISION_UNAVAILABLE"
+        assert "Not Enough Stock" in getattr(exc, "raw_output", "")
+    else:  # pragma: no cover
+        raise AssertionError("Hyperstack stock failure unexpectedly provisioned")
+
+
 def test_hyperstack_worker_script_invokes_vllm_not_smoke_output(monkeypatch, tmp_path) -> None:
     commands: list[str] = []
 
