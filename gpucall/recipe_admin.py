@@ -1185,13 +1185,17 @@ def _default_vram(task: str, proposed: Mapping[str, Any]) -> int:
 
 
 def _timeout_for(task: str, max_model_len: int) -> int:
-    if task == "vision" or max_model_len >= 131072:
+    if task == "vision":
+        return 1800
+    if max_model_len >= 131072:
         return 600
     return 180
 
 
 def _lease_for(task: str, max_model_len: int) -> int:
-    if task == "vision" or max_model_len >= 131072:
+    if task == "vision":
+        return 2100
+    if max_model_len >= 131072:
         return 900
     return 240
 
