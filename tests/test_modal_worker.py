@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 
-from gpucall.providers.modal_worker import (
+from gpucall.worker_contracts.modal import (
     _env_int,
     _format_prompt_for_model,
     _json_object_guided_schema,

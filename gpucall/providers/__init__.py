@@ -15,8 +15,8 @@ __all__ = [
     "ProviderAdapter",
     "RemoteHandle",
     "ResourceLease",
-    "RunpodFlashAdapter",
     "RunpodServerlessAdapter",
+    "RunpodVllmServerlessAdapter",
     "ScalewayInstanceAdapter",
     "build_adapters",
 ]
@@ -28,36 +28,36 @@ def __getattr__(name: str) -> Any:
 
         return build_adapters
     if name == "EchoProvider":
-        from gpucall.providers.echo import EchoProvider
+        from gpucall.execution_surfaces.local_runtime import EchoProvider
 
         return EchoProvider
     if name == "LocalOllamaAdapter":
-        from gpucall.providers.local_adapter import LocalOllamaAdapter
+        from gpucall.execution_surfaces.local_runtime import LocalOllamaAdapter
 
         return LocalOllamaAdapter
     if name == "ModalAdapter":
-        from gpucall.providers.modal_adapter import ModalAdapter
+        from gpucall.execution_surfaces.function_runtime import ModalAdapter
 
         return ModalAdapter
     if name == "HyperstackAdapter":
-        from gpucall.providers.hyperstack_adapter import HyperstackAdapter
+        from gpucall.execution_surfaces.iaas_vm import HyperstackAdapter
 
         return HyperstackAdapter
-    if name in {"RunpodFlashAdapter", "RunpodServerlessAdapter"}:
-        from gpucall.providers.runpod_flash_adapter import RunpodFlashAdapter
-        from gpucall.providers.runpod_serverless_adapter import RunpodServerlessAdapter
+    if name in {"RunpodServerlessAdapter", "RunpodVllmServerlessAdapter"}:
+        from gpucall.execution_surfaces.managed_endpoint import RunpodServerlessAdapter
+        from gpucall.execution_surfaces.managed_endpoint import RunpodVllmServerlessAdapter
 
-        return {"RunpodFlashAdapter": RunpodFlashAdapter, "RunpodServerlessAdapter": RunpodServerlessAdapter}[name]
+        return {"RunpodServerlessAdapter": RunpodServerlessAdapter, "RunpodVllmServerlessAdapter": RunpodVllmServerlessAdapter}[name]
     if name in {
         "AzureComputeVMAdapter",
         "GCPConfidentialSpaceVMAdapter",
         "OVHCloudPublicCloudInstanceAdapter",
         "ScalewayInstanceAdapter",
     }:
-        from gpucall.providers.azure_compute_vm_adapter import AzureComputeVMAdapter
-        from gpucall.providers.gcp_confidential_space_adapter import GCPConfidentialSpaceVMAdapter
-        from gpucall.providers.ovhcloud_public_cloud_adapter import OVHCloudPublicCloudInstanceAdapter
-        from gpucall.providers.scaleway_instance_adapter import ScalewayInstanceAdapter
+        from gpucall.execution_surfaces.iaas_vm import AzureComputeVMAdapter
+        from gpucall.execution_surfaces.iaas_vm import GCPConfidentialSpaceVMAdapter
+        from gpucall.execution_surfaces.iaas_vm import OVHCloudPublicCloudInstanceAdapter
+        from gpucall.execution_surfaces.iaas_vm import ScalewayInstanceAdapter
 
         return {
             "AzureComputeVMAdapter": AzureComputeVMAdapter,

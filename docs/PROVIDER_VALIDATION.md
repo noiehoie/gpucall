@@ -16,7 +16,7 @@ RunPod production validation uses the official worker-vLLM OpenAI-compatible rou
 POST /v2/<endpoint_id>/openai/v1/chat/completions
 ```
 
-Use `runpod-vllm-serverless` for the stable Serverless endpoint and `runpod-vllm-flashboot` for the FlashBoot candidate. Keep the older `runpod-flash` name only as a compatibility alias.
+Use `runpod-vllm-serverless` for the stable Serverless endpoint and `runpod-vllm-flashboot` for the FlashBoot candidate.
 
 Do not declare `stream` for RunPod worker-vLLM providers in v2.0. Token streaming is intentionally unsupported until the RunPod worker path has a real incremental generation contract.
 

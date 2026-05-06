@@ -13,7 +13,6 @@ Use distinct provider names so operational state does not get confused:
 
 - `runpod-vllm-serverless`: official `runpod/worker-v1-vllm` Serverless endpoint, FlashBoot not required.
 - `runpod-vllm-flashboot`: official RunPod Flash SDK `@Endpoint` function backed by Transformers/Qwen.
-- `runpod-flash`: deprecated compatibility alias. Do not use for new production config.
 
 ## v2.0 Contract
 
@@ -106,7 +105,7 @@ deployment contract before production routing.
 
 Use a container disk large enough for the image and model cache. Keep `workersMin=0` unless intentionally warming the endpoint with explicit cost approval.
 
-For `runpod-vllm-flashboot`, gpucall uses `gpucall/providers/runpod_flash_worker.py` as the official Flash SDK function body. Keep that file self-contained because RunPod Flash serializes and executes the function remotely.
+For `runpod-vllm-flashboot`, gpucall uses `gpucall/worker_contracts/runpod_flash.py` as the official Flash SDK function body. Keep that file self-contained because RunPod Flash serializes and executes the function remotely.
 
 ## Validation
 

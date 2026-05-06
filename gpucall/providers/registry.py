@@ -42,7 +42,6 @@ _DEFAULT_EXECUTION_SURFACES = {
     "local-ollama": ExecutionSurface.LOCAL_RUNTIME,
     "modal": ExecutionSurface.FUNCTION_RUNTIME,
     "ovhcloud-public-cloud-instance": ExecutionSurface.IAAS_VM,
-    "runpod-flash": ExecutionSurface.MANAGED_ENDPOINT,
     "runpod-serverless": ExecutionSurface.MANAGED_ENDPOINT,
     "runpod-vllm-flashboot": ExecutionSurface.FUNCTION_RUNTIME,
     "runpod-vllm-serverless": ExecutionSurface.MANAGED_ENDPOINT,
@@ -83,18 +82,10 @@ def ensure_builtin_adapters_loaded() -> None:
     if _BUILTINS_LOADED:
         return
     _BUILTINS_LOADED = True
-    import gpucall.providers.azure_compute_vm_adapter  # noqa: F401
-    import gpucall.providers.echo  # noqa: F401
-    import gpucall.providers.gcp_confidential_space_adapter  # noqa: F401
-    import gpucall.providers.hyperstack_adapter  # noqa: F401
-    import gpucall.providers.local_adapter  # noqa: F401
-    import gpucall.providers.modal_adapter  # noqa: F401
-    import gpucall.providers.ovhcloud_public_cloud_adapter  # noqa: F401
-    import gpucall.providers.runpod_flash_adapter  # noqa: F401
-    import gpucall.providers.runpod_flashboot_adapter  # noqa: F401
-    import gpucall.providers.runpod_serverless_adapter  # noqa: F401
-    import gpucall.providers.runpod_vllm_adapter  # noqa: F401
-    import gpucall.providers.scaleway_instance_adapter  # noqa: F401
+    import gpucall.execution_surfaces.local_runtime  # noqa: F401
+    import gpucall.execution_surfaces.iaas_vm  # noqa: F401
+    import gpucall.execution_surfaces.managed_endpoint  # noqa: F401
+    import gpucall.execution_surfaces.function_runtime  # noqa: F401
 
 
 def build_registered_adapter(

@@ -9,7 +9,7 @@ modes: [sync, async]
 endpoint: null
 target: ""
 image: null
-endpoint_contract: openai-chat-completions
+endpoint_contract: runpod-flash-sdk
 input_contracts: [chat_messages]
 output_contract: gpucall-provider-result
 stream_contract: none

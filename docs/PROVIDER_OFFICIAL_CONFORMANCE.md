@@ -4,7 +4,7 @@ This file records the official provider contracts used by gpucall adapters. It i
 
 ## Modal
 
-- Module: `gpucall.providers.modal_adapter`
+- Module: `gpucall.execution_surfaces.function_runtime`
 - Contract: deployed Modal function invocation
 - Official sources:
   - https://modal.com/docs/reference/modal.Function
@@ -16,7 +16,7 @@ This file records the official provider contracts used by gpucall adapters. It i
 
 ## RunPod Serverless
 
-- Module: `gpucall.providers.runpod_serverless_adapter`
+- Module: `gpucall.execution_surfaces.managed_endpoint`
 - Contract: queue-based Serverless endpoint operations
 - Official sources:
   - https://docs.runpod.io/serverless/endpoints/send-requests
@@ -29,9 +29,7 @@ This file records the official provider contracts used by gpucall adapters. It i
 
 ## RunPod worker-vLLM
 
-- Modules:
-  - `gpucall.providers.runpod_vllm_adapter`
-  - `gpucall.providers.runpod_flash_adapter`
+- Module: `gpucall.execution_surfaces.managed_endpoint`
 - Contract: RunPod worker-vLLM OpenAI-compatible endpoint
 - Official sources:
   - https://docs.runpod.io/serverless/vllm/openai-compatibility
@@ -43,7 +41,7 @@ This file records the official provider contracts used by gpucall adapters. It i
 
 ## RunPod FlashBoot
 
-- Module: `gpucall.providers.runpod_flashboot_adapter`
+- Module: `gpucall.execution_surfaces.function_runtime`
 - Contract: `runpod-flash` SDK / gpucall Flash worker path
 - Production status: not production eligible until billable validation artifacts prove the SDK path and cleanup lifecycle.
 - Code mapping:
@@ -52,7 +50,7 @@ This file records the official provider contracts used by gpucall adapters. It i
 
 ## Hyperstack
 
-- Module: `gpucall.providers.hyperstack_adapter`
+- Module: `gpucall.execution_surfaces.iaas_vm`
 - Contract: Infrahub REST API plus SSH into the provisioned VM
 - Official sources:
   - https://portal.hyperstack.cloud/knowledge/api-documentation
@@ -68,7 +66,7 @@ This file records the official provider contracts used by gpucall adapters. It i
 
 ## Local Ollama
 
-- Module: `gpucall.providers.local_adapter`
+- Module: `gpucall.execution_surfaces.local_runtime`
 - Contract: Ollama native generate API
 - Official sources:
   - https://github.com/ollama/ollama/blob/main/docs/api.md#generate-a-completion
@@ -79,7 +77,7 @@ This file records the official provider contracts used by gpucall adapters. It i
 
 ## Azure Compute VM
 
-- Module: `gpucall.providers.azure_compute_vm_adapter`
+- Module: `gpucall.execution_surfaces.iaas_vm`
 - Contract: Azure SDK for Python Compute VM lifecycle.
 - Production status: not production eligible until worker bootstrap and result retrieval are configured.
 - Official sources:
@@ -93,7 +91,7 @@ This file records the official provider contracts used by gpucall adapters. It i
 
 ## GCP Confidential Space VM
 
-- Module: `gpucall.providers.gcp_confidential_space_adapter`
+- Module: `gpucall.execution_surfaces.iaas_vm`
 - Contract: Google Cloud Compute Python `InstancesClient` VM lifecycle.
 - Production status: not production eligible until worker bootstrap and result retrieval are configured.
 - Official sources:
@@ -106,7 +104,7 @@ This file records the official provider contracts used by gpucall adapters. It i
 
 ## Scaleway Instance
 
-- Module: `gpucall.providers.scaleway_instance_adapter`
+- Module: `gpucall.execution_surfaces.iaas_vm`
 - Contract: Scaleway Instance REST API.
 - Production status: not production eligible until worker bootstrap and result retrieval are configured.
 - Official sources:
@@ -119,7 +117,7 @@ This file records the official provider contracts used by gpucall adapters. It i
 
 ## OVHcloud Public Cloud Instance
 
-- Module: `gpucall.providers.ovhcloud_public_cloud_adapter`
+- Module: `gpucall.execution_surfaces.iaas_vm`
 - Contract: official `ovh` Python wrapper for Public Cloud instance lifecycle.
 - Production status: not production eligible until worker bootstrap and result retrieval are configured.
 - Official sources:
@@ -134,6 +132,6 @@ This file records the official provider contracts used by gpucall adapters. It i
 ## Non-Negotiables
 
 - A provider adapter descriptor must not claim an official OpenAI-compatible contract if its code path returns a gpucall-specific result contract.
-- Compatibility shims may re-export classes, but built-in registration must happen in the concrete provider contract module.
+- Built-in registration must happen in an execution-surface module, not a provider-name compatibility shim.
 - Production-eligible external adapters must carry official source URLs in their descriptor.
 - Lifecycle-only adapters must not be production-eligible for deterministic routing until they implement worker bootstrap, result retrieval, and billable live validation.

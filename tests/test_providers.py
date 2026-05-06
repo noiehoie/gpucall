@@ -11,7 +11,7 @@ import yaml
 
 from gpucall.domain import ChatMessage, CompiledPlan, ExecutionMode, InlineValue, ProviderSpec
 from gpucall.domain import ArtifactExportSpec, DataClassification
-from gpucall.providers.hyperstack_adapter import DEFAULT_HYPERSTACK_IMAGE, HyperstackAdapter
+from gpucall.execution_surfaces.iaas_vm import DEFAULT_HYPERSTACK_IMAGE, HyperstackAdapter
 from gpucall.providers import (
     AzureComputeVMAdapter,
     EchoProvider,
@@ -24,10 +24,9 @@ from gpucall.providers import (
 )
 from gpucall.providers.base import RemoteHandle
 from gpucall.providers.payloads import gpucall_provider_result, plan_payload
-from gpucall.providers.runpod_flashboot_adapter import RunpodVllmFlashBootAdapter
-from gpucall.providers.runpod_flash_adapter import RunpodFlashAdapter
-from gpucall.providers.runpod_serverless_adapter import RunpodServerlessAdapter
-from gpucall.providers.runpod_vllm_adapter import RunpodVllmServerlessAdapter, runpod_vllm_health_rejection_reason
+from gpucall.execution_surfaces.function_runtime import RunpodVllmFlashBootAdapter
+from gpucall.execution_surfaces.managed_endpoint import RunpodServerlessAdapter
+from gpucall.execution_surfaces.managed_endpoint import RunpodVllmServerlessAdapter, runpod_vllm_health_rejection_reason
 
 
 def test_router_core_does_not_hardcode_builtin_provider_names() -> None:
@@ -65,30 +64,24 @@ def test_provider_contract_modules_are_separated_and_sourced() -> None:
     from gpucall.providers.registry import adapter_descriptor
 
     root = Path(__file__).resolve().parents[1]
-    runpod_shim = (root / "gpucall" / "providers" / "runpod_adapter.py").read_text(encoding="utf-8")
-    cloud_shim = (root / "gpucall" / "providers" / "cloud_vm_adapters.py").read_text(encoding="utf-8")
     registry = (root / "gpucall" / "providers" / "registry.py").read_text(encoding="utf-8")
 
-    assert "@register_adapter" not in runpod_shim
-    assert "@register_adapter" not in cloud_shim
-    for module in (
-        "azure_compute_vm_adapter",
-        "gcp_confidential_space_adapter",
-        "ovhcloud_public_cloud_adapter",
-        "runpod_serverless_adapter",
-        "runpod_vllm_adapter",
-        "runpod_flash_adapter",
-        "runpod_flashboot_adapter",
-        "scaleway_instance_adapter",
+    for removed in (
+        "runpod_adapter.py",
+        "cloud_vm_adapters.py",
+        "hyperstack_adapter.py",
+        "modal_adapter.py",
+        "runpod_vllm_adapter.py",
     ):
-        assert f"gpucall.providers.{module}" in registry
+        assert not (root / "gpucall" / "providers" / removed).exists()
+    for module in ("iaas_vm", "managed_endpoint", "function_runtime"):
+        assert f"gpucall.execution_surfaces.{module}" in registry
 
     expected = {
         "local-ollama": "https://github.com/ollama/ollama/blob/main/docs/api.md#generate-a-completion",
         "modal": "https://modal.com/docs/reference/modal.Function#from_name",
         "runpod-serverless": "https://docs.runpod.io/serverless/endpoints/send-requests",
         "runpod-vllm-serverless": "https://docs.runpod.io/serverless/vllm/openai-compatibility",
-        "runpod-flash": "https://docs.runpod.io/serverless/vllm/openai-compatibility",
         "hyperstack": "https://portal.hyperstack.cloud/knowledge/api-documentation",
         "azure-compute-vm": "https://learn.microsoft.com/en-us/python/api/azure-mgmt-compute/azure.mgmt.compute.operations.virtualmachinesoperations",
         "gcp-confidential-space-vm": "https://cloud.google.com/python/docs/reference/compute/latest/google.cloud.compute_v1.services.instances.InstancesClient",
@@ -348,7 +341,7 @@ def test_modal_stream_uses_explicit_deployed_remote_gen(monkeypatch) -> None:
 
 def test_modal_scaledown_metadata_matches_worker_defaults() -> None:
     root = Path(__file__).resolve().parents[1]
-    worker = (root / "gpucall" / "providers" / "modal_worker.py").read_text(encoding="utf-8")
+    worker = (root / "gpucall" / "worker_contracts" / "modal.py").read_text(encoding="utf-8")
     surfaces = {
         path.name: yaml.safe_load(path.read_text(encoding="utf-8"))
         for path in [
@@ -373,7 +366,7 @@ async def test_runpod_flash_cancel_without_owned_resource_is_noop(monkeypatch) -
         nonlocal called
         called = True
 
-    monkeypatch.setattr("gpucall.providers.runpod_flashboot_adapter.runpod_flash_cleanup_resource_sync", cleanup)
+    monkeypatch.setattr("gpucall.execution_surfaces.function_runtime.runpod_flash_cleanup_resource_sync", cleanup)
     adapter = RunpodVllmFlashBootAdapter(api_key="test", model="Qwen/Qwen2.5-1.5B-Instruct")
     handle = RemoteHandle(provider="runpod-vllm-flashboot", remote_id="job", expires_at=plan_payload_plan().expires_at())
 
@@ -382,8 +375,8 @@ async def test_runpod_flash_cancel_without_owned_resource_is_noop(monkeypatch) -
     assert called is False
 
 
-async def test_runpod_flash_stream_is_explicitly_unsupported() -> None:
-    adapter = RunpodFlashAdapter(
+async def test_runpod_vllm_stream_is_explicitly_unsupported() -> None:
+    adapter = RunpodVllmServerlessAdapter(
         api_key="rk_test",
         endpoint_id="endpoint-1",
         endpoint_contract="openai-chat-completions",
@@ -452,7 +445,7 @@ def test_runpod_flashboot_declares_non_openai_contract() -> None:
     assert descriptor.production_eligible is False
 
 
-async def test_runpod_flash_official_vllm_uses_openai_chat_route(monkeypatch) -> None:
+async def test_runpod_vllm_official_route_uses_openai_chat_route(monkeypatch) -> None:
     calls: list[tuple[str, str, dict[str, object] | None]] = []
 
     class FakeResponse:
@@ -491,7 +484,7 @@ async def test_runpod_flash_official_vllm_uses_openai_chat_route(monkeypatch) ->
     monkeypatch.setitem(sys.modules, "requests.adapters", fake_adapters)
     monkeypatch.setitem(sys.modules, "urllib3.util.retry", fake_retry)
 
-    adapter = RunpodFlashAdapter(
+    adapter = RunpodVllmServerlessAdapter(
         api_key="rk_test",
         endpoint_id="endpoint-1",
         image="runpod/worker-v1-vllm:v2.18.1",
@@ -518,11 +511,11 @@ def test_runpod_worker_vllm_health_rejects_throttled_endpoint() -> None:
     assert runpod_vllm_health_rejection_reason(health) == "workers are throttled and no ready worker is available"
 
 
-async def test_runpod_flash_official_vllm_rejects_data_refs_for_failover() -> None:
+async def test_runpod_vllm_official_route_rejects_data_refs_for_failover() -> None:
     plan = plan_payload_plan().model_copy(
         update={"input_refs": [{"uri": "https://example.com/input.txt", "sha256": "a" * 64, "bytes": 100}]}
     )
-    adapter = RunpodFlashAdapter(
+    adapter = RunpodVllmServerlessAdapter(
         api_key="rk_test",
         endpoint_id="endpoint-1",
         image="runpod/worker-v1-vllm:v2.18.1",
@@ -540,8 +533,8 @@ async def test_runpod_flash_official_vllm_rejects_data_refs_for_failover() -> No
         raise AssertionError("RunPod Flash official worker-vLLM unexpectedly accepted DataRef input")
 
 
-async def test_runpod_flash_requires_official_worker_vllm_unless_experimental_enabled() -> None:
-    adapter = RunpodFlashAdapter(
+async def test_runpod_vllm_requires_official_worker_vllm_unless_experimental_enabled() -> None:
+    adapter = RunpodVllmServerlessAdapter(
         api_key="rk_test",
         endpoint_id="endpoint-1",
         image="custom/runpod-worker:latest",
@@ -558,7 +551,7 @@ async def test_runpod_flash_requires_official_worker_vllm_unless_experimental_en
 
 
 def test_runpod_flash_worker_is_self_contained() -> None:
-    source = (Path(__file__).resolve().parents[1] / "gpucall" / "providers" / "runpod_flash_worker.py").read_text(
+    source = (Path(__file__).resolve().parents[1] / "gpucall" / "worker_contracts" / "runpod_flash.py").read_text(
         encoding="utf-8"
     )
 
@@ -1306,7 +1299,7 @@ def test_hyperstack_wait_active_ignores_private_fixed_ip(monkeypatch, tmp_path) 
         def get(self, *_args, **_kwargs):
             return FakeResponse()
 
-    monkeypatch.setattr("gpucall.providers.hyperstack_adapter.time.sleep", lambda _seconds: None)
+    monkeypatch.setattr("gpucall.execution_surfaces.iaas_vm.time.sleep", lambda _seconds: None)
     adapter = HyperstackAdapter(
         api_key="test", lease_manifest_path=str(tmp_path / "leases.jsonl"), ssh_remote_cidr="203.0.113.0/24"
     )
@@ -1332,7 +1325,7 @@ def test_hyperstack_wait_active_retries_transient_api_timeout(monkeypatch, tmp_p
                 raise TimeoutError("slow official API")
             return FakeResponse()
 
-    monkeypatch.setattr("gpucall.providers.hyperstack_adapter.time.sleep", lambda _seconds: None)
+    monkeypatch.setattr("gpucall.execution_surfaces.iaas_vm.time.sleep", lambda _seconds: None)
     adapter = HyperstackAdapter(
         api_key="test", lease_manifest_path=str(tmp_path / "leases.jsonl"), ssh_remote_cidr="203.0.113.0/24"
     )
