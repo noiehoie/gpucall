@@ -237,6 +237,8 @@ if modal is not None:
             "pillow",
             "torch",
             "torchvision",
+            "einops",
+            "timm",
             "accelerate",
             "transformers==4.51.3",
             "qwen-vl-utils==0.0.8",
