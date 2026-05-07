@@ -6,7 +6,7 @@ import types
 
 import pytest
 
-from gpucall.providers.worker_io import prompt_from_payload
+from gpucall.worker_contracts.io import prompt_from_payload
 from gpucall.domain import DataRef
 
 
@@ -28,7 +28,7 @@ def test_worker_fetches_gateway_presigned_https_data_ref_text(monkeypatch) -> No
         assert timeout >= 1
         return FakeResponse()
 
-    monkeypatch.setattr("gpucall.providers.worker_io.urlopen", fake_urlopen)
+    monkeypatch.setattr("gpucall.worker_contracts.io.urlopen", fake_urlopen)
     payload = {
         "inline_inputs": {},
         "input_refs": [

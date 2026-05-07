@@ -6,7 +6,7 @@ from typing import Any
 
 from gpucall.domain import ExecutionSurface, ProviderSpec
 from gpucall.plugin_loader import load_entry_point_group
-from gpucall.providers.base import ProviderAdapter
+from gpucall.execution.base import ProviderAdapter
 
 AdapterFactory = Callable[[ProviderSpec, dict[str, dict[str, str]]], ProviderAdapter]
 ConfigValidator = Callable[[ProviderSpec], list[str]]

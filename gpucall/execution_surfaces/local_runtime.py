@@ -6,8 +6,8 @@ from datetime import datetime, timezone
 from uuid import uuid4
 
 from gpucall.domain import CompiledPlan, ProviderError, ProviderResult
-from gpucall.providers.base import ProviderAdapter, RemoteHandle
-from gpucall.providers.registry import ProviderAdapterDescriptor, register_adapter
+from gpucall.execution.base import ProviderAdapter, RemoteHandle
+from gpucall.execution.registry import ProviderAdapterDescriptor, register_adapter
 
 
 class EchoProvider(ProviderAdapter):
@@ -67,9 +67,9 @@ from uuid import uuid4
 import httpx
 
 from gpucall.domain import CompiledPlan, ProviderError, ProviderResult
-from gpucall.providers.base import ProviderAdapter, RemoteHandle
-from gpucall.providers.payloads import ollama_generate_result
-from gpucall.providers.registry import ProviderAdapterDescriptor, register_adapter
+from gpucall.execution.base import ProviderAdapter, RemoteHandle
+from gpucall.execution.payloads import ollama_generate_result
+from gpucall.execution.registry import ProviderAdapterDescriptor, register_adapter
 
 
 class LocalOllamaAdapter(ProviderAdapter):

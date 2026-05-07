@@ -21,7 +21,7 @@ from gpucall.domain import (
     ProviderResult,
     ResponseFormatType,
 )
-from gpucall.providers.base import ProviderAdapter, RemoteHandle
+from gpucall.execution.base import ProviderAdapter, RemoteHandle
 from gpucall.registry import ObservedRegistry
 
 

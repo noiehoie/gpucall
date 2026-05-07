@@ -21,7 +21,7 @@ from gpucall.domain import (
     TaskRequest,
 )
 from gpucall.domain import ChatMessage, ResponseFormatType
-from gpucall.providers.registry import provider_family_for_adapter
+from gpucall.execution.registry import provider_family_for_adapter
 from gpucall.registry import ObservedRegistry
 from gpucall.routing import classification_rank, is_production_route_candidate, provider_route_rejection_reason, required_model_len, token_budget
 

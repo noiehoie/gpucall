@@ -13,7 +13,7 @@ from gpucall.config import default_state_dir
 from gpucall.credentials import credentials_path, load_credentials
 from gpucall.domain import ExecutionMode, ProviderSpec, Recipe
 from gpucall.provider_catalog import live_provider_catalog_findings
-from gpucall.providers.registry import adapter_descriptor
+from gpucall.execution.registry import adapter_descriptor
 from gpucall.routing import provider_route_rejection_reason
 
 

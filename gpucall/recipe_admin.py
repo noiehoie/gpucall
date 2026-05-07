@@ -18,7 +18,7 @@ import yaml
 
 from gpucall.config import ConfigError, default_state_dir, load_config
 from gpucall.domain import ExecutionMode, ProviderSpec, Recipe
-from gpucall.providers.registry import adapter_descriptor
+from gpucall.execution.registry import adapter_descriptor
 from gpucall.routing import provider_route_rejection_reason
 
 

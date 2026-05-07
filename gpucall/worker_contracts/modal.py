@@ -702,7 +702,7 @@ else:
 
 def _execute_artifact_workload(payload: dict[str, Any]) -> dict[str, Any] | None:
     try:
-        from gpucall.providers.worker_artifacts import execute_artifact_workload
+        from gpucall.worker_contracts.artifacts import execute_artifact_workload
     except ImportError:
         return None
     return execute_artifact_workload(payload)

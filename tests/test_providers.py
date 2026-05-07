@@ -12,7 +12,7 @@ import yaml
 from gpucall.domain import ChatMessage, CompiledPlan, ExecutionMode, InlineValue, ProviderSpec
 from gpucall.domain import ArtifactExportSpec, DataClassification
 from gpucall.execution_surfaces.iaas_vm import DEFAULT_HYPERSTACK_IMAGE, HyperstackAdapter
-from gpucall.providers import (
+from gpucall.execution import (
     AzureComputeVMAdapter,
     EchoProvider,
     GCPConfidentialSpaceVMAdapter,
@@ -22,8 +22,8 @@ from gpucall.providers import (
     ScalewayInstanceAdapter,
     build_adapters,
 )
-from gpucall.providers.base import RemoteHandle
-from gpucall.providers.payloads import gpucall_provider_result, plan_payload
+from gpucall.execution.base import RemoteHandle
+from gpucall.execution.payloads import gpucall_provider_result, plan_payload
 from gpucall.execution_surfaces.function_runtime import RunpodVllmFlashBootAdapter
 from gpucall.execution_surfaces.managed_endpoint import RunpodServerlessAdapter
 from gpucall.execution_surfaces.managed_endpoint import RunpodVllmServerlessAdapter, runpod_vllm_health_rejection_reason
@@ -35,7 +35,7 @@ def test_router_core_does_not_hardcode_builtin_provider_names() -> None:
         root / "gpucall" / "config.py",
         root / "gpucall" / "routing.py",
         root / "gpucall" / "provider_catalog.py",
-        root / "gpucall" / "providers" / "factory.py",
+        root / "gpucall" / "execution" / "factory.py",
         root / "gpucall" / "compiler.py",
         root / "gpucall" / "dispatcher.py",
     ]
@@ -61,10 +61,10 @@ def test_router_core_does_not_hardcode_builtin_provider_names() -> None:
 
 
 def test_provider_contract_modules_are_separated_and_sourced() -> None:
-    from gpucall.providers.registry import adapter_descriptor
+    from gpucall.execution.registry import adapter_descriptor
 
     root = Path(__file__).resolve().parents[1]
-    registry = (root / "gpucall" / "providers" / "registry.py").read_text(encoding="utf-8")
+    registry = (root / "gpucall" / "execution" / "registry.py").read_text(encoding="utf-8")
 
     for removed in (
         "runpod_adapter.py",
@@ -107,7 +107,7 @@ def test_provider_contract_modules_are_separated_and_sourced() -> None:
 
 
 def test_provider_descriptor_conformance_invariants() -> None:
-    from gpucall.providers.registry import registered_adapter_descriptors
+    from gpucall.execution.registry import registered_adapter_descriptors
 
     descriptors = registered_adapter_descriptors()
 
@@ -435,7 +435,7 @@ async def test_runpod_flash_uses_deployed_runsync_rest_endpoint(monkeypatch) -> 
 
 
 def test_runpod_flashboot_declares_non_openai_contract() -> None:
-    from gpucall.providers.registry import adapter_descriptor
+    from gpucall.execution.registry import adapter_descriptor
 
     descriptor = adapter_descriptor("runpod-vllm-flashboot")
 
@@ -555,7 +555,7 @@ def test_runpod_flash_worker_is_self_contained() -> None:
         encoding="utf-8"
     )
 
-    assert "from gpucall.providers" not in source
+    assert "from gpucall.execution" not in source
     assert "import gpucall" not in source
 
 
@@ -1299,7 +1299,7 @@ def test_hyperstack_wait_active_ignores_private_fixed_ip(monkeypatch, tmp_path) 
         def get(self, *_args, **_kwargs):
             return FakeResponse()
 
-    monkeypatch.setattr("gpucall.execution_surfaces.iaas_vm.time.sleep", lambda _seconds: None)
+    monkeypatch.setattr("gpucall.execution_surfaces.hyperstack_vm.time.sleep", lambda _seconds: None)
     adapter = HyperstackAdapter(
         api_key="test", lease_manifest_path=str(tmp_path / "leases.jsonl"), ssh_remote_cidr="203.0.113.0/24"
     )
@@ -1325,7 +1325,7 @@ def test_hyperstack_wait_active_retries_transient_api_timeout(monkeypatch, tmp_p
                 raise TimeoutError("slow official API")
             return FakeResponse()
 
-    monkeypatch.setattr("gpucall.execution_surfaces.iaas_vm.time.sleep", lambda _seconds: None)
+    monkeypatch.setattr("gpucall.execution_surfaces.hyperstack_vm.time.sleep", lambda _seconds: None)
     adapter = HyperstackAdapter(
         api_key="test", lease_manifest_path=str(tmp_path / "leases.jsonl"), ssh_remote_cidr="203.0.113.0/24"
     )

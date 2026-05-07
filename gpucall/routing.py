@@ -4,7 +4,7 @@ import math
 import os
 
 from gpucall.domain import CompiledPlan, DataClassification, EngineSpec, ExecutionMode, ModelSpec, Policy, ProviderSpec, Recipe, SecurityTier, TaskRequest
-from gpucall.providers.registry import adapter_descriptor
+from gpucall.execution.registry import adapter_descriptor
 
 
 def classification_rank(value: DataClassification) -> int:

@@ -2,8 +2,8 @@ from __future__ import annotations
 
 from gpucall.credentials import load_credentials
 from gpucall.domain import ProviderSpec
-from gpucall.providers.base import ProviderAdapter
-from gpucall.providers.registry import build_registered_adapter
+from gpucall.execution.base import ProviderAdapter
+from gpucall.execution.registry import build_registered_adapter
 
 
 def build_adapters(providers: dict[str, ProviderSpec]) -> dict[str, ProviderAdapter]:

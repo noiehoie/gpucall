@@ -3,8 +3,8 @@ from __future__ import annotations
 import os
 from typing import Any
 
-from gpucall.providers.llm_engine import generate_text
-from gpucall.providers.worker_artifacts import execute_artifact_workload
+from gpucall.worker_contracts.llm_engine import generate_text
+from gpucall.worker_contracts.artifacts import execute_artifact_workload
 
 
 def handler(event: dict[str, Any]) -> dict[str, Any]:

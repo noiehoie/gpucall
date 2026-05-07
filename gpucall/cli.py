@@ -31,7 +31,7 @@ from gpucall.execution_catalog import build_resource_catalog_snapshot, dumps_can
 from gpucall.lease_reaper import active_manifest_leases, lease_reaper_report
 from gpucall.provider_audit import provider_audit_report
 from gpucall.provider_catalog import live_provider_catalog_findings
-from gpucall.providers.registry import adapter_descriptor
+from gpucall.execution.registry import adapter_descriptor
 from gpucall.registry import ObservedRegistry
 from gpucall.audit import AuditTrail
 from gpucall.routing import provider_route_rejection_reason

@@ -3,7 +3,7 @@ from __future__ import annotations
 from typing import Any
 
 from gpucall.domain import ProviderSpec
-from gpucall.providers.registry import adapter_descriptor
+from gpucall.execution.registry import adapter_descriptor
 
 
 def live_provider_catalog_findings(providers: dict[str, ProviderSpec], credentials: dict[str, dict[str, str]]) -> list[dict[str, Any]]:

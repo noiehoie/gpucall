@@ -37,9 +37,9 @@ import os
 from typing import Any
 
 from gpucall.domain import CompiledPlan, ProviderError, ProviderResult
-from gpucall.providers.base import ProviderAdapter, RemoteHandle
-from gpucall.providers.payloads import openai_chat_completion_result
-from gpucall.providers.registry import ProviderAdapterDescriptor, register_adapter
+from gpucall.execution.base import ProviderAdapter, RemoteHandle
+from gpucall.execution.payloads import openai_chat_completion_result
+from gpucall.execution.registry import ProviderAdapterDescriptor, register_adapter
 
 
 class RunpodVllmServerlessAdapter(ProviderAdapter):
@@ -249,9 +249,9 @@ import time
 from typing import Any
 
 from gpucall.domain import CompiledPlan, ProviderError, ProviderResult
-from gpucall.providers.base import ProviderAdapter, RemoteHandle
-from gpucall.providers.payloads import gpucall_provider_result, plan_payload
-from gpucall.providers.registry import ProviderAdapterDescriptor, register_adapter
+from gpucall.execution.base import ProviderAdapter, RemoteHandle
+from gpucall.execution.payloads import gpucall_provider_result, plan_payload
+from gpucall.execution.registry import ProviderAdapterDescriptor, register_adapter
 
 
 class RunpodServerlessAdapter(ProviderAdapter):

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from gpucall.providers.llm_engine import messages_from_payload
+from gpucall.worker_contracts.llm_engine import messages_from_payload
 
 
 def test_llm_engine_preserves_payload_messages_without_system_rewrite() -> None:

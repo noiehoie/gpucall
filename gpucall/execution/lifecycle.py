@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from gpucall.domain import CompiledPlan, ProviderError
-from gpucall.providers.base import RemoteHandle
+from gpucall.execution.base import RemoteHandle
 
 
 class LifecycleOnlyMixin:

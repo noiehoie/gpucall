@@ -7,7 +7,7 @@ import secrets
 from datetime import datetime, timezone
 from typing import Any
 
-from gpucall.providers.worker_io import fetch_data_ref_bytes
+from gpucall.worker_contracts.io import fetch_data_ref_bytes
 
 
 def execute_artifact_workload(payload: dict[str, Any]) -> dict[str, Any] | None:

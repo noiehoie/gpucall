@@ -3,14 +3,14 @@ from __future__ import annotations
 import json
 
 from gpucall.domain import ArtifactManifest
-from gpucall.providers.worker_artifacts import execute_artifact_workload
+from gpucall.worker_contracts.artifacts import execute_artifact_workload
 
 
 def test_worker_artifact_export_encrypts_and_returns_manifest(monkeypatch, tmp_path) -> None:
     output = tmp_path / "artifact.bin"
     monkeypatch.setenv("GPUCALL_WORKER_ARTIFACT_DEK_HEX", "11" * 32)
     monkeypatch.setenv("GPUCALL_WORKER_ARTIFACT_URI", f"file://{output}")
-    monkeypatch.setattr("gpucall.providers.worker_artifacts.fetch_data_ref_bytes", lambda _ref: b'{"prompt":"train"}\n')
+    monkeypatch.setattr("gpucall.worker_contracts.artifacts.fetch_data_ref_bytes", lambda _ref: b'{"prompt":"train"}\n')
     payload = {
         "plan_id": "plan-1",
         "task": "fine-tune",
@@ -38,7 +38,7 @@ def test_worker_artifact_export_uses_unique_nonce(monkeypatch, tmp_path) -> None
     output = tmp_path / "artifact.bin"
     monkeypatch.setenv("GPUCALL_WORKER_ARTIFACT_DEK_HEX", "11" * 32)
     monkeypatch.setenv("GPUCALL_WORKER_ARTIFACT_URI", f"file://{output}")
-    monkeypatch.setattr("gpucall.providers.worker_artifacts.fetch_data_ref_bytes", lambda _ref: b'{"prompt":"train"}\n')
+    monkeypatch.setattr("gpucall.worker_contracts.artifacts.fetch_data_ref_bytes", lambda _ref: b'{"prompt":"train"}\n')
     payload = {
         "plan_id": "plan-1",
         "task": "fine-tune",
@@ -61,7 +61,7 @@ def test_worker_artifact_export_uses_unique_nonce(monkeypatch, tmp_path) -> None
 
 
 def test_worker_split_learning_accepts_activation_ref(monkeypatch) -> None:
-    monkeypatch.setattr("gpucall.providers.worker_artifacts.fetch_data_ref_bytes", lambda _ref: b"activation")
+    monkeypatch.setattr("gpucall.worker_contracts.artifacts.fetch_data_ref_bytes", lambda _ref: b"activation")
     payload = {
         "task": "split-infer",
         "split_learning": {

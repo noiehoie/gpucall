@@ -7,7 +7,7 @@ import types
 import inspect
 from typing import Any
 
-from gpucall.providers.worker_io import prompt_from_payload
+from gpucall.worker_contracts.io import prompt_from_payload
 
 
 DEFAULT_ALLOWED_MODELS = {

@@ -8,7 +8,7 @@ from typing import Any
 import yaml
 
 from gpucall.config import GpucallConfig
-from gpucall.providers.registry import adapter_descriptor
+from gpucall.execution.registry import adapter_descriptor
 
 
 class SQLiteCapabilityCatalog:

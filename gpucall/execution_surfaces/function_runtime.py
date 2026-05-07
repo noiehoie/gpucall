@@ -14,9 +14,9 @@ from uuid import uuid4
 
 from gpucall.domain import ArtifactManifest, CompiledPlan, ProviderError, ProviderResult
 from gpucall.execution_surfaces.managed_endpoint import RUNPOD_API_BASE, json_or_error, requests_session
-from gpucall.providers.base import ProviderAdapter, RemoteHandle
-from gpucall.providers.payloads import plan_payload, plain_text_result
-from gpucall.providers.registry import ProviderAdapterDescriptor, register_adapter
+from gpucall.execution.base import ProviderAdapter, RemoteHandle
+from gpucall.execution.payloads import plan_payload, plain_text_result
+from gpucall.execution.registry import ProviderAdapterDescriptor, register_adapter
 
 _ephemeral_run_lock = threading.Lock()
 
@@ -346,9 +346,9 @@ import time
 from typing import Any
 
 from gpucall.domain import CompiledPlan, ProviderError, ProviderResult
-from gpucall.providers.base import ProviderAdapter, RemoteHandle
-from gpucall.providers.payloads import gpucall_provider_result, plan_payload
-from gpucall.providers.registry import ProviderAdapterDescriptor, register_adapter
+from gpucall.execution.base import ProviderAdapter, RemoteHandle
+from gpucall.execution.payloads import gpucall_provider_result, plan_payload
+from gpucall.execution.registry import ProviderAdapterDescriptor, register_adapter
 
 
 class RunpodVllmFlashBootAdapter(ProviderAdapter):

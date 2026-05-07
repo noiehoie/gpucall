@@ -242,7 +242,7 @@ def _execute_artifact_workload(payload: dict) -> dict | None:
     try:
         from importlib import import_module
 
-        execute_artifact_workload = import_module("gpucall.providers.worker_artifacts").execute_artifact_workload
+        execute_artifact_workload = import_module("gpucall.worker_contracts.artifacts").execute_artifact_workload
     except ImportError:
         return None
     return execute_artifact_workload(payload)

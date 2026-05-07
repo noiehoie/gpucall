@@ -8,7 +8,7 @@ import yaml
 from pydantic import BaseModel, ValidationError
 
 from gpucall.domain import EngineSpec, ModelSpec, ObjectStoreConfig, Policy, ProviderSpec, Recipe, TenantSpec
-from gpucall.providers.registry import adapter_descriptor
+from gpucall.execution.registry import adapter_descriptor
 from gpucall.routing import provider_route_rejection_reason
 
 T = TypeVar("T", bound=BaseModel)

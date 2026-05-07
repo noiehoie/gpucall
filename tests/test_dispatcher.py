@@ -22,7 +22,7 @@ from gpucall.domain import (
     ResponseFormat,
     ResponseFormatType,
 )
-from gpucall.providers import EchoProvider, RemoteHandle
+from gpucall.execution import EchoProvider, RemoteHandle
 from gpucall.registry import ObservedRegistry
 
 

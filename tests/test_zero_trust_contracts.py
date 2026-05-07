@@ -22,7 +22,7 @@ from gpucall.domain import (
     SecurityTier,
     TaskRequest,
 )
-from gpucall.providers.payloads import plan_payload
+from gpucall.execution.payloads import plan_payload
 from gpucall.registry import ObservedRegistry
 
 

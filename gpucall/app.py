@@ -25,7 +25,7 @@ from gpucall.dispatcher import Dispatcher, LeaseReaper, ProviderReconciler
 from gpucall.domain import ChatMessage, DataRef, ExecutionMode, InlineValue, JobRecord, JobState, ProviderError, ResponseFormat, TaskRequest
 from gpucall.domain import PresignGetRequest, PresignGetResponse, PresignPutRequest, PresignPutResponse
 from gpucall.object_store import ObjectStore
-from gpucall.providers.factory import build_adapters
+from gpucall.execution.factory import build_adapters
 from gpucall.registry import ObservedRegistry
 from gpucall.routing import route_warning_tags
 from gpucall.sqlite_store import SQLiteIdempotencyStore, SQLiteJobStore

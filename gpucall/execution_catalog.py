@@ -11,7 +11,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from gpucall.config import GpucallConfig
 from gpucall.domain import ExecutionMode, Recipe
-from gpucall.providers.registry import adapter_descriptor
+from gpucall.execution.registry import adapter_descriptor
 
 
 class ProviderAccountSpec(BaseModel):
