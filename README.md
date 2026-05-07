@@ -132,6 +132,7 @@ gpucall-recipe-admin watch --inbox-dir /path/to/inbox --output-dir config/recipe
 gpucall is a deterministic governance router, not a Modal-only proxy. Recipe and provider selection rules are documented in [docs/ROUTING_POLICY.md](docs/ROUTING_POLICY.md).
 Capability catalog rules for recipe/model/engine/provider matching are documented in [docs/CAPABILITY_CATALOG.md](docs/CAPABILITY_CATALOG.md).
 RunPod Flash production validation is documented in [docs/RUNPOD_FLASH.md](docs/RUNPOD_FLASH.md).
+RunPod Serverless catalog expansion rules are documented in [docs/RUNPOD_SERVERLESS_CATALOG.md](docs/RUNPOD_SERVERLESS_CATALOG.md).
 
 ## Zero-Trust Contracts
 

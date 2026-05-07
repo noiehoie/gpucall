@@ -1,0 +1,32 @@
+name: runpod-native-ada48pro-qwen25-7b
+status: candidate
+adapter: runpod-serverless
+execution_surface: managed_endpoint
+gpu: ADA_48_PRO
+vram_gb: 48
+max_model_len: 131072
+model_ref: qwen2.5-7b-instruct
+engine_ref: runpod-serverless-gpucall
+modes: [sync, async]
+endpoint_contract: runpod-serverless
+input_contracts: [text, chat_messages, data_refs]
+output_contract: gpucall-provider-result
+stream_contract: none
+max_data_classification: confidential
+cost_per_second: 0.0
+scaledown_window_seconds: 5
+min_billable_seconds: 1
+billing_granularity_seconds: 1
+model: Qwen/Qwen2.5-7B-Instruct
+provider_params:
+  worker_contract: gpucall-provider-result
+  worker_image_required: true
+  worker_env:
+    GPUCALL_WORKER_MODEL: Qwen/Qwen2.5-7B-Instruct
+    GPUCALL_WORKER_MAX_MODEL_LEN: '131072'
+official_doc_refs:
+  - https://docs.runpod.io/references/gpu-types
+  - https://docs.runpod.io/serverless/endpoints/send-requests
+  - https://docs.runpod.io/serverless/references/operations
+live_validation_required: true
+notes: Candidate for RunPod generic Serverless queue API. Requires gpucall-compatible custom worker image, endpoint id, and billable validation before production routing.

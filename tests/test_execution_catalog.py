@@ -32,7 +32,13 @@ def test_execution_catalog_generates_snapshot_pinned_tuple_candidates() -> None:
     assert any(candidate.provider_name == "hyperstack-a100" and candidate.execution_surface == "iaas_vm" for candidate in candidates)
     assert any(candidate.provider_name == "modal-a10g" and candidate.execution_surface == "function_runtime" for candidate in candidates)
     assert any(
-        candidate.provider_name == "runpod-vllm-l40s-qwen25-7b"
+        candidate.provider_name.startswith("runpod-vllm-")
+        and candidate.execution_surface == "managed_endpoint"
+        and candidate.production_state == "candidate_draft"
+        for candidate in candidates
+    )
+    assert any(
+        candidate.provider_name.startswith("runpod-native-")
         and candidate.execution_surface == "managed_endpoint"
         and candidate.production_state == "candidate_draft"
         for candidate in candidates

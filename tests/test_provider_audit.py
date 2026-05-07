@@ -38,7 +38,8 @@ def test_provider_audit_reports_active_and_candidate_tuples(tmp_path) -> None:
     assert payload["ideal_contract"]["recipe_is_authority"] is True
     assert recipe["routing_decision"]["decision"] in {"ROUTABLE", "READY_FOR_VALIDATION", "CANDIDATE_ONLY"}
     assert any(row["name"] == "modal-a10g" for row in recipe["active_providers"])
-    assert any(row["name"] == "runpod-vllm-l40s-qwen25-7b" for row in recipe["candidate_tuples"])
+    assert any(row["name"].startswith("runpod-vllm-") for row in recipe["candidate_tuples"])
+    assert any(row["name"].startswith("runpod-native-") for row in recipe["candidate_tuples"])
     assert recipe["surfaces"]["active"]["function_runtime"] >= 1
     assert recipe["surfaces"]["active"]["iaas_vm"] >= 1
     assert recipe["surfaces"]["candidate"]["managed_endpoint"] >= 1
