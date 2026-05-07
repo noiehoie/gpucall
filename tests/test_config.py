@@ -60,7 +60,6 @@ max_model_len: 999999
 timeout_seconds: 30
 lease_ttl_seconds: 120
 tokenizer_family: qwen
-gpu: L4
 """.lstrip(),
         encoding="utf-8",
     )
@@ -98,7 +97,6 @@ max_model_len: 32768
 timeout_seconds: 30
 lease_ttl_seconds: 120
 tokenizer_family: qwen
-gpu: L4
 """.lstrip(),
         encoding="utf-8",
     )

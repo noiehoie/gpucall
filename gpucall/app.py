@@ -604,8 +604,6 @@ def enforce_gateway_owned_routing(request: TaskRequest) -> None:
         forbidden.append("recipe")
     if request.requested_provider is not None:
         forbidden.append("requested_provider")
-    if request.requested_gpu is not None:
-        forbidden.append("requested_gpu")
     if forbidden:
         joined = ", ".join(forbidden)
         raise GovernanceError(f"caller-controlled routing is disabled; omit {joined}")

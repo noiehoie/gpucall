@@ -87,8 +87,9 @@ Use `/v2/tasks/sync`, `/v2/tasks/async`, `/v2/tasks/stream`, and object-store
 presign endpoints for internal systems and advanced integrations.
 
 This level exposes `TaskRequest`, `DataRef`, `response_format`, and job polling
-directly. Public callers still must not set `recipe`, `requested_provider`, or
-`requested_gpu`; those fields are reserved for admin/debug flows.
+directly. Public callers still must not set `recipe` or `requested_provider`;
+those fields are reserved for admin/debug flows. GPU and model selection are
+management-side catalog decisions, not caller payload fields.
 
 Do not combine `messages` with `inline_inputs` or `input_refs` in v2.0. Use one
 chat message list or use inline/DataRef inputs. Vision requests must include an

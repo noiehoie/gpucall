@@ -196,7 +196,6 @@ def canonical_recipe_from_artifact(artifact: Mapping[str, Any]) -> dict[str, Any
         "timeout_seconds": _timeout_for(task, max_model_len),
         "lease_ttl_seconds": _lease_for(task, max_model_len),
         "tokenizer_family": "qwen",
-        "gpu": "any",
         "max_input_bytes": _max_input_bytes(task, max_model_len),
         "allowed_mime_prefixes": _allowed_mime_prefixes(task, proposed),
         "default_temperature": 0.2 if task == "vision" else 0.7,

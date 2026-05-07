@@ -6,9 +6,11 @@ The caller normally sends task intent, mode, and input references. The gateway
 selects a recipe and provider chain from policy, recipe constraints, request
 weight, provider capabilities, and observed provider health.
 
-Public callers must not set `recipe`, `requested_provider`, or `requested_gpu`.
-Those fields are reserved for admin/debug flows and are rejected by the public
-task endpoints unless `GPUCALL_ALLOW_CALLER_ROUTING=1` is explicitly enabled.
+Public callers must not set `recipe` or `requested_provider`. Those fields are
+for operator/debug flows only and are rejected by the public task endpoints
+unless `GPUCALL_ALLOW_CALLER_ROUTING=1` is explicitly enabled. GPU selection is
+not a caller-facing concept; GPU, region, price, stock, model, and engine belong
+to the gateway catalogs.
 
 ## Deterministic Selection
 

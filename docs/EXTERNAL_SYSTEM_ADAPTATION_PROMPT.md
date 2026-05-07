@@ -40,13 +40,12 @@ public internet には公開されていません。
 - inline_inputs または input_refs
 - max_tokens 等の実行希望
 
-recipe / provider / fallback / circuit breaker / governance / lease / audit は gpucall Gateway 側が決定する。
+recipe / provider / GPU / model / engine / fallback / circuit breaker / governance / lease / audit は gpucall Gateway 側が決定する。
 
 通常 payload に以下を含めないこと。
 
 - `requested_provider`
 - `recipe`
-- `requested_gpu`
 
 これらは public task endpoint では拒否される。recipe / provider 選択は gateway の責務であり、外部システムは要求だけを送る。
 
@@ -117,7 +116,7 @@ gpucall 専用 client wrapper を実装または修正してください。
 - 全 task endpoint に `Authorization: Bearer <token>` を付ける
 - API key 未設定時に明確なエラーを出す
 - 401 では「GPUCALL_API_KEY を確認」とわかるエラーにする
-- `recipe` / `requested_provider` / `requested_gpu` は payload に含めない
+- `recipe` / `requested_provider` は payload に含めない
 
 期待実装例:
 
@@ -253,7 +252,7 @@ GitHub Actions 例:
 
 - payload に `recipe` が含まれない
 - payload に `requested_provider` が含まれない
-- payload に `requested_gpu` が含まれない
+- payload に GPU や provider 指定が含まれない
 - `task` と `mode` は含まれる
 - `inline_inputs.prompt.value` 形式になっている
 - `input_refs` は list 形式
@@ -344,7 +343,7 @@ D. DataRef smoke:
 4. `/v2/tasks/sync|async|stream` を使っている
 5. payload に `recipe` が含まれない
 6. payload に `requested_provider` が含まれない
-7. payload に `requested_gpu` が含まれない
+7. payload に GPU や provider 指定が含まれない
 8. sync infer が通る
 9. async infer が graceful に動く
 10. DataRef smoke が通る

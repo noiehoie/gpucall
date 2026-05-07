@@ -257,7 +257,6 @@ class TaskRequest(BaseModel):
     inline_inputs: dict[str, InlineValue] = Field(default_factory=dict)
     messages: list[ChatMessage] = Field(default_factory=list)
     requested_provider: str | None = None
-    requested_gpu: str | None = None
     max_tokens: PositiveInt | None = None
     temperature: float | None = Field(default=None, ge=0.0, le=2.0)
     timeout_seconds: PositiveInt | None = None
@@ -331,7 +330,6 @@ class Recipe(BaseModel):
     timeout_seconds: PositiveInt
     lease_ttl_seconds: PositiveInt
     tokenizer_family: str
-    gpu: str | None = None
     max_input_bytes: PositiveInt | None = None
     allowed_mime_prefixes: list[str] = Field(default_factory=list)
     allowed_inline_mime_prefixes: list[str] = Field(default_factory=list)
@@ -365,7 +363,6 @@ class Recipe(BaseModel):
             context_budget = int(payload.get("context_budget_tokens") or _context_budget_for(payload))
             payload["max_model_len"] = context_budget
             payload["min_vram_gb"] = _vram_for_recipe(payload, context_budget)
-            payload["gpu"] = None
             if "max_input_bytes" not in payload:
                 payload["max_input_bytes"] = _max_input_bytes_for(payload, context_budget)
             if "timeout_seconds" not in payload:

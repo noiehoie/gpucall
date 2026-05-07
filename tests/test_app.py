@@ -613,15 +613,15 @@ def test_public_task_endpoint_rejects_requested_provider(tmp_path) -> None:
     assert "requested_provider" in response.json()["detail"]
 
 
-def test_public_task_endpoint_rejects_requested_gpu(tmp_path) -> None:
+def test_public_task_endpoint_has_no_requested_gpu_field(tmp_path) -> None:
     with TestClient(create_app(copy_config(tmp_path))) as client:
         response = client.post(
             "/v2/tasks/sync",
             json={"task": "infer", "mode": "sync", "requested_gpu": "A100"},
         )
 
-    assert response.status_code == 400
-    assert "requested_gpu" in response.json()["detail"]
+    assert response.status_code == 422
+    assert "requested_gpu" in str(response.json()["detail"])
 
 
 def test_debug_flag_allows_caller_routing(tmp_path, monkeypatch) -> None:
