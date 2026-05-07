@@ -11,7 +11,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from gpucall.config import GpucallConfig
 from gpucall.domain import ExecutionMode, Recipe
-from gpucall.execution.registry import adapter_descriptor
+from gpucall.execution.registry import adapter_descriptor, provider_family_for_adapter
 
 
 class ProviderAccountSpec(BaseModel):
@@ -31,6 +31,8 @@ class ResourceCatalogEntry(BaseModel):
     source: Literal["active_provider", "provider_candidate"]
     account_ref: str
     provider_name: str
+    surface_ref: str
+    worker_binding_ref: str
     adapter: str
     execution_surface: str
     gpu: str
@@ -48,6 +50,7 @@ class WorkerContractSpec(BaseModel):
     worker_ref: str
     source: Literal["active_provider", "provider_candidate"]
     provider_name: str
+    worker_binding_ref: str
     adapter: str
     execution_surface: str
     model_ref: str | None = None
@@ -124,10 +127,10 @@ def build_resource_catalog_snapshot(config: GpucallConfig, *, config_dir: Path |
 
 
 def generate_tuple_candidates(snapshot: ResourceCatalogSnapshot, *, recipe: Recipe | None = None) -> list[TupleCandidate]:
-    workers = {worker.provider_name: worker for worker in snapshot.workers}
+    workers = {worker.worker_binding_ref: worker for worker in snapshot.workers}
     candidates: list[TupleCandidate] = []
     for resource in snapshot.resources:
-        worker = workers.get(resource.provider_name)
+        worker = workers.get(resource.worker_binding_ref)
         if worker is None:
             continue
         payload = {
@@ -185,7 +188,7 @@ def _accounts_for(rows: list[Mapping[str, Any]]) -> list[ProviderAccountSpec]:
     accounts: dict[str, ProviderAccountSpec] = {}
     for row in rows:
         adapter = str(row.get("adapter") or "")
-        account_ref = _account_ref(adapter)
+        account_ref = _account_ref(row)
         accounts[account_ref] = ProviderAccountSpec(
             account_ref=account_ref,
             provider_family=_provider_family(adapter),
@@ -203,8 +206,10 @@ def _resource_entry(row: Mapping[str, Any]) -> ResourceCatalogEntry:
     return ResourceCatalogEntry(
         resource_ref=f"{source}:{name}:resource",
         source=source,
-        account_ref=_account_ref(adapter),
+        account_ref=_account_ref(row),
         provider_name=name,
+        surface_ref=str(row.get("surface_ref") or name),
+        worker_binding_ref=str(row.get("worker_ref") or row.get("provider_name") or name),
         adapter=adapter,
         execution_surface=str(row.get("execution_surface") or _surface_for_adapter(adapter) or "unknown"),
         gpu=str(row.get("gpu") or "unknown"),
@@ -225,6 +230,7 @@ def _worker_contract(row: Mapping[str, Any]) -> WorkerContractSpec:
         worker_ref=f"{source}:{name}:worker",
         source=source,
         provider_name=name,
+        worker_binding_ref=str(row.get("worker_ref") or row.get("provider_name") or name),
         adapter=adapter,
         execution_surface=str(row.get("execution_surface") or _surface_for_adapter(adapter) or "unknown"),
         model_ref=str(row.get("model_ref") or "") or None,
@@ -273,25 +279,15 @@ def _surface_for_adapter(adapter: str) -> str | None:
     return descriptor.execution_surface.value
 
 
-def _account_ref(adapter: str) -> str:
-    return _provider_family(adapter)
+def _account_ref(row: Mapping[str, Any]) -> str:
+    explicit = str(row.get("account_ref") or "").strip()
+    if explicit:
+        return explicit
+    return _provider_family(str(row.get("adapter") or ""))
 
 
 def _provider_family(adapter: str) -> str:
-    adapter = adapter.strip().lower()
-    if adapter.startswith("runpod-"):
-        return "runpod"
-    if adapter in {"azure-compute-vm"}:
-        return "azure"
-    if adapter in {"gcp-confidential-space-vm"}:
-        return "gcp"
-    if adapter in {"ovhcloud-public-cloud-instance"}:
-        return "ovhcloud"
-    if adapter in {"scaleway-instance"}:
-        return "scaleway"
-    if adapter in {"echo", "local-ollama"}:
-        return "local"
-    return adapter
+    return provider_family_for_adapter(adapter)
 
 
 def _positive_int(value: Any, *, default: int) -> int:

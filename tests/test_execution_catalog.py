@@ -19,7 +19,9 @@ def test_execution_catalog_separates_accounts_surfaces_and_workers() -> None:
     assert {"hyperstack", "modal", "runpod"}.issubset(account_refs)
     assert {"iaas_vm", "function_runtime", "managed_endpoint"}.issubset(surfaces)
     assert all(resource.account_ref for resource in snapshot.resources)
+    assert all(resource.worker_binding_ref for resource in snapshot.resources)
     assert all(worker.execution_surface for worker in snapshot.workers)
+    assert all(worker.worker_binding_ref for worker in snapshot.workers)
     assert len(snapshot.snapshot_id) == 64
     assert len(snapshot.config_hash) == 64
 

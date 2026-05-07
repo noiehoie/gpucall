@@ -79,10 +79,11 @@ def test_production_launch_report_blocks_without_live_requirements(tmp_path, mon
     assert report["checks"]["cost_audit_live_ok"] is False
     assert report["checks"]["cost_audit_live_findings"]
     provider_live_validation = report["provider_live_validation"]
-    assert provider_live_validation["missing_adapters"] == provider_live_validation["required_adapters"]
-    assert "modal" in provider_live_validation["required_adapters"]
-    assert "runpod-vllm-serverless" in provider_live_validation["required_adapters"]
-    assert "hyperstack" in provider_live_validation["required_adapters"]
+    assert provider_live_validation["missing_tuples"] == provider_live_validation["required_tuples"]
+    labels = {row["label"] for row in provider_live_validation["required_tuples"]}
+    assert "function_runtime:modal-function:qwen2.5-1.5b-instruct:modal-vllm" in labels
+    assert "managed_endpoint:openai-chat-completions:qwen2.5-1.5b-instruct:runpod-vllm-openai" in labels
+    assert "iaas_vm:hyperstack-vm:qwen2.5-7b-instruct-1m:hyperstack-vllm" in labels
 
 
 def test_launch_report_blocks_smoke_provider_in_auto_recipe(tmp_path, monkeypatch) -> None:

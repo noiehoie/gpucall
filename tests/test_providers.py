@@ -106,6 +106,20 @@ def test_provider_contract_modules_are_separated_and_sourced() -> None:
         assert descriptor.production_rejection_reason
 
 
+def test_launch_validation_is_tuple_contract_based() -> None:
+    root = Path(__file__).resolve().parents[1]
+    cli = (root / "gpucall" / "cli.py").read_text(encoding="utf-8")
+
+    assert "required_live_adapters" not in cli
+    assert "missing_adapters" not in cli
+    assert "artifacts_by_adapter" not in cli
+    assert 'adapter == "modal"' not in cli
+    assert 'adapter == "runpod-vllm-serverless"' not in cli
+    assert 'adapter == "hyperstack"' not in cli
+    assert "required_live_tuples" in cli
+    assert "tuple_evidence_key" in cli
+
+
 def test_provider_descriptor_conformance_invariants() -> None:
     from gpucall.execution.registry import registered_adapter_descriptors
 

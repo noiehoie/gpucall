@@ -12,6 +12,7 @@ import yaml
 from gpucall.config import default_state_dir
 from gpucall.credentials import credentials_path, load_credentials
 from gpucall.domain import ExecutionMode, ProviderSpec, Recipe
+from gpucall.execution.contracts import artifact_tuple_evidence_key, official_contract, official_contract_hash, tuple_evidence_key
 from gpucall.provider_catalog import live_provider_catalog_findings
 from gpucall.execution.registry import adapter_descriptor
 from gpucall.routing import provider_route_rejection_reason
@@ -34,11 +35,11 @@ def provider_audit_report(config: Any, *, config_dir: Path, recipe_name: str | N
                 "recipe fit",
                 "model catalog fit",
                 "engine catalog fit",
-                "provider/GPU catalog fit",
-                "official adapter contract",
+                "resource catalog fit",
+                "official execution contract",
                 "cost metadata",
                 "endpoint or lifecycle configuration",
-                "billable live validation for the exact recipe/provider/model/engine tuple",
+                "billable live validation for the exact recipe/resource/model/engine/contract tuple",
                 "cleanup audit compatibility",
             ],
             "unvalidated_candidates_enter_routing": False,
@@ -281,19 +282,7 @@ def _adapter_config_findings(provider: ProviderSpec) -> list[str]:
 
 
 def _official_contract(provider: ProviderSpec) -> dict[str, Any]:
-    descriptor = adapter_descriptor(provider)
-    return {
-        "adapter": provider.adapter,
-        "execution_surface": provider.execution_surface.value if provider.execution_surface else None,
-        "endpoint_contract": provider.endpoint_contract,
-        "expected_endpoint_contract": getattr(descriptor, "endpoint_contract", None),
-        "output_contract": provider.output_contract,
-        "expected_output_contract": getattr(descriptor, "output_contract", None),
-        "stream_contract": provider.stream_contract,
-        "expected_stream_contract": getattr(descriptor, "stream_contract", None),
-        "official_sources": list(getattr(descriptor, "official_sources", ()) or ()),
-        "production_eligible": bool(getattr(descriptor, "production_eligible", False)) if descriptor is not None else False,
-    }
+    return official_contract(provider)
 
 
 def _matching_validation(*, provider: ProviderSpec, recipe: Recipe, config_dir: Path) -> dict[str, Any]:
@@ -312,9 +301,9 @@ def _matching_validation(*, provider: ProviderSpec, recipe: Recipe, config_dir: 
             continue
         if data.get("validation_schema_version") != 1 or data.get("passed") is not True:
             continue
-        if data.get("provider") != provider.name or data.get("recipe") != recipe.name:
+        if data.get("recipe") != recipe.name:
             continue
-        if data.get("model_ref") != provider.model_ref or data.get("engine_ref") != provider.engine_ref:
+        if artifact_tuple_evidence_key(data, provider) != tuple_evidence_key(provider):
             continue
         if data.get("config_hash") != expected_hash:
             continue
@@ -323,15 +312,14 @@ def _matching_validation(*, provider: ProviderSpec, recipe: Recipe, config_dir: 
         contract = data.get("official_contract") if isinstance(data.get("official_contract"), dict) else {}
         if not _official_contract_hash_valid(data, contract):
             continue
-        result["matched"].append({"path": str(path), "provider": provider.name, "recipe": recipe.name})
+        result["matched"].append({"path": str(path), "provider": data.get("provider"), "recipe": recipe.name, "tuple_key": tuple_evidence_key(provider)})
     return result
 
 
 def _official_contract_hash_valid(data: Mapping[str, Any], contract: Mapping[str, Any]) -> bool:
     if not contract:
         return False
-    computed = hashlib.sha256(json.dumps(contract, sort_keys=True, separators=(",", ":"), default=str).encode("utf-8")).hexdigest()
-    return data.get("official_contract_hash") == computed
+    return data.get("official_contract_hash") == official_contract_hash(contract)
 
 
 def _load_provider_candidates(config_dir: Path) -> list[dict[str, Any]]:

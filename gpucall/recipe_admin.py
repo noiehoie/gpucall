@@ -18,7 +18,8 @@ import yaml
 
 from gpucall.config import ConfigError, default_state_dir, load_config
 from gpucall.domain import ExecutionMode, ProviderSpec, Recipe
-from gpucall.execution.registry import adapter_descriptor
+from gpucall.execution.contracts import artifact_tuple_evidence_key, tuple_evidence_key
+from gpucall.execution.registry import adapter_descriptor, provider_family_for_adapter
 from gpucall.routing import provider_route_rejection_reason
 
 
@@ -250,6 +251,7 @@ def review_artifact(
         "warnings": [],
         "provider_matrix": {},
         "provider_candidate_matches": [],
+        "tuple_candidate_matches": [],
         "required_provider_contract": {},
         "live_validation": {"matched": []},
     }
@@ -500,11 +502,13 @@ def _review_config_and_providers(
     report["provider_matrix"] = provider_matrix
     report["eligible_providers"] = eligible
     if not eligible:
-        report["provider_candidate_matches"] = _candidate_matches(
+        matches = _candidate_matches(
             config_dir=config_dir,
             config=config,
             contract=report.get("required_provider_contract") or {},
         )
+        report["tuple_candidate_matches"] = matches
+        report["provider_candidate_matches"] = matches
         report["warnings"].append({"check": "provider_fit", "reason": "no provider satisfies recipe, policy, mode, and contract requirements"})
         report["warnings"].append(
             {
@@ -621,6 +625,7 @@ def _candidate_match(candidate: Mapping[str, Any], *, config: Any, contract: Map
         "eligible": eligible,
         "name": candidate.get("name"),
         "path": candidate.get("_path"),
+        "tuple_source": "provider_candidates",
         "adapter": candidate.get("adapter"),
         "execution_surface": candidate.get("execution_surface") or _surface_for_adapter(str(candidate.get("adapter") or "")),
         "gpu": candidate.get("gpu"),
@@ -778,11 +783,7 @@ def _drop_none(payload: Mapping[str, Any]) -> dict[str, Any]:
 
 
 def _account_ref(adapter: str) -> str:
-    if adapter.startswith("runpod-"):
-        return "runpod"
-    if adapter in {"echo", "local-ollama"}:
-        return "local"
-    return adapter
+    return provider_family_for_adapter(adapter)
 
 
 def _validate_config_dir(config_dir: Path) -> None:
@@ -889,9 +890,9 @@ def _candidate_rank(candidate: Mapping[str, Any], *, contract: Mapping[str, Any]
 def _promotion_actions(candidate: Mapping[str, Any]) -> list[str]:
     name = str(candidate.get("name") or "<candidate>")
     return [
-        f"review official adapter conformance for {name}",
-        f"create active provider YAML from provider_candidates/{name}.yml only after credentials/endpoint ids are filled",
-        f"run gpucall provider-smoke {name} --write-artifact against a billable endpoint",
+        f"review official execution contract conformance for tuple {name}",
+        f"materialize active surface/worker YAML from provider_candidates/{name}.yml only after credentials/endpoint ids are filled",
+        f"run gpucall provider-smoke {name} --write-artifact against the exact billable tuple",
         "rerun gpucall-recipe-admin review with --validation-dir pointing to provider-validation artifacts",
         "promote to production auto-routing only after review returns READY_FOR_PRODUCTION or AUTO_SELECT_SAFE",
     ]
@@ -1022,11 +1023,16 @@ def _matching_live_validation(
     root = validation_dir or (default_state_dir() / "provider-validation")
     expected_hash = _config_hash(config_dir) if config_dir is not None and config_dir.exists() else None
     expected_commit = _git_commit(Path.cwd())
-    result: dict[str, Any] = {"dir": str(root), "matched": [], "checked": 0, "missing_for_providers": [provider.name for provider in providers]}
+    provider_keys = {tuple_evidence_key(provider): provider for provider in providers}
+    result: dict[str, Any] = {
+        "dir": str(root),
+        "matched": [],
+        "checked": 0,
+        "missing_for_tuples": sorted(provider_keys),
+    }
     if not root.exists():
         result["reason"] = "validation artifact directory does not exist"
         return result
-    provider_names = {provider.name for provider in providers}
     matched: list[dict[str, Any]] = []
     for path in sorted(root.glob("*.json"), key=lambda item: item.stat().st_mtime, reverse=True):
         result["checked"] += 1
@@ -1036,23 +1042,31 @@ def _matching_live_validation(
             continue
         if data.get("validation_schema_version") != 1 or data.get("passed") is not True:
             continue
-        if data.get("provider") not in provider_names:
-            continue
-        provider = next((item for item in providers if item.name == data.get("provider")), None)
-        if provider is None:
-            continue
-        if data.get("model_ref") != provider.model_ref or data.get("engine_ref") != provider.engine_ref:
-            continue
         if data.get("recipe") != recipe.name:
+            continue
+        matched_key = None
+        for key, provider in provider_keys.items():
+            if artifact_tuple_evidence_key(data, provider) == key:
+                matched_key = key
+                break
+        if matched_key is None:
             continue
         if expected_hash and data.get("config_hash") != expected_hash:
             continue
         if expected_commit and data.get("commit") != expected_commit:
             continue
-        matched.append({"path": str(path), "provider": data.get("provider"), "recipe": data.get("recipe"), "mode": data.get("mode")})
+        matched.append(
+            {
+                "path": str(path),
+                "provider": data.get("provider"),
+                "recipe": data.get("recipe"),
+                "mode": data.get("mode"),
+                "tuple_key": matched_key,
+            }
+        )
     result["matched"] = matched
-    matched_providers = {str(item.get("provider")) for item in matched}
-    result["missing_for_providers"] = sorted(provider_names - matched_providers)
+    matched_tuples = {str(item.get("tuple_key")) for item in matched}
+    result["missing_for_tuples"] = sorted(set(provider_keys) - matched_tuples)
     return result
 
 

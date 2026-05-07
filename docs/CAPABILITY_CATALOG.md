@@ -66,11 +66,12 @@ can own multiple execution surfaces:
 - `workers/*.yml`: model, engine, input/output/stream contracts, modes, target
   function or endpoint contract.
 
-The loader joins `surfaces/*.yml` and `workers/*.yml` by `provider_name` and
-fails closed if a surface and worker are missing a counterpart or disagree on
-account, adapter, or execution surface. The joined tuple is the active provider
-surface eligible for production routing after policy, validation, circuit, and
-cleanup checks.
+The loader joins `surfaces/*.yml` to `workers/*.yml` by explicit `worker_ref`.
+Existing configs may still omit `worker_ref`, in which case the file stem or
+legacy `provider_name` is the compatibility key. The loader fails closed if a
+surface and worker are missing a counterpart or disagree on account, adapter, or
+execution surface. The joined tuple is the active execution surface eligible for
+production routing after policy, validation, circuit, and cleanup checks.
 
 Provider candidates are not production routing entries. They are a queue of plausible
 provider/model/engine tuples that need endpoint credentials, official-adapter
@@ -125,8 +126,8 @@ gpucall provider-audit --config-dir config --recipe text-infer-standard --live
 
 The audit treats the recipe as the authority. It evaluates every active joined
 surface/worker tuple and every `provider_candidates/*.yml` tuple against recipe requirements,
-model catalog declarations, engine catalog guarantees, provider/GPU metadata,
-official adapter contracts, endpoint configuration, and exact live validation
+model catalog declarations, engine catalog guarantees, resource catalog metadata,
+official execution contracts, endpoint configuration, and exact tuple validation
 artifacts. Candidate tuples that fit the recipe remain outside production routing
 until they have endpoint/lifecycle configuration and billable validation evidence.
 The audit also reports surface distribution so Modal function-runtime candidates,
@@ -146,8 +147,9 @@ gpucall-recipe-admin review \
 
 If active providers are insufficient, the report includes `required_provider_contract`.
 If `provider_candidates/*.yml` contains tuples that satisfy that contract, the same
-report includes `provider_candidate_matches`. These matches are promotion plans,
-not routing entries.
+report includes `tuple_candidate_matches` and the compatibility alias
+`provider_candidate_matches`. These matches are tuple promotion plans, not routing
+entries.
 
 Each candidate match carries:
 
@@ -193,4 +195,4 @@ Possible decisions:
 - `READY_FOR_PRODUCTION`: catalog and live validation are present.
 - `AUTO_SELECT_SAFE`: production-ready and low routing-shadowing risk.
 
-The admin reviewer must not claim business quality from catalog metadata alone. Quality claims require live validation artifacts for the recipe/model/engine/provider/GPU tuple.
+The admin reviewer must not claim business quality from catalog metadata alone. Quality claims require live validation artifacts for the recipe/model/engine/resource/contract tuple.

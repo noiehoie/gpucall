@@ -28,10 +28,17 @@ from gpucall.configure import configure_command
 from gpucall.credentials import configured_credentials, credentials_path, load_credentials
 from gpucall.domain import ExecutionMode, JobState, PresignPutRequest, ProviderError, TaskRequest
 from gpucall.execution_catalog import build_resource_catalog_snapshot, dumps_candidates, dumps_snapshot as dumps_execution_snapshot, generate_tuple_candidates
+from gpucall.execution.contracts import (
+    artifact_tuple_evidence_key,
+    official_contract,
+    official_contract_hash,
+    tuple_evidence_key,
+    tuple_evidence_label,
+)
 from gpucall.lease_reaper import active_manifest_leases, lease_reaper_report
 from gpucall.provider_audit import provider_audit_report
 from gpucall.provider_catalog import live_provider_catalog_findings
-from gpucall.execution.registry import adapter_descriptor
+from gpucall.execution.registry import adapter_descriptor, provider_family_for_adapter
 from gpucall.registry import ObservedRegistry
 from gpucall.audit import AuditTrail
 from gpucall.routing import provider_route_rejection_reason
@@ -412,7 +419,7 @@ def build_launch_report(config_dir: Path, *, url: str | None = None, api_key: st
             gateway_smoke = _gateway_smoke_summary(url, api_key=api_key, recipe=smoke_recipe)
         except Exception as exc:
             gateway_smoke = {"ok": False, "error": str(exc)}
-    gateway_live_adapters = _gateway_smoke_live_adapters(gateway_smoke, config)
+    gateway_live_tuples = _gateway_smoke_live_tuples(gateway_smoke, config)
     checks = {
         "config_valid": True,
         "secrets_present": _secret_presence_summary(creds),
@@ -480,13 +487,15 @@ def build_launch_report(config_dir: Path, *, url: str | None = None, api_key: st
     if cleanup_audit.get("ok") is not True:
         blockers.append({"check": "cleanup_audit", "summary": cleanup_audit})
     secrets = checks["secrets_present"]
-    required_live_adapters = _required_live_validation_adapters(config)
-    live_artifacts = _live_validation_artifacts_by_adapter(config, config_dir=config_dir)
-    capacity_unavailable_adapters = _capacity_unavailable_validation_adapters(config, config_dir=config_dir)
-    missing_live_adapters = [
-        adapter
-        for adapter in required_live_adapters
-        if adapter not in live_artifacts and adapter not in gateway_live_adapters and adapter not in capacity_unavailable_adapters
+    required_live_tuples = _required_live_validation_tuples(config)
+    live_artifacts = _live_validation_artifacts_by_tuple(config, config_dir=config_dir)
+    capacity_unavailable_tuples = _capacity_unavailable_validation_tuples(config, config_dir=config_dir)
+    missing_live_tuples = [
+        item
+        for item in required_live_tuples
+        if item["tuple_key"] not in live_artifacts
+        and item["tuple_key"] not in gateway_live_tuples
+        and item["tuple_key"] not in capacity_unavailable_tuples
     ]
     production = profile == "production"
     checks["launch_gates"] = {
@@ -495,7 +504,7 @@ def build_launch_report(config_dir: Path, *, url: str | None = None, api_key: st
         "object_store_required": production,
         "object_store_configured": config.object_store is not None and bool(secrets["object_store"]),
         "gateway_live_smoke_passed": bool(gateway_smoke and gateway_smoke.get("ok") is True),
-        "provider_live_validation_passed": not missing_live_adapters,
+        "provider_live_validation_passed": not missing_live_tuples,
         "audit_chain_valid": checks["audit_chain_valid"],
     }
     if production:
@@ -513,12 +522,12 @@ def build_launch_report(config_dir: Path, *, url: str | None = None, api_key: st
             blockers.append({"check": "gateway_live_smoke", "passed": False, "summary": gateway_smoke})
         elif gateway_smoke.get("auth_required") is not True:
             blockers.append({"check": "gateway_auth_enforced", "auth_required": gateway_smoke.get("auth_required")})
-        if missing_live_adapters:
+        if missing_live_tuples:
             blockers.append(
                 {
                     "check": "provider_live_validation",
-                    "missing_adapters": missing_live_adapters,
-                    "required_adapters": required_live_adapters,
+                    "missing_tuples": missing_live_tuples,
+                    "required_tuples": required_live_tuples,
                 }
             )
         if provider_tuple_gaps:
@@ -534,11 +543,11 @@ def build_launch_report(config_dir: Path, *, url: str | None = None, api_key: st
         "registry": provider_samples,
         "gateway_smoke": gateway_smoke,
         "provider_live_validation": {
-            "required_adapters": required_live_adapters,
-            "missing_adapters": missing_live_adapters,
-            "gateway_live_adapters": gateway_live_adapters,
-            "capacity_unavailable_adapters": capacity_unavailable_adapters,
-            "artifacts_by_adapter": live_artifacts,
+            "required_tuples": required_live_tuples,
+            "missing_tuples": missing_live_tuples,
+            "gateway_live_tuples": gateway_live_tuples,
+            "capacity_unavailable_tuples": capacity_unavailable_tuples,
+            "artifacts_by_tuple": live_artifacts,
         },
         "blockers": blockers,
         "go": not blockers,
@@ -710,7 +719,7 @@ async def provider_smoke_command(
 
 def _provider_smoke_base_summary(runtime, provider: str, recipe_name: str, mode: ExecutionMode) -> dict[str, object]:
     spec = runtime.compiler.providers.get(provider)
-    official_contract = _provider_official_contract(spec)
+    provider_contract = official_contract(spec)
     return {
         "provider": provider,
         "recipe": recipe_name,
@@ -719,87 +728,15 @@ def _provider_smoke_base_summary(runtime, provider: str, recipe_name: str, mode:
         "engine_ref": getattr(spec, "engine_ref", None),
         "provider_model": getattr(spec, "model", None),
         "gpu": getattr(spec, "gpu", None),
-        "official_contract": official_contract,
-        "official_contract_hash": hashlib.sha256(
-            json.dumps(official_contract, sort_keys=True, separators=(",", ":"), default=str).encode("utf-8")
-        ).hexdigest(),
+        "tuple_evidence_key": tuple_evidence_key(spec) if spec is not None else None,
+        "tuple_evidence_label": tuple_evidence_label(spec) if spec is not None else None,
+        "official_contract": provider_contract,
+        "official_contract_hash": official_contract_hash(provider_contract),
     }
 
 
 def _provider_official_contract(spec) -> dict[str, object]:
-    descriptor = adapter_descriptor(spec) if spec is not None else None
-    contract: dict[str, object] = {
-        "adapter": getattr(spec, "adapter", None),
-        "execution_surface": getattr(getattr(spec, "execution_surface", None), "value", getattr(spec, "execution_surface", None)),
-        "endpoint_contract": getattr(spec, "endpoint_contract", None),
-        "expected_endpoint_contract": getattr(descriptor, "endpoint_contract", None),
-        "output_contract": getattr(spec, "output_contract", None),
-        "expected_output_contract": getattr(descriptor, "output_contract", None),
-        "stream_contract": getattr(spec, "stream_contract", None),
-        "expected_stream_contract": getattr(descriptor, "stream_contract", None),
-        "input_contracts": list(getattr(spec, "input_contracts", []) or []),
-        "official_sources": list(getattr(descriptor, "official_sources", ()) or ()),
-        "production_eligible": bool(getattr(descriptor, "production_eligible", False)) if descriptor is not None else False,
-        "production_rejection_reason": getattr(descriptor, "production_rejection_reason", None),
-        "model": getattr(spec, "model", None),
-        "model_ref": getattr(spec, "model_ref", None),
-        "engine_ref": getattr(spec, "engine_ref", None),
-        "max_model_len": getattr(spec, "max_model_len", None),
-        "gpu": getattr(spec, "gpu", None),
-        "vram_gb": getattr(spec, "vram_gb", None),
-    }
-    adapter = str(getattr(spec, "adapter", "") or "")
-    if adapter == "modal":
-        app_name, function_name = _split_provider_target(getattr(spec, "target", None))
-        stream_app_name, stream_function_name = _split_provider_target(getattr(spec, "stream_target", None))
-        contract["modal"] = {
-            "target_app": app_name,
-            "target_function": function_name,
-            "stream_app": stream_app_name,
-            "stream_function": stream_function_name,
-            "provider_params": getattr(spec, "provider_params", None) or {},
-            "autoscaler_env": {
-                "GPUCALL_MODAL_A10G_MIN_CONTAINERS": os.getenv("GPUCALL_MODAL_A10G_MIN_CONTAINERS"),
-                "GPUCALL_MODAL_A10G_SCALEDOWN_WINDOW": os.getenv("GPUCALL_MODAL_A10G_SCALEDOWN_WINDOW"),
-                "GPUCALL_MODAL_H200X4_MIN_CONTAINERS": os.getenv("GPUCALL_MODAL_H200X4_MIN_CONTAINERS"),
-                "GPUCALL_MODAL_H200X4_SCALEDOWN_WINDOW": os.getenv("GPUCALL_MODAL_H200X4_SCALEDOWN_WINDOW"),
-                "GPUCALL_MODAL_VISION_H100_MIN_CONTAINERS": os.getenv("GPUCALL_MODAL_VISION_H100_MIN_CONTAINERS"),
-                "GPUCALL_MODAL_VISION_H100_SCALEDOWN_WINDOW": os.getenv("GPUCALL_MODAL_VISION_H100_SCALEDOWN_WINDOW"),
-            },
-        }
-    elif adapter == "runpod-vllm-serverless":
-        params = getattr(spec, "provider_params", None) or {}
-        contract["runpod_worker_vllm"] = {
-            "endpoint_id": getattr(spec, "target", None),
-            "base_url": str(getattr(spec, "endpoint", None) or "https://api.runpod.ai/v2"),
-            "chat_completions_path": "/openai/v1/chat/completions",
-            "health_path": "/health",
-            "image": getattr(spec, "image", None),
-            "worker_env": params.get("worker_env") if isinstance(params, dict) else None,
-            "data_refs_supported": "data_refs" in set(getattr(spec, "input_contracts", []) or []),
-        }
-    elif adapter == "hyperstack":
-        contract["hyperstack"] = {
-            "api_base": str(getattr(spec, "endpoint", None) or "https://infrahub-api.nexgencloud.com/v1"),
-            "auth_header": "api_key",
-            "environment_name": getattr(spec, "target", None),
-            "flavor_name": getattr(spec, "instance", None),
-            "image_name": getattr(spec, "image", None),
-            "key_name": getattr(spec, "key_name", None),
-            "ssh_remote_cidr": getattr(spec, "ssh_remote_cidr", None),
-            "create_payload_validated_by_official_sdk": True,
-            "security_rules_inline": True,
-            "worker_bootstrap_contract": "gpucall-managed-ssh-vllm",
-        }
-    return contract
-
-
-def _split_provider_target(target: object) -> tuple[str | None, str | None]:
-    text = str(target or "")
-    if ":" not in text:
-        return (text or None), None
-    app, fn = text.split(":", 1)
-    return app or None, fn or None
+    return official_contract(spec)
 
 
 def _provider_smoke_error(exc: ProviderError) -> dict[str, object]:
@@ -1087,26 +1024,32 @@ def _latest_live_validation_artifact(config_dir: Path | None = None) -> dict[str
     return None
 
 
-def _required_live_validation_adapters(config) -> list[str]:
-    adapters: set[str] = set()
+def _required_live_validation_tuples(config) -> list[dict[str, object]]:
+    tuples: dict[str, dict[str, object]] = {}
     for provider in config.providers.values():
         descriptor = adapter_descriptor(provider)
         if descriptor is None:
             continue
         if descriptor.local_execution or not descriptor.production_eligible:
             continue
-        adapters.add(str(provider.adapter))
-    return sorted(adapters)
+        key = tuple_evidence_key(provider)
+        tuples[key] = {
+            "tuple_key": key,
+            "label": tuple_evidence_label(provider),
+            "provider": provider.name,
+            "adapter": provider.adapter,
+        }
+    return [tuples[key] for key in sorted(tuples)]
 
 
-def _live_validation_artifacts_by_adapter(config, config_dir: Path | None = None) -> dict[str, object]:
+def _live_validation_artifacts_by_tuple(config, config_dir: Path | None = None) -> dict[str, object]:
     root = default_state_dir() / "provider-validation"
     if not root.exists():
         return {}
     expected_commit = _git_commit()
     expected_config_hash = _config_hash(config_dir) if config_dir is not None else None
     providers_by_name = {provider.name: provider for provider in config.providers.values()}
-    required_adapters = set(_required_live_validation_adapters(config))
+    required_keys = {str(item["tuple_key"]) for item in _required_live_validation_tuples(config)}
     artifacts: dict[str, object] = {}
     candidates = sorted(root.glob("*.json"), key=lambda path: path.stat().st_mtime, reverse=True)
     for path in candidates:
@@ -1124,30 +1067,32 @@ def _live_validation_artifacts_by_adapter(config, config_dir: Path | None = None
         if provider is None:
             continue
         contract = data.get("official_contract") if isinstance(data.get("official_contract"), dict) else {}
-        adapter = str(contract.get("adapter") or provider.adapter)
-        if adapter != provider.adapter:
+        tuple_key = artifact_tuple_evidence_key(data, provider)
+        if tuple_key is None:
             continue
-        if adapter not in required_adapters or adapter in artifacts:
+        if tuple_key not in required_keys or tuple_key in artifacts:
             continue
-        artifacts[adapter] = {
+        artifacts[tuple_key] = {
             "path": str(path),
             "mtime": datetime.fromtimestamp(path.stat().st_mtime, timezone.utc).isoformat(),
+            "label": tuple_evidence_label(provider),
+            "provider": provider.name,
             "data": data,
         }
     return artifacts
 
 
-def _gateway_smoke_live_adapters(gateway_smoke: dict[str, object] | None, config) -> list[str]:
+def _gateway_smoke_live_tuples(gateway_smoke: dict[str, object] | None, config) -> list[str]:
     if not isinstance(gateway_smoke, dict) or gateway_smoke.get("ok") is not True:
         return []
     providers_by_name = config.providers
-    adapters: set[str] = set()
+    tuple_keys: set[str] = set()
     sync = gateway_smoke.get("sync")
     if isinstance(sync, dict):
         provider_name = sync.get("selected_provider")
         provider = providers_by_name.get(str(provider_name or ""))
         if provider is not None and sync.get("output_non_empty") is True:
-            adapters.add(str(provider.adapter))
+            tuple_keys.add(tuple_evidence_key(provider))
     vision = gateway_smoke.get("vision")
     if isinstance(vision, dict) and vision.get("ok") is True:
         body = vision.get("body")
@@ -1155,18 +1100,18 @@ def _gateway_smoke_live_adapters(gateway_smoke: dict[str, object] | None, config
         provider_name = plan.get("selected_provider") if isinstance(plan, dict) else None
         provider = providers_by_name.get(str(provider_name or ""))
         if provider is not None:
-            adapters.add(str(provider.adapter))
-    return sorted(adapters)
+            tuple_keys.add(tuple_evidence_key(provider))
+    return sorted(tuple_keys)
 
 
-def _capacity_unavailable_validation_adapters(config, config_dir: Path | None = None) -> list[str]:
+def _capacity_unavailable_validation_tuples(config, config_dir: Path | None = None) -> list[str]:
     root = default_state_dir() / "provider-validation"
     if not root.exists():
         return []
     expected_commit = _git_commit()
     expected_config_hash = _config_hash(config_dir) if config_dir is not None else None
     providers_by_name = {provider.name: provider for provider in config.providers.values()}
-    adapters: set[str] = set()
+    tuple_keys: set[str] = set()
     for path in sorted(root.glob("*.json"), key=lambda item: item.stat().st_mtime, reverse=True):
         try:
             data = json.loads(path.read_text(encoding="utf-8"))
@@ -1190,10 +1135,10 @@ def _capacity_unavailable_validation_adapters(config, config_dir: Path | None = 
         contract = data.get("official_contract") if isinstance(data.get("official_contract"), dict) else {}
         if provider is None or not _official_contract_hash_valid(data, contract):
             continue
-        adapter = str(contract.get("adapter") or provider.adapter)
-        if adapter == provider.adapter:
-            adapters.add(adapter)
-    return sorted(adapters)
+        tuple_key = artifact_tuple_evidence_key(data, provider)
+        if tuple_key is not None:
+            tuple_keys.add(tuple_key)
+    return sorted(tuple_keys)
 
 
 def _live_validation_artifact_valid(data: dict[str, object]) -> bool:
@@ -1240,10 +1185,7 @@ def _live_validation_artifact_valid(data: dict[str, object]) -> bool:
 
 
 def _official_contract_hash_valid(data: dict[str, object], contract: dict[str, object]) -> bool:
-    computed = hashlib.sha256(
-        json.dumps(contract, sort_keys=True, separators=(",", ":"), default=str).encode("utf-8")
-    ).hexdigest()
-    return data.get("official_contract_hash") == computed
+    return data.get("official_contract_hash") == official_contract_hash(contract)
 
 
 async def jobs_command(job_id: str | None, limit: int, *, scrub_inputs: bool = False, expire_stale: bool = False) -> None:
@@ -1345,20 +1287,23 @@ def lease_reaper_command(manifest: Path | None, *, apply: bool) -> None:
 
 def _cleanup_audit_report(config) -> dict[str, object]:
     lease_path = Path(os.getenv("GPUCALL_HYPERSTACK_LEASE_MANIFEST", str(default_state_dir() / "hyperstack_leases.jsonl"))).expanduser()
-    active_hyperstack = _active_hyperstack_leases_from_manifest(lease_path)
+    active_leases = _active_resource_leases_from_manifest(lease_path)
     validation = _provider_validation_cleanup_summary(config)
     return {
         "generated_at": datetime.now(timezone.utc).isoformat(),
-        "ok": not active_hyperstack and validation["invalid_cleanup_artifacts"] == [],
-        "hyperstack": {
-            "lease_manifest_path": str(lease_path),
-            "active_manifest_leases": active_hyperstack,
-        },
+        "ok": not active_leases and validation["invalid_cleanup_artifacts"] == [],
+        "resource_leases": [
+            {
+                "lifecycle_contract": "iaas_vm_lease",
+                "lease_manifest_path": str(lease_path),
+                "active_manifest_leases": active_leases,
+            }
+        ],
         "provider_validation": validation,
     }
 
 
-def _active_hyperstack_leases_from_manifest(path: Path) -> list[dict[str, object]]:
+def _active_resource_leases_from_manifest(path: Path) -> list[dict[str, object]]:
     return active_manifest_leases(path)
 
 
@@ -1412,9 +1357,9 @@ def _provider_cost_audit_row(provider) -> dict[str, object]:
 
 def _live_cost_audit(providers: dict[str, object], creds: dict[str, dict[str, str]]) -> dict[str, object]:
     return {
-        "modal": _modal_live_cost_audit(providers),
-        "runpod": _runpod_live_cost_audit(providers, creds),
-        "hyperstack": _hyperstack_live_cost_audit(providers, creds),
+        "function_runtime": _function_runtime_live_cost_audit(providers),
+        "managed_endpoint": _managed_endpoint_live_cost_audit(providers, creds),
+        "iaas_vm_lease": _iaas_vm_live_cost_audit(providers, creds),
     }
 
 
@@ -1458,35 +1403,50 @@ def _live_cost_audit_findings(live: object) -> list[dict[str, object]]:
     return findings
 
 
-def _modal_live_cost_audit(providers: dict[str, object]) -> dict[str, object]:
-    if not any(getattr(provider, "adapter", "") == "modal" for provider in providers.values()):
+def _function_runtime_live_cost_audit(providers: dict[str, object]) -> dict[str, object]:
+    function_providers = [
+        provider for provider in providers.values() if str(getattr(getattr(provider, "execution_surface", None), "value", "")) == "function_runtime"
+    ]
+    if not function_providers:
         return {"configured": False}
-    modal = shutil.which("modal")
+    family_names = sorted({provider_family_for_adapter(str(getattr(provider, "adapter", "") or "")) for provider in function_providers})
+    modal = shutil.which("modal") if "modal" in family_names else None
+    if "modal" in family_names and modal is None:
+        return {"configured": True, "ok": False, "credential_families": family_names, "error": "modal CLI not found"}
+    result: dict[str, object] = {"configured": True, "credential_families": family_names}
     if modal is None:
-        return {"configured": True, "ok": False, "error": "modal CLI not found"}
+        return result
+    result.update(
+        {
+            "app_list": _run_jsonish_command([modal, "app", "list"], timeout=30),
+            "billing_today": _run_jsonish_command(
+                [modal, "billing", "report", "--for", "today", "--resolution", "h", "--tz", "Asia/Tokyo", "--json"],
+                timeout=60,
+            ),
+        }
+    )
     return {
-        "configured": True,
-        "app_list": _run_jsonish_command([modal, "app", "list"], timeout=30),
-        "billing_today": _run_jsonish_command(
-            [modal, "billing", "report", "--for", "today", "--resolution", "h", "--tz", "Asia/Tokyo", "--json"],
-            timeout=60,
-        ),
+        **result,
     }
 
 
-def _runpod_live_cost_audit(providers: dict[str, object], creds: dict[str, dict[str, str]]) -> dict[str, object]:
-    runpod_providers = [
+def _managed_endpoint_live_cost_audit(providers: dict[str, object], creds: dict[str, dict[str, str]]) -> dict[str, object]:
+    endpoint_providers = [
         provider
         for provider in providers.values()
-        if str(getattr(provider, "adapter", "")).startswith("runpod") and getattr(provider, "target", None)
+        if str(getattr(getattr(provider, "execution_surface", None), "value", "")) == "managed_endpoint"
+        and getattr(provider, "target", None)
     ]
-    if not runpod_providers:
+    if not endpoint_providers:
         return {"configured": False}
-    api_key = creds.get("runpod", {}).get("api_key")
+    families = sorted({provider_family_for_adapter(str(getattr(provider, "adapter", "") or "")) for provider in endpoint_providers})
+    if families != ["runpod"]:
+        return {"configured": True, "ok": False, "credential_families": families, "error": "managed endpoint live cost probe supports RunPod credentials only"}
+    api_key = creds.get(families[0], {}).get("api_key")
     if not api_key:
-        return {"configured": True, "ok": False, "error": "RunPod api_key is not configured"}
+        return {"configured": True, "ok": False, "credential_families": families, "error": "managed endpoint api_key is not configured"}
     rows: list[dict[str, object]] = []
-    for provider in runpod_providers:
+    for provider in endpoint_providers:
         base_url = str(getattr(provider, "endpoint", None) or "https://api.runpod.ai/v2").rstrip("/")
         endpoint_id = str(getattr(provider, "target"))
         rows.append(
@@ -1499,19 +1459,25 @@ def _runpod_live_cost_audit(providers: dict[str, object], creds: dict[str, dict[
                 ),
             }
         )
-    return {"configured": True, "endpoints": rows}
+    return {"configured": True, "credential_families": families, "endpoints": rows}
 
 
-def _hyperstack_live_cost_audit(providers: dict[str, object], creds: dict[str, dict[str, str]]) -> dict[str, object]:
-    hyperstack_providers = [provider for provider in providers.values() if getattr(provider, "adapter", "") == "hyperstack"]
-    if not hyperstack_providers:
+def _iaas_vm_live_cost_audit(providers: dict[str, object], creds: dict[str, dict[str, str]]) -> dict[str, object]:
+    vm_providers = [
+        provider for provider in providers.values() if str(getattr(getattr(provider, "execution_surface", None), "value", "")) == "iaas_vm"
+    ]
+    if not vm_providers:
         return {"configured": False}
-    api_key = creds.get("hyperstack", {}).get("api_key")
+    families = sorted({provider_family_for_adapter(str(getattr(provider, "adapter", "") or "")) for provider in vm_providers})
+    if families != ["hyperstack"]:
+        return {"configured": True, "ok": False, "credential_families": families, "error": "iaas_vm live cost probe supports Hyperstack credentials only"}
+    api_key = creds.get(families[0], {}).get("api_key")
     if not api_key:
-        return {"configured": True, "ok": False, "error": "Hyperstack api_key is not configured"}
-    base_url = str(getattr(hyperstack_providers[0], "endpoint", None) or "https://infrahub-api.nexgencloud.com/v1").rstrip("/")
+        return {"configured": True, "ok": False, "credential_families": families, "error": "iaas_vm api_key is not configured"}
+    base_url = str(getattr(vm_providers[0], "endpoint", None) or "https://infrahub-api.nexgencloud.com/v1").rstrip("/")
     return {
         "configured": True,
+        "credential_families": families,
         "virtual_machines": _http_json(
             f"{base_url}/core/virtual-machines",
             headers={"api_key": api_key, "accept": "application/json", "content-type": "application/json"},

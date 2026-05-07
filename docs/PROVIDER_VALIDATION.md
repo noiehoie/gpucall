@@ -36,7 +36,7 @@ Record for each provider:
 - cost observed on provider dashboard
 - audit trail validity after execution
 
-Production `launch-check --profile production` requires one valid JSON artifact per required live adapter under `$XDG_STATE_HOME/gpucall/provider-validation/`. Artifacts are bound to the current git HEAD and active config directory; stale artifacts do not satisfy the gate.
+Production `launch-check --profile production` requires one valid JSON artifact per required production tuple under `$XDG_STATE_HOME/gpucall/provider-validation/`. The tuple key is derived from account, execution surface, endpoint contract, output contract, stream contract, model ref, engine ref, and endpoint/lifecycle configuration state. Artifacts are bound to the current git HEAD and active config directory; stale artifacts do not satisfy the gate.
 
 Required top-level fields:
 
@@ -63,6 +63,8 @@ Required top-level fields:
 `official_contract` must include:
 
 - `adapter`
+- `account_ref`
+- `execution_surface`
 - `endpoint_contract`
 - `expected_endpoint_contract`
 - `output_contract`
@@ -77,7 +79,7 @@ The observed `endpoint_contract`, `output_contract`, and `stream_contract` must 
 
 `cost` must be an object containing the estimated or observed billable resource cost. `audit` must be an object containing the related audit event identifiers.
 
-During `launch-check --profile production`, a successful gateway smoke also satisfies live validation for the adapters it actually exercises. A retryable provider capacity artifact, for example Hyperstack returning no stock before any VM is created, is reported as `capacity_unavailable_adapters` instead of being treated as a code or cleanup failure. It does not hide leaked resources; `cleanup-audit` must still return `ok: true`.
+During `launch-check --profile production`, a successful gateway smoke also satisfies live validation for the exact tuple it actually exercises. A retryable provider capacity artifact, for example an `iaas_vm` lease attempt returning no stock before any VM is created, is reported as `capacity_unavailable_tuples` instead of being treated as a code or cleanup failure. It does not hide leaked resources; `cleanup-audit` must still return `ok: true`.
 
 ## Artifact and Split-Learning Worker Paths
 

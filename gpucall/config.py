@@ -122,21 +122,23 @@ def _load_split_provider_payloads(root: Path) -> list[tuple[Path, dict[str, obje
     if not surfaces_root.exists() or not workers_root.exists():
         return []
     payloads: list[tuple[Path, dict[str, object]]] = []
+    used_worker_keys: set[str] = set()
     workers: dict[str, tuple[Path, dict[str, object]]] = {}
     for worker_path in sorted(workers_root.glob("*.yml")):
         worker = _load_yaml(worker_path)
         if not isinstance(worker, dict):
             raise ConfigError(f"invalid worker YAML in {worker_path}: root must be a mapping")
-        provider_name = str(worker.get("provider_name") or worker.get("worker_ref") or worker_path.stem)
-        workers[provider_name] = (worker_path, worker)
+        worker_key = _worker_binding_ref(worker, worker_path)
+        workers[worker_key] = (worker_path, worker)
     for surface_path in sorted(surfaces_root.glob("*.yml")):
         surface = _load_yaml(surface_path)
         if not isinstance(surface, dict):
             raise ConfigError(f"invalid surface YAML in {surface_path}: root must be a mapping")
         provider_name = str(surface.get("provider_name") or surface.get("surface_ref") or surface_path.stem)
-        worker_entry = workers.get(provider_name)
+        worker_key = str(surface.get("worker_ref") or surface.get("provider_name") or surface.get("surface_ref") or surface_path.stem)
+        worker_entry = workers.get(worker_key)
         if worker_entry is None:
-            raise ConfigError(f"surface {provider_name!r} has no matching worker YAML")
+            raise ConfigError(f"surface {provider_name!r} references missing worker {worker_key!r}")
         worker_path, worker = worker_entry
         for field in ("account_ref", "adapter", "execution_surface"):
             surface_value = surface.get(field)
@@ -148,17 +150,21 @@ def _load_split_provider_payloads(root: Path) -> list[tuple[Path, dict[str, obje
                 )
         payload: dict[str, object] = {**surface, **worker}
         payload["name"] = provider_name
+        used_worker_keys.add(worker_key)
         payload.pop("surface_ref", None)
         payload.pop("worker_ref", None)
         payload.pop("provider_name", None)
         payload.pop("account_ref", None)
         payload.pop("stock_state", None)
         payloads.append((surface_path, payload))
-    surface_names = {str(item[1].get("name")) for item in payloads}
-    orphan_workers = sorted(name for name in workers if name not in surface_names)
+    orphan_workers = sorted(name for name in workers if name not in used_worker_keys)
     if orphan_workers:
         raise ConfigError(f"worker YAML has no matching surface YAML: {', '.join(orphan_workers)}")
     return payloads
+
+
+def _worker_binding_ref(worker: dict[str, object], worker_path: Path) -> str:
+    return str(worker.get("worker_ref") or worker.get("provider_name") or worker_path.stem)
 
 
 def _provider_from_payload(path: Path, payload: dict[str, object]) -> ProviderSpec:
