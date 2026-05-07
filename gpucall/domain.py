@@ -495,6 +495,15 @@ class ObjectStoreConfig(BaseModel):
     prefix: str = "gpucall"
     presign_ttl_seconds: PositiveInt = 900
 
+    @model_validator(mode="before")
+    @classmethod
+    def accept_legacy_provider_key(cls, data: Any) -> Any:
+        if isinstance(data, dict) and "tuple" not in data and "provider" in data:
+            payload = dict(data)
+            payload["tuple"] = payload.pop("provider")
+            return payload
+        return data
+
 
 class TenantSpec(BaseModel):
     model_config = ConfigDict(extra="forbid")

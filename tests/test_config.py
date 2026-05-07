@@ -14,7 +14,7 @@ import yaml
 from gpucall.config import ConfigError, load_config
 from gpucall.cli import _provider_smoke_request
 from gpucall.compiler import GovernanceCompiler
-from gpucall.domain import DataRef, ExecutionMode, ExecutionTupleSpec, Recipe, SecurityTier, TaskRequest, recipe_requirements
+from gpucall.domain import DataRef, ExecutionMode, ExecutionTupleSpec, ObjectStoreConfig, Recipe, SecurityTier, TaskRequest, recipe_requirements
 from gpucall.registry import ObservedRegistry
 
 
@@ -45,6 +45,12 @@ def test_recipe_v3_rejects_provider_resource_fields() -> None:
                 "token_estimation_profile": "qwen",
             }
         )
+
+
+def test_object_store_accepts_legacy_provider_key() -> None:
+    config = ObjectStoreConfig.model_validate({"provider": "s3", "bucket": "gpucall"})
+
+    assert config.tuple == "s3"
 
 
 def test_load_config_rejects_recipe_without_capable_provider(tmp_path) -> None:
