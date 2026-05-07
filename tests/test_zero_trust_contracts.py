@@ -15,9 +15,9 @@ from gpucall.domain import (
     ExecutionMode,
     KeyReleaseRequirement,
     Policy,
-    ProviderPolicy,
-    ProviderSpec,
-    ProviderTrustProfile,
+    TuplePolicy,
+    ExecutionTupleSpec,
+    TupleTrustProfile,
     Recipe,
     SecurityTier,
     TaskRequest,
@@ -26,14 +26,14 @@ from gpucall.execution.payloads import plan_payload
 from gpucall.registry import ObservedRegistry
 
 
-def _compiler_for_security(provider: ProviderSpec, recipe: Recipe | None = None) -> GovernanceCompiler:
+def _compiler_for_security(tuple: ExecutionTupleSpec, recipe: Recipe | None = None) -> GovernanceCompiler:
     policy = Policy(
         version="test",
         inline_bytes_limit=1024,
         default_lease_ttl_seconds=30,
         max_lease_ttl_seconds=60,
         max_timeout_seconds=30,
-        providers=ProviderPolicy(allow=[provider.name], deny=[], max_data_classification=DataClassification.RESTRICTED),
+        tuples=TuplePolicy(allow=[tuple.name], deny=[], max_data_classification=DataClassification.RESTRICTED),
     )
     if recipe is None:
         recipe = Recipe(
@@ -50,17 +50,17 @@ def _compiler_for_security(provider: ProviderSpec, recipe: Recipe | None = None)
     return GovernanceCompiler(
         policy=policy,
         recipes={recipe.name: recipe},
-        providers={provider.name: provider},
+        tuples={tuple.name: tuple},
         registry=ObservedRegistry(),
     )
 
 
-def _provider(name: str, trust_profile: ProviderTrustProfile | None = None) -> ProviderSpec:
-    return ProviderSpec(
+def _provider(name: str, trust_profile: TupleTrustProfile | None = None) -> ExecutionTupleSpec:
+    return ExecutionTupleSpec(
         name=name,
         adapter="modal",
         max_data_classification=DataClassification.RESTRICTED,
-        trust_profile=trust_profile or ProviderTrustProfile(),
+        trust_profile=trust_profile or TupleTrustProfile(),
         gpu="H100",
         vram_gb=80,
         max_model_len=8192,
@@ -74,7 +74,7 @@ def _provider(name: str, trust_profile: ProviderTrustProfile | None = None) -> P
 def test_restricted_workload_rejects_shared_gpu_provider() -> None:
     compiler = _compiler_for_security(_provider("shared"))
 
-    with pytest.raises(ValueError, match="no eligible provider"):
+    with pytest.raises(ValueError, match="no eligible tuple"):
         compiler.compile(TaskRequest(task="infer", mode="sync", recipe="restricted-infer"))
 
 
@@ -82,7 +82,7 @@ def test_restricted_workload_accepts_attested_confidential_tee_provider() -> Non
     compiler = _compiler_for_security(
         _provider(
             "tee",
-            ProviderTrustProfile(
+            TupleTrustProfile(
                 security_tier=SecurityTier.CONFIDENTIAL_TEE,
                 requires_attestation=True,
                 supports_key_release=True,
@@ -93,13 +93,13 @@ def test_restricted_workload_accepts_attested_confidential_tee_provider() -> Non
 
     plan = compiler.compile(TaskRequest(task="infer", mode="sync", recipe="restricted-infer"))
 
-    assert plan.provider_chain == ["tee"]
+    assert plan.tuple_chain == ["tee"]
     assert plan.attestations["compile_artifact"]["governance_hash"] == plan.attestations["governance_hash"]
 
 
 def test_governance_hash_is_stable_across_plan_ids() -> None:
-    provider = _provider("tee", ProviderTrustProfile(security_tier=SecurityTier.CONFIDENTIAL_TEE, requires_attestation=True))
-    compiler = _compiler_for_security(provider)
+    tuple = _provider("tee", TupleTrustProfile(security_tier=SecurityTier.CONFIDENTIAL_TEE, requires_attestation=True))
+    compiler = _compiler_for_security(tuple)
     request = TaskRequest(task="infer", mode="sync", recipe="restricted-infer", max_tokens=8)
 
     first = compiler.compile(request)
@@ -140,9 +140,9 @@ def test_artifact_registry_latest_pointer_is_cas_only(tmp_path) -> None:
 
 
 def test_train_plan_requires_explicit_artifact_export_and_key_release() -> None:
-    provider = _provider(
+    tuple = _provider(
         "tee",
-        ProviderTrustProfile(
+        TupleTrustProfile(
             security_tier=SecurityTier.CONFIDENTIAL_TEE,
             requires_attestation=True,
             supports_key_release=True,
@@ -161,7 +161,7 @@ def test_train_plan_requires_explicit_artifact_export_and_key_release() -> None:
         artifact_export=True,
         requires_key_release=True,
     )
-    compiler = _compiler_for_security(provider, recipe)
+    compiler = _compiler_for_security(tuple, recipe)
 
     plan = compiler.compile(
         TaskRequest(
@@ -183,8 +183,8 @@ def test_train_plan_requires_explicit_artifact_export_and_key_release() -> None:
 
 
 def test_split_learning_plan_uses_activation_ref_without_inline_payload() -> None:
-    provider = _provider("split", ProviderTrustProfile(security_tier=SecurityTier.SPLIT_LEARNING)).model_copy(
-        update={"input_contracts": ["activation_refs"], "output_contract": "gpucall-provider-result"}
+    tuple = _provider("split", TupleTrustProfile(security_tier=SecurityTier.SPLIT_LEARNING)).model_copy(
+        update={"input_contracts": ["activation_refs"], "output_contract": "gpucall-tuple-result"}
     )
     recipe = Recipe(
         name="split-infer",
@@ -197,7 +197,7 @@ def test_split_learning_plan_uses_activation_ref_without_inline_payload() -> Non
         lease_ttl_seconds=20,
         tokenizer_family="activation",
     )
-    compiler = _compiler_for_security(provider, recipe)
+    compiler = _compiler_for_security(tuple, recipe)
 
     plan = compiler.compile(
         TaskRequest(
@@ -220,12 +220,12 @@ def test_split_learning_plan_uses_activation_ref_without_inline_payload() -> Non
 
 
 def test_attestation_verifier_and_key_release_broker_bind_policy_nonce_and_recipient() -> None:
-    provider = _provider(
+    tuple = _provider(
         "tee",
-        ProviderTrustProfile(security_tier=SecurityTier.CONFIDENTIAL_TEE, requires_attestation=True, supports_key_release=True),
+        TupleTrustProfile(security_tier=SecurityTier.CONFIDENTIAL_TEE, requires_attestation=True, supports_key_release=True),
     )
     evidence = AttestationEvidence(
-        provider="tee",
+        tuple="tee",
         security_tier=SecurityTier.CONFIDENTIAL_TEE,
         confidential_computing_mode="h100-cc",
         nonce="nonce-1",
@@ -233,7 +233,7 @@ def test_attestation_verifier_and_key_release_broker_bind_policy_nonce_and_recip
         evidence_ref="attestation-1",
     )
 
-    verified = AttestationVerifier().verify(evidence, provider=provider, expected_policy_hash="c" * 64, nonce="nonce-1")
+    verified = AttestationVerifier().verify(evidence, tuple=tuple, expected_policy_hash="c" * 64, nonce="nonce-1")
     grant = KeyReleaseBroker().release(
         KeyReleaseRequirement(key_id="tenant-key", policy_hash="c" * 64),
         evidence=verified,

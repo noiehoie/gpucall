@@ -5,9 +5,9 @@ import pytest
 from gpucall.compiler import GovernanceCompiler, GovernanceError
 from datetime import datetime, timedelta, timezone
 
-from gpucall.domain import CostPolicy, DataRef, ExecutionMode, Policy, ProviderPolicy, ProviderSpec, Recipe, TaskRequest
+from gpucall.domain import CostPolicy, DataRef, ExecutionMode, Policy, TuplePolicy, ExecutionTupleSpec, Recipe, TaskRequest
 from gpucall.registry import ObservedRegistry
-from gpucall.domain import ProviderObservation
+from gpucall.domain import TupleObservation
 
 
 def build_compiler() -> GovernanceCompiler:
@@ -18,7 +18,7 @@ def build_compiler() -> GovernanceCompiler:
         max_lease_ttl_seconds=60,
         max_timeout_seconds=30,
         tokenizer_safety_multiplier=1.25,
-        providers=ProviderPolicy(allow=["p1", "p2"], deny=[]),
+        tuples=TuplePolicy(allow=["p1", "p2"], deny=[]),
     )
     recipe = Recipe(
         name="r1",
@@ -30,8 +30,8 @@ def build_compiler() -> GovernanceCompiler:
         lease_ttl_seconds=20,
         tokenizer_family="qwen",
     )
-    providers = {
-        "p1": ProviderSpec(
+    tuples = {
+        "p1": ExecutionTupleSpec(
             name="p1",
             adapter="modal",
             gpu="L4",
@@ -42,7 +42,7 @@ def build_compiler() -> GovernanceCompiler:
             target="app:fn",
             model="test-model-small",
         ),
-        "p2": ProviderSpec(
+        "p2": ExecutionTupleSpec(
             name="p2",
             adapter="modal",
             gpu="L4",
@@ -54,7 +54,7 @@ def build_compiler() -> GovernanceCompiler:
             model="test-model-large",
         ),
     }
-    return GovernanceCompiler(policy=policy, recipes={"r1": recipe}, providers=providers, registry=ObservedRegistry())
+    return GovernanceCompiler(policy=policy, recipes={"r1": recipe}, tuples=tuples, registry=ObservedRegistry())
 
 
 def test_compiler_applies_tokenizer_safety_margin() -> None:
@@ -73,7 +73,7 @@ def test_compiler_auto_selects_recipe_when_omitted() -> None:
     plan = compiler.compile(request)
 
     assert plan.recipe_name == "r1"
-    assert plan.provider_chain == ["p1", "p2"]
+    assert plan.tuple_chain == ["p1", "p2"]
 
 
 def test_compiler_preserves_chat_messages_and_recipe_generation_contract() -> None:
@@ -134,7 +134,7 @@ def test_compiler_auto_selects_smallest_capable_recipe_for_weight() -> None:
         }
     )
     compiler.recipes = {"small": small, "large": large}
-    compiler.providers["p2"] = compiler.providers["p2"].model_copy(update={"max_model_len": 1000})
+    compiler.tuples["p2"] = compiler.tuples["p2"].model_copy(update={"max_model_len": 1000})
 
     small_plan = compiler.compile(
         TaskRequest(
@@ -152,9 +152,9 @@ def test_compiler_auto_selects_smallest_capable_recipe_for_weight() -> None:
     )
 
     assert small_plan.recipe_name == "small"
-    assert small_plan.provider_chain == ["p1", "p2"]
+    assert small_plan.tuple_chain == ["p1", "p2"]
     assert large_plan.recipe_name == "large"
-    assert large_plan.provider_chain == ["p2"]
+    assert large_plan.tuple_chain == ["p2"]
 
 
 def test_compiler_reports_structured_context_when_no_recipe_can_fit() -> None:
@@ -174,8 +174,8 @@ def test_compiler_reports_structured_context_when_no_recipe_can_fit() -> None:
 
 def test_runpod_provider_without_endpoint_is_not_auto_routed() -> None:
     compiler = build_compiler()
-    compiler.policy.providers.allow.append("runpod")
-    compiler.providers["runpod"] = ProviderSpec(
+    compiler.policy.tuples.allow.append("runpod")
+    compiler.tuples["runpod"] = ExecutionTupleSpec(
         name="runpod",
         adapter="runpod-vllm-serverless",
         gpu="L4",
@@ -189,20 +189,20 @@ def test_runpod_provider_without_endpoint_is_not_auto_routed() -> None:
 
     plan = compiler.compile(TaskRequest(task="infer", mode="sync", max_tokens=10))
 
-    assert "runpod" not in plan.provider_chain
+    assert "runpod" not in plan.tuple_chain
 
 
 def test_modal_stream_requires_explicit_stream_target() -> None:
     compiler = build_compiler()
     compiler.recipes["r1"] = compiler.recipes["r1"].model_copy(update={"allowed_modes": [ExecutionMode.STREAM]})
-    compiler.providers["p1"] = compiler.providers["p1"].model_copy(update={"modes": [ExecutionMode.STREAM], "stream_target": None})
-    compiler.providers["p2"] = compiler.providers["p2"].model_copy(
+    compiler.tuples["p1"] = compiler.tuples["p1"].model_copy(update={"modes": [ExecutionMode.STREAM], "stream_target": None})
+    compiler.tuples["p2"] = compiler.tuples["p2"].model_copy(
         update={"modes": [ExecutionMode.STREAM], "stream_target": "app:stream", "stream_contract": "token-incremental"}
     )
 
     plan = compiler.compile(TaskRequest(task="infer", mode="stream", max_tokens=10))
 
-    assert plan.provider_chain == ["p2"]
+    assert plan.tuple_chain == ["p2"]
 
 
 def test_compiler_auto_selection_ignores_non_auto_recipes() -> None:
@@ -217,9 +217,9 @@ def test_compiler_auto_selection_ignores_non_auto_recipes() -> None:
 
 def test_compiler_auto_selection_uses_request_content_type() -> None:
     compiler = build_compiler()
-    compiler.providers = {
-        name: provider.model_copy(update={"input_contracts": ["text", "data_refs", "image"], "max_model_len": 512})
-        for name, provider in compiler.providers.items()
+    compiler.tuples = {
+        name: tuple.model_copy(update={"input_contracts": ["text", "data_refs", "image"], "max_model_len": 512})
+        for name, tuple in compiler.tuples.items()
     }
     text_recipe = compiler.recipes["r1"].model_copy(update={"name": "text", "allowed_mime_prefixes": ["text/"]})
     image_recipe = compiler.recipes["r1"].model_copy(
@@ -239,9 +239,9 @@ def test_compiler_auto_selection_uses_request_content_type() -> None:
 
 def test_vision_recipe_allows_text_prompt_as_inline_companion() -> None:
     compiler = build_compiler()
-    compiler.providers = {
-        name: provider.model_copy(update={"input_contracts": ["text", "data_refs", "image"], "max_model_len": 512})
-        for name, provider in compiler.providers.items()
+    compiler.tuples = {
+        name: tuple.model_copy(update={"input_contracts": ["text", "data_refs", "image"], "max_model_len": 512})
+        for name, tuple in compiler.tuples.items()
     }
     vision = compiler.recipes["r1"].model_copy(
         update={
@@ -388,48 +388,48 @@ def test_open_circuit_provider_is_skipped() -> None:
 
     plan = compiler.compile(request)
 
-    assert plan.provider_chain == ["p2"]
+    assert plan.tuple_chain == ["p2"]
 
 
 def test_observed_registry_ranks_all_eligible_providers() -> None:
     compiler = build_compiler()
-    compiler.registry.record(ProviderObservation(provider="p1", latency_ms=1000, success=True, cost=10))
-    compiler.registry.record(ProviderObservation(provider="p2", latency_ms=1, success=True, cost=0))
+    compiler.registry.record(TupleObservation(tuple="p1", latency_ms=1000, success=True, cost=10))
+    compiler.registry.record(TupleObservation(tuple="p2", latency_ms=1, success=True, cost=0))
     request = TaskRequest(task="infer", mode="sync", recipe="r1")
 
     plan = compiler.compile(request)
 
-    assert plan.provider_chain == ["p2", "p1"]
+    assert plan.tuple_chain == ["p2", "p1"]
 
 
-def test_provider_chain_prefers_smallest_capable_provider_before_observations() -> None:
+def test_tuple_chain_prefers_smallest_capable_tuple_before_observations() -> None:
     compiler = build_compiler()
-    compiler.providers["p1"] = compiler.providers["p1"].model_copy(update={"vram_gb": 80, "max_model_len": 32768})
-    compiler.providers["p2"] = compiler.providers["p2"].model_copy(update={"vram_gb": 24, "max_model_len": 100})
+    compiler.tuples["p1"] = compiler.tuples["p1"].model_copy(update={"vram_gb": 80, "max_model_len": 32768})
+    compiler.tuples["p2"] = compiler.tuples["p2"].model_copy(update={"vram_gb": 24, "max_model_len": 100})
     request = TaskRequest(task="infer", mode="sync", recipe="r1")
 
     plan = compiler.compile(request)
 
-    assert plan.provider_chain == ["p2", "p1"]
+    assert plan.tuple_chain == ["p2", "p1"]
 
 
 def test_provider_fit_dominates_observed_score_across_different_fit_classes() -> None:
     compiler = build_compiler()
-    compiler.providers["p1"] = compiler.providers["p1"].model_copy(update={"vram_gb": 80, "max_model_len": 32768})
-    compiler.providers["p2"] = compiler.providers["p2"].model_copy(update={"vram_gb": 24, "max_model_len": 100})
-    compiler.registry.record(ProviderObservation(provider="p1", latency_ms=1, success=True, cost=0))
-    compiler.registry.record(ProviderObservation(provider="p2", latency_ms=1000, success=True, cost=100))
+    compiler.tuples["p1"] = compiler.tuples["p1"].model_copy(update={"vram_gb": 80, "max_model_len": 32768})
+    compiler.tuples["p2"] = compiler.tuples["p2"].model_copy(update={"vram_gb": 24, "max_model_len": 100})
+    compiler.registry.record(TupleObservation(tuple="p1", latency_ms=1, success=True, cost=0))
+    compiler.registry.record(TupleObservation(tuple="p2", latency_ms=1000, success=True, cost=100))
     request = TaskRequest(task="infer", mode="sync", recipe="r1")
 
     plan = compiler.compile(request)
 
-    assert plan.provider_chain == ["p2", "p1"]
+    assert plan.tuple_chain == ["p2", "p1"]
 
 
-def test_provider_chain_filters_by_request_weight() -> None:
+def test_tuple_chain_filters_by_request_weight() -> None:
     compiler = build_compiler()
     compiler.recipes["r1"] = compiler.recipes["r1"].model_copy(update={"max_model_len": 1000})
-    compiler.providers["p2"] = compiler.providers["p2"].model_copy(update={"max_model_len": 1000})
+    compiler.tuples["p2"] = compiler.tuples["p2"].model_copy(update={"max_model_len": 1000})
     request = TaskRequest(
         task="infer",
         mode="sync",
@@ -439,13 +439,13 @@ def test_provider_chain_filters_by_request_weight() -> None:
 
     plan = compiler.compile(request)
 
-    assert plan.provider_chain == ["p2"]
+    assert plan.tuple_chain == ["p2"]
 
 
-def test_high_cost_provider_requires_explicit_budget_for_auto_select() -> None:
+def test_high_cost_tuple_requires_explicit_budget_for_auto_select() -> None:
     compiler = build_compiler()
-    compiler.providers = {
-        "p1": compiler.providers["p1"].model_copy(
+    compiler.tuples = {
+        "p1": compiler.tuples["p1"].model_copy(
             update={
                 "cost_per_second": 0.00505,
                 "expected_cold_start_seconds": 1000,
@@ -458,14 +458,14 @@ def test_high_cost_provider_requires_explicit_budget_for_auto_select() -> None:
     with pytest.raises(GovernanceError) as exc:
         compiler.compile(request)
 
-    assert exc.value.code == "NO_ELIGIBLE_PROVIDER"
-    assert "without explicit budget" in exc.value.context["provider_rejections"]["p1"]
+    assert exc.value.code == "NO_ELIGIBLE_TUPLE"
+    assert "without explicit budget" in exc.value.context["tuple_rejections"]["p1"]
 
 
-def test_recipe_budget_allows_high_cost_provider_when_within_limit() -> None:
+def test_recipe_budget_allows_high_cost_tuple_when_within_limit() -> None:
     compiler = build_compiler()
-    compiler.providers = {
-        "p1": compiler.providers["p1"].model_copy(
+    compiler.tuples = {
+        "p1": compiler.tuples["p1"].model_copy(
             update={
                 "cost_per_second": 0.00505,
                 "expected_cold_start_seconds": 1000,
@@ -480,14 +480,14 @@ def test_recipe_budget_allows_high_cost_provider_when_within_limit() -> None:
 
     plan = compiler.compile(request)
 
-    assert plan.provider_chain == ["p1"]
+    assert plan.tuple_chain == ["p1"]
     assert plan.attestations["cost_estimate"]["estimated_cost_usd"] == pytest.approx(6.6155)
 
 
-def test_recipe_budget_rejects_provider_when_estimate_exceeds_limit() -> None:
+def test_recipe_budget_rejects_tuple_when_estimate_exceeds_limit() -> None:
     compiler = build_compiler()
-    compiler.providers = {
-        "p1": compiler.providers["p1"].model_copy(
+    compiler.tuples = {
+        "p1": compiler.tuples["p1"].model_copy(
             update={
                 "cost_per_second": 0.00505,
                 "expected_cold_start_seconds": 1000,
@@ -503,14 +503,14 @@ def test_recipe_budget_rejects_provider_when_estimate_exceeds_limit() -> None:
     with pytest.raises(GovernanceError) as exc:
         compiler.compile(request)
 
-    assert exc.value.code == "NO_ELIGIBLE_PROVIDER"
-    assert "max_estimated_cost_usd" in exc.value.context["provider_rejections"]["p1"]
+    assert exc.value.code == "NO_ELIGIBLE_TUPLE"
+    assert "max_estimated_cost_usd" in exc.value.context["tuple_rejections"]["p1"]
 
 
-def test_standing_provider_cost_counts_toward_budget_guard() -> None:
+def test_standing_tuple_cost_counts_toward_budget_guard() -> None:
     compiler = build_compiler()
-    compiler.providers = {
-        "p1": compiler.providers["p1"].model_copy(
+    compiler.tuples = {
+        "p1": compiler.tuples["p1"].model_copy(
             update={
                 "cost_per_second": 0.0,
                 "standing_cost_per_second": 0.001,
@@ -525,14 +525,14 @@ def test_standing_provider_cost_counts_toward_budget_guard() -> None:
     with pytest.raises(GovernanceError) as exc:
         compiler.compile(request)
 
-    assert exc.value.code == "NO_ELIGIBLE_PROVIDER"
-    assert "without explicit budget" in exc.value.context["provider_rejections"]["p1"]
+    assert exc.value.code == "NO_ELIGIBLE_TUPLE"
+    assert "without explicit budget" in exc.value.context["tuple_rejections"]["p1"]
 
 
-def test_standing_provider_cost_is_reported_in_attestation() -> None:
+def test_standing_tuple_cost_is_reported_in_attestation() -> None:
     compiler = build_compiler()
-    compiler.providers = {
-        "p1": compiler.providers["p1"].model_copy(
+    compiler.tuples = {
+        "p1": compiler.tuples["p1"].model_copy(
             update={
                 "cost_per_second": 0.0,
                 "standing_cost_per_second": 0.001,
@@ -551,31 +551,31 @@ def test_standing_provider_cost_is_reported_in_attestation() -> None:
     assert plan.attestations["cost_estimate"]["estimated_cost_usd"] == pytest.approx(7.2)
 
 
-def test_requested_provider_must_be_eligible() -> None:
+def test_requested_tuple_must_be_eligible() -> None:
     compiler = build_compiler()
-    request = TaskRequest(task="infer", mode="sync", recipe="r1", requested_provider="missing")
+    request = TaskRequest(task="infer", mode="sync", recipe="r1", requested_tuple="missing")
 
-    with pytest.raises(GovernanceError, match="requested provider"):
+    with pytest.raises(GovernanceError, match="requested tuple"):
         compiler.compile(request)
 
 
-def test_requested_provider_does_not_fall_back_when_circuit_is_open() -> None:
+def test_requested_tuple_does_not_fall_back_when_circuit_is_open() -> None:
     compiler = build_compiler()
     compiler.registry.breakers["p1"].open = True
     compiler.registry.breakers["p1"].opened_at = datetime.now(timezone.utc).timestamp()
-    request = TaskRequest(task="infer", mode="sync", recipe="r1", requested_provider="p1")
+    request = TaskRequest(task="infer", mode="sync", recipe="r1", requested_tuple="p1")
 
     with pytest.raises(GovernanceError, match="circuit breaker"):
         compiler.compile(request)
 
 
-def test_requested_provider_is_single_provider_chain() -> None:
+def test_requested_tuple_is_single_tuple_chain() -> None:
     compiler = build_compiler()
-    request = TaskRequest(task="infer", mode="sync", recipe="r1", requested_provider="p1")
+    request = TaskRequest(task="infer", mode="sync", recipe="r1", requested_tuple="p1")
 
     plan = compiler.compile(request)
 
-    assert plan.provider_chain == ["p1"]
+    assert plan.tuple_chain == ["p1"]
 
 
 def test_open_circuit_allows_half_open_after_timeout() -> None:
@@ -583,7 +583,7 @@ def test_open_circuit_allows_half_open_after_timeout() -> None:
     breaker = registry.breakers["p1"]
     breaker.recovery_timeout_seconds = 0
     for _ in range(breaker.failure_threshold):
-        registry.record(ProviderObservation(provider="p1", latency_ms=1, success=False, cost=0))
+        registry.record(TupleObservation(tuple="p1", latency_ms=1, success=False, cost=0))
 
     assert registry.is_available("p1") is True
 
@@ -598,7 +598,7 @@ def test_observed_registry_persists_observations(tmp_path) -> None:
     path = tmp_path / "registry.db"
     registry = ObservedRegistry(path=path)
 
-    registry.record(ProviderObservation(provider="p1", latency_ms=12, success=True, cost=0.5))
+    registry.record(TupleObservation(tuple="p1", latency_ms=12, success=True, cost=0.5))
     loaded = ObservedRegistry(path=path)
 
     score = loaded.score("p1")
@@ -610,19 +610,19 @@ def test_observed_registry_persists_circuit_breaker_state(tmp_path) -> None:
     path = tmp_path / "registry.db"
     registry = ObservedRegistry(path=path)
     for _ in range(3):
-        registry.record(ProviderObservation(provider="p1", latency_ms=1, success=False, cost=0))
+        registry.record(TupleObservation(tuple="p1", latency_ms=1, success=False, cost=0))
 
     loaded = ObservedRegistry(path=path)
 
     assert loaded.breakers["p1"].open is True
 
 
-def test_observed_registry_caps_observations_per_provider(tmp_path) -> None:
-    registry = ObservedRegistry(path=tmp_path / "registry.db", max_observations_per_provider=3)
+def test_observed_registry_caps_observations_per_tuple(tmp_path) -> None:
+    registry = ObservedRegistry(path=tmp_path / "registry.db", max_observations_per_tuple=3)
     for i in range(5):
-        registry.record(ProviderObservation(provider="p1", latency_ms=i, success=True, cost=0))
+        registry.record(TupleObservation(tuple="p1", latency_ms=i, success=True, cost=0))
 
-    loaded = ObservedRegistry(path=tmp_path / "registry.db", max_observations_per_provider=3)
+    loaded = ObservedRegistry(path=tmp_path / "registry.db", max_observations_per_tuple=3)
 
     assert loaded.score("p1").samples == 3
     assert [row.latency_ms for row in loaded.observations["p1"]] == [2, 3, 4]

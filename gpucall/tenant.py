@@ -30,7 +30,7 @@ class TenantUsageLedger:
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     tenant_id TEXT NOT NULL,
                     estimated_cost_usd REAL NOT NULL,
-                    provider TEXT,
+                    tuple TEXT,
                     recipe TEXT,
                     plan_id TEXT,
                     recorded_at TEXT NOT NULL
@@ -42,14 +42,14 @@ class TenantUsageLedger:
     def _connect(self) -> sqlite3.Connection:
         return sqlite3.connect(self.path)
 
-    def reserve(self, tenant_id: str, estimated_cost_usd: float, *, provider: str | None, recipe: str | None, plan_id: str | None) -> None:
+    def reserve(self, tenant_id: str, estimated_cost_usd: float, *, tuple: str | None, recipe: str | None, plan_id: str | None) -> None:
         with self._connect() as conn:
             conn.execute(
                 """
-                INSERT INTO tenant_usage (tenant_id, estimated_cost_usd, provider, recipe, plan_id, recorded_at)
+                INSERT INTO tenant_usage (tenant_id, estimated_cost_usd, tuple, recipe, plan_id, recorded_at)
                 VALUES (?, ?, ?, ?, ?, ?)
                 """,
-                (tenant_id, estimated_cost_usd, provider, recipe, plan_id, datetime.now(timezone.utc).isoformat()),
+                (tenant_id, estimated_cost_usd, tuple, recipe, plan_id, datetime.now(timezone.utc).isoformat()),
             )
 
     def spend_since(self, tenant_id: str, since: datetime) -> float:
@@ -120,7 +120,7 @@ def enforce_tenant_budget(
     tenant: TenantSpec | None,
     ledger: TenantUsageLedger,
     estimated_cost_usd: float,
-    provider: str | None,
+    tuple: str | None,
     recipe: str | None,
     plan_id: str | None,
 ) -> None:
@@ -144,7 +144,7 @@ def enforce_tenant_budget(
                 raise TenantBudgetError(
                     f"tenant monthly budget exceeded: projected {projected:.4f} > {float(tenant.monthly_budget_usd):.4f}"
                 )
-    ledger.reserve(resolved, estimated_cost_usd, provider=provider, recipe=recipe, plan_id=plan_id)
+    ledger.reserve(resolved, estimated_cost_usd, tuple=tuple, recipe=recipe, plan_id=plan_id)
 
 
 def _tenant_key_sources() -> list[str]:

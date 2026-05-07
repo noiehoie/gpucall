@@ -7,7 +7,7 @@ import sqlite3
 from statistics import median
 from time import time
 
-from gpucall.domain import ProviderObservation, ProviderScore
+from gpucall.domain import TupleObservation, TupleScore
 
 
 @dataclass
@@ -44,10 +44,10 @@ class CircuitBreaker:
 
 @dataclass
 class ObservedRegistry:
-    observations: dict[str, list[ProviderObservation]] = field(default_factory=lambda: defaultdict(list))
+    observations: dict[str, list[TupleObservation]] = field(default_factory=lambda: defaultdict(list))
     breakers: dict[str, CircuitBreaker] = field(default_factory=lambda: defaultdict(CircuitBreaker))
     path: Path | None = None
-    max_observations_per_provider: int = 1000
+    max_observations_per_tuple: int = 1000
 
     def __post_init__(self) -> None:
         if self.path is None:
@@ -61,14 +61,14 @@ class ObservedRegistry:
             for line in self.path.read_text(encoding="utf-8").splitlines():
                 if not line.strip():
                     continue
-                observation = ProviderObservation.model_validate_json(line)
-                self.observations[observation.provider].append(observation)
-                self._trim_observations(observation.provider)
+                observation = TupleObservation.model_validate_json(line)
+                self.observations[observation.tuple].append(observation)
+                self._trim_observations(observation.tuple)
 
-    def record(self, observation: ProviderObservation) -> None:
-        self.observations[observation.provider].append(observation)
-        self._trim_observations(observation.provider)
-        self.breakers[observation.provider].record(observation.success)
+    def record(self, observation: TupleObservation) -> None:
+        self.observations[observation.tuple].append(observation)
+        self._trim_observations(observation.tuple)
+        self.breakers[observation.tuple].record(observation.success)
         if self.path is not None:
             if self.path.suffix == ".db":
                 self._record_sqlite(observation)
@@ -78,40 +78,40 @@ class ObservedRegistry:
                 handle.write(observation.model_dump_json())
                 handle.write("\n")
 
-    def is_available(self, provider: str) -> bool:
-        return self.breakers[provider].allow_request()
+    def is_available(self, tuple: str) -> bool:
+        return self.breakers[tuple].allow_request()
 
-    def score(self, provider: str) -> ProviderScore:
-        rows = self.observations.get(provider, [])
+    def score(self, tuple: str) -> TupleScore:
+        rows = self.observations.get(tuple, [])
         if not rows:
-            return ProviderScore()
+            return TupleScore()
         successes = [row for row in rows if row.success]
         success_rate = len(successes) / len(rows)
         p50 = median([row.latency_ms for row in rows])
         cost_per_success = sum(row.cost for row in rows) / max(len(successes), 1)
-        return ProviderScore(
+        return TupleScore(
             success_rate=success_rate,
             p50_latency_ms=float(p50),
             cost_per_success=float(cost_per_success),
             samples=len(rows),
         )
 
-    def rank(self, providers: list[str]) -> list[str]:
-        available = [provider for provider in providers if self.is_available(provider)]
-        input_order = {provider: index for index, provider in enumerate(providers)}
+    def rank(self, tuples: list[str]) -> list[str]:
+        available = [item for item in tuples if self.is_available(item)]
+        input_order = {item: index for index, item in enumerate(tuples)}
 
-        def key(provider: str) -> tuple[float, float, float, int]:
-            score = self.score(provider)
+        def key(item: str) -> tuple[float, float, float, int]:
+            score = self.score(item)
             latency = score.p50_latency_ms if score.p50_latency_ms is not None else 0.0
             cost = score.cost_per_success if score.cost_per_success is not None else 0.0
-            return (-score.success_rate, latency, cost, input_order[provider])
+            return (-score.success_rate, latency, cost, input_order[item])
 
         return sorted(available, key=key)
 
     def snapshot(self) -> dict[str, dict[str, object]]:
         return {
-            provider: self.score(provider).model_dump(mode="json")
-            for provider in sorted(self.observations)
+            item: self.score(item).model_dump(mode="json")
+            for item in sorted(self.observations)
         }
 
     def _connect(self) -> sqlite3.Connection:
@@ -157,27 +157,27 @@ class ObservedRegistry:
                 WHERE rn <= ?
                 ORDER BY observed_at
                 """,
-                (self.max_observations_per_provider,),
+                (self.max_observations_per_tuple,),
             ):
-                observation = ProviderObservation.model_validate_json(payload)
-                self.observations[observation.provider].append(observation)
-                self._trim_observations(observation.provider)
+                observation = TupleObservation.model_validate_json(payload)
+                self.observations[observation.tuple].append(observation)
+                self._trim_observations(observation.tuple)
             for row in conn.execute(
                 "SELECT provider, consecutive_failures, consecutive_successes, open, opened_at FROM circuit_breakers"
             ):
-                provider, failures, successes, opened, opened_at = row
-                breaker = self.breakers[provider]
+                tuple_name, failures, successes, opened, opened_at = row
+                breaker = self.breakers[tuple_name]
                 breaker.consecutive_failures = int(failures)
                 breaker.consecutive_successes = int(successes)
                 breaker.open = bool(opened)
                 breaker.opened_at = float(opened_at) if opened_at is not None else None
 
-    def _record_sqlite(self, observation: ProviderObservation) -> None:
-        breaker = self.breakers[observation.provider]
+    def _record_sqlite(self, observation: TupleObservation) -> None:
+        breaker = self.breakers[observation.tuple]
         with self._connect() as conn:
             conn.execute(
                 "INSERT INTO observations(provider, payload, observed_at) VALUES (?, ?, ?)",
-                (observation.provider, observation.model_dump_json(), observation.observed_at.isoformat()),
+                (observation.tuple, observation.model_dump_json(), observation.observed_at.isoformat()),
             )
             conn.execute(
                 """
@@ -191,7 +191,7 @@ class ObservedRegistry:
                     LIMIT ?
                   )
                 """,
-                (observation.provider, observation.provider, self.max_observations_per_provider),
+                (observation.tuple, observation.tuple, self.max_observations_per_tuple),
             )
             conn.execute(
                 """
@@ -204,7 +204,7 @@ class ObservedRegistry:
                   opened_at=excluded.opened_at
                 """,
                 (
-                    observation.provider,
+                    observation.tuple,
                     breaker.consecutive_failures,
                     breaker.consecutive_successes,
                     int(breaker.open),
@@ -224,14 +224,14 @@ class ObservedRegistry:
             for line in legacy.read_text(encoding="utf-8").splitlines():
                 if not line.strip():
                     continue
-                observation = ProviderObservation.model_validate_json(line)
+                observation = TupleObservation.model_validate_json(line)
                 conn.execute(
                     "INSERT INTO observations(provider, payload, observed_at) VALUES (?, ?, ?)",
-                    (observation.provider, observation.model_dump_json(), observation.observed_at.isoformat()),
+                    (observation.tuple, observation.model_dump_json(), observation.observed_at.isoformat()),
                 )
 
-    def _trim_observations(self, provider: str) -> None:
-        rows = self.observations[provider]
-        overflow = len(rows) - self.max_observations_per_provider
+    def _trim_observations(self, tuple: str) -> None:
+        rows = self.observations[tuple]
+        overflow = len(rows) - self.max_observations_per_tuple
         if overflow > 0:
             del rows[:overflow]

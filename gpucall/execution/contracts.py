@@ -5,11 +5,11 @@ import json
 import os
 from typing import Any, Mapping
 
-from gpucall.domain import ProviderSpec
-from gpucall.execution.registry import adapter_descriptor, provider_family_for_adapter
+from gpucall.domain import ExecutionTupleSpec
+from gpucall.execution.registry import adapter_descriptor, vendor_family_for_adapter
 
 
-def official_contract(spec: ProviderSpec | None) -> dict[str, object]:
+def official_contract(spec: ExecutionTupleSpec | None) -> dict[str, object]:
     descriptor = adapter_descriptor(spec) if spec is not None else None
     endpoint_contract = getattr(spec, "endpoint_contract", None)
     execution_surface = getattr(getattr(spec, "execution_surface", None), "value", getattr(spec, "execution_surface", None))
@@ -42,18 +42,18 @@ def official_contract_hash(contract: Mapping[str, object]) -> str:
     return hashlib.sha256(json.dumps(contract, sort_keys=True, separators=(",", ":"), default=str).encode("utf-8")).hexdigest()
 
 
-def account_ref_for_spec(spec: ProviderSpec | None) -> str | None:
+def account_ref_for_spec(spec: ExecutionTupleSpec | None) -> str | None:
     if spec is None:
         return None
     explicit = getattr(spec, "account_ref", None)
     if explicit:
         return str(explicit)
-    return provider_family_for_adapter(str(getattr(spec, "adapter", "") or ""))
+    return vendor_family_for_adapter(str(getattr(spec, "adapter", "") or ""))
 
 
-def tuple_evidence_key(spec: ProviderSpec) -> str:
+def tuple_evidence_key(spec: ExecutionTupleSpec) -> str:
     # This key names what was validated, not who sold the GPU. It stays stable
-    # across provider display-name changes but changes when the executable
+    # across tuple display-name changes but changes when the executable
     # contract, worker, model, or account boundary changes.
     payload = {
         "account_ref": account_ref_for_spec(spec),
@@ -68,7 +68,7 @@ def tuple_evidence_key(spec: ProviderSpec) -> str:
     return official_contract_hash(payload)
 
 
-def tuple_evidence_label(spec: ProviderSpec) -> str:
+def tuple_evidence_label(spec: ExecutionTupleSpec) -> str:
     surface = spec.execution_surface.value if spec.execution_surface else "unknown_surface"
     contract = spec.endpoint_contract or "unknown_contract"
     model = spec.model_ref or "unknown_model"
@@ -76,24 +76,24 @@ def tuple_evidence_label(spec: ProviderSpec) -> str:
     return f"{surface}:{contract}:{model}:{engine}"
 
 
-def artifact_tuple_evidence_key(data: Mapping[str, object], provider: ProviderSpec) -> str | None:
+def artifact_tuple_evidence_key(data: Mapping[str, object], tuple: ExecutionTupleSpec) -> str | None:
     contract = data.get("official_contract") if isinstance(data.get("official_contract"), dict) else {}
     if not contract:
         return None
     payload = {
-        "account_ref": contract.get("account_ref") or account_ref_for_spec(provider),
+        "account_ref": contract.get("account_ref") or account_ref_for_spec(tuple),
         "execution_surface": contract.get("execution_surface"),
         "endpoint_contract": contract.get("endpoint_contract"),
         "output_contract": contract.get("output_contract"),
         "stream_contract": contract.get("stream_contract"),
         "model_ref": data.get("model_ref") or contract.get("model_ref"),
         "engine_ref": data.get("engine_ref") or contract.get("engine_ref"),
-        "target": bool(getattr(provider, "target", None)),
+        "target": bool(getattr(tuple, "target", None)),
     }
     return official_contract_hash(payload)
 
 
-def _contract_details(spec: ProviderSpec | None, *, endpoint_contract: str, execution_surface: str) -> dict[str, object]:
+def _contract_details(spec: ExecutionTupleSpec | None, *, endpoint_contract: str, execution_surface: str) -> dict[str, object]:
     if spec is None:
         return {}
     if endpoint_contract == "modal-function":

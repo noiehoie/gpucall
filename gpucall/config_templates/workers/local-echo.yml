@@ -12,7 +12,7 @@ input_contracts:
 - text
 - chat_messages
 - data_refs
-output_contract: gpucall-provider-result
+output_contract: gpucall-tuple-result
 stream_contract: token-incremental
 target: null
 stream_target: null

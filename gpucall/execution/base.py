@@ -5,12 +5,12 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any
 
-from gpucall.domain import CompiledPlan, ProviderError
+from gpucall.domain import CompiledPlan, TupleError
 
 
 @dataclass(frozen=True)
 class ResourceLease:
-    provider: str
+    tuple: str
     remote_id: str
     expires_at: datetime
     account_ref: str | None = None
@@ -24,7 +24,7 @@ class ResourceLease:
 RemoteHandle = ResourceLease
 
 
-class ProviderAdapter(ABC):
+class TupleAdapter(ABC):
     name: str
 
     @abstractmethod
@@ -40,4 +40,4 @@ class ProviderAdapter(ABC):
         raise NotImplementedError
 
     async def stream(self, handle: RemoteHandle, plan: CompiledPlan):
-        raise ProviderError("provider does not support streaming", retryable=False, status_code=400)
+        raise TupleError("tuple does not support streaming", retryable=False, status_code=400)

@@ -60,7 +60,7 @@ def test_python_sdk_uploads_file_and_sends_data_ref(tmp_path, monkeypatch) -> No
     assert result["result"]["value"] == "ok"
     assert b"s3://bucket/key" in sent_payload
     payload = json.loads(sent_payload)
-    assert "requested_provider" not in payload
+    assert "requested_tuple" not in payload
     assert "recipe" not in payload
 
 
@@ -117,7 +117,7 @@ def test_python_sdk_chat_completions_create_returns_openai_like_shape() -> None:
 
     assert sent_payload["task"] == "infer"
     assert "recipe" not in sent_payload
-    assert "requested_provider" not in sent_payload
+    assert "requested_tuple" not in sent_payload
     assert sent_payload["response_format"] == {"type": "json_object"}
     assert result["choices"][0]["message"]["content"] == "{\"answer\":2}"
     assert result["output_validated"] is True
@@ -235,7 +235,7 @@ def test_python_sdk_chat_empty_output_is_not_success() -> None:
 
 def test_python_sdk_422_empty_output_maps_to_typed_exception() -> None:
     def handler(request: httpx.Request) -> httpx.Response:
-        return httpx.Response(422, json={"detail": "empty provider output", "code": "EMPTY_OUTPUT"})
+        return httpx.Response(422, json={"detail": "empty tuple output", "code": "EMPTY_OUTPUT"})
 
     client = GPUCallClient("http://gpucall.test", transport=httpx.MockTransport(handler))
 
@@ -316,7 +316,7 @@ def test_python_sdk_rejects_caller_routing() -> None:
 
     with pytest.raises(GPUCallCallerRoutingError):
         client.infer(recipe="text-infer-standard")
-    with pytest.raises(GPUCallCallerRoutingError):
+    with pytest.raises(TypeError):
         client.infer(provider="local-echo")
 
 

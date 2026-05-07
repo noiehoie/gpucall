@@ -89,7 +89,7 @@ families:
   engine_ref: runpod-serverless-gpucall
   endpoint_contract: runpod-serverless
   input_contracts: [text, chat_messages, data_refs]
-  output_contract: gpucall-provider-result
+  output_contract: gpucall-tuple-result
   stream_contract: none
   notes: Candidate for RunPod generic Serverless queue API. Requires gpucall-compatible custom worker image, endpoint id, and billable validation before production routing.
   official_doc_refs:

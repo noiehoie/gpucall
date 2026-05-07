@@ -286,9 +286,9 @@ def test_promote_candidate_writes_isolated_config_without_activation(tmp_path) -
 
     assert report["decision"] == "READY_FOR_BILLABLE_VALIDATION"
     assert report["config_valid"] is True
-    assert (tmp_path / "promotion" / "config" / "providers" / "modal-h100-qwen25-vl-7b.yml").exists()
+    assert (tmp_path / "promotion" / "config" / "tuples" / "modal-h100-qwen25-vl-7b.yml").exists()
     assert (tmp_path / "promotion" / "config" / "recipes" / "vision-understand-document-image-draft.yml").exists()
-    provider = yaml.safe_load((tmp_path / "promotion" / "config" / "providers" / "modal-h100-qwen25-vl-7b.yml").read_text())
-    assert provider["model"] == "Qwen/Qwen2.5-VL-7B-Instruct"
-    assert provider["model_ref"] == "qwen2.5-vl-7b-instruct"
+    tuple = yaml.safe_load((tmp_path / "promotion" / "config" / "tuples" / "modal-h100-qwen25-vl-7b.yml").read_text())
+    assert tuple["model"] == "Qwen/Qwen2.5-VL-7B-Instruct"
+    assert tuple["model_ref"] == "qwen2.5-vl-7b-instruct"
     assert report["activated"] is False

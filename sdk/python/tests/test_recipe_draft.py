@@ -123,7 +123,7 @@ def test_draft_uses_sanitized_intake_only() -> None:
     assert draft["proposed_recipe"]["name"] == "vision-understand-document-image-draft"
     assert draft["proposed_recipe"]["max_model_len"] == 32768
     assert draft["proposed_recipe"]["min_vram_gb"] == 80
-    assert draft["provider_requirements"]["input_contracts"] == ["image", "data_refs", "text"]
+    assert draft["tuple_requirements"]["input_contracts"] == ["image", "data_refs", "text"]
 
 
 def test_recipe_draft_cli_intake_and_draft(tmp_path, capsys) -> None:
@@ -295,8 +295,8 @@ def test_quality_feedback_intake_is_sanitized_metadata_only() -> None:
             byte_values=(1136521,),
             dimensions=("1200x2287",),
             selected_recipe="vision-image-standard",
-            selected_provider="modal-vision-a10g",
-            selected_provider_model="Salesforce/blip-vqa-base",
+            selected_tuple="modal-vision-a10g",
+            selected_tuple_model="Salesforce/blip-vqa-base",
             output_validated=None,
             quality_failure_kind="insufficient_ocr",
             quality_failure_reason="short answer only; expected top headlines, not raw page text",
@@ -308,7 +308,7 @@ def test_quality_feedback_intake_is_sanitized_metadata_only() -> None:
     assert intake["phase"] == "deterministic-quality-feedback-intake"
     assert sanitized["error"]["code"] == "LOW_QUALITY_SUCCESS"
     assert sanitized["error"]["capability_gap"] == "model_or_recipe_capability_mismatch"
-    assert sanitized["runtime_selection"]["provider_model"] == "Salesforce/blip-vqa-base"
+    assert sanitized["runtime_selection"]["tuple_model"] == "Salesforce/blip-vqa-base"
     assert sanitized["quality_feedback"]["kind"] == "insufficient_ocr"
     assert sanitized["input_summary"]["dimensions"] == ["1200x2287"]
     assert intake["redaction_report"]["prompt_body_forwarded"] is False
@@ -427,9 +427,9 @@ def test_recipe_draft_cli_quality_can_auto_submit(tmp_path, capsys) -> None:
                 "1200x2287",
                 "--selected-recipe",
                 "vision-image-standard",
-                "--selected-provider",
+                "--selected-tuple",
                 "modal-vision-a10g",
-                "--selected-provider-model",
+                "--selected-tuple-model",
                 "Salesforce/blip-vqa-base",
                 "--quality-failure-kind",
                 "insufficient_ocr",

@@ -7,14 +7,14 @@ import os
 from typing import Any
 from uuid import uuid4
 
-from gpucall.domain import CompiledPlan, ProviderError
-from gpucall.execution.base import ProviderAdapter, RemoteHandle
+from gpucall.domain import CompiledPlan, TupleError
+from gpucall.execution.base import TupleAdapter, RemoteHandle
 from gpucall.execution.lifecycle import LifecycleOnlyMixin
 from gpucall.execution.payloads import plan_payload
-from gpucall.execution.registry import ProviderAdapterDescriptor, register_adapter
+from gpucall.execution.registry import TupleAdapterDescriptor, register_adapter
 
 
-class AzureComputeVMAdapter(LifecycleOnlyMixin, ProviderAdapter):
+class AzureComputeVMAdapter(LifecycleOnlyMixin, TupleAdapter):
     def __init__(
         self,
         *,
@@ -43,7 +43,7 @@ class AzureComputeVMAdapter(LifecycleOnlyMixin, ProviderAdapter):
     async def start(self, plan: CompiledPlan) -> RemoteHandle:
         meta = await asyncio.to_thread(self._start_sync, plan)
         return RemoteHandle(
-            provider=self.name,
+            tuple=self.name,
             remote_id=meta["vm_name"],
             expires_at=plan.expires_at(),
             account_ref="azure",
@@ -59,12 +59,12 @@ class AzureComputeVMAdapter(LifecycleOnlyMixin, ProviderAdapter):
 
     def _client(self) -> Any:
         if not self.subscription_id:
-            raise ProviderError("Azure subscription_id is not configured", retryable=False, status_code=401)
+            raise TupleError("Azure subscription_id is not configured", retryable=False, status_code=401)
         try:
             from azure.identity import DefaultAzureCredential
             from azure.mgmt.compute import ComputeManagementClient
         except ImportError as exc:
-            raise ProviderError(
+            raise TupleError(
                 "azure-identity and azure-mgmt-compute are required for azure-compute-vm",
                 retryable=False,
                 status_code=501,
@@ -82,7 +82,7 @@ class AzureComputeVMAdapter(LifecycleOnlyMixin, ProviderAdapter):
         }
         missing = [key for key, value in required.items() if not value]
         if missing:
-            raise ProviderError(f"Azure provider missing required fields: {', '.join(missing)}", retryable=False, status_code=400)
+            raise TupleError(f"Azure tuple missing required fields: {', '.join(missing)}", retryable=False, status_code=400)
         vm_name = str(self.params.get("vm_name") or f"gpucall-{plan.plan_id[:12]}-{uuid4().hex[:6]}")
         poller = self._client().virtual_machines.begin_create_or_update(self.resource_group, vm_name, self._vm_parameters(plan, vm_name))
         if self.params.get("wait_for_create", True):
@@ -95,7 +95,7 @@ class AzureComputeVMAdapter(LifecycleOnlyMixin, ProviderAdapter):
             custom_data = base64.b64encode(str(plan_payload(plan)).encode("utf-8")).decode("ascii")
         image_reference = self.image_reference or self.params.get("image_reference")
         if not image_reference:
-            raise ProviderError("Azure provider requires image_reference", retryable=False, status_code=400)
+            raise TupleError("Azure tuple requires image_reference", retryable=False, status_code=400)
         return {
             "location": self.location,
             "hardware_profile": {"vm_size": self.vm_size},
@@ -119,7 +119,7 @@ class AzureComputeVMAdapter(LifecycleOnlyMixin, ProviderAdapter):
 
     def _delete_sync(self, vm_name: str) -> None:
         if not self.resource_group:
-            raise ProviderError("Azure resource_group is not configured", retryable=False, status_code=400)
+            raise TupleError("Azure resource_group is not configured", retryable=False, status_code=400)
         poller = self._client().virtual_machines.begin_delete(self.resource_group, vm_name)
         if self.params.get("wait_for_delete", False):
             poller.result()
@@ -127,9 +127,9 @@ class AzureComputeVMAdapter(LifecycleOnlyMixin, ProviderAdapter):
 
 @register_adapter(
     "azure-compute-vm",
-    descriptor=ProviderAdapterDescriptor(
+    descriptor=TupleAdapterDescriptor(
         endpoint_contract="azure-compute-vm",
-        output_contract="gpucall-provider-result",
+        output_contract="gpucall-tuple-result",
         production_eligible=False,
         production_rejection_reason="Azure VM adapter is lifecycle-only until worker bootstrap and result retrieval are configured",
         official_sources=(
@@ -160,13 +160,13 @@ import os
 from typing import Any
 from uuid import uuid4
 
-from gpucall.domain import CompiledPlan, ProviderError
-from gpucall.execution.base import ProviderAdapter, RemoteHandle
+from gpucall.domain import CompiledPlan, TupleError
+from gpucall.execution.base import TupleAdapter, RemoteHandle
 from gpucall.execution.lifecycle import LifecycleOnlyMixin
-from gpucall.execution.registry import ProviderAdapterDescriptor, register_adapter
+from gpucall.execution.registry import TupleAdapterDescriptor, register_adapter
 
 
-class GCPConfidentialSpaceVMAdapter(LifecycleOnlyMixin, ProviderAdapter):
+class GCPConfidentialSpaceVMAdapter(LifecycleOnlyMixin, TupleAdapter):
     def __init__(
         self,
         *,
@@ -193,7 +193,7 @@ class GCPConfidentialSpaceVMAdapter(LifecycleOnlyMixin, ProviderAdapter):
     async def start(self, plan: CompiledPlan) -> RemoteHandle:
         meta = await asyncio.to_thread(self._start_sync, plan)
         return RemoteHandle(
-            provider=self.name,
+            tuple=self.name,
             remote_id=meta["instance_name"],
             expires_at=plan.expires_at(),
             account_ref="gcp",
@@ -211,14 +211,14 @@ class GCPConfidentialSpaceVMAdapter(LifecycleOnlyMixin, ProviderAdapter):
         try:
             from google.cloud import compute_v1
         except ImportError as exc:
-            raise ProviderError("google-cloud-compute is required for gcp-confidential-space-vm", retryable=False, status_code=501) from exc
+            raise TupleError("google-cloud-compute is required for gcp-confidential-space-vm", retryable=False, status_code=501) from exc
         return compute_v1.InstancesClient()
 
     def _start_sync(self, plan: CompiledPlan) -> dict[str, Any]:
         required = {"project_id": self.project_id, "zone": self.zone, "machine_type": self.machine_type, "source_image": self.source_image}
         missing = [key for key, value in required.items() if not value]
         if missing:
-            raise ProviderError(f"GCP provider missing required fields: {', '.join(missing)}", retryable=False, status_code=400)
+            raise TupleError(f"GCP tuple missing required fields: {', '.join(missing)}", retryable=False, status_code=400)
         instance_name = str(self.params.get("instance_name") or f"gpucall-{plan.plan_id[:12]}-{uuid4().hex[:6]}")
         operation = self._client().insert(project=self.project_id, zone=self.zone, instance_resource=self._instance_resource(plan, instance_name))
         if self.params.get("wait_for_insert", False) and hasattr(operation, "result"):
@@ -258,7 +258,7 @@ class GCPConfidentialSpaceVMAdapter(LifecycleOnlyMixin, ProviderAdapter):
 
     def _delete_sync(self, instance_name: str) -> None:
         if not self.project_id or not self.zone:
-            raise ProviderError("GCP project_id and zone are required for delete", retryable=False, status_code=400)
+            raise TupleError("GCP project_id and zone are required for delete", retryable=False, status_code=400)
         operation = self._client().delete(project=self.project_id, zone=self.zone, instance=instance_name)
         if self.params.get("wait_for_delete", False) and hasattr(operation, "result"):
             operation.result()
@@ -266,9 +266,9 @@ class GCPConfidentialSpaceVMAdapter(LifecycleOnlyMixin, ProviderAdapter):
 
 @register_adapter(
     "gcp-confidential-space-vm",
-    descriptor=ProviderAdapterDescriptor(
+    descriptor=TupleAdapterDescriptor(
         endpoint_contract="gcp-confidential-space-vm",
-        output_contract="gpucall-provider-result",
+        output_contract="gpucall-tuple-result",
         production_eligible=False,
         production_rejection_reason="GCP Confidential Space VM adapter is lifecycle-only until worker bootstrap and result retrieval are configured",
         official_sources=(
@@ -292,12 +292,12 @@ def build_gcp_confidential_space_vm_adapter(spec, credentials):
     )
 
 
-from gpucall.execution.base import ProviderAdapter, RemoteHandle
+from gpucall.execution.base import TupleAdapter, RemoteHandle
 from gpucall.execution.lifecycle import LifecycleOnlyMixin
-from gpucall.execution.registry import ProviderAdapterDescriptor, register_adapter
+from gpucall.execution.registry import TupleAdapterDescriptor, register_adapter
 
 
-class OVHCloudPublicCloudInstanceAdapter(LifecycleOnlyMixin, ProviderAdapter):
+class OVHCloudPublicCloudInstanceAdapter(LifecycleOnlyMixin, TupleAdapter):
     def __init__(
         self,
         *,
@@ -328,7 +328,7 @@ class OVHCloudPublicCloudInstanceAdapter(LifecycleOnlyMixin, ProviderAdapter):
     async def start(self, plan: CompiledPlan) -> RemoteHandle:
         meta = await asyncio.to_thread(self._start_sync, plan)
         return RemoteHandle(
-            provider=self.name,
+            tuple=self.name,
             remote_id=meta["instance_id"],
             expires_at=plan.expires_at(),
             account_ref="ovhcloud",
@@ -346,7 +346,7 @@ class OVHCloudPublicCloudInstanceAdapter(LifecycleOnlyMixin, ProviderAdapter):
         try:
             import ovh
         except ImportError as exc:
-            raise ProviderError("ovh is required for ovhcloud-public-cloud-instance", retryable=False, status_code=501) from exc
+            raise TupleError("ovh is required for ovhcloud-public-cloud-instance", retryable=False, status_code=501) from exc
         kwargs: dict[str, str] = {"endpoint": self.endpoint}
         if self.application_key:
             kwargs["application_key"] = self.application_key
@@ -366,7 +366,7 @@ class OVHCloudPublicCloudInstanceAdapter(LifecycleOnlyMixin, ProviderAdapter):
         }
         missing = [key for key, value in required.items() if not value]
         if missing:
-            raise ProviderError(f"OVHcloud provider missing required fields: {', '.join(missing)}", retryable=False, status_code=400)
+            raise TupleError(f"OVHcloud tuple missing required fields: {', '.join(missing)}", retryable=False, status_code=400)
         instance_name = str(self.params.get("instance_name") or f"gpucall-{plan.plan_id[:12]}-{uuid4().hex[:6]}")
         body = {
             "name": instance_name,
@@ -379,7 +379,7 @@ class OVHCloudPublicCloudInstanceAdapter(LifecycleOnlyMixin, ProviderAdapter):
         data = self._client().post(f"/cloud/project/{self.service_name}/instance", **body)
         instance_id = data.get("id") if isinstance(data, dict) else None
         if not instance_id:
-            raise ProviderError("OVHcloud response did not include instance id", retryable=True, status_code=502)
+            raise TupleError("OVHcloud response did not include instance id", retryable=True, status_code=502)
         return {"instance_id": instance_id, "instance_name": instance_name, "service_name": self.service_name}
 
     def _delete_sync(self, instance_id: str) -> None:
@@ -388,9 +388,9 @@ class OVHCloudPublicCloudInstanceAdapter(LifecycleOnlyMixin, ProviderAdapter):
 
 @register_adapter(
     "ovhcloud-public-cloud-instance",
-    descriptor=ProviderAdapterDescriptor(
+    descriptor=TupleAdapterDescriptor(
         endpoint_contract="ovhcloud-public-cloud-instance",
-        output_contract="gpucall-provider-result",
+        output_contract="gpucall-tuple-result",
         production_eligible=False,
         production_rejection_reason="OVHcloud Public Cloud adapter is lifecycle-only until worker bootstrap and result retrieval are configured",
         official_sources=(
@@ -422,13 +422,13 @@ import os
 from typing import Any
 from uuid import uuid4
 
-from gpucall.domain import CompiledPlan, ProviderError
-from gpucall.execution.base import ProviderAdapter, RemoteHandle
+from gpucall.domain import CompiledPlan, TupleError
+from gpucall.execution.base import TupleAdapter, RemoteHandle
 from gpucall.execution.lifecycle import LifecycleOnlyMixin
-from gpucall.execution.registry import ProviderAdapterDescriptor, register_adapter
+from gpucall.execution.registry import TupleAdapterDescriptor, register_adapter
 
 
-class ScalewayInstanceAdapter(LifecycleOnlyMixin, ProviderAdapter):
+class ScalewayInstanceAdapter(LifecycleOnlyMixin, TupleAdapter):
     def __init__(
         self,
         *,
@@ -453,7 +453,7 @@ class ScalewayInstanceAdapter(LifecycleOnlyMixin, ProviderAdapter):
     async def start(self, plan: CompiledPlan) -> RemoteHandle:
         meta = await asyncio.to_thread(self._start_sync, plan)
         return RemoteHandle(
-            provider=self.name,
+            tuple=self.name,
             remote_id=meta["server_id"],
             expires_at=plan.expires_at(),
             account_ref="scaleway",
@@ -469,11 +469,11 @@ class ScalewayInstanceAdapter(LifecycleOnlyMixin, ProviderAdapter):
 
     def _session(self) -> Any:
         if not self.secret_key:
-            raise ProviderError("Scaleway SCW_SECRET_KEY is not configured", retryable=False, status_code=401)
+            raise TupleError("Scaleway SCW_SECRET_KEY is not configured", retryable=False, status_code=401)
         try:
             import requests
         except ImportError as exc:
-            raise ProviderError("requests is required for scaleway-instance", retryable=False, status_code=501) from exc
+            raise TupleError("requests is required for scaleway-instance", retryable=False, status_code=501) from exc
         session = requests.Session()
         session.headers.update({"X-Auth-Token": self.secret_key, "Content-Type": "application/json"})
         return session
@@ -482,7 +482,7 @@ class ScalewayInstanceAdapter(LifecycleOnlyMixin, ProviderAdapter):
         required = {"project_id": self.project_id, "zone": self.zone, "commercial_type": self.commercial_type, "image": self.image}
         missing = [key for key, value in required.items() if not value]
         if missing:
-            raise ProviderError(f"Scaleway provider missing required fields: {', '.join(missing)}", retryable=False, status_code=400)
+            raise TupleError(f"Scaleway tuple missing required fields: {', '.join(missing)}", retryable=False, status_code=400)
         name = str(self.params.get("server_name") or f"gpucall-{plan.plan_id[:12]}-{uuid4().hex[:6]}")
         body = {
             "name": name,
@@ -495,25 +495,25 @@ class ScalewayInstanceAdapter(LifecycleOnlyMixin, ProviderAdapter):
         body.update(self.params.get("create_overrides", {}))
         response = self._session().post(f"{self.base_url}/instance/v1/zones/{self.zone}/servers", json=body, timeout=15)
         if response.status_code not in {200, 201, 202}:
-            raise ProviderError(f"Scaleway create instance failed: {response.status_code}", retryable=response.status_code >= 500, status_code=502)
+            raise TupleError(f"Scaleway create instance failed: {response.status_code}", retryable=response.status_code >= 500, status_code=502)
         data = response.json()
         server = data.get("server") if isinstance(data, dict) else None
         server_id = (server or {}).get("id") or data.get("id")
         if not server_id:
-            raise ProviderError("Scaleway response did not include server id", retryable=True, status_code=502)
+            raise TupleError("Scaleway response did not include server id", retryable=True, status_code=502)
         return {"server_id": server_id, "server_name": name, "zone": self.zone}
 
     def _delete_sync(self, server_id: str) -> None:
         response = self._session().delete(f"{self.base_url}/instance/v1/zones/{self.zone}/servers/{server_id}", timeout=15)
         if response.status_code not in {200, 202, 204, 404}:
-            raise ProviderError(f"Scaleway delete instance failed: {response.status_code}", retryable=response.status_code >= 500, status_code=502)
+            raise TupleError(f"Scaleway delete instance failed: {response.status_code}", retryable=response.status_code >= 500, status_code=502)
 
 
 @register_adapter(
     "scaleway-instance",
-    descriptor=ProviderAdapterDescriptor(
+    descriptor=TupleAdapterDescriptor(
         endpoint_contract="scaleway-instance",
-        output_contract="gpucall-provider-result",
+        output_contract="gpucall-tuple-result",
         production_eligible=False,
         production_rejection_reason="Scaleway Instance adapter is lifecycle-only until worker bootstrap and result retrieval are configured",
         official_sources=(

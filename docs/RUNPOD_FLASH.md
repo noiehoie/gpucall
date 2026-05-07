@@ -68,7 +68,7 @@ endpoint: null
 target: ""
 image: null
 endpoint_contract: runpod-flash-sdk
-output_contract: gpucall-provider-result
+output_contract: gpucall-tuple-result
 model: Qwen/Qwen2.5-1.5B-Instruct
 ```
 

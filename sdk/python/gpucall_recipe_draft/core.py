@@ -84,8 +84,8 @@ class QualityFeedbackInputs:
     dimensions: tuple[str, ...] = ()
     required_model_len: int | None = None
     selected_recipe: str | None = None
-    selected_provider: str | None = None
-    selected_provider_model: str | None = None
+    selected_tuple: str | None = None
+    selected_tuple_model: str | None = None
     output_validated: bool | None = None
     quality_failure_kind: str = "low_quality_success"
     quality_failure_reason: str = ""
@@ -224,8 +224,8 @@ def intake_from_quality_feedback(inputs: QualityFeedbackInputs) -> dict[str, Any
             },
             "runtime_selection": {
                 "recipe": inputs.selected_recipe,
-                "provider": inputs.selected_provider,
-                "provider_model": inputs.selected_provider_model,
+                "tuple": inputs.selected_tuple,
+                "tuple_model": inputs.selected_tuple_model,
                 "output_validated": inputs.output_validated,
             },
             "quality_feedback": {
@@ -317,7 +317,7 @@ def draft_from_intake(intake: Mapping[str, Any]) -> dict[str, Any]:
             "allowed_mime_prefixes": _mime_prefixes_for(task),
             "output_contract": sanitized.get("expected_output") or "plain_text",
         },
-        "provider_requirements": {
+        "tuple_requirements": {
             "model_capabilities": capabilities,
             "instruction_tuned": "instruction_following" in capabilities,
             "min_vram_gb": min_vram,
@@ -358,9 +358,9 @@ def _extract_rejections(error: Mapping[str, Any], context: Mapping[str, Any]) ->
     failure_artifact = _failure_artifact(error)
     matrix = _as_mapping(failure_artifact.get("rejection_matrix"))
     recipe_matrix = _as_mapping(matrix.get("recipes"))
-    provider_matrix = _as_mapping(matrix.get("providers"))
-    if recipe_matrix or provider_matrix:
-        return [f"{name}: {reason}" for name, reason in sorted({**recipe_matrix, **provider_matrix}.items())]
+    tuple_matrix = _as_mapping(matrix.get("tuples"))
+    if recipe_matrix or tuple_matrix:
+        return [f"{name}: {reason}" for name, reason in sorted({**recipe_matrix, **tuple_matrix}.items())]
     raw = context.get("rejections")
     if isinstance(raw, list):
         return [str(item) for item in raw]
@@ -527,8 +527,8 @@ def _expected_output_from_error(error: Mapping[str, Any]) -> str:
 def _detail_kind(detail: Any) -> str:
     if isinstance(detail, str) and "no auto-selectable recipe" in detail:
         return "recipe_selection_failure"
-    if isinstance(detail, str) and "no eligible provider" in detail:
-        return "provider_selection_failure"
+    if isinstance(detail, str) and "no eligible tuple" in detail:
+        return "tuple_selection_failure"
     return "unknown"
 
 

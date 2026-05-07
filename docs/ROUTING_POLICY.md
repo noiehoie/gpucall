@@ -3,10 +3,10 @@
 gpucall is a deterministic governance router, not a Modal-only proxy.
 
 The caller normally sends task intent, mode, and input references. The gateway
-selects a recipe and provider chain from policy, recipe constraints, request
-weight, provider capabilities, and observed provider health.
+selects a recipe and tuple chain from policy, recipe constraints, request
+weight, tuple capabilities, and observed tuple health.
 
-Public callers must not set `recipe` or `requested_provider`. Those fields are
+Public callers must not set `recipe` or `requested_tuple`. Those fields are
 for operator/debug flows only and are rejected by the public task endpoints
 unless `GPUCALL_ALLOW_CALLER_ROUTING=1` is explicitly enabled. GPU selection is
 not a caller-facing concept; GPU, region, price, stock, model, and engine belong
@@ -20,10 +20,10 @@ to the gateway catalogs.
    move to larger recipes instead of pinning all traffic to the largest GPU.
 3. Estimate required model length from inline bytes, DataRef bytes, max output
    tokens, and the policy tokenizer safety multiplier.
-4. Filter providers whose `max_model_len`, `vram_gb`, modes, and data
+4. Filter tuples whose `max_model_len`, `vram_gb`, modes, and data
    classification cannot satisfy that request.
 5. Apply deterministic cost policy. Budget fields are optional; when no explicit
-   budget is present, high-cost providers are not auto-selected once their
+   budget is present, high-cost tuples are not auto-selected once their
    estimated cold-start + runtime + idle + standing endpoint cost exceeds the
    policy threshold.
 6. Rank the remaining provider list with `ObservedRegistry`.
@@ -44,7 +44,7 @@ Long-form `infer` traffic is split by deterministic recipe capacity. The standar
 
 ## Production Provider Hygiene
 
-Production auto-selected recipes do not name providers. They become runnable
+Production auto-selected recipes do not name tuples. They become runnable
 only when at least one configured production provider satisfies the recipe's
 declared requirements.
 

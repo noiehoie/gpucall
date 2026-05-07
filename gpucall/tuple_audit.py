@@ -10,14 +10,14 @@ from typing import Any, Mapping
 from gpucall.candidate_sources import load_tuple_candidate_payloads
 from gpucall.config import default_state_dir
 from gpucall.credentials import credentials_path, load_credentials
-from gpucall.domain import ExecutionMode, ProviderSpec, Recipe
+from gpucall.domain import ExecutionMode, ExecutionTupleSpec, Recipe
 from gpucall.execution.contracts import artifact_tuple_evidence_key, official_contract, official_contract_hash, tuple_evidence_key
-from gpucall.provider_catalog import live_provider_catalog_findings
+from gpucall.tuple_catalog import live_tuple_catalog_findings
 from gpucall.execution.registry import adapter_descriptor
-from gpucall.routing import provider_route_rejection_reason
+from gpucall.routing import tuple_route_rejection_reason
 
 
-def provider_audit_report(config: Any, *, config_dir: Path, recipe_name: str | None = None, live: bool = False) -> dict[str, Any]:
+def tuple_audit_report(config: Any, *, config_dir: Path, recipe_name: str | None = None, live: bool = False) -> dict[str, Any]:
     recipes = _selected_recipes(config.recipes, recipe_name)
     candidates = _load_tuple_candidates(config_dir)
     creds = load_credentials()
@@ -47,7 +47,7 @@ def provider_audit_report(config: Any, *, config_dir: Path, recipe_name: str | N
         "recipes": {},
     }
     if live:
-        report["live_catalog"]["findings"] = live_provider_catalog_findings(config.providers, creds)
+        report["live_catalog"]["findings"] = live_tuple_catalog_findings(config.tuples, creds)
     for recipe in recipes:
         report["recipes"][recipe.name] = _recipe_audit(config, config_dir=config_dir, recipe=recipe, candidates=candidates)
     return report
@@ -65,8 +65,8 @@ def _selected_recipes(recipes: Mapping[str, Recipe], recipe_name: str | None) ->
 def _recipe_audit(config: Any, *, config_dir: Path, recipe: Recipe, candidates: list[dict[str, Any]]) -> dict[str, Any]:
     required_inputs = _required_input_contracts(recipe)
     active_rows = [
-        _active_provider_row(config, config_dir=config_dir, recipe=recipe, provider=provider, required_inputs=required_inputs)
-        for provider in sorted(config.providers.values(), key=lambda item: item.name)
+        _active_tuple_row(config, config_dir=config_dir, recipe=recipe, tuple=tuple, required_inputs=required_inputs)
+        for tuple in sorted(config.tuples.values(), key=lambda item: item.name)
     ]
     candidate_rows = [
         _candidate_row(config, config_dir=config_dir, recipe=recipe, candidate=candidate, required_inputs=required_inputs)
@@ -90,20 +90,20 @@ def _recipe_audit(config: Any, *, config_dir: Path, recipe: Recipe, candidates: 
     }
 
 
-def _active_provider_row(
+def _active_tuple_row(
     config: Any,
     *,
     config_dir: Path,
     recipe: Recipe,
-    provider: ProviderSpec,
+    tuple: ExecutionTupleSpec,
     required_inputs: set[str],
 ) -> dict[str, Any]:
-    model = config.models.get(provider.model_ref) if provider.model_ref else None
-    engine = config.engines.get(provider.engine_ref) if provider.engine_ref else None
-    reason = provider_route_rejection_reason(
+    model = config.models.get(tuple.model_ref) if tuple.model_ref else None
+    engine = config.engines.get(tuple.engine_ref) if tuple.engine_ref else None
+    reason = tuple_route_rejection_reason(
         policy=config.policy,
         recipe=recipe,
-        provider=provider,
+        tuple=tuple,
         model=model,
         engine=engine,
         mode=_first_mode(recipe),
@@ -111,9 +111,9 @@ def _active_provider_row(
         required_input_contracts=required_inputs,
         auto_selected=True,
     )
-    validation = _matching_validation(provider=provider, recipe=recipe, config_dir=config_dir)
-    contract = _official_contract(provider)
-    config_findings = _adapter_config_findings(provider)
+    validation = _matching_validation(tuple=tuple, recipe=recipe, config_dir=config_dir)
+    contract = _official_contract(tuple)
+    config_findings = _adapter_config_findings(tuple)
     decision = "REJECTED_BY_RECIPE_OR_POLICY"
     if reason is None:
         if config_findings:
@@ -123,9 +123,9 @@ def _active_provider_row(
         else:
             decision = "READY_FOR_BILLABLE_VALIDATION"
     return {
-        "source": "providers",
-        "name": provider.name,
-        "tuple": _tuple_summary(provider),
+        "source": "tuples",
+        "name": tuple.name,
+        "tuple": _tuple_summary(tuple),
         "recipe_fit": {"eligible": reason is None, "reason": reason},
         "official_contract": contract,
         "adapter_config_findings": config_findings,
@@ -142,23 +142,23 @@ def _candidate_row(
     candidate: Mapping[str, Any],
     required_inputs: set[str],
 ) -> dict[str, Any]:
-    provider_error: str | None = None
-    provider: ProviderSpec | None = None
+    tuple_error: str | None = None
+    tuple: ExecutionTupleSpec | None = None
     try:
-        provider = _provider_from_candidate(candidate, config)
+        tuple = _tuple_from_candidate(candidate, config)
     except Exception as exc:
-        provider_error = str(exc)
-    reason = provider_error
+        tuple_error = str(exc)
+    reason = tuple_error
     config_findings: list[str] = []
     validation: dict[str, Any] = {"matched": []}
     contract: dict[str, Any] = {}
-    if provider is not None:
-        model = config.models.get(provider.model_ref) if provider.model_ref else None
-        engine = config.engines.get(provider.engine_ref) if provider.engine_ref else None
-        reason = provider_route_rejection_reason(
+    if tuple is not None:
+        model = config.models.get(tuple.model_ref) if tuple.model_ref else None
+        engine = config.engines.get(tuple.engine_ref) if tuple.engine_ref else None
+        reason = tuple_route_rejection_reason(
             policy=config.policy,
             recipe=recipe,
-            provider=provider,
+            tuple=tuple,
             model=model,
             engine=engine,
             mode=_first_mode(recipe),
@@ -166,15 +166,15 @@ def _candidate_row(
             required_input_contracts=required_inputs,
             auto_selected=False,
         )
-        config_findings = _adapter_config_findings(provider)
-        validation = _matching_validation(provider=provider, recipe=recipe, config_dir=config_dir)
-        contract = _official_contract(provider)
+        config_findings = _adapter_config_findings(tuple)
+        validation = _matching_validation(tuple=tuple, recipe=recipe, config_dir=config_dir)
+        contract = _official_contract(tuple)
     decision = _candidate_decision(reason=reason, config_findings=config_findings, validation=validation)
     return {
         "source": "candidate_catalog",
         "name": candidate.get("name"),
         "path": candidate.get("_path"),
-        "tuple": _tuple_summary(provider) if provider is not None else _candidate_tuple_summary(candidate),
+        "tuple": _tuple_summary(tuple) if tuple is not None else _candidate_tuple_summary(candidate),
         "recipe_fit": {"eligible": reason is None, "reason": reason},
         "official_contract": contract,
         "adapter_config_findings": config_findings,
@@ -198,24 +198,24 @@ def _routing_decision(production_ready: list[dict[str, Any]], validation_ready: 
         return {
             "decision": "ROUTABLE",
             "reason": "at least one active execution tuple has exact live validation evidence",
-            "providers": [row["name"] for row in production_ready],
+            "tuples": [row["name"] for row in production_ready],
         }
     if validation_ready:
         return {
             "decision": "READY_FOR_VALIDATION",
             "reason": "active execution tuples fit the recipe but lack exact live validation evidence",
-            "providers": [row["name"] for row in validation_ready],
+            "tuples": [row["name"] for row in validation_ready],
         }
     if candidate_fit:
         return {
             "decision": "CANDIDATE_ONLY",
             "reason": "candidate tuples fit the recipe but are not active production routes",
-            "providers": [row["name"] for row in candidate_fit],
+            "tuples": [row["name"] for row in candidate_fit],
         }
     return {"decision": "FAIL_CLOSED", "reason": "no active or candidate tuple satisfies the recipe"}
 
 
-def _provider_from_candidate(candidate: Mapping[str, Any], config: Any) -> ProviderSpec:
+def _tuple_from_candidate(candidate: Mapping[str, Any], config: Any) -> ExecutionTupleSpec:
     name = str(candidate.get("name") or "")
     model_ref = str(candidate.get("model_ref") or "")
     engine_ref = str(candidate.get("engine_ref") or "")
@@ -270,22 +270,22 @@ def _provider_from_candidate(candidate: Mapping[str, Any], config: Any) -> Provi
     ):
         if key in candidate:
             payload[key] = candidate.get(key)
-    return ProviderSpec.model_validate(payload)
+    return ExecutionTupleSpec.model_validate(payload)
 
 
-def _adapter_config_findings(provider: ProviderSpec) -> list[str]:
-    descriptor = adapter_descriptor(provider)
+def _adapter_config_findings(tuple: ExecutionTupleSpec) -> list[str]:
+    descriptor = adapter_descriptor(tuple)
     if descriptor is None or descriptor.config_validator is None:
         return []
-    return descriptor.config_validator(provider)
+    return descriptor.config_validator(tuple)
 
 
-def _official_contract(provider: ProviderSpec) -> dict[str, Any]:
-    return official_contract(provider)
+def _official_contract(tuple: ExecutionTupleSpec) -> dict[str, Any]:
+    return official_contract(tuple)
 
 
-def _matching_validation(*, provider: ProviderSpec, recipe: Recipe, config_dir: Path) -> dict[str, Any]:
-    root = default_state_dir() / "provider-validation"
+def _matching_validation(*, tuple: ExecutionTupleSpec, recipe: Recipe, config_dir: Path) -> dict[str, Any]:
+    root = default_state_dir() / "tuple-validation"
     result: dict[str, Any] = {"dir": str(root), "matched": [], "checked": 0}
     if not root.exists():
         result["reason"] = "validation artifact directory does not exist"
@@ -302,7 +302,7 @@ def _matching_validation(*, provider: ProviderSpec, recipe: Recipe, config_dir: 
             continue
         if data.get("recipe") != recipe.name:
             continue
-        if artifact_tuple_evidence_key(data, provider) != tuple_evidence_key(provider):
+        if artifact_tuple_evidence_key(data, tuple) != tuple_evidence_key(tuple):
             continue
         if data.get("config_hash") != expected_hash:
             continue
@@ -311,7 +311,7 @@ def _matching_validation(*, provider: ProviderSpec, recipe: Recipe, config_dir: 
         contract = data.get("official_contract") if isinstance(data.get("official_contract"), dict) else {}
         if not _official_contract_hash_valid(data, contract):
             continue
-        result["matched"].append({"path": str(path), "tuple": data.get("tuple"), "recipe": recipe.name, "tuple_key": tuple_evidence_key(provider)})
+        result["matched"].append({"path": str(path), "tuple": data.get("tuple"), "recipe": recipe.name, "tuple_key": tuple_evidence_key(tuple)})
     return result
 
 
@@ -339,21 +339,21 @@ def _first_mode(recipe: Recipe) -> ExecutionMode | None:
     return recipe.allowed_modes[0] if recipe.allowed_modes else None
 
 
-def _tuple_summary(provider: ProviderSpec | None) -> dict[str, Any]:
-    if provider is None:
+def _tuple_summary(tuple: ExecutionTupleSpec | None) -> dict[str, Any]:
+    if tuple is None:
         return {}
     return {
-        "tuple": provider.name,
-        "adapter": provider.adapter,
-        "execution_surface": provider.execution_surface.value if provider.execution_surface else None,
-        "gpu": provider.gpu,
-        "vram_gb": provider.vram_gb,
-        "model_ref": provider.model_ref,
-        "engine_ref": provider.engine_ref,
-        "max_model_len": provider.max_model_len,
-        "cost_per_second": float(provider.cost_per_second),
-        "modes": [mode.value for mode in provider.modes],
-        "target_configured": bool(provider.target),
+        "tuple": tuple.name,
+        "adapter": tuple.adapter,
+        "execution_surface": tuple.execution_surface.value if tuple.execution_surface else None,
+        "gpu": tuple.gpu,
+        "vram_gb": tuple.vram_gb,
+        "model_ref": tuple.model_ref,
+        "engine_ref": tuple.engine_ref,
+        "max_model_len": tuple.max_model_len,
+        "cost_per_second": float(tuple.cost_per_second),
+        "modes": [mode.value for mode in tuple.modes],
+        "target_configured": bool(tuple.target),
     }
 
 

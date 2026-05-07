@@ -71,8 +71,8 @@ def main(argv: list[str] | None = None) -> int:
     quality.add_argument("--dimension", action="append", default=[], help="input dimensions such as 1200x2287; never pass raw media")
     quality.add_argument("--required-model-len", type=int)
     quality.add_argument("--selected-recipe")
-    quality.add_argument("--selected-provider")
-    quality.add_argument("--selected-provider-model")
+    quality.add_argument("--selected-tuple")
+    quality.add_argument("--selected-tuple-model")
     quality.add_argument("--output-validated", choices=["true", "false", "unknown"], default="unknown")
     quality.add_argument("--quality-failure-kind", default="low_quality_success")
     quality.add_argument("--quality-failure-reason", default="")
@@ -146,8 +146,8 @@ def main(argv: list[str] | None = None) -> int:
                 dimensions=tuple(args.dimension),
                 required_model_len=args.required_model_len,
                 selected_recipe=args.selected_recipe,
-                selected_provider=args.selected_provider,
-                selected_provider_model=args.selected_provider_model,
+                selected_tuple=args.selected_tuple,
+                selected_tuple_model=args.selected_tuple_model,
                 output_validated=_parse_bool(args.output_validated),
                 quality_failure_kind=args.quality_failure_kind,
                 quality_failure_reason=args.quality_failure_reason,

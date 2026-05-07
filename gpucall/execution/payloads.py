@@ -2,12 +2,12 @@ from __future__ import annotations
 
 from typing import Any
 
-from gpucall.domain import CompiledPlan, ProviderResult
-from gpucall.domain import ProviderError
+from gpucall.domain import CompiledPlan, TupleResult
+from gpucall.domain import TupleError
 
 
 def plan_payload(plan: CompiledPlan) -> dict[str, Any]:
-    """Build a provider payload without dereferencing sensitive object data."""
+    """Build a tuple payload without dereferencing sensitive object data."""
     return {
         "plan_id": plan.plan_id,
         "task": plan.task,
@@ -32,44 +32,44 @@ def plan_payload(plan: CompiledPlan) -> dict[str, Any]:
     }
 
 
-def gpucall_provider_result(value: Any) -> ProviderResult:
-    if isinstance(value, ProviderResult):
+def gpucall_tuple_result(value: Any) -> TupleResult:
+    if isinstance(value, TupleResult):
         return value
     if isinstance(value, dict):
         if value.get("kind") in {"inline", "ref", "artifact_manifest"}:
-            return ProviderResult.model_validate(value)
-    raise ProviderError(f"provider output does not match gpucall ProviderResult contract: {type(value).__name__}", retryable=True, status_code=502)
+            return TupleResult.model_validate(value)
+    raise TupleError(f"tuple output does not match gpucall TupleResult contract: {type(value).__name__}", retryable=True, status_code=502)
 
 
-def plain_text_result(value: Any) -> ProviderResult:
+def plain_text_result(value: Any) -> TupleResult:
     if isinstance(value, str):
-        return ProviderResult(kind="inline", value=value)
-    raise ProviderError(f"provider output does not match plain text contract: {type(value).__name__}", retryable=True, status_code=502)
+        return TupleResult(kind="inline", value=value)
+    raise TupleError(f"tuple output does not match plain text contract: {type(value).__name__}", retryable=True, status_code=502)
 
 
-def ollama_generate_result(value: Any) -> ProviderResult:
+def ollama_generate_result(value: Any) -> TupleResult:
     if not isinstance(value, dict) or not isinstance(value.get("response"), str):
-        raise ProviderError("Ollama response missing string 'response' field", retryable=True, status_code=502)
-    return ProviderResult(kind="inline", value=value["response"])
+        raise TupleError("Ollama response missing string 'response' field", retryable=True, status_code=502)
+    return TupleResult(kind="inline", value=value["response"])
 
 
-def openai_chat_completion_result(value: Any) -> ProviderResult:
+def openai_chat_completion_result(value: Any) -> TupleResult:
     if not isinstance(value, dict):
-        raise ProviderError("OpenAI-compatible response must be an object", retryable=True, status_code=502)
+        raise TupleError("OpenAI-compatible response must be an object", retryable=True, status_code=502)
     choices = value.get("choices")
     if not isinstance(choices, list) or not choices:
-        raise ProviderError("OpenAI-compatible response missing choices", retryable=True, status_code=502)
+        raise TupleError("OpenAI-compatible response missing choices", retryable=True, status_code=502)
     first = choices[0]
     if not isinstance(first, dict):
-        raise ProviderError("OpenAI-compatible response has invalid choice", retryable=True, status_code=502)
+        raise TupleError("OpenAI-compatible response has invalid choice", retryable=True, status_code=502)
     message = first.get("message")
     content: Any = None
     if isinstance(message, dict):
         content = message.get("content")
     if not isinstance(content, str):
-        raise ProviderError("OpenAI-compatible response missing assistant content", retryable=True, status_code=502)
+        raise TupleError("OpenAI-compatible response missing assistant content", retryable=True, status_code=502)
     usage: dict[str, int] = {}
     raw_usage = value.get("usage")
     if isinstance(raw_usage, dict):
         usage = {str(k): v for k, v in raw_usage.items() if isinstance(v, int) and not isinstance(v, bool)}
-    return ProviderResult(kind="inline", value=content, usage=usage)
+    return TupleResult(kind="inline", value=content, usage=usage)

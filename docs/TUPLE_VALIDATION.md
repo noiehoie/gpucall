@@ -1,4 +1,4 @@
-# Provider Validation
+# Tuple Validation
 
 External provider validation can create billable resources. Run these only after credentials, quotas, and cost guardrails are confirmed.
 
@@ -18,7 +18,7 @@ POST /v2/<endpoint_id>/openai/v1/chat/completions
 
 Use `runpod-vllm-serverless` for the stable Serverless endpoint and `runpod-vllm-flashboot` for the FlashBoot candidate.
 
-Do not declare `stream` for RunPod worker-vLLM providers in v2.0. Token streaming is intentionally unsupported until the RunPod worker path has a real incremental generation contract.
+Do not declare `stream` for RunPod worker-vLLM tuples in v2.0. Token streaming is intentionally unsupported until the RunPod worker path has a real incremental generation contract.
 
 Do not declare `stream` for Modal unless the deployed function provides true incremental generation. Post-hoc chunking of a completed response is not a stream contract.
 
@@ -26,7 +26,7 @@ RunPod Serverless native queue validation uses `/runsync`, `/run`, `/status/{job
 
 Keep smoke/stub endpoints out of production auto-routing. If a provider returns a fixed value such as `Hello World`, name it accordingly, for example `runpod-serverless-smoke`, and validate it only through `gpucall tuple-smoke` or a non-auto-selected smoke recipe such as `smoke-text-small`.
 
-For external GPU providers, `model:` is the production-readiness declaration. Do not set it on smoke endpoints. Once set, the provider can become eligible for auto-routing if policy, recipe requirements, modes, VRAM, and context length all match.
+For external GPU tuples, `model:` is the production-readiness declaration. Do not set it on smoke endpoints. Once set, the provider can become eligible for auto-routing if policy, recipe requirements, modes, VRAM, and context length all match.
 
 Record for each provider:
 

@@ -11,7 +11,7 @@ def lease_reaper_report(*, manifest_path: Path, apply: bool = False) -> dict[str
     actions = [
         {
             "action": "destroy_resource",
-            "provider": lease.get("provider"),
+            "tuple": lease.get("tuple"),
             "resource_kind": lease.get("resource_kind") or "vm",
             "remote_id": lease.get("vm_id") or lease.get("remote_id"),
             "source": str(manifest_path),

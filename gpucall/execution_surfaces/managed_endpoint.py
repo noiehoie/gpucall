@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from gpucall.domain import ProviderError
+from gpucall.domain import TupleError
 
 RUNPOD_API_BASE = "https://api.runpod.ai/v2"
 
@@ -14,7 +14,7 @@ def requests_session():
         from requests.adapters import HTTPAdapter
         from urllib3.util.retry import Retry
     except ImportError as exc:
-        raise ProviderError("requests/urllib3 are required for RunPod", retryable=False, status_code=501) from exc
+        raise TupleError("requests/urllib3 are required for RunPod", retryable=False, status_code=501) from exc
     session = requests.Session()
     session.mount("https://", HTTPAdapter(max_retries=Retry(total=0)))
     return session
@@ -25,7 +25,7 @@ def json_or_error(response: Any, message: str) -> dict[str, Any]:
         data = response.json()
         return data if isinstance(data, dict) else {"output": data}
     retryable = response.status_code in {408, 409, 425, 429, 500, 502, 503, 504}
-    raise ProviderError(
+    raise TupleError(
         f"{message}: {response.status_code}",
         retryable=retryable,
         status_code=502 if response.status_code >= 500 else response.status_code,
@@ -36,13 +36,13 @@ import asyncio
 import os
 from typing import Any
 
-from gpucall.domain import CompiledPlan, ProviderError, ProviderResult
-from gpucall.execution.base import ProviderAdapter, RemoteHandle
+from gpucall.domain import CompiledPlan, TupleError, TupleResult
+from gpucall.execution.base import TupleAdapter, RemoteHandle
 from gpucall.execution.payloads import openai_chat_completion_result
-from gpucall.execution.registry import ProviderAdapterDescriptor, register_adapter
+from gpucall.execution.registry import TupleAdapterDescriptor, register_adapter
 
 
-class RunpodVllmServerlessAdapter(ProviderAdapter):
+class RunpodVllmServerlessAdapter(TupleAdapter):
     """RunPod official Serverless worker-vLLM OpenAI-compatible adapter."""
 
     def __init__(
@@ -68,17 +68,17 @@ class RunpodVllmServerlessAdapter(ProviderAdapter):
 
     async def start(self, plan: CompiledPlan) -> RemoteHandle:
         if not self.api_key:
-            raise ProviderError("RunPod api_key is not configured", retryable=False, status_code=401)
+            raise TupleError("RunPod api_key is not configured", retryable=False, status_code=401)
         if not self.endpoint_id:
-            raise ProviderError("RunPod worker-vLLM endpoint_id is not configured", retryable=False, status_code=400)
+            raise TupleError("RunPod worker-vLLM endpoint_id is not configured", retryable=False, status_code=400)
         if not self.model:
-            raise ProviderError("RunPod worker-vLLM model is not configured", retryable=False, status_code=400)
+            raise TupleError("RunPod worker-vLLM model is not configured", retryable=False, status_code=400)
         if self.endpoint_contract != "openai-chat-completions":
-            raise ProviderError("RunPod worker-vLLM requires endpoint_contract=openai-chat-completions", retryable=False, status_code=400)
+            raise TupleError("RunPod worker-vLLM requires endpoint_contract=openai-chat-completions", retryable=False, status_code=400)
         if plan.mode.value == "stream":
-            raise ProviderError("RunPod worker-vLLM streaming is not supported in v2.0", retryable=False, status_code=400)
+            raise TupleError("RunPod worker-vLLM streaming is not supported in v2.0", retryable=False, status_code=400)
         return RemoteHandle(
-            provider=self.name,
+            tuple=self.name,
             remote_id=f"openai-{plan.plan_id}",
             expires_at=plan.expires_at(),
             account_ref="runpod",
@@ -89,26 +89,26 @@ class RunpodVllmServerlessAdapter(ProviderAdapter):
             meta={"official_vllm": True},
         )
 
-    async def wait(self, handle: RemoteHandle, plan: CompiledPlan) -> ProviderResult:
+    async def wait(self, handle: RemoteHandle, plan: CompiledPlan) -> TupleResult:
         try:
             return await asyncio.to_thread(self._call_sync, plan)
         except asyncio.TimeoutError as exc:
-            raise ProviderError("RunPod worker-vLLM timed out", retryable=True, status_code=504) from exc
+            raise TupleError("RunPod worker-vLLM timed out", retryable=True, status_code=504) from exc
 
     async def cancel_remote(self, handle: RemoteHandle) -> None:
         return None
 
     async def stream(self, handle: RemoteHandle, plan: CompiledPlan):
-        raise ProviderError("RunPod worker-vLLM streaming is not supported in v2.0", retryable=False, status_code=400)
+        raise TupleError("RunPod worker-vLLM streaming is not supported in v2.0", retryable=False, status_code=400)
 
-    def _call_sync(self, plan: CompiledPlan) -> ProviderResult:
+    def _call_sync(self, plan: CompiledPlan) -> TupleResult:
         if plan.input_refs:
-            raise ProviderError("RunPod worker-vLLM does not fetch DataRef inputs; falling back", retryable=True, status_code=502)
+            raise TupleError("RunPod worker-vLLM does not fetch DataRef inputs; falling back", retryable=True, status_code=502)
         if not plan.messages:
-            raise ProviderError("RunPod worker-vLLM openai-chat-completions contract requires compiled messages", retryable=True, status_code=502)
+            raise TupleError("RunPod worker-vLLM openai-chat-completions contract requires compiled messages", retryable=True, status_code=502)
         health = self._health_sync()
         if runpod_vllm_health_rejection_reason(health):
-            raise ProviderError(
+            raise TupleError(
                 "RunPod worker-vLLM endpoint is not ready: " + runpod_vllm_health_rejection_reason(health),
                 retryable=True,
                 status_code=503,
@@ -141,7 +141,7 @@ class RunpodVllmServerlessAdapter(ProviderAdapter):
 
     def _messages(self, plan: CompiledPlan) -> list[dict[str, str]]:
         if not plan.messages:
-            raise ProviderError("RunPod worker-vLLM requires compiled chat messages", retryable=False, status_code=400)
+            raise TupleError("RunPod worker-vLLM requires compiled chat messages", retryable=False, status_code=400)
         return [{"role": message.role, "content": message.content} for message in plan.messages]
 
     def _headers(self) -> dict[str, str]:
@@ -176,48 +176,48 @@ def runpod_vllm_health_rejection_reason(health: dict[str, Any]) -> str | None:
     return "no ready worker is available"
 
 
-def runpod_vllm_config_findings(provider: Any) -> list[str]:
+def runpod_vllm_config_findings(tuple: Any) -> list[str]:
     findings: list[str] = []
-    if not provider.target:
-        findings.append(f"tuple {provider.name!r} must declare RunPod endpoint id in target")
-    if not provider.model:
-        findings.append(f"tuple {provider.name!r} must declare deployed worker-vLLM model")
-    if not provider.image:
-        findings.append(f"tuple {provider.name!r} must declare official worker-vLLM image")
-    elif not str(provider.image).startswith("runpod/worker-v1-vllm:"):
-        findings.append(f"tuple {provider.name!r} image must be the official runpod/worker-v1-vllm image")
-    if "data_refs" in set(provider.input_contracts or []):
-        findings.append(f"tuple {provider.name!r} official worker-vLLM path must not declare DataRef input support")
+    if not tuple.target:
+        findings.append(f"tuple {tuple.name!r} must declare RunPod endpoint id in target")
+    if not tuple.model:
+        findings.append(f"tuple {tuple.name!r} must declare deployed worker-vLLM model")
+    if not tuple.image:
+        findings.append(f"tuple {tuple.name!r} must declare official worker-vLLM image")
+    elif not str(tuple.image).startswith("runpod/worker-v1-vllm:"):
+        findings.append(f"tuple {tuple.name!r} image must be the official runpod/worker-v1-vllm image")
+    if "data_refs" in set(tuple.input_contracts or []):
+        findings.append(f"tuple {tuple.name!r} official worker-vLLM path must not declare DataRef input support")
 
-    worker_env = (provider.provider_params or {}).get("worker_env")
+    worker_env = (tuple.provider_params or {}).get("worker_env")
     if not isinstance(worker_env, dict):
-        findings.append(f"tuple {provider.name!r} must declare provider_params.worker_env for official worker-vLLM deployment")
+        findings.append(f"tuple {tuple.name!r} must declare provider_params.worker_env for official worker-vLLM deployment")
         return findings
 
     model_name = str(worker_env.get("MODEL_NAME") or "")
     served_name = str(worker_env.get("OPENAI_SERVED_MODEL_NAME_OVERRIDE") or "")
-    declared_model = str(provider.model or "")
+    declared_model = str(tuple.model or "")
     if declared_model and declared_model not in {model_name, served_name}:
         findings.append(
-            f"tuple {provider.name!r} model must match MODEL_NAME or OPENAI_SERVED_MODEL_NAME_OVERRIDE in worker_env"
+            f"tuple {tuple.name!r} model must match MODEL_NAME or OPENAI_SERVED_MODEL_NAME_OVERRIDE in worker_env"
         )
     try:
         max_model_len = int(worker_env.get("MAX_MODEL_LEN"))
     except (TypeError, ValueError):
-        findings.append(f"tuple {provider.name!r} worker_env.MAX_MODEL_LEN must be an integer")
+        findings.append(f"tuple {tuple.name!r} worker_env.MAX_MODEL_LEN must be an integer")
     else:
-        if max_model_len < int(provider.max_model_len):
-            findings.append(f"tuple {provider.name!r} worker_env.MAX_MODEL_LEN is below tuple max_model_len")
+        if max_model_len < int(tuple.max_model_len):
+            findings.append(f"tuple {tuple.name!r} worker_env.MAX_MODEL_LEN is below tuple max_model_len")
     if "GPU_MEMORY_UTILIZATION" not in worker_env:
-        findings.append(f"tuple {provider.name!r} worker_env.GPU_MEMORY_UTILIZATION must be declared")
+        findings.append(f"tuple {tuple.name!r} worker_env.GPU_MEMORY_UTILIZATION must be declared")
     if "MAX_CONCURRENCY" not in worker_env:
-        findings.append(f"tuple {provider.name!r} worker_env.MAX_CONCURRENCY must be declared")
+        findings.append(f"tuple {tuple.name!r} worker_env.MAX_CONCURRENCY must be declared")
     return findings
 
 
 @register_adapter(
     "runpod-vllm-serverless",
-    descriptor=ProviderAdapterDescriptor(
+    descriptor=TupleAdapterDescriptor(
         endpoint_contract="openai-chat-completions",
         output_contract="openai-chat-completions",
         required_auto_fields={"target": "RunPod endpoint target is not configured"},
@@ -248,13 +248,13 @@ import os
 import time
 from typing import Any
 
-from gpucall.domain import CompiledPlan, ProviderError, ProviderResult
-from gpucall.execution.base import ProviderAdapter, RemoteHandle
-from gpucall.execution.payloads import gpucall_provider_result, plan_payload
-from gpucall.execution.registry import ProviderAdapterDescriptor, register_adapter
+from gpucall.domain import CompiledPlan, TupleError, TupleResult
+from gpucall.execution.base import TupleAdapter, RemoteHandle
+from gpucall.execution.payloads import gpucall_tuple_result, plan_payload
+from gpucall.execution.registry import TupleAdapterDescriptor, register_adapter
 
 
-class RunpodServerlessAdapter(ProviderAdapter):
+class RunpodServerlessAdapter(TupleAdapter):
     """RunPod queue-based Serverless adapter using the official REST contract."""
 
     def __init__(
@@ -278,13 +278,13 @@ class RunpodServerlessAdapter(ProviderAdapter):
 
     async def start(self, plan: CompiledPlan) -> RemoteHandle:
         if not self.api_key or not self.endpoint_id:
-            raise ProviderError("RunPod api_key or endpoint_id is not configured", retryable=False, status_code=401)
+            raise TupleError("RunPod api_key or endpoint_id is not configured", retryable=False, status_code=401)
         if plan.mode.value == "sync":
             run_request = await asyncio.to_thread(self._runsync_sync, plan)
         else:
             run_request = await asyncio.to_thread(self._start_sync, plan)
         return RemoteHandle(
-            provider=self.name,
+            tuple=self.name,
             remote_id=run_request["job_id"],
             expires_at=plan.expires_at(),
             account_ref="runpod",
@@ -295,7 +295,7 @@ class RunpodServerlessAdapter(ProviderAdapter):
             meta=run_request,
         )
 
-    async def wait(self, handle: RemoteHandle, plan: CompiledPlan) -> ProviderResult:
+    async def wait(self, handle: RemoteHandle, plan: CompiledPlan) -> TupleResult:
         return await asyncio.to_thread(self._wait_sync, handle, plan)
 
     async def cancel_remote(self, handle: RemoteHandle) -> None:
@@ -318,7 +318,7 @@ class RunpodServerlessAdapter(ProviderAdapter):
         data = json_or_error(response, "RunPod start failed")
         job_id = data.get("id") or data.get("job_id")
         if not job_id:
-            raise ProviderError("RunPod start response did not include job id", retryable=True, status_code=502)
+            raise TupleError("RunPod start response did not include job id", retryable=True, status_code=502)
         return {"job_id": str(job_id)}
 
     def _runsync_sync(self, plan: CompiledPlan) -> dict[str, Any]:
@@ -338,17 +338,17 @@ class RunpodServerlessAdapter(ProviderAdapter):
         status = data.get("status")
         if status in {"FAILED", "CANCELLED", "TIMED_OUT"}:
             code = "PROVIDER_TIMEOUT" if status == "TIMED_OUT" else "PROVIDER_JOB_FAILED"
-            raise ProviderError(f"RunPod status: {status}", retryable=status == "TIMED_OUT", status_code=502, code=code)
+            raise TupleError(f"RunPod status: {status}", retryable=status == "TIMED_OUT", status_code=502, code=code)
         if "output" in data and status in {None, "COMPLETED"}:
             return {"job_id": str(data.get("id") or data.get("job_id") or f"runsync-{plan.plan_id}"), "completed_output": data["output"]}
         job_id = data.get("id") or data.get("job_id")
         if not job_id:
-            raise ProviderError("RunPod runsync response did not include output or job id", retryable=True, status_code=502)
+            raise TupleError("RunPod runsync response did not include output or job id", retryable=True, status_code=502)
         return {"job_id": str(job_id)}
 
-    def _wait_sync(self, handle: RemoteHandle, plan: CompiledPlan) -> ProviderResult:
+    def _wait_sync(self, handle: RemoteHandle, plan: CompiledPlan) -> TupleResult:
         if "completed_output" in handle.meta:
-            return gpucall_provider_result(handle.meta["completed_output"])
+            return gpucall_tuple_result(handle.meta["completed_output"])
         deadline = time.monotonic() + plan.timeout_seconds
         while time.monotonic() < deadline:
             response = requests_session().get(
@@ -359,11 +359,11 @@ class RunpodServerlessAdapter(ProviderAdapter):
             data = json_or_error(response, "RunPod status failed")
             status = data.get("status")
             if status == "COMPLETED":
-                return gpucall_provider_result(data.get("output"))
+                return gpucall_tuple_result(data.get("output"))
             if status in {"FAILED", "CANCELLED", "TIMED_OUT"}:
-                raise ProviderError(f"RunPod status: {status}", retryable=status == "TIMED_OUT", status_code=502)
+                raise TupleError(f"RunPod status: {status}", retryable=status == "TIMED_OUT", status_code=502)
             time.sleep(self.poll_interval_seconds)
-        raise ProviderError("RunPod polling timed out", retryable=True, status_code=504)
+        raise TupleError("RunPod polling timed out", retryable=True, status_code=504)
 
     def _cancel_sync(self, job_id: str) -> None:
         response = requests_session().post(
@@ -390,12 +390,12 @@ class RunpodServerlessAdapter(ProviderAdapter):
 @register_adapter(
     "runpod-serverless",
     aliases=("runpod",),
-    descriptor=ProviderAdapterDescriptor(
+    descriptor=TupleAdapterDescriptor(
         endpoint_contract="runpod-serverless",
-        output_contract="gpucall-provider-result",
+        output_contract="gpucall-tuple-result",
         production_eligible=False,
         production_rejection_reason=(
-            "RunPod generic Serverless queue operations are official, but the gpucall-provider-result worker "
+            "RunPod generic Serverless queue operations are official, but the gpucall-tuple-result worker "
             "contract is custom and must not be treated as the official worker-vLLM production route"
         ),
         required_auto_fields={"target": "RunPod endpoint target is not configured"},

@@ -1,4 +1,4 @@
-# Provider Official Study Notes
+# Official Provider Study Notes
 
 This file is the source-of-truth study note for provider adapter work. Do not treat
 "calling a documented URL" as official conformance. A gpucall provider is official

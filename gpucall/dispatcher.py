@@ -16,12 +16,12 @@ from gpucall.domain import (
     CompiledPlan,
     JobRecord,
     JobState,
-    ProviderError,
-    ProviderObservation,
-    ProviderResult,
+    TupleError,
+    TupleObservation,
+    TupleResult,
     ResponseFormatType,
 )
-from gpucall.execution.base import ProviderAdapter, RemoteHandle
+from gpucall.execution.base import TupleAdapter, RemoteHandle
 from gpucall.registry import ObservedRegistry
 
 
@@ -55,29 +55,29 @@ class Dispatcher:
     def __init__(
         self,
         *,
-        adapters: dict[str, ProviderAdapter],
+        adapters: dict[str, TupleAdapter],
         registry: ObservedRegistry,
         audit: AuditTrail,
         jobs: JobStore,
-        provider_costs: dict[str, float] | None = None,
+        tuple_costs: dict[str, float] | None = None,
         artifact_registry: SQLiteArtifactRegistry | None = None,
     ) -> None:
         self.adapters = adapters
         self.registry = registry
         self.audit = audit
         self.jobs = jobs
-        self.provider_costs = provider_costs or {}
+        self.tuple_costs = tuple_costs or {}
         self.artifact_registry = artifact_registry
         self._job_tasks: dict[str, asyncio.Task[None]] = {}
         self._job_plans: dict[str, CompiledPlan] = {}
 
-    async def execute_sync(self, plan: CompiledPlan) -> ProviderResult:
+    async def execute_sync(self, plan: CompiledPlan) -> TupleResult:
         self.audit.append("plan.accepted", redacted_plan_for_audit(plan))
-        last_error: ProviderError | None = None
-        for provider in plan.provider_chain:
-            if not self.registry.is_available(provider):
+        last_error: TupleError | None = None
+        for tuple in plan.tuple_chain:
+            if not self.registry.is_available(tuple):
                 continue
-            adapter = self.adapters.get(provider)
+            adapter = self.adapters.get(tuple)
             if adapter is None:
                 continue
             attempts = _output_validation_attempts(plan)
@@ -89,24 +89,24 @@ class Dispatcher:
                     handle = await adapter.start(plan)
                     self.audit.append(
                         "lease.started",
-                        {**_lease_audit(handle), "plan_id": plan.plan_id, "provider": provider, "attempt": attempt},
+                        {**_lease_audit(handle), "plan_id": plan.plan_id, "tuple": tuple, "attempt": attempt},
                     )
                     result = await asyncio.wait_for(adapter.wait(handle, plan), timeout=plan.timeout_seconds)
-                    result = _validate_and_register_provider_output(self, plan, result)
+                    result = _validate_and_register_tuple_output(self, plan, result)
                     self.registry.record(
-                        self._observation(provider, started, success=True)
+                        self._observation(tuple, started, success=True)
                     )
-                    self.audit.append("plan.completed", {"plan_id": plan.plan_id, "provider": provider, "attempt": attempt})
+                    self.audit.append("plan.completed", {"plan_id": plan.plan_id, "tuple": tuple, "attempt": attempt})
                     return result
-                except ProviderError as exc:
+                except TupleError as exc:
                     last_error = exc
                     if exc.code in {"EMPTY_OUTPUT", "MALFORMED_OUTPUT"}:
                         final_attempt = attempt >= attempts
                         self.audit.append(
-                            "provider.output_rejected",
+                            "tuple.output_rejected",
                             {
                                 "plan_id": plan.plan_id,
-                                "provider": provider,
+                                "tuple": tuple,
                                 "attempt": attempt,
                                 "code": exc.code,
                                 "retryable": not final_attempt,
@@ -114,7 +114,7 @@ class Dispatcher:
                         )
                         if not final_attempt:
                             continue
-                        last_error = ProviderError(
+                        last_error = TupleError(
                             _job_error_message(exc),
                             retryable=False,
                             status_code=422,
@@ -123,50 +123,50 @@ class Dispatcher:
                         )
                         break
                     self.registry.record(
-                        self._observation(provider, started, success=False)
+                        self._observation(tuple, started, success=False)
                     )
                     self.audit.append(
-                        "provider.failed",
-                        {"plan_id": plan.plan_id, "provider": provider, "error": _provider_error_audit(exc)},
+                        "tuple.failed",
+                        {"plan_id": plan.plan_id, "tuple": tuple, "error": _tuple_error_audit(exc)},
                     )
                     if not exc.retryable:
                         raise
                     break
                 except asyncio.TimeoutError as exc:
-                    last_error = ProviderError("provider timed out", retryable=True, status_code=504)
+                    last_error = TupleError("tuple timed out", retryable=True, status_code=504)
                     self.registry.record(
-                        self._observation(provider, started, success=False)
+                        self._observation(tuple, started, success=False)
                     )
-                    self.audit.append("provider.timeout", {"plan_id": plan.plan_id, "provider": provider})
+                    self.audit.append("tuple.timeout", {"plan_id": plan.plan_id, "tuple": tuple})
                     break
                 except Exception as exc:
-                    last_error = ProviderError("provider raised unexpected exception", retryable=True, status_code=502)
+                    last_error = TupleError("tuple raised unexpected exception", retryable=True, status_code=502)
                     self.registry.record(
-                        self._observation(provider, started, success=False)
+                        self._observation(tuple, started, success=False)
                     )
                     self.audit.append(
-                        "provider.failed",
+                        "tuple.failed",
                         {
                             "plan_id": plan.plan_id,
-                            "provider": provider,
+                            "tuple": tuple,
                             "error": _exception_audit(exc, retryable=True),
                         },
                     )
                     break
                 finally:
                     if handle is not None:
-                        await self._cleanup_remote(adapter, handle, plan_id=plan.plan_id, provider=provider, attempt=attempt)
+                        await self._cleanup_remote(adapter, handle, plan_id=plan.plan_id, tuple=tuple, attempt=attempt)
         if last_error is not None:
             raise last_error
-        raise ProviderError("no provider adapter available", retryable=False, status_code=503)
+        raise TupleError("no tuple adapter available", retryable=False, status_code=503)
 
     async def execute_stream(self, plan: CompiledPlan):
         self.audit.append("plan.accepted", redacted_plan_for_audit(plan))
-        last_error: ProviderError | None = None
-        for provider in plan.provider_chain:
-            if not self.registry.is_available(provider):
+        last_error: TupleError | None = None
+        for tuple in plan.tuple_chain:
+            if not self.registry.is_available(tuple):
                 continue
-            adapter = self.adapters.get(provider)
+            adapter = self.adapters.get(tuple)
             if adapter is None:
                 continue
             started = monotonic()
@@ -174,56 +174,56 @@ class Dispatcher:
             try:
                 _enforce_pre_execution_security_gate(plan)
                 handle = await adapter.start(plan)
-                self.audit.append("lease.started", {**_lease_audit(handle), "plan_id": plan.plan_id, "provider": provider})
+                self.audit.append("lease.started", {**_lease_audit(handle), "plan_id": plan.plan_id, "tuple": tuple})
                 async for event in adapter.stream(handle, plan):
                     yield _validate_stream_event(plan, event)
                 self.registry.record(
-                    self._observation(provider, started, success=True)
+                    self._observation(tuple, started, success=True)
                 )
-                self.audit.append("plan.completed", {"plan_id": plan.plan_id, "provider": provider})
+                self.audit.append("plan.completed", {"plan_id": plan.plan_id, "tuple": tuple})
                 return
-            except ProviderError as exc:
+            except TupleError as exc:
                 last_error = exc
                 self.registry.record(
-                    self._observation(provider, started, success=False)
+                    self._observation(tuple, started, success=False)
                 )
                 self.audit.append(
-                    "provider.failed",
-                    {"plan_id": plan.plan_id, "provider": provider, "error": _provider_error_audit(exc)},
+                    "tuple.failed",
+                    {"plan_id": plan.plan_id, "tuple": tuple, "error": _tuple_error_audit(exc)},
                 )
                 if not exc.retryable:
                     raise
             except Exception as exc:
-                last_error = ProviderError("provider raised unexpected exception", retryable=True, status_code=502)
+                last_error = TupleError("tuple raised unexpected exception", retryable=True, status_code=502)
                 self.registry.record(
-                    self._observation(provider, started, success=False)
+                    self._observation(tuple, started, success=False)
                 )
                 self.audit.append(
-                    "provider.failed",
-                    {"plan_id": plan.plan_id, "provider": provider, "error": _exception_audit(exc, retryable=True)},
+                    "tuple.failed",
+                    {"plan_id": plan.plan_id, "tuple": tuple, "error": _exception_audit(exc, retryable=True)},
                 )
             finally:
                 if handle is not None:
-                    await self._cleanup_remote(adapter, handle, plan_id=plan.plan_id, provider=provider)
+                    await self._cleanup_remote(adapter, handle, plan_id=plan.plan_id, tuple=tuple)
         if last_error is not None:
             raise last_error
-        raise ProviderError("no provider adapter available", retryable=False, status_code=503)
+        raise TupleError("no tuple adapter available", retryable=False, status_code=503)
 
-    def _observation(self, provider: str, started: float, *, success: bool) -> ProviderObservation:
+    def _observation(self, tuple: str, started: float, *, success: bool) -> TupleObservation:
         latency_ms = (monotonic() - started) * 1000
-        cost = max(latency_ms / 1000.0 * float(self.provider_costs.get(provider, 0.0)), 0.0)
-        return ProviderObservation(provider=provider, latency_ms=latency_ms, success=success, cost=cost)
+        cost = max(latency_ms / 1000.0 * float(self.tuple_costs.get(tuple, 0.0)), 0.0)
+        return TupleObservation(tuple=tuple, latency_ms=latency_ms, success=success, cost=cost)
 
     async def _cleanup_remote(
         self,
-        adapter: ProviderAdapter,
+        adapter: TupleAdapter,
         handle: RemoteHandle,
         *,
         plan_id: str,
-        provider: str,
+        tuple: str,
         attempt: int | None = None,
     ) -> None:
-        payload: dict[str, object] = {**_lease_audit(handle), "plan_id": plan_id, "provider": provider}
+        payload: dict[str, object] = {**_lease_audit(handle), "plan_id": plan_id, "tuple": tuple}
         if attempt is not None:
             payload["attempt"] = attempt
         try:
@@ -272,9 +272,9 @@ class Dispatcher:
                 await self.jobs.update(job_id, state=JobState.CANCELLED, error="job cancelled")
             self.audit.append("job.cancelled", {"job_id": job_id})
             raise
-        except ProviderError as exc:
+        except TupleError as exc:
             await self.jobs.update(job_id, state=JobState.FAILED, error=_job_error_message(exc), result=None)
-            self.audit.append("job.failed", {"job_id": job_id, "error": _provider_error_audit(exc)})
+            self.audit.append("job.failed", {"job_id": job_id, "error": _tuple_error_audit(exc)})
         finally:
             self._job_tasks.pop(job_id, None)
             self._job_plans.pop(job_id, None)
@@ -299,19 +299,19 @@ def _lease_audit(handle: RemoteHandle) -> dict[str, object]:
     }
 
 
-def _job_error_message(exc: ProviderError) -> str:
-    return f"provider execution failed ({exc.code or 'PROVIDER_ERROR'})"
+def _job_error_message(exc: TupleError) -> str:
+    return f"tuple execution failed ({exc.code or 'PROVIDER_ERROR'})"
 
 
 def _validate_stream_event(plan: CompiledPlan, event: str) -> str:
     if not isinstance(event, str):
-        raise ProviderError("stream event must be text", retryable=True, status_code=502)
+        raise TupleError("stream event must be text", retryable=True, status_code=502)
     if not event.endswith("\n\n"):
-        raise ProviderError("stream event must be SSE-framed", retryable=True, status_code=502)
+        raise TupleError("stream event must be SSE-framed", retryable=True, status_code=502)
     if event.startswith(": ") or event.startswith(":\n") or event.startswith("data: "):
         return event
-    raise ProviderError(
-        f"stream event does not match provider stream contract {plan.mode.value}",
+    raise TupleError(
+        f"stream event does not match tuple stream contract {plan.mode.value}",
         retryable=True,
         status_code=502,
     )
@@ -338,19 +338,19 @@ def _enforce_pre_execution_security_gate(plan: CompiledPlan) -> None:
     if isinstance(security_gate, dict) and security_gate.get("attestation_required") is True:
         evidence = attestations.get("attestation_evidence")
         if not isinstance(evidence, dict) or evidence.get("verified") is not True:
-            raise ProviderError("verified attestation evidence is required before execution", retryable=False, status_code=412, code="ATTESTATION_REQUIRED")
+            raise TupleError("verified attestation evidence is required before execution", retryable=False, status_code=412, code="ATTESTATION_REQUIRED")
     key_release = attestations.get("key_release_requirement")
     if isinstance(key_release, dict) and key_release.get("required") is True:
         grant = attestations.get("key_release_grant")
         if not isinstance(grant, dict):
-            raise ProviderError("key release grant is required before execution", retryable=False, status_code=412, code="KEY_RELEASE_REQUIRED")
+            raise TupleError("key release grant is required before execution", retryable=False, status_code=412, code="KEY_RELEASE_REQUIRED")
         if grant.get("key_id") != key_release.get("key_id"):
-            raise ProviderError("key release grant does not match required key_id", retryable=False, status_code=412, code="KEY_RELEASE_REQUIRED")
+            raise TupleError("key release grant does not match required key_id", retryable=False, status_code=412, code="KEY_RELEASE_REQUIRED")
         if not hmac.compare_digest(str(grant.get("policy_hash") or ""), str(key_release.get("policy_hash") or "")):
-            raise ProviderError("key release grant does not match required policy_hash", retryable=False, status_code=412, code="KEY_RELEASE_REQUIRED")
+            raise TupleError("key release grant does not match required policy_hash", retryable=False, status_code=412, code="KEY_RELEASE_REQUIRED")
         expires_at = _parse_datetime(grant.get("expires_at"))
         if expires_at is None or expires_at <= datetime.now(timezone.utc):
-            raise ProviderError("key release grant is expired or missing expires_at", retryable=False, status_code=412, code="KEY_RELEASE_REQUIRED")
+            raise TupleError("key release grant is expired or missing expires_at", retryable=False, status_code=412, code="KEY_RELEASE_REQUIRED")
 
 
 def _parse_datetime(value: object) -> datetime | None:
@@ -367,21 +367,21 @@ def _parse_datetime(value: object) -> datetime | None:
         return parsed.replace(tzinfo=timezone.utc)
     return parsed.astimezone(timezone.utc)
 
-def _validate_provider_output(plan: CompiledPlan, result: ProviderResult) -> ProviderResult:
+def _validate_tuple_output(plan: CompiledPlan, result: TupleResult) -> TupleResult:
     if _requires_checked_inline_output(plan) and result.kind == "inline":
         if result.value is None or not result.value.strip():
-            raise ProviderError("empty provider output", retryable=True, code="EMPTY_OUTPUT", raw_output=result.value or "")
+            raise TupleError("empty tuple output", retryable=True, code="EMPTY_OUTPUT", raw_output=result.value or "")
     if not _requires_json_output(plan):
         return result
     if result.kind != "inline" or result.value is None:
-        raise ProviderError("structured output must be inline text", retryable=True, code="MALFORMED_OUTPUT")
+        raise TupleError("structured output must be inline text", retryable=True, code="MALFORMED_OUTPUT")
     try:
         parsed = json.loads(result.value)
     except json.JSONDecodeError as exc:
-        raise ProviderError("malformed structured output", retryable=True, code="MALFORMED_OUTPUT", raw_output=result.value) from exc
+        raise TupleError("malformed structured output", retryable=True, code="MALFORMED_OUTPUT", raw_output=result.value) from exc
     if plan.response_format is not None and plan.response_format.type is ResponseFormatType.JSON_OBJECT:
         if not isinstance(parsed, dict):
-            raise ProviderError("structured output must be a JSON object", retryable=True, code="MALFORMED_OUTPUT", raw_output=result.value)
+            raise TupleError("structured output must be a JSON object", retryable=True, code="MALFORMED_OUTPUT", raw_output=result.value)
     if (
         plan.response_format is not None
         and plan.response_format.type is ResponseFormatType.JSON_SCHEMA
@@ -393,12 +393,12 @@ def _validate_provider_output(plan: CompiledPlan, result: ProviderResult) -> Pro
 
             jsonschema.validate(parsed, plan.response_format.json_schema)
         except Exception as exc:
-            raise ProviderError("structured output does not match JSON schema", retryable=True, code="MALFORMED_OUTPUT", raw_output=result.value) from exc
+            raise TupleError("structured output does not match JSON schema", retryable=True, code="MALFORMED_OUTPUT", raw_output=result.value) from exc
     return result.model_copy(update={"output_validated": True})
 
 
-def _validate_and_register_provider_output(dispatcher: Dispatcher, plan: CompiledPlan, result: ProviderResult) -> ProviderResult:
-    result = _validate_provider_output(plan, result)
+def _validate_and_register_tuple_output(dispatcher: Dispatcher, plan: CompiledPlan, result: TupleResult) -> TupleResult:
+    result = _validate_tuple_output(plan, result)
     if result.kind == "artifact_manifest":
         manifest = _artifact_manifest_from_result(result)
         _validate_artifact_manifest(plan, manifest)
@@ -418,29 +418,29 @@ def _validate_and_register_provider_output(dispatcher: Dispatcher, plan: Compile
     return result
 
 
-def _artifact_manifest_from_result(result: ProviderResult) -> ArtifactManifest:
+def _artifact_manifest_from_result(result: TupleResult) -> ArtifactManifest:
     if result.artifact_manifest is not None:
         return result.artifact_manifest
     if result.value is not None:
         try:
             return ArtifactManifest.model_validate_json(result.value)
         except Exception as exc:
-            raise ProviderError("artifact manifest output is malformed", retryable=True, status_code=502, code="MALFORMED_ARTIFACT") from exc
-    raise ProviderError("artifact manifest result is missing manifest", retryable=True, status_code=502, code="MALFORMED_ARTIFACT")
+            raise TupleError("artifact manifest output is malformed", retryable=True, status_code=502, code="MALFORMED_ARTIFACT") from exc
+    raise TupleError("artifact manifest result is missing manifest", retryable=True, status_code=502, code="MALFORMED_ARTIFACT")
 
 
 def _validate_artifact_manifest(plan: CompiledPlan, manifest: ArtifactManifest) -> None:
     expected_hash = (plan.attestations or {}).get("governance_hash")
     if expected_hash and manifest.producer_plan_hash != expected_hash:
-        raise ProviderError("artifact manifest producer_plan_hash does not match plan", retryable=False, status_code=502, code="ARTIFACT_POLICY_VIOLATION")
+        raise TupleError("artifact manifest producer_plan_hash does not match plan", retryable=False, status_code=502, code="ARTIFACT_POLICY_VIOLATION")
     if plan.artifact_export is not None:
         export = plan.artifact_export
         if manifest.artifact_chain_id != export.artifact_chain_id or manifest.version != export.version:
-            raise ProviderError("artifact manifest does not match requested artifact export", retryable=False, status_code=502, code="ARTIFACT_POLICY_VIOLATION")
+            raise TupleError("artifact manifest does not match requested artifact export", retryable=False, status_code=502, code="ARTIFACT_POLICY_VIOLATION")
         if manifest.key_id != export.key_id:
-            raise ProviderError("artifact manifest key_id does not match key release requirement", retryable=False, status_code=502, code="ARTIFACT_POLICY_VIOLATION")
+            raise TupleError("artifact manifest key_id does not match key release requirement", retryable=False, status_code=502, code="ARTIFACT_POLICY_VIOLATION")
     if manifest.classification != plan.data_classification:
-        raise ProviderError("artifact manifest classification must inherit task classification", retryable=False, status_code=502, code="ARTIFACT_POLICY_VIOLATION")
+        raise TupleError("artifact manifest classification must inherit task classification", retryable=False, status_code=502, code="ARTIFACT_POLICY_VIOLATION")
 
 
 class LeaseReaper:
@@ -485,10 +485,10 @@ class LeaseReaper:
                     self.audit.append("job.expired", {"job_id": job.job_id, "plan_id": job.plan.plan_id})
 
 
-class ProviderReconciler:
+class TupleReconciler:
     def __init__(
         self,
-        adapters: dict[str, ProviderAdapter],
+        adapters: dict[str, TupleAdapter],
         audit: AuditTrail,
         interval_seconds: float = 300.0,
     ) -> None:
@@ -524,12 +524,12 @@ class ProviderReconciler:
                 continue
             try:
                 await reconcile()
-                self.audit.append("provider.reconciled", {"provider": name})
+                self.audit.append("tuple.reconciled", {"tuple": name})
             except Exception as exc:
-                self.audit.append("provider.reconcile_failed", {"provider": name, "error": _exception_audit(exc, retryable=True)})
+                self.audit.append("tuple.reconcile_failed", {"tuple": name, "error": _exception_audit(exc, retryable=True)})
 
 
-def _provider_error_audit(exc: ProviderError) -> dict[str, object]:
+def _tuple_error_audit(exc: TupleError) -> dict[str, object]:
     detail = str(exc)
     payload: dict[str, object] = {
         "code": exc.code or "PROVIDER_ERROR",

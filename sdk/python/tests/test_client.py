@@ -36,7 +36,7 @@ def test_chat_completions_sends_no_recipe_or_provider() -> None:
     assert sent_payload["temperature"] == 0
     assert sent_payload["max_tokens"] == 64
     assert "recipe" not in sent_payload
-    assert "requested_provider" not in sent_payload
+    assert "requested_tuple" not in sent_payload
     assert sent_payload["messages"] == [{"role": "user", "content": "1+1?"}]
     assert sent_payload["inline_inputs"] == {}
     assert response["parsed"] == {"answer": 2}
@@ -153,7 +153,7 @@ def test_empty_output_is_not_success() -> None:
 
 def test_422_empty_output_maps_to_typed_exception() -> None:
     def handler(request: httpx.Request) -> httpx.Response:
-        return httpx.Response(422, json={"detail": "empty provider output", "code": "EMPTY_OUTPUT"})
+        return httpx.Response(422, json={"detail": "empty tuple output", "code": "EMPTY_OUTPUT"})
 
     client = GPUCallClient("http://gpucall.test", transport=httpx.MockTransport(handler))
 
@@ -183,7 +183,7 @@ def test_http_error_preserves_failure_artifact() -> None:
     artifact = {
         "schema_version": 1,
         "failure_id": "pf-test",
-        "failure_kind": "provider_runtime",
+        "failure_kind": "tuple_runtime",
         "caller_action": "retry_later",
     }
 
@@ -191,7 +191,7 @@ def test_http_error_preserves_failure_artifact() -> None:
         return httpx.Response(
             502,
             json={
-                "detail": "provider execution failed (PROVIDER_PROVISION_FAILED)",
+                "detail": "tuple execution failed (PROVIDER_PROVISION_FAILED)",
                 "code": "PROVIDER_PROVISION_FAILED",
                 "failure_artifact": artifact,
             },
@@ -234,10 +234,10 @@ def test_redacts_presigned_httpx_url_log_args() -> None:
     assert "signature" not in record.getMessage()
 
 
-def test_infer_rejects_recipe_or_provider() -> None:
+def test_infer_rejects_recipe_and_has_no_tuple_selector() -> None:
     client = GPUCallClient("http://gpucall.test", transport=httpx.MockTransport(lambda request: httpx.Response(500)))
 
     with pytest.raises(GPUCallCallerRoutingError):
         client.infer(recipe="text-infer-standard")
-    with pytest.raises(GPUCallCallerRoutingError):
+    with pytest.raises(TypeError):
         client.infer(provider="modal-a10g")

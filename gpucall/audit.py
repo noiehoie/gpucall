@@ -220,7 +220,7 @@ def redacted_plan_for_audit(plan: Any) -> dict[str, Any]:
         "recipe_name": getattr(plan, "recipe_name", None),
         "task": getattr(plan, "task", None),
         "mode": _enum_value(getattr(plan, "mode", None)),
-        "provider_chain": list(getattr(plan, "provider_chain", []) or []),
+        "tuple_chain": list(getattr(plan, "tuple_chain", []) or []),
         "timeout_seconds": getattr(plan, "timeout_seconds", None),
         "lease_ttl_seconds": getattr(plan, "lease_ttl_seconds", None),
         "tokenizer_family": getattr(plan, "tokenizer_family", None),

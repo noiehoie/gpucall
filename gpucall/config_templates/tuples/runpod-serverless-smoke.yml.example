@@ -10,5 +10,5 @@ endpoint: null
 target: ""
 endpoint_contract: runpod-serverless
 input_contracts: [text, chat_messages, data_refs]
-output_contract: gpucall-provider-result
+output_contract: gpucall-tuple-result
 stream_contract: none

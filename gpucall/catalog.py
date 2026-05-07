@@ -22,8 +22,8 @@ class SQLiteCapabilityCatalog:
             conn.execute("DELETE FROM recipes")
             conn.execute("DELETE FROM models")
             conn.execute("DELETE FROM engines")
-            conn.execute("DELETE FROM providers")
-            conn.execute("DELETE FROM provider_candidates")
+            conn.execute("DELETE FROM tuples")
+            conn.execute("DELETE FROM tuple_candidates")
             for recipe in config.recipes.values():
                 conn.execute(
                     "INSERT INTO recipes(name, task, payload) VALUES (?, ?, ?)",
@@ -39,10 +39,10 @@ class SQLiteCapabilityCatalog:
                     "INSERT INTO engines(name, kind, payload) VALUES (?, ?, ?)",
                     (engine.name, engine.kind, engine.model_dump_json()),
                 )
-            for provider in config.providers.values():
+            for provider in config.tuples.values():
                 conn.execute(
                     """
-                    INSERT INTO providers(name, adapter, execution_surface, model_ref, engine_ref, payload)
+                    INSERT INTO tuples(name, adapter, execution_surface, model_ref, engine_ref, payload)
                     VALUES (?, ?, ?, ?, ?, ?)
                     """,
                     (
@@ -58,7 +58,7 @@ class SQLiteCapabilityCatalog:
                 for candidate in load_tuple_candidate_payloads(root):
                     conn.execute(
                         """
-                        INSERT INTO provider_candidates(name, adapter, execution_surface, model_ref, engine_ref, status, payload)
+                        INSERT INTO tuple_candidates(name, adapter, execution_surface, model_ref, engine_ref, status, payload)
                         VALUES (?, ?, ?, ?, ?, ?, ?)
                         """,
                         (
@@ -80,12 +80,12 @@ class SQLiteCapabilityCatalog:
                 "recipes": _rows(conn.execute("SELECT name, task FROM recipes ORDER BY name")),
                 "models": _rows(conn.execute("SELECT name, provider_model_id FROM models ORDER BY name")),
                 "engines": _rows(conn.execute("SELECT name, kind FROM engines ORDER BY name")),
-                "providers": _rows(
-                    conn.execute("SELECT name, adapter, execution_surface, model_ref, engine_ref FROM providers ORDER BY name")
+                "tuples": _rows(
+                    conn.execute("SELECT name, adapter, execution_surface, model_ref, engine_ref FROM tuples ORDER BY name")
                 ),
-                "provider_candidates": _rows(
+                "tuple_candidates": _rows(
                     conn.execute(
-                        "SELECT name, adapter, execution_surface, model_ref, engine_ref, status FROM provider_candidates ORDER BY name"
+                        "SELECT name, adapter, execution_surface, model_ref, engine_ref, status FROM tuple_candidates ORDER BY name"
                     )
                 ),
             }
@@ -104,7 +104,7 @@ class SQLiteCapabilityCatalog:
             )
             conn.execute(
                 """
-                CREATE TABLE IF NOT EXISTS providers (
+                CREATE TABLE IF NOT EXISTS tuples (
                     name TEXT PRIMARY KEY,
                     adapter TEXT NOT NULL,
                     execution_surface TEXT,
@@ -114,10 +114,10 @@ class SQLiteCapabilityCatalog:
                 )
                 """
             )
-            _ensure_column(conn, "providers", "execution_surface", "TEXT")
+            _ensure_column(conn, "tuples", "execution_surface", "TEXT")
             conn.execute(
                 """
-                CREATE TABLE IF NOT EXISTS provider_candidates (
+                CREATE TABLE IF NOT EXISTS tuple_candidates (
                     name TEXT PRIMARY KEY,
                     adapter TEXT NOT NULL,
                     execution_surface TEXT,
@@ -128,7 +128,7 @@ class SQLiteCapabilityCatalog:
                 )
                 """
             )
-            _ensure_column(conn, "provider_candidates", "execution_surface", "TEXT")
+            _ensure_column(conn, "tuple_candidates", "execution_surface", "TEXT")
 
 
 def _rows(cursor: sqlite3.Cursor) -> list[dict[str, Any]]:

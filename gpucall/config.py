@@ -7,9 +7,9 @@ from typing import TypeVar
 import yaml
 from pydantic import BaseModel, ValidationError
 
-from gpucall.domain import EngineSpec, ModelSpec, ObjectStoreConfig, Policy, ProviderSpec, Recipe, TenantSpec
+from gpucall.domain import EngineSpec, ModelSpec, ObjectStoreConfig, Policy, ExecutionTupleSpec, Recipe, TenantSpec
 from gpucall.execution.registry import adapter_descriptor
-from gpucall.routing import provider_route_rejection_reason
+from gpucall.routing import tuple_route_rejection_reason
 
 T = TypeVar("T", bound=BaseModel)
 
@@ -21,7 +21,7 @@ class ConfigError(RuntimeError):
 class GpucallConfig(BaseModel):
     policy: Policy
     recipes: dict[str, Recipe]
-    providers: dict[str, ProviderSpec]
+    tuples: dict[str, ExecutionTupleSpec]
     models: dict[str, ModelSpec] = {}
     engines: dict[str, EngineSpec] = {}
     object_store: ObjectStoreConfig | None = None
@@ -95,28 +95,28 @@ def load_recipes(config_dir: Path | None = None) -> dict[str, Recipe]:
     return recipes
 
 
-def load_providers(config_dir: Path | None = None) -> dict[str, ProviderSpec]:
+def load_providers(config_dir: Path | None = None) -> dict[str, ExecutionTupleSpec]:
     root = config_dir or default_config_dir()
-    providers: dict[str, ProviderSpec] = {}
-    split_payloads = _load_split_provider_payloads(root)
+    tuples: dict[str, ExecutionTupleSpec] = {}
+    split_payloads = _load_split_tuple_payloads(root)
     if split_payloads:
         for path, payload in split_payloads:
-            provider = _provider_from_payload(path, payload)
-            if provider.name in providers:
-                raise ConfigError(f"duplicate provider name {provider.name!r} in {path}")
-            providers[provider.name] = provider
+            tuple_spec = _tuple_from_payload(path, payload)
+            if tuple_spec.name in tuples:
+                raise ConfigError(f"duplicate tuple name {tuple_spec.name!r} in {path}")
+            tuples[tuple_spec.name] = tuple_spec
     else:
-        for path in sorted((root / "providers").glob("*.yml")):
-            provider = _load_provider(path)
-            if provider.name in providers:
-                raise ConfigError(f"duplicate provider name {provider.name!r} in {path}")
-            providers[provider.name] = provider
-    if not providers:
-        raise ConfigError(f"no providers found in {root / 'surfaces'} or {root / 'providers'}")
-    return providers
+        for path in sorted((root / "tuples").glob("*.yml")):
+            tuple_spec = _load_tuple(path)
+            if tuple_spec.name in tuples:
+                raise ConfigError(f"duplicate tuple name {tuple_spec.name!r} in {path}")
+            tuples[tuple_spec.name] = tuple_spec
+    if not tuples:
+        raise ConfigError(f"no execution tuples found in {root / 'surfaces'} or {root / 'tuples'}")
+    return tuples
 
 
-def _load_split_provider_payloads(root: Path) -> list[tuple[Path, dict[str, object]]]:
+def _load_split_tuple_payloads(root: Path) -> list[tuple[Path, dict[str, object]]]:
     surfaces_root = root / "surfaces"
     workers_root = root / "workers"
     if not surfaces_root.exists() or not workers_root.exists():
@@ -140,8 +140,8 @@ def _load_split_provider_payloads(root: Path) -> list[tuple[Path, dict[str, obje
         if worker_entry is None:
             raise ConfigError(f"surface {surface_ref!r} references missing worker {worker_key!r}")
         worker_path, worker = worker_entry
-        # Surface and worker files are intentionally joined by worker_ref, not by
-        # cloud provider. One execution surface can host different worker contracts.
+        # Surface and worker files are intentionally joined by worker_ref.
+        # One execution surface can host different worker contracts.
         for field in ("account_ref", "adapter", "execution_surface"):
             surface_value = surface.get(field)
             worker_value = worker.get(field)
@@ -174,7 +174,7 @@ def _required_ref(payload: dict[str, object], field: str, path: Path) -> str:
     return value
 
 
-def _provider_from_payload(path: Path, payload: dict[str, object]) -> ProviderSpec:
+def _tuple_from_payload(path: Path, payload: dict[str, object]) -> ExecutionTupleSpec:
     if not payload.get("execution_surface"):
         adapter = str(payload.get("adapter") or "echo")
         descriptor = adapter_descriptor(adapter)
@@ -182,16 +182,16 @@ def _provider_from_payload(path: Path, payload: dict[str, object]) -> ProviderSp
             payload = dict(payload)
             payload["execution_surface"] = descriptor.execution_surface.value
     try:
-        return ProviderSpec.model_validate(payload)
+        return ExecutionTupleSpec.model_validate(payload)
     except ValidationError as exc:
         raise ConfigError(f"invalid {path}: {_validation_error_summary(exc)}") from exc
 
 
-def _load_provider(path: Path) -> ProviderSpec:
+def _load_tuple(path: Path) -> ExecutionTupleSpec:
     payload = _load_yaml(path)
     if not isinstance(payload, dict):
         raise ConfigError(f"invalid execution tuple YAML in {path}: root must be a mapping")
-    return _provider_from_payload(path, payload)
+    return _tuple_from_payload(path, payload)
 
 def load_models(config_dir: Path | None = None) -> dict[str, ModelSpec]:
     root = config_dir or default_config_dir()
@@ -220,7 +220,7 @@ def load_config(config_dir: Path | None = None) -> GpucallConfig:
     config = GpucallConfig(
         policy=load_policy(root),
         recipes=load_recipes(root),
-        providers=load_providers(root),
+        tuples=load_providers(root),
         models=load_models(root),
         engines=load_engines(root),
         object_store=load_object_store(root),
@@ -253,101 +253,101 @@ def load_tenants(config_dir: Path | None = None) -> dict[str, TenantSpec]:
 
 
 def validate_config(config: GpucallConfig) -> None:
-    tuple_names = set(config.providers)
-    allowed = set(config.policy.providers.allow)
-    denied = set(config.policy.providers.deny)
+    tuple_names = set(config.tuples)
+    allowed = set(config.policy.tuples.allow)
+    denied = set(config.policy.tuples.deny)
     missing_policy = (allowed | denied) - tuple_names
     if missing_policy:
-        raise ConfigError(f"policy references unknown providers: {', '.join(sorted(missing_policy))}")
+        raise ConfigError(f"policy references unknown tuples: {', '.join(sorted(missing_policy))}")
     overlap = allowed & denied
     if overlap:
-        raise ConfigError(f"providers cannot be both allowed and denied: {', '.join(sorted(overlap))}")
+        raise ConfigError(f"tuples cannot be both allowed and denied: {', '.join(sorted(overlap))}")
 
     for recipe in config.recipes.values():
         if not recipe.allowed_modes:
             raise ConfigError(f"recipe {recipe.name!r} must define at least one allowed mode")
-        if not config.policy.providers.max_data_classification.permits(recipe.data_classification):
+        if not config.policy.tuples.max_data_classification.permits(recipe.data_classification):
             raise ConfigError(
                 f"recipe {recipe.name!r} data_classification {recipe.data_classification} exceeds policy ceiling "
-                f"{config.policy.providers.max_data_classification}"
+                f"{config.policy.tuples.max_data_classification}"
             )
         if recipe.auto_select:
-            has_capable_provider = False
-            for provider in config.providers.values():
-                reason = provider_route_rejection_reason(
+            has_capable_tuple = False
+            for tuple_spec in config.tuples.values():
+                reason = tuple_route_rejection_reason(
                     policy=config.policy,
                     recipe=recipe,
-                    provider=provider,
-                    model=config.models.get(provider.model_ref) if provider.model_ref else None,
-                    engine=config.engines.get(provider.engine_ref) if provider.engine_ref else None,
+                    tuple=tuple_spec,
+                    model=config.models.get(tuple_spec.model_ref) if tuple_spec.model_ref else None,
+                    engine=config.engines.get(tuple_spec.engine_ref) if tuple_spec.engine_ref else None,
                     required_len=recipe.max_model_len,
                     auto_selected=True,
                 )
                 if reason is not None:
                     continue
-                has_capable_provider = True
+                has_capable_tuple = True
                 break
-            if not has_capable_provider:
-                raise ConfigError(f"recipe {recipe.name!r} has no provider satisfying its declared requirements")
-    for provider in config.providers.values():
-        if provider.model_ref:
-            model = config.models.get(provider.model_ref)
+            if not has_capable_tuple:
+                raise ConfigError(f"recipe {recipe.name!r} has no tuple satisfying its declared requirements")
+    for tuple_spec in config.tuples.values():
+        if tuple_spec.model_ref:
+            model = config.models.get(tuple_spec.model_ref)
             if model is None:
-                raise ConfigError(f"provider {provider.name!r} references unknown model {provider.model_ref!r}")
-            if provider.model and provider.model != model.provider_model_id:
+                raise ConfigError(f"tuple {tuple_spec.name!r} references unknown model {tuple_spec.model_ref!r}")
+            if tuple_spec.model and tuple_spec.model != model.provider_model_id:
                 raise ConfigError(
-                    f"provider {provider.name!r} model {provider.model!r} does not match model catalog provider_model_id "
+                    f"tuple {tuple_spec.name!r} model {tuple_spec.model!r} does not match model catalog provider_model_id "
                     f"{model.provider_model_id!r}"
                 )
-            if provider.max_model_len > model.max_model_len:
+            if tuple_spec.max_model_len > model.max_model_len:
                 raise ConfigError(
-                    f"provider {provider.name!r} max_model_len {provider.max_model_len} exceeds model catalog capability "
+                    f"tuple {tuple_spec.name!r} max_model_len {tuple_spec.max_model_len} exceeds model catalog capability "
                     f"{model.max_model_len}"
                 )
-        if provider.engine_ref:
-            engine = config.engines.get(provider.engine_ref)
+        if tuple_spec.engine_ref:
+            engine = config.engines.get(tuple_spec.engine_ref)
             if engine is None:
-                raise ConfigError(f"provider {provider.name!r} references unknown engine {provider.engine_ref!r}")
-            if provider.model_ref:
-                model = config.models[provider.model_ref]
-                if model.supported_engines and provider.engine_ref not in model.supported_engines:
+                raise ConfigError(f"tuple {tuple_spec.name!r} references unknown engine {tuple_spec.engine_ref!r}")
+            if tuple_spec.model_ref:
+                model = config.models[tuple_spec.model_ref]
+                if model.supported_engines and tuple_spec.engine_ref not in model.supported_engines:
                     raise ConfigError(
-                        f"provider {provider.name!r} engine {provider.engine_ref!r} is not supported by model {provider.model_ref!r}"
+                        f"tuple {tuple_spec.name!r} engine {tuple_spec.engine_ref!r} is not supported by model {tuple_spec.model_ref!r}"
                     )
-        if provider.declared_model_max_len is not None and provider.max_model_len > provider.declared_model_max_len:
+        if tuple_spec.declared_model_max_len is not None and tuple_spec.max_model_len > tuple_spec.declared_model_max_len:
             raise ConfigError(
-                f"provider {provider.name!r} max_model_len {provider.max_model_len} exceeds declared model capability "
-                f"{provider.declared_model_max_len}"
+                f"tuple {tuple_spec.name!r} max_model_len {tuple_spec.max_model_len} exceeds declared model capability "
+                f"{tuple_spec.declared_model_max_len}"
             )
-        descriptor = adapter_descriptor(provider)
+        descriptor = adapter_descriptor(tuple_spec)
         if (
             descriptor is not None
             and descriptor.execution_surface is not None
-            and provider.execution_surface is not None
-            and provider.execution_surface != descriptor.execution_surface
+            and tuple_spec.execution_surface is not None
+            and tuple_spec.execution_surface != descriptor.execution_surface
         ):
             raise ConfigError(
-                f"provider {provider.name!r} execution_surface {provider.execution_surface!r} does not match adapter "
-                f"{provider.adapter!r} surface {descriptor.execution_surface!r}"
+                f"tuple {tuple_spec.name!r} execution_surface {tuple_spec.execution_surface!r} does not match adapter "
+                f"{tuple_spec.adapter!r} surface {descriptor.execution_surface!r}"
             )
         requires_contracts = descriptor.requires_contracts if descriptor is not None else True
         if requires_contracts:
-            if not provider.endpoint_contract:
-                raise ConfigError(f"tuple {provider.name!r} must declare endpoint_contract")
-            if not provider.input_contracts:
-                raise ConfigError(f"tuple {provider.name!r} must declare input_contracts")
-            if not provider.output_contract:
-                raise ConfigError(f"tuple {provider.name!r} must declare output_contract")
+            if not tuple_spec.endpoint_contract:
+                raise ConfigError(f"tuple {tuple_spec.name!r} must declare endpoint_contract")
+            if not tuple_spec.input_contracts:
+                raise ConfigError(f"tuple {tuple_spec.name!r} must declare input_contracts")
+            if not tuple_spec.output_contract:
+                raise ConfigError(f"tuple {tuple_spec.name!r} must declare output_contract")
         expected = descriptor.endpoint_contract if descriptor is not None else None
-        if expected is not None and provider.endpoint_contract != expected:
-            raise ConfigError(f"tuple {provider.name!r} endpoint_contract must be {expected!r}")
+        if expected is not None and tuple_spec.endpoint_contract != expected:
+            raise ConfigError(f"tuple {tuple_spec.name!r} endpoint_contract must be {expected!r}")
         expected_output = descriptor.output_contract if descriptor is not None else None
-        if expected_output is not None and provider.output_contract != expected_output:
-            raise ConfigError(f"tuple {provider.name!r} output_contract must be {expected_output!r}")
+        if expected_output is not None and tuple_spec.output_contract != expected_output:
+            raise ConfigError(f"tuple {tuple_spec.name!r} output_contract must be {expected_output!r}")
         expected_stream = descriptor.stream_contract if descriptor is not None else None
-        if expected_stream is not None and provider.stream_contract != expected_stream:
-            raise ConfigError(f"tuple {provider.name!r} stream_contract must be {expected_stream!r}")
+        if expected_stream is not None and tuple_spec.stream_contract != expected_stream:
+            raise ConfigError(f"tuple {tuple_spec.name!r} stream_contract must be {expected_stream!r}")
         if descriptor is not None and descriptor.config_validator is not None:
-            findings = descriptor.config_validator(provider)
+            findings = descriptor.config_validator(tuple_spec)
             if findings:
                 raise ConfigError("; ".join(findings))

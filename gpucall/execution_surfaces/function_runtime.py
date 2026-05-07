@@ -12,11 +12,11 @@ from contextlib import ExitStack, contextmanager
 from typing import Any, Iterator
 from uuid import uuid4
 
-from gpucall.domain import ArtifactManifest, CompiledPlan, ProviderError, ProviderResult
+from gpucall.domain import ArtifactManifest, CompiledPlan, TupleError, TupleResult
 from gpucall.execution_surfaces.managed_endpoint import RUNPOD_API_BASE, json_or_error, requests_session
-from gpucall.execution.base import ProviderAdapter, RemoteHandle
+from gpucall.execution.base import TupleAdapter, RemoteHandle
 from gpucall.execution.payloads import plan_payload, plain_text_result
-from gpucall.execution.registry import ProviderAdapterDescriptor, register_adapter
+from gpucall.execution.registry import TupleAdapterDescriptor, register_adapter
 
 _ephemeral_run_lock = threading.Lock()
 
@@ -25,7 +25,7 @@ def _import_modal():
     try:
         import modal  # type: ignore
     except ImportError as exc:
-        raise ProviderError("modal SDK is not installed", retryable=False, status_code=501) from exc
+        raise TupleError("modal SDK is not installed", retryable=False, status_code=501) from exc
     return modal
 
 
@@ -62,7 +62,7 @@ def _modal_output(modal: Any):
 @contextmanager
 def _ephemeral_guard(timeout: float):
     if not _ephemeral_run_lock.acquire(timeout=min(timeout, _lock_timeout())):
-        raise ProviderError("modal ephemeral app.run lock timeout", retryable=True, status_code=503)
+        raise TupleError("modal ephemeral app.run lock timeout", retryable=True, status_code=503)
     try:
         yield
     finally:
@@ -95,7 +95,7 @@ def _split_modal_target(target: str | None) -> tuple[str | None, str | None]:
     return app_name or None, function_name or None
 
 
-class ModalAdapter(ProviderAdapter):
+class ModalAdapter(TupleAdapter):
     """Modal adapter ported from v1, using deployed functions by default."""
 
     def __init__(
@@ -128,13 +128,13 @@ class ModalAdapter(ProviderAdapter):
     async def start(self, plan: CompiledPlan) -> RemoteHandle:
         if not self.app_name or not self.function_name:
             if not self.allow_ephemeral:
-                raise ProviderError(
+                raise TupleError(
                     "Modal requires deployed GPUCALL_MODAL_APP and GPUCALL_MODAL_FN in v2",
                     retryable=False,
                     status_code=501,
                 )
         return RemoteHandle(
-            provider=self.name,
+            tuple=self.name,
             remote_id=uuid4().hex,
             expires_at=plan.expires_at(),
             account_ref="modal",
@@ -144,11 +144,11 @@ class ModalAdapter(ProviderAdapter):
             reaper_eligible=False,
         )
 
-    async def wait(self, handle: RemoteHandle, plan: CompiledPlan) -> ProviderResult:
+    async def wait(self, handle: RemoteHandle, plan: CompiledPlan) -> TupleResult:
         try:
             value = await asyncio.to_thread(self._invoke, plan, plan.timeout_seconds, handle.remote_id)
             if plan.artifact_export is not None:
-                return ProviderResult(kind="artifact_manifest", artifact_manifest=ArtifactManifest.model_validate_json(value))
+                return TupleResult(kind="artifact_manifest", artifact_manifest=ArtifactManifest.model_validate_json(value))
             return plain_text_result(value)
         finally:
             with self._remote_lock:
@@ -245,7 +245,7 @@ class ModalAdapter(ProviderAdapter):
         with _modal_output(modal):
             if self.app_name:
                 if not self.stream_function_name:
-                    raise ProviderError("Modal stream requires explicit stream_target in provider config", retryable=False, status_code=400)
+                    raise TupleError("Modal stream requires explicit stream_target in tuple config", retryable=False, status_code=400)
                 fn = modal.Function.from_name(self.app_name, self.stream_function_name)
                 gen = fn.remote_gen(
                     plan_payload(plan),
@@ -258,7 +258,7 @@ class ModalAdapter(ProviderAdapter):
                     self._streams[remote_id] = gen
             else:
                 if not self.allow_ephemeral:
-                    raise ProviderError("Modal stream requires deployed app in v2", retryable=False, status_code=501)
+                    raise TupleError("Modal stream requires deployed app in v2", retryable=False, status_code=501)
                 from gpucall.worker_contracts.modal import app, vllm_a10g_ref, vllm_t4_ref
 
                 worker = vllm_a10g_ref if (plan.token_budget or 0) > 8192 else vllm_t4_ref
@@ -276,39 +276,39 @@ class ModalAdapter(ProviderAdapter):
                         self._streams[remote_id] = gen
                     for chunk in gen:
                         if time.monotonic() > deadline:
-                            raise ProviderError("Modal stream timed out", retryable=True, status_code=504)
+                            raise TupleError("Modal stream timed out", retryable=True, status_code=504)
                         yield str(chunk)
                 return
             for chunk in gen:
                 if time.monotonic() > deadline:
-                    raise ProviderError("Modal stream timed out", retryable=True, status_code=504)
+                    raise TupleError("Modal stream timed out", retryable=True, status_code=504)
                 yield str(chunk)
 
 
-def modal_config_findings(provider: Any) -> list[str]:
+def modal_config_findings(tuple: Any) -> list[str]:
     findings: list[str] = []
-    app_name, function_name = _split_modal_target(provider.target)
+    app_name, function_name = _split_modal_target(tuple.target)
     if not app_name or not function_name:
-        findings.append(f"tuple {provider.name!r} target must be '<modal-app>:<function>' for deployed Modal functions")
-    stream_contract = str(provider.stream_contract or "none")
+        findings.append(f"tuple {tuple.name!r} target must be '<modal-app>:<function>' for deployed Modal functions")
+    stream_contract = str(tuple.stream_contract or "none")
     if stream_contract != "none":
-        stream_app_name, stream_function_name = _split_modal_target(provider.stream_target)
+        stream_app_name, stream_function_name = _split_modal_target(tuple.stream_target)
         if not stream_app_name or not stream_function_name:
-            findings.append(f"tuple {provider.name!r} stream_target must be '<modal-app>:<function>' when streaming is declared")
+            findings.append(f"tuple {tuple.name!r} stream_target must be '<modal-app>:<function>' when streaming is declared")
         elif app_name and stream_app_name != app_name:
-            findings.append(f"tuple {provider.name!r} stream_target must use the same Modal app as target")
-    elif provider.stream_target:
-        findings.append(f"tuple {provider.name!r} stream_target must not be set when stream_contract is none")
-    if not provider.model:
-        findings.append(f"tuple {provider.name!r} must declare the model served by the Modal function")
-    if provider.endpoint is not None:
-        findings.append(f"tuple {provider.name!r} must not set endpoint for Modal SDK function invocation")
+            findings.append(f"tuple {tuple.name!r} stream_target must use the same Modal app as target")
+    elif tuple.stream_target:
+        findings.append(f"tuple {tuple.name!r} stream_target must not be set when stream_contract is none")
+    if not tuple.model:
+        findings.append(f"tuple {tuple.name!r} must declare the model served by the Modal function")
+    if tuple.endpoint is not None:
+        findings.append(f"tuple {tuple.name!r} must not set endpoint for Modal SDK function invocation")
     return findings
 
 
 @register_adapter(
     "modal",
-    descriptor=ProviderAdapterDescriptor(
+    descriptor=TupleAdapterDescriptor(
         endpoint_contract="modal-function",
         output_contract="plain-text",
         required_auto_fields={"target": "Modal function target is not configured"},
@@ -345,13 +345,13 @@ import os
 import time
 from typing import Any
 
-from gpucall.domain import CompiledPlan, ProviderError, ProviderResult
-from gpucall.execution.base import ProviderAdapter, RemoteHandle
-from gpucall.execution.payloads import gpucall_provider_result, plan_payload
-from gpucall.execution.registry import ProviderAdapterDescriptor, register_adapter
+from gpucall.domain import CompiledPlan, TupleError, TupleResult
+from gpucall.execution.base import TupleAdapter, RemoteHandle
+from gpucall.execution.payloads import gpucall_tuple_result, plan_payload
+from gpucall.execution.registry import TupleAdapterDescriptor, register_adapter
 
 
-class RunpodVllmFlashBootAdapter(ProviderAdapter):
+class RunpodVllmFlashBootAdapter(TupleAdapter):
     """RunPod Flash SDK function endpoint for live-provisioned FlashBoot jobs."""
 
     def __init__(
@@ -377,14 +377,14 @@ class RunpodVllmFlashBootAdapter(ProviderAdapter):
 
     async def start(self, plan: CompiledPlan) -> RemoteHandle:
         if not self.api_key:
-            raise ProviderError("RunPod api_key is not configured", retryable=False, status_code=401)
+            raise TupleError("RunPod api_key is not configured", retryable=False, status_code=401)
         if plan.mode.value == "stream":
-            raise ProviderError("RunPod FlashBoot streaming is not supported in v2.0", retryable=False, status_code=400)
+            raise TupleError("RunPod FlashBoot streaming is not supported in v2.0", retryable=False, status_code=400)
         if not self.model:
-            raise ProviderError("RunPod FlashBoot model is not configured", retryable=False, status_code=400)
+            raise TupleError("RunPod FlashBoot model is not configured", retryable=False, status_code=400)
         resource_name = f"gpucall-flash-worker-{plan.plan_id}"
         return RemoteHandle(
-            provider=self.name,
+            tuple=self.name,
             remote_id=resource_name,
             expires_at=plan.expires_at(),
             account_ref="runpod",
@@ -395,12 +395,12 @@ class RunpodVllmFlashBootAdapter(ProviderAdapter):
             meta={"resource_name": resource_name, "flash_function": True},
         )
 
-    async def wait(self, handle: RemoteHandle, plan: CompiledPlan) -> ProviderResult:
+    async def wait(self, handle: RemoteHandle, plan: CompiledPlan) -> TupleResult:
         try:
             value = await asyncio.wait_for(self._run_flash(plan), timeout=max(float(plan.timeout_seconds), 300.0))
         except asyncio.TimeoutError as exc:
-            raise ProviderError("RunPod FlashBoot timed out", retryable=True, status_code=504) from exc
-        return gpucall_provider_result(value)
+            raise TupleError("RunPod FlashBoot timed out", retryable=True, status_code=504) from exc
+        return gpucall_tuple_result(value)
 
     async def cancel_remote(self, handle: RemoteHandle) -> None:
         resource_id = handle.meta.get("resource_id")
@@ -426,7 +426,7 @@ class RunpodVllmFlashBootAdapter(ProviderAdapter):
             from runpod_flash.endpoint import EndpointJob  # type: ignore
             from gpucall.worker_contracts.runpod_flash import run_inference_on_flash
         except ImportError as exc:
-            raise ProviderError("runpod-flash is not installed", retryable=False, status_code=501) from exc
+            raise TupleError("runpod-flash is not installed", retryable=False, status_code=501) from exc
         value = run_inference_on_flash(payload)
         if inspect.isawaitable(value):
             value = await value
@@ -435,12 +435,12 @@ class RunpodVllmFlashBootAdapter(ProviderAdapter):
             job = EndpointJob(value, endpoint)
             await job.wait(timeout=max(float(plan.timeout_seconds), 300.0))
             if job.error:
-                raise ProviderError("RunPod Flash job failed", retryable=True, status_code=502, code="PROVIDER_JOB_FAILED")
+                raise TupleError("RunPod Flash job failed", retryable=True, status_code=502, code="PROVIDER_JOB_FAILED")
             return job.output
         if hasattr(value, "wait") and hasattr(value, "output"):
             await value.wait(timeout=max(float(plan.timeout_seconds), 300.0))
             if getattr(value, "error", None):
-                raise ProviderError("RunPod Flash job failed", retryable=True, status_code=502, code="PROVIDER_JOB_FAILED")
+                raise TupleError("RunPod Flash job failed", retryable=True, status_code=502, code="PROVIDER_JOB_FAILED")
             return value.output
         if isinstance(value, dict) and value.get("status") == "COMPLETED" and "output" in value:
             return value["output"]
@@ -459,7 +459,7 @@ class RunpodVllmFlashBootAdapter(ProviderAdapter):
         status = data.get("status")
         if status in {"FAILED", "CANCELLED", "TIMED_OUT"}:
             code = "PROVIDER_TIMEOUT" if status == "TIMED_OUT" else "PROVIDER_JOB_FAILED"
-            raise ProviderError(f"RunPod Flash job failed: {status}", retryable=status == "TIMED_OUT", status_code=502, code=code)
+            raise TupleError(f"RunPod Flash job failed: {status}", retryable=status == "TIMED_OUT", status_code=502, code=code)
         if status == "COMPLETED" and "output" in data:
             return data["output"]
         if "output" in data and status is None:
@@ -468,7 +468,7 @@ class RunpodVllmFlashBootAdapter(ProviderAdapter):
         if job_id:
             return self._poll_endpoint_job_sync(str(job_id), plan)
         if "error" in data:
-            raise ProviderError("RunPod Flash job failed", retryable=True, status_code=502, code="PROVIDER_JOB_FAILED")
+            raise TupleError("RunPod Flash job failed", retryable=True, status_code=502, code="PROVIDER_JOB_FAILED")
         return data
 
     def _poll_endpoint_job_sync(self, job_id: str, plan: CompiledPlan) -> Any:
@@ -481,9 +481,9 @@ class RunpodVllmFlashBootAdapter(ProviderAdapter):
                 return data["output"]
             if status in {"FAILED", "CANCELLED", "TIMED_OUT"}:
                 code = "PROVIDER_TIMEOUT" if status == "TIMED_OUT" else "PROVIDER_JOB_FAILED"
-                raise ProviderError(f"RunPod Flash job failed: {status}", retryable=status == "TIMED_OUT", status_code=502, code=code)
+                raise TupleError(f"RunPod Flash job failed: {status}", retryable=status == "TIMED_OUT", status_code=502, code=code)
             time.sleep(2.0)
-        raise ProviderError("RunPod Flash polling timed out", retryable=True, status_code=504)
+        raise TupleError("RunPod Flash polling timed out", retryable=True, status_code=504)
 
     def _headers(self) -> dict[str, str]:
         return {"authorization": f"Bearer {self.api_key}", "content-type": "application/json", "accept": "application/json"}
@@ -522,9 +522,9 @@ def runpod_flash_cleanup_resource_sync(resource_id: str, resource_name: str | No
 
 @register_adapter(
     "runpod-vllm-flashboot",
-    descriptor=ProviderAdapterDescriptor(
+    descriptor=TupleAdapterDescriptor(
         endpoint_contract="runpod-flash-sdk",
-        output_contract="gpucall-provider-result",
+        output_contract="gpucall-tuple-result",
         production_eligible=False,
         production_rejection_reason="RunPod FlashBoot uses the runpod-flash SDK path and is not the official worker-vLLM OpenAI endpoint",
         required_auto_fields={"target": "RunPod endpoint target is not configured"},

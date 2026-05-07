@@ -9,12 +9,12 @@ import types
 import pytest
 import yaml
 
-from gpucall.domain import ChatMessage, CompiledPlan, ExecutionMode, InlineValue, ProviderSpec
+from gpucall.domain import ChatMessage, CompiledPlan, ExecutionMode, InlineValue, ExecutionTupleSpec
 from gpucall.domain import ArtifactExportSpec, DataClassification
 from gpucall.execution_surfaces.iaas_vm import DEFAULT_HYPERSTACK_IMAGE, HyperstackAdapter
 from gpucall.execution import (
     AzureComputeVMAdapter,
-    EchoProvider,
+    EchoTuple,
     GCPConfidentialSpaceVMAdapter,
     LocalOllamaAdapter,
     ModalAdapter,
@@ -23,7 +23,7 @@ from gpucall.execution import (
     build_adapters,
 )
 from gpucall.execution.base import RemoteHandle
-from gpucall.execution.payloads import gpucall_provider_result, plan_payload
+from gpucall.execution.payloads import gpucall_tuple_result, plan_payload
 from gpucall.execution_surfaces.function_runtime import RunpodVllmFlashBootAdapter
 from gpucall.execution_surfaces.managed_endpoint import RunpodServerlessAdapter
 from gpucall.execution_surfaces.managed_endpoint import RunpodVllmServerlessAdapter, runpod_vllm_health_rejection_reason
@@ -34,7 +34,7 @@ def test_router_core_does_not_hardcode_builtin_tuple_implementations() -> None:
     core_files = [
         root / "gpucall" / "config.py",
         root / "gpucall" / "routing.py",
-        root / "gpucall" / "provider_catalog.py",
+        root / "gpucall" / "tuple_catalog.py",
         root / "gpucall" / "execution" / "factory.py",
         root / "gpucall" / "compiler.py",
         root / "gpucall" / "dispatcher.py",
@@ -73,7 +73,7 @@ def test_provider_contract_modules_are_separated_and_sourced() -> None:
         "modal_adapter.py",
         "runpod_vllm_adapter.py",
     ):
-        assert not (root / "gpucall" / "providers" / removed).exists()
+        assert not (root / "gpucall" / "tuples" / removed).exists()
     for module in ("iaas_vm", "managed_endpoint", "function_runtime"):
         assert f"gpucall.execution_surfaces.{module}" in registry
 
@@ -96,7 +96,7 @@ def test_provider_contract_modules_are_separated_and_sourced() -> None:
     flashboot = adapter_descriptor("runpod-vllm-flashboot")
     assert flashboot is not None
     assert flashboot.endpoint_contract == "runpod-flash-sdk"
-    assert flashboot.output_contract == "gpucall-provider-result"
+    assert flashboot.output_contract == "gpucall-tuple-result"
     assert flashboot.production_eligible is False
 
     for adapter in ("azure-compute-vm", "gcp-confidential-space-vm", "scaleway-instance", "ovhcloud-public-cloud-instance"):
@@ -138,9 +138,9 @@ def test_provider_descriptor_conformance_invariants() -> None:
 
 
 def test_factory_builds_configured_adapter_types() -> None:
-    providers = {
-        "echo": ProviderSpec(name="echo", adapter="echo", gpu="L4", vram_gb=24, max_model_len=8192, cost_per_second=0),
-        "local": ProviderSpec(
+    tuples = {
+        "echo": ExecutionTupleSpec(name="echo", adapter="echo", gpu="L4", vram_gb=24, max_model_len=8192, cost_per_second=0),
+        "local": ExecutionTupleSpec(
             name="local",
             adapter="local-ollama",
             gpu="local",
@@ -153,7 +153,7 @@ def test_factory_builds_configured_adapter_types() -> None:
                 output_contract="ollama-generate",
                 model="qwen2.5",
         ),
-        "modal": ProviderSpec(
+        "modal": ExecutionTupleSpec(
             name="modal",
             adapter="modal",
             gpu="A10G",
@@ -166,7 +166,7 @@ def test_factory_builds_configured_adapter_types() -> None:
             output_contract="plain-text",
             model="Qwen/Qwen2.5-1.5B-Instruct",
         ),
-        "hyperstack": ProviderSpec(
+        "hyperstack": ExecutionTupleSpec(
             name="hyperstack",
             adapter="hyperstack",
             gpu="A100",
@@ -182,7 +182,7 @@ def test_factory_builds_configured_adapter_types() -> None:
             key_name="gpucall-key",
             ssh_remote_cidr="203.0.113.0/24",
         ),
-        "runpod-vllm-serverless": ProviderSpec(
+        "runpod-vllm-serverless": ExecutionTupleSpec(
             name="runpod-vllm-serverless",
             adapter="runpod-vllm-serverless",
             gpu="AMPERE_16",
@@ -195,7 +195,7 @@ def test_factory_builds_configured_adapter_types() -> None:
             output_contract="openai-chat-completions",
             model="Qwen/Qwen2.5-1.5B-Instruct",
         ),
-        "runpod-vllm-flashboot": ProviderSpec(
+        "runpod-vllm-flashboot": ExecutionTupleSpec(
             name="runpod-vllm-flashboot",
             adapter="runpod-vllm-flashboot",
             gpu="AMPERE_16",
@@ -205,10 +205,10 @@ def test_factory_builds_configured_adapter_types() -> None:
             target="endpoint-2",
             image="runpod/worker-v1-vllm:v2.18.1",
             endpoint_contract="openai-chat-completions",
-            output_contract="gpucall-provider-result",
+            output_contract="gpucall-tuple-result",
             model="Qwen/Qwen2.5-1.5B-Instruct",
         ),
-        "azure": ProviderSpec(
+        "azure": ExecutionTupleSpec(
             name="azure",
             adapter="azure-compute-vm",
             gpu="H100",
@@ -217,9 +217,9 @@ def test_factory_builds_configured_adapter_types() -> None:
             cost_per_second=0,
             resource_group="rg",
             region="eastus",
-            network="/subscriptions/s/resourceGroups/rg/providers/Microsoft.Network/networkInterfaces/nic",
+            network="/subscriptions/s/resourceGroups/rg/tuples/Microsoft.Network/networkInterfaces/nic",
             endpoint_contract="azure-compute-vm",
-            output_contract="gpucall-provider-result",
+            output_contract="gpucall-tuple-result",
             instance="Standard_NC40ads_H100_v5",
             provider_params={
                 "image_reference": {"publisher": "Canonical", "offer": "ubuntu-24_04-lts", "sku": "server", "version": "latest"},
@@ -227,7 +227,7 @@ def test_factory_builds_configured_adapter_types() -> None:
                 "ssh_public_key": "ssh-ed25519 AAAA test",
             },
         ),
-        "gcp": ProviderSpec(
+        "gcp": ExecutionTupleSpec(
             name="gcp",
             adapter="gcp-confidential-space-vm",
             gpu="H100",
@@ -238,11 +238,11 @@ def test_factory_builds_configured_adapter_types() -> None:
             zone="us-central1-a",
             network="global/networks/default",
             endpoint_contract="gcp-confidential-space-vm",
-            output_contract="gpucall-provider-result",
+            output_contract="gpucall-tuple-result",
             instance="zones/us-central1-a/machineTypes/a3-highgpu-1g",
             image="projects/confidential-space-images/global/images/family/confidential-space",
         ),
-        "scaleway": ProviderSpec(
+        "scaleway": ExecutionTupleSpec(
             name="scaleway",
             adapter="scaleway-instance",
             gpu="L40S",
@@ -250,13 +250,13 @@ def test_factory_builds_configured_adapter_types() -> None:
             max_model_len=32768,
             cost_per_second=0,
             endpoint_contract="scaleway-instance",
-            output_contract="gpucall-provider-result",
+            output_contract="gpucall-tuple-result",
             project_id="project",
             zone="fr-par-1",
             instance="GPU-L40S",
             image="ubuntu_noble",
         ),
-        "ovhcloud": ProviderSpec(
+        "ovhcloud": ExecutionTupleSpec(
             name="ovhcloud",
             adapter="ovhcloud-public-cloud-instance",
             gpu="L40S",
@@ -264,7 +264,7 @@ def test_factory_builds_configured_adapter_types() -> None:
             max_model_len=32768,
             cost_per_second=0,
             endpoint_contract="ovhcloud-public-cloud-instance",
-            output_contract="gpucall-provider-result",
+            output_contract="gpucall-tuple-result",
             project_id="service",
             region="GRA11",
             instance="flavor-id",
@@ -273,9 +273,9 @@ def test_factory_builds_configured_adapter_types() -> None:
         ),
     }
 
-    adapters = build_adapters(providers)
+    adapters = build_adapters(tuples)
 
-    assert isinstance(adapters["echo"], EchoProvider)
+    assert isinstance(adapters["echo"], EchoTuple)
     assert isinstance(adapters["local"], LocalOllamaAdapter)
     assert isinstance(adapters["modal"], ModalAdapter)
     assert isinstance(adapters["hyperstack"], HyperstackAdapter)
@@ -296,7 +296,7 @@ def test_provider_payload_contains_refs_not_dereferenced_data() -> None:
         recipe_name="r1",
         task="infer",
         mode=ExecutionMode.SYNC,
-        provider_chain=["p1"],
+        tuple_chain=["p1"],
         timeout_seconds=2,
         lease_ttl_seconds=10,
         tokenizer_family="qwen",
@@ -382,7 +382,7 @@ async def test_runpod_flash_cancel_without_owned_resource_is_noop(monkeypatch) -
 
     monkeypatch.setattr("gpucall.execution_surfaces.function_runtime.runpod_flash_cleanup_resource_sync", cleanup)
     adapter = RunpodVllmFlashBootAdapter(api_key="test", model="Qwen/Qwen2.5-1.5B-Instruct")
-    handle = RemoteHandle(provider="runpod-vllm-flashboot", remote_id="job", expires_at=plan_payload_plan().expires_at())
+    handle = RemoteHandle(tuple="runpod-vllm-flashboot", remote_id="job", expires_at=plan_payload_plan().expires_at())
 
     await adapter.cancel_remote(handle)
 
@@ -455,7 +455,7 @@ def test_runpod_flashboot_declares_non_openai_contract() -> None:
 
     assert descriptor is not None
     assert descriptor.endpoint_contract == "runpod-flash-sdk"
-    assert descriptor.output_contract == "gpucall-provider-result"
+    assert descriptor.output_contract == "gpucall-tuple-result"
     assert descriptor.production_eligible is False
 
 
@@ -618,7 +618,7 @@ def test_runpod_serverless_uses_rest_policy_and_cancel(monkeypatch) -> None:
     run_request = adapter._start_sync(plan)
     sync_request = adapter._runsync_sync(plan)
     result = adapter._wait_sync(
-        RemoteHandle(provider="runpod", remote_id=sync_request["job_id"], expires_at=plan.expires_at(), meta=sync_request),
+        RemoteHandle(tuple="runpod", remote_id=sync_request["job_id"], expires_at=plan.expires_at(), meta=sync_request),
         plan,
     )
     adapter._cancel_sync("job-1")
@@ -633,11 +633,11 @@ def test_runpod_serverless_uses_rest_policy_and_cancel(monkeypatch) -> None:
     assert calls[2][1] == "https://api.runpod.ai/v2/endpoint-1/cancel/job-1"
 
 
-def test_gpucall_provider_result_rejects_heuristic_output_shapes() -> None:
-    from gpucall.domain import ProviderError
+def test_gpucall_tuple_result_rejects_heuristic_output_shapes() -> None:
+    from gpucall.domain import TupleError
 
-    with pytest.raises(ProviderError, match="ProviderResult contract"):
-        gpucall_provider_result({"output": "ok"})
+    with pytest.raises(TupleError, match="TupleResult contract"):
+        gpucall_tuple_result({"output": "ok"})
 
 
 def test_local_ollama_rejects_data_refs_without_leaking_uri() -> None:
@@ -666,7 +666,7 @@ def plan_payload_plan() -> CompiledPlan:
         recipe_name="r1",
         task="infer",
         mode=ExecutionMode.SYNC,
-        provider_chain=["p1"],
+        tuple_chain=["p1"],
         timeout_seconds=2,
         lease_ttl_seconds=10,
         tokenizer_family="qwen",
@@ -715,7 +715,7 @@ async def test_azure_adapter_uses_compute_management_client(monkeypatch) -> None
         location="eastus",
         vm_size="Standard_NC40ads_H100_v5",
         image_reference={"publisher": "Canonical", "offer": "ubuntu-24_04-lts", "sku": "server", "version": "latest"},
-        network_interface_id="/subscriptions/s/resourceGroups/rg/providers/Microsoft.Network/networkInterfaces/nic",
+        network_interface_id="/subscriptions/s/resourceGroups/rg/tuples/Microsoft.Network/networkInterfaces/nic",
         admin_username="azureuser",
         ssh_public_key="ssh-ed25519 AAAA test",
         params={"vm_name": "gpucall-test"},
@@ -882,7 +882,7 @@ async def test_ovhcloud_adapter_uses_official_sdk_paths(monkeypatch) -> None:
 
 async def test_lifecycle_only_adapters_do_not_fake_provider_success() -> None:
     adapter = ScalewayInstanceAdapter(secret_key="secret", project_id="project", zone="fr-par-1", commercial_type="GPU-L40S", image="ubuntu")
-    handle = RemoteHandle(provider="scaleway", remote_id="server-1", expires_at=plan_payload_plan().expires_at())
+    handle = RemoteHandle(tuple="scaleway", remote_id="server-1", expires_at=plan_payload_plan().expires_at())
 
     with pytest.raises(Exception) as exc_info:
         await adapter.wait(handle, plan_payload_plan())
@@ -1241,7 +1241,7 @@ def test_hyperstack_wait_parses_artifact_manifest(tmp_path) -> None:
         }
     )
     handle = RemoteHandle(
-        provider="hyperstack",
+        tuple="hyperstack",
         remote_id="vm-1",
         expires_at=plan.expires_at(),
         meta={"ssh_channel": FakeChannel(), "ssh_client": FakeSSH()},

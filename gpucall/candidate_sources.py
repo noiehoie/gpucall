@@ -8,7 +8,7 @@ import yaml
 
 def load_tuple_candidate_payloads(config_dir: Path) -> list[dict[str, Any]]:
     """Return explicit and generated candidate tuples in the legacy payload shape."""
-    payloads = _load_explicit_candidates(config_dir / "provider_candidates")
+    payloads = _load_explicit_candidates(config_dir / "tuple_candidates")
     payloads.extend(_load_generated_candidates(config_dir / "candidate_sources"))
     return sorted(payloads, key=lambda item: str(item.get("name") or ""))
 
@@ -114,7 +114,7 @@ def _worker_fields(family: Mapping[str, Any], model: Mapping[str, Any]) -> dict[
     return {
         "model": provider_model_id,
         "provider_params": {
-            "worker_contract": "gpucall-provider-result",
+            "worker_contract": "gpucall-tuple-result",
             "worker_image_required": True,
             "worker_env": {
                 "GPUCALL_WORKER_MODEL": provider_model_id,

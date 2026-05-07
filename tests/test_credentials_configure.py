@@ -34,7 +34,7 @@ def test_configure_runpod_interactive_flow(tmp_path, monkeypatch, capsys) -> Non
     out = capsys.readouterr().out
     assert creds["runpod"] == {"api_key": "secret-key"}
     assert "api_key:runpod" in configured_credentials()
-    assert "providers/runpod.yml" in out
+    assert "tuples/runpod.yml" in out
     assert "runpod-serverless" in out
     assert "Setup session finished" in out
     assert "gpucall doctor" in out

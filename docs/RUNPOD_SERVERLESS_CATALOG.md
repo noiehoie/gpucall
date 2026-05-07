@@ -24,7 +24,7 @@ declare:
 - `adapter: runpod-serverless`
 - `engine_ref: runpod-serverless-gpucall`
 - `endpoint_contract: runpod-serverless`
-- `output_contract: gpucall-provider-result`
+- `output_contract: gpucall-tuple-result`
 - a required custom gpucall-compatible worker image before promotion
 
 ## GPU Scope
@@ -56,5 +56,5 @@ Candidate tuples must not enter production routing until all of these are true:
 
 For OpenAI-compatible LLM traffic, prefer `runpod-vllm-*`. Use
 `runpod-native-*` when a gpucall worker must fetch DataRefs, return
-`gpucall-provider-result`, or implement behavior that the official worker-vLLM
+`gpucall-tuple-result`, or implement behavior that the official worker-vLLM
 contract cannot provide.

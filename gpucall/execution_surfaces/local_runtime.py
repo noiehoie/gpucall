@@ -5,13 +5,13 @@ import asyncio
 from datetime import datetime, timezone
 from uuid import uuid4
 
-from gpucall.domain import CompiledPlan, ProviderError, ProviderResult
-from gpucall.execution.base import ProviderAdapter, RemoteHandle
-from gpucall.execution.registry import ProviderAdapterDescriptor, register_adapter
+from gpucall.domain import CompiledPlan, TupleError, TupleResult
+from gpucall.execution.base import TupleAdapter, RemoteHandle
+from gpucall.execution.registry import TupleAdapterDescriptor, register_adapter
 
 
-class EchoProvider(ProviderAdapter):
-    """Local deterministic provider for development and contract tests."""
+class EchoTuple(TupleAdapter):
+    """Local deterministic tuple for development and contract tests."""
 
     def __init__(self, name: str = "local-echo", latency_seconds: float = 0.01) -> None:
         self.name = name
@@ -20,7 +20,7 @@ class EchoProvider(ProviderAdapter):
 
     async def start(self, plan: CompiledPlan) -> RemoteHandle:
         return RemoteHandle(
-            provider=self.name,
+            tuple=self.name,
             remote_id=uuid4().hex,
             expires_at=plan.expires_at(),
             account_ref="local",
@@ -30,13 +30,13 @@ class EchoProvider(ProviderAdapter):
             reaper_eligible=False,
         )
 
-    async def wait(self, handle: RemoteHandle, plan: CompiledPlan) -> ProviderResult:
+    async def wait(self, handle: RemoteHandle, plan: CompiledPlan) -> TupleResult:
         if datetime.now(timezone.utc) >= handle.expires_at:
-            raise ProviderError("lease expired before completion", retryable=True, status_code=504)
+            raise TupleError("lease expired before completion", retryable=True, status_code=504)
         await asyncio.sleep(self.latency_seconds)
         if handle.remote_id in self.cancelled:
-            raise ProviderError("remote execution cancelled", retryable=False, status_code=499)
-        return ProviderResult(kind="inline", value=f"ok:{plan.task}:{handle.provider}")
+            raise TupleError("remote execution cancelled", retryable=False, status_code=499)
+        return TupleResult(kind="inline", value=f"ok:{plan.task}:{handle.tuple}")
 
     async def cancel_remote(self, handle: RemoteHandle) -> None:
         self.cancelled.add(handle.remote_id)
@@ -44,35 +44,35 @@ class EchoProvider(ProviderAdapter):
     async def stream(self, handle: RemoteHandle, plan: CompiledPlan):
         yield ": heartbeat\n\n"
         await asyncio.sleep(self.latency_seconds)
-        yield f"data: ok:{plan.task}:{handle.provider}\n\n"
+        yield f"data: ok:{plan.task}:{handle.tuple}\n\n"
 
 
 @register_adapter(
     "echo",
-    descriptor=ProviderAdapterDescriptor(
+    descriptor=TupleAdapterDescriptor(
         requires_contracts=False,
         stream_contract=None,
         production_eligible=False,
-        production_rejection_reason="smoke/fake provider is not eligible for production auto-routing",
+        production_rejection_reason="smoke/fake tuple is not eligible for production auto-routing",
         local_execution=True,
         requires_model_for_auto=False,
     ),
 )
 def build_echo_adapter(spec, _credentials):
-    return EchoProvider(name=spec.name)
+    return EchoTuple(name=spec.name)
 
 
 from uuid import uuid4
 
 import httpx
 
-from gpucall.domain import CompiledPlan, ProviderError, ProviderResult
-from gpucall.execution.base import ProviderAdapter, RemoteHandle
+from gpucall.domain import CompiledPlan, TupleError, TupleResult
+from gpucall.execution.base import TupleAdapter, RemoteHandle
 from gpucall.execution.payloads import ollama_generate_result
-from gpucall.execution.registry import ProviderAdapterDescriptor, register_adapter
+from gpucall.execution.registry import TupleAdapterDescriptor, register_adapter
 
 
-class LocalOllamaAdapter(ProviderAdapter):
+class LocalOllamaAdapter(TupleAdapter):
     def __init__(
         self,
         name: str = "local-ollama",
@@ -86,7 +86,7 @@ class LocalOllamaAdapter(ProviderAdapter):
 
     async def start(self, plan: CompiledPlan) -> RemoteHandle:
         return RemoteHandle(
-            provider=self.name,
+            tuple=self.name,
             remote_id=uuid4().hex,
             expires_at=plan.expires_at(),
             account_ref="local",
@@ -96,7 +96,7 @@ class LocalOllamaAdapter(ProviderAdapter):
             reaper_eligible=False,
         )
 
-    async def wait(self, handle: RemoteHandle, plan: CompiledPlan) -> ProviderResult:
+    async def wait(self, handle: RemoteHandle, plan: CompiledPlan) -> TupleResult:
         prompt = self._prompt_from_plan(plan)
         try:
             async with httpx.AsyncClient(timeout=plan.timeout_seconds) as client:
@@ -105,25 +105,25 @@ class LocalOllamaAdapter(ProviderAdapter):
                     json={"model": self.model, "prompt": prompt, "stream": False},
                 )
             if response.status_code == 404:
-                raise ProviderError("local Ollama model or endpoint not found", retryable=False, status_code=502)
+                raise TupleError("local Ollama model or endpoint not found", retryable=False, status_code=502)
             response.raise_for_status()
             return ollama_generate_result(response.json())
-        except ProviderError:
+        except TupleError:
             raise
         except httpx.ConnectError as exc:
-            raise ProviderError("local Ollama is unavailable", retryable=True, status_code=503) from exc
+            raise TupleError("local Ollama is unavailable", retryable=True, status_code=503) from exc
         except httpx.HTTPStatusError as exc:
             retryable = exc.response.status_code >= 500
-            raise ProviderError(f"local Ollama failed: {exc.response.status_code}", retryable=retryable, status_code=502) from exc
+            raise TupleError(f"local Ollama failed: {exc.response.status_code}", retryable=retryable, status_code=502) from exc
         except httpx.TimeoutException as exc:
-            raise ProviderError("local Ollama timed out", retryable=True, status_code=504) from exc
+            raise TupleError("local Ollama timed out", retryable=True, status_code=504) from exc
 
     async def cancel_remote(self, handle: RemoteHandle) -> None:
         return None
 
     def _prompt_from_plan(self, plan: CompiledPlan) -> str:
         if plan.input_refs:
-            raise ProviderError("local Ollama does not support data_refs", retryable=False, status_code=400)
+            raise TupleError("local Ollama does not support data_refs", retryable=False, status_code=400)
         if "prompt" in plan.inline_inputs:
             return plan.inline_inputs["prompt"].value
         if plan.messages:
@@ -136,7 +136,7 @@ class LocalOllamaAdapter(ProviderAdapter):
 @register_adapter(
     "local-ollama",
     aliases=("local", "ollama"),
-    descriptor=ProviderAdapterDescriptor(
+    descriptor=TupleAdapterDescriptor(
         endpoint_contract="ollama-generate",
         output_contract="ollama-generate",
         local_execution=True,

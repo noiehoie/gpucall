@@ -10,9 +10,9 @@ def test_lease_reaper_reports_active_manifest_leases(tmp_path) -> None:
     manifest.write_text(
         "\n".join(
             [
-                json.dumps({"event": "provision.created", "provider": "hyperstack", "vm_id": "vm-1"}),
-                json.dumps({"event": "provision.created", "provider": "hyperstack", "vm_id": "vm-2"}),
-                json.dumps({"event": "destroyed", "provider": "hyperstack", "vm_id": "vm-1"}),
+                json.dumps({"event": "provision.created", "tuple": "hyperstack", "vm_id": "vm-1"}),
+                json.dumps({"event": "provision.created", "tuple": "hyperstack", "vm_id": "vm-2"}),
+                json.dumps({"event": "destroyed", "tuple": "hyperstack", "vm_id": "vm-1"}),
             ]
         )
         + "\n",

@@ -1,6 +1,6 @@
 # gpucall Recipe Draft Tool
 
-`gpucall-recipe-draft` is an operator-assist tool for cases where a caller's workload does not match the recipes and providers currently installed in a gpucall gateway.
+`gpucall-recipe-draft` is an operator-assist tool for cases where a caller's workload does not match the recipes and tuples currently installed in a gpucall gateway.
 
 It is intentionally separate from the gateway runtime.
 
@@ -135,8 +135,8 @@ gpucall-recipe-draft quality \
   --bytes 1136521 \
   --dimension 1200x2287 \
   --selected-recipe vision-image-standard \
-  --selected-provider modal-vision-a10g \
-  --selected-provider-model Salesforce/blip-vqa-base \
+  --selected-tuple modal-vision-a10g \
+  --selected-tuple-model Salesforce/blip-vqa-base \
   --quality-failure-kind insufficient_ocr \
   --quality-failure-reason "short answer only; expected top headlines" \
   --remote-inbox admin@gpucall.example.internal:/srv/gpucall/state/recipe_requests/inbox \

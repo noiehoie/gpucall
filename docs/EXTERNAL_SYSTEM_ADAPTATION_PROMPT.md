@@ -1,6 +1,6 @@
 # External System Adaptation Prompt
 
-Use this prompt when asking another code agent to migrate an existing system to gpucall v2.0. It is intentionally prescriptive: external systems should send task intent and data references, while gpucall owns recipe selection, provider routing, governance, fallback, lease handling, and audit.
+Use this prompt when asking another code agent to migrate an existing system to gpucall v2.0. It is intentionally prescriptive: external systems should send task intent and data references, while gpucall owns recipe selection, tuple routing, governance, fallback, lease handling, and audit.
 
 ```text
 あなたは既存システムの実装担当エージェントです。
@@ -30,7 +30,7 @@ public internet には公開されていません。
 
 # 2. gpucall v2.0 の基本思想
 
-外部システムは provider を選ばない。
+外部システムは tuple を選ばない。
 外部システムは通常 recipe も選ばない。
 
 外部システムは以下だけを送る。
@@ -40,14 +40,14 @@ public internet には公開されていません。
 - inline_inputs または input_refs
 - max_tokens 等の実行希望
 
-recipe / provider / GPU / model / engine / fallback / circuit breaker / governance / lease / audit は gpucall Gateway 側が決定する。
+recipe / tuple / GPU / model / engine / fallback / circuit breaker / governance / lease / audit は gpucall Gateway 側が決定する。
 
 通常 payload に以下を含めないこと。
 
-- `requested_provider`
+- `requested_tuple`
 - `recipe`
 
-これらは public task endpoint では拒否される。recipe / provider 選択は gateway の責務であり、外部システムは要求だけを送る。
+これらは public task endpoint では拒否される。recipe / tuple 選択は gateway の責務であり、外部システムは要求だけを送る。
 
 # 3. API endpoint
 
@@ -116,7 +116,7 @@ gpucall 専用 client wrapper を実装または修正してください。
 - 全 task endpoint に `Authorization: Bearer <token>` を付ける
 - API key 未設定時に明確なエラーを出す
 - 401 では「GPUCALL_API_KEY を確認」とわかるエラーにする
-- `recipe` / `requested_provider` は payload に含めない
+- `recipe` / `requested_tuple` は payload に含めない
 
 期待実装例:
 
@@ -251,7 +251,7 @@ GitHub Actions 例:
 ## 9.1 Payload construction
 
 - payload に `recipe` が含まれない
-- payload に `requested_provider` が含まれない
+- payload に `requested_tuple` が含まれない
 - payload に GPU や provider 指定が含まれない
 - `task` と `mode` は含まれる
 - `inline_inputs.prompt.value` 形式になっている
@@ -342,7 +342,7 @@ D. DataRef smoke:
 3. `/infer` を使っていない
 4. `/v2/tasks/sync|async|stream` を使っている
 5. payload に `recipe` が含まれない
-6. payload に `requested_provider` が含まれない
+6. payload に `requested_tuple` が含まれない
 7. payload に GPU や provider 指定が含まれない
 8. sync infer が通る
 9. async infer が graceful に動く
@@ -376,6 +376,6 @@ D. DataRef smoke:
 - Sending `input_refs` as an object instead of a list.
 - Treating async completion with no inline result as a hard crash.
 - Always sending `recipe: text-infer-standard`, which pins external systems to gateway internals.
-- Sending `requested_provider` from application code.
+- Sending `requested_tuple` from application code.
 - Printing the gateway API key in completion reports.
 - Using `pip install -e ".[dev]"` in repositories whose policy requires `uv`.

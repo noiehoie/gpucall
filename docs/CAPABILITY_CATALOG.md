@@ -20,8 +20,8 @@ config/
   surfaces/*.yml
   workers/*.yml
   candidate_sources/*.yml
-  provider_candidates/*.yml
-  providers/*.yml.example
+  tuple_candidates/*.yml
+  tuples/*.yml.example
 ```
 
 Recipes use the caller-facing v2 DSL and contain workload requirements:
@@ -81,7 +81,7 @@ can be promoted into active `surfaces/*.yml` and `workers/*.yml`.
 Candidate sources such as `candidate_sources/*.yml` are deterministic generators
 for broad surfaces. For example, RunPod Serverless candidates are generated from
 GPU, model, and worker-family matrices instead of maintaining one YAML file per
-possible tuple. `provider_candidates/*.yml` remains available for small explicit
+possible tuple. `tuple_candidates/*.yml` remains available for small explicit
 candidate definitions and for compatibility with existing catalog tooling.
 
 ## Catalog DB

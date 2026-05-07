@@ -26,7 +26,7 @@ from gpucall.compiler import GovernanceCompiler
 from gpucall.config import ConfigError, default_config_dir, default_state_dir, load_config
 from gpucall.configure import configure_command
 from gpucall.credentials import configured_credentials, credentials_path, load_credentials
-from gpucall.domain import ExecutionMode, JobState, PresignPutRequest, ProviderError, TaskRequest
+from gpucall.domain import ExecutionMode, JobState, PresignPutRequest, TupleError, TaskRequest
 from gpucall.execution_catalog import build_resource_catalog_snapshot, dumps_candidates, dumps_snapshot as dumps_execution_snapshot, generate_tuple_candidates
 from gpucall.execution.contracts import (
     artifact_tuple_evidence_key,
@@ -36,12 +36,12 @@ from gpucall.execution.contracts import (
     tuple_evidence_label,
 )
 from gpucall.lease_reaper import active_manifest_leases, lease_reaper_report
-from gpucall.provider_audit import provider_audit_report
-from gpucall.provider_catalog import live_provider_catalog_findings
-from gpucall.execution.registry import adapter_descriptor, provider_family_for_adapter
+from gpucall.tuple_audit import tuple_audit_report
+from gpucall.tuple_catalog import live_tuple_catalog_findings
+from gpucall.execution.registry import adapter_descriptor, vendor_family_for_adapter
 from gpucall.registry import ObservedRegistry
 from gpucall.audit import AuditTrail
-from gpucall.routing import provider_route_rejection_reason
+from gpucall.routing import tuple_route_rejection_reason
 from gpucall.sqlite_store import SQLiteJobStore
 from gpucall.tenant import TenantUsageLedger
 
@@ -57,7 +57,7 @@ def main() -> None:
     explain.add_argument("recipe_name")
     explain.add_argument("--config-dir", type=Path, default=default_config_dir())
     explain.add_argument("--mode", choices=[mode.value for mode in ExecutionMode], default=None)
-    explain.add_argument("--provider", default=None)
+    explain.add_argument("--tuple", dest="tuple_name", default=None)
     explain.add_argument("--max-tokens", type=int, default=None)
     explain.add_argument("--timeout-seconds", type=int, default=None)
     explain.add_argument("--lease-ttl-seconds", type=int, default=None)
@@ -66,7 +66,7 @@ def main() -> None:
     init.add_argument("--force", action="store_true")
     doctor = sub.add_parser("doctor")
     doctor.add_argument("--config-dir", type=Path, default=default_config_dir())
-    doctor.add_argument("--live-provider-catalog", action="store_true")
+    doctor.add_argument("--live-tuple-catalog", action="store_true")
     validate = sub.add_parser("validate-config")
     validate.add_argument("--config-dir", type=Path, default=default_config_dir())
     seed = sub.add_parser("seed-liveness")
@@ -156,7 +156,7 @@ def main() -> None:
                 task=recipe.task,
                 mode=mode,
                 recipe=recipe.name,
-                requested_provider=args.provider,
+                requested_tuple=args.tuple_name,
                 max_tokens=args.max_tokens,
                 timeout_seconds=args.timeout_seconds,
                 lease_ttl_seconds=args.lease_ttl_seconds,
@@ -165,7 +165,7 @@ def main() -> None:
             compiler = GovernanceCompiler(
                 policy=config.policy,
                 recipes=config.recipes,
-                providers=config.providers,
+                tuples=config.tuples,
                 models=config.models,
                 engines=config.engines,
                 registry=ObservedRegistry(),
@@ -182,7 +182,7 @@ def main() -> None:
                         "max_timeout_seconds": config.policy.max_timeout_seconds,
                         "max_lease_ttl_seconds": config.policy.max_lease_ttl_seconds,
                         "inline_bytes_limit": config.policy.inline_bytes_limit,
-                        "max_data_classification": config.policy.providers.max_data_classification,
+                        "max_data_classification": config.policy.tuples.max_data_classification,
                     },
                     "recipe_standard": recipe.model_dump(mode="json"),
                     "execution_spec": plan.model_dump(mode="json", exclude={"inline_inputs", "input_refs"}),
@@ -194,7 +194,7 @@ def main() -> None:
     elif args.command == "init":
         init_config(args.config_dir, force=args.force)
     elif args.command == "doctor":
-        doctor_config(args.config_dir, live_provider_catalog=args.live_provider_catalog)
+        doctor_config(args.config_dir, live_tuple_catalog=args.live_tuple_catalog)
     elif args.command == "validate-config":
         validate_config_command(args.config_dir)
     elif args.command == "seed-liveness":
@@ -218,7 +218,7 @@ def main() -> None:
     elif args.command == "cost-audit":
         cost_audit_command(args.config_dir, live=args.live)
     elif args.command == "tuple-audit":
-        provider_audit_command(args.config_dir, recipe=args.recipe, live=args.live)
+        tuple_audit_command(args.config_dir, recipe=args.recipe, live=args.live)
     elif args.command == "cleanup-audit":
         cleanup_audit_command(args.config_dir)
     elif args.command == "lease-reaper":
@@ -274,7 +274,7 @@ def init_config(config_dir: Path, *, force: bool = False) -> None:
     print(f"initialized gpucall config at {config_dir}")
 
 
-def doctor_config(config_dir: Path, *, live_provider_catalog: bool = False) -> None:
+def doctor_config(config_dir: Path, *, live_tuple_catalog: bool = False) -> None:
     try:
         config = load_config(config_dir)
     except ConfigError as exc:
@@ -286,7 +286,7 @@ def doctor_config(config_dir: Path, *, live_provider_catalog: bool = False) -> N
         "state_dir": str(default_state_dir()),
         "policy_version": config.policy.version,
         "recipes": sorted(config.recipes),
-        "providers": sorted(config.providers),
+        "tuples": sorted(config.tuples),
         "models": sorted(config.models),
         "engines": sorted(config.engines),
         "object_store": config.object_store.model_dump(mode="json") if config.object_store else None,
@@ -294,9 +294,9 @@ def doctor_config(config_dir: Path, *, live_provider_catalog: bool = False) -> N
         "routing": _routing_decision_summary(config),
         "secrets": _secret_presence_summary(creds),
     }
-    if live_provider_catalog:
-        catalog_findings = live_provider_catalog_findings(config.providers, creds)
-        checks["live_provider_catalog"] = {
+    if live_tuple_catalog:
+        catalog_findings = live_tuple_catalog_findings(config.tuples, creds)
+        checks["live_tuple_catalog"] = {
             "ok": not catalog_findings,
             "findings": catalog_findings,
         }
@@ -307,7 +307,7 @@ def validate_config_command(config_dir: Path) -> None:
     config = load_config(config_dir)
     print(
         json.dumps(
-            {"valid": True, "recipes": sorted(config.recipes), "providers": sorted(config.providers), "tenants": sorted(config.tenants)},
+            {"valid": True, "recipes": sorted(config.recipes), "tuples": sorted(config.tuples), "tenants": sorted(config.tenants)},
             indent=2,
             sort_keys=True,
         )
@@ -386,7 +386,7 @@ def release_check_command(config_dir: Path, output_dir: Path) -> None:
         "commit": _git_commit(),
         "config_hash": _config_hash(config_dir),
         "policy_version": config.policy.version,
-        "providers": sorted(config.providers),
+        "tuples": sorted(config.tuples),
         "recipes": sorted(config.recipes),
         "tenants": sorted(config.tenants),
         "static_launch_go": launch_report["go"],
@@ -409,8 +409,8 @@ def build_launch_report(config_dir: Path, *, url: str | None = None, api_key: st
     provider_samples = _configured_registry_snapshot(config)
     cost_audit = _cost_audit_report(config, creds, config_dir=config_dir, live=profile == "production")
     cleanup_audit = _cleanup_audit_report(config)
-    provider_audit = provider_audit_report(config, config_dir=config_dir, live=False)
-    tuple_validation_gaps = _tuple_validation_gaps(provider_audit) if profile == "production" else []
+    tuple_audit = tuple_audit_report(config, config_dir=config_dir, live=False)
+    tuple_validation_gaps = _tuple_validation_gaps(tuple_audit) if profile == "production" else []
     live_cost_findings = _live_cost_audit_findings(cost_audit.get("live")) if profile == "production" else []
     gateway_smoke: dict[str, object] | None = None
     if url:
@@ -444,7 +444,7 @@ def build_launch_report(config_dir: Path, *, url: str | None = None, api_key: st
             "launch_runbook": (PROJECT_ROOT / "LAUNCH_MVP.md").exists(),
             "security": (PROJECT_ROOT / "SECURITY.md").exists(),
             "observability": (PROJECT_ROOT / "docs" / "OBSERVABILITY.md").exists(),
-            "tuple_validation": (PROJECT_ROOT / "docs" / "PROVIDER_VALIDATION.md").exists(),
+            "tuple_validation": (PROJECT_ROOT / "docs" / "TUPLE_VALIDATION.md").exists(),
         },
         "launch_profile": profile,
         "tenant_governance": {
@@ -456,7 +456,7 @@ def build_launch_report(config_dir: Path, *, url: str | None = None, api_key: st
         "cost_audit_live_ok": not live_cost_findings,
         "cost_audit_live_findings": live_cost_findings,
         "cleanup_audit": cleanup_audit,
-        "provider_audit": _provider_audit_launch_summary(provider_audit),
+        "tuple_audit": _tuple_audit_launch_summary(tuple_audit),
     }
     required_paths = {
         "/healthz",
@@ -480,10 +480,10 @@ def build_launch_report(config_dir: Path, *, url: str | None = None, api_key: st
     if not checks["audit_chain_valid"]:
         blockers.append({"check": "audit_chain", "valid": False})
     incomplete_cost_metadata = [
-        row for row in cost_audit["providers"] if isinstance(row, dict) and row.get("metadata_complete") is not True
+        row for row in cost_audit["tuples"] if isinstance(row, dict) and row.get("metadata_complete") is not True
     ]
     if incomplete_cost_metadata:
-        blockers.append({"check": "cost_metadata", "providers": incomplete_cost_metadata})
+        blockers.append({"check": "cost_metadata", "tuples": incomplete_cost_metadata})
     if cleanup_audit.get("ok") is not True:
         blockers.append({"check": "cleanup_audit", "summary": cleanup_audit})
     secrets = checks["secrets_present"]
@@ -537,7 +537,7 @@ def build_launch_report(config_dir: Path, *, url: str | None = None, api_key: st
         "config_dir": str(config_dir),
         "state_dir": str(default_state_dir()),
         "policy_version": config.policy.version,
-        "providers": sorted(config.providers),
+        "tuples": sorted(config.tuples),
         "recipes": sorted(config.recipes),
         "checks": checks,
         "registry": provider_samples,
@@ -555,9 +555,9 @@ def build_launch_report(config_dir: Path, *, url: str | None = None, api_key: st
     return report
 
 
-def _provider_audit_launch_summary(provider_audit: dict[str, object]) -> dict[str, object]:
-    recipes = provider_audit.get("recipes") if isinstance(provider_audit, dict) else {}
-    summary: dict[str, object] = {"phase": provider_audit.get("phase") if isinstance(provider_audit, dict) else None, "recipes": {}}
+def _tuple_audit_launch_summary(tuple_audit: dict[str, object]) -> dict[str, object]:
+    recipes = tuple_audit.get("recipes") if isinstance(tuple_audit, dict) else {}
+    summary: dict[str, object] = {"phase": tuple_audit.get("phase") if isinstance(tuple_audit, dict) else None, "recipes": {}}
     if not isinstance(recipes, dict):
         return summary
     for name, row in sorted(recipes.items()):
@@ -573,10 +573,10 @@ def _provider_audit_launch_summary(provider_audit: dict[str, object]) -> dict[st
     return summary
 
 
-def _tuple_validation_gaps(provider_audit: dict[str, object]) -> list[dict[str, object]]:
-    recipes = provider_audit.get("recipes") if isinstance(provider_audit, dict) else {}
+def _tuple_validation_gaps(tuple_audit: dict[str, object]) -> list[dict[str, object]]:
+    recipes = tuple_audit.get("recipes") if isinstance(tuple_audit, dict) else {}
     if not isinstance(recipes, dict):
-        return [{"recipe": None, "decision": None, "reason": "provider audit report is malformed"}]
+        return [{"recipe": None, "decision": None, "reason": "tuple audit report is malformed"}]
     gaps: list[dict[str, object]] = []
     for name, row in sorted(recipes.items()):
         if not isinstance(row, dict):
@@ -615,8 +615,8 @@ async def post_launch_report_command(config_dir: Path) -> None:
         "audit_valid": AuditTrail(default_state_dir() / "audit" / "trail.jsonl").verify(),
         "post_launch_actions": [
             "review incident log",
-            "review provider cost dashboards",
-            "review provider success rates",
+            "review tuple cost dashboards",
+            "review tuple success rates",
             "review SDK feedback",
             "triage docs corrections",
             "groom v2.1 backlog",
@@ -651,7 +651,7 @@ async def seed_liveness(config_dir: Path, recipe_name: str, count: int, *, inter
 
 async def provider_smoke_command(
     config_dir: Path,
-    provider: str,
+    tuple: str,
     recipe_name: str,
     mode: ExecutionMode,
     *,
@@ -662,7 +662,7 @@ async def provider_smoke_command(
     if recipe is None:
         raise SystemExit(f"unknown recipe: {recipe_name}")
     started_at = datetime.now(timezone.utc)
-    request = _provider_smoke_request(runtime, recipe, mode, provider)
+    request = _provider_smoke_request(runtime, recipe, mode, tuple)
     plan = runtime.compiler.compile(request)
     if request.input_refs or request.split_learning is not None:
         worker_request = worker_readable_request(request, runtime)
@@ -680,7 +680,7 @@ async def provider_smoke_command(
                         break
             finally:
                 await stream.aclose()
-            summary = _provider_smoke_base_summary(runtime, provider, recipe_name, mode)
+            summary = _provider_smoke_base_summary(runtime, tuple, recipe_name, mode)
             summary.update({"chunks": len(chunks), "sample": chunks[:2]})
             _finish_provider_smoke_summary(summary, started_at=started_at, config_dir=config_dir, plan=plan, write_artifact=write_artifact)
             return
@@ -696,8 +696,8 @@ async def provider_smoke_command(
                         break
                 await asyncio.sleep(1.0)
             summary = {
-                **_provider_smoke_base_summary(runtime, provider, recipe_name, mode),
-                "tuple": provider,
+                **_provider_smoke_base_summary(runtime, tuple, recipe_name, mode),
+                "tuple": tuple,
                 "recipe": recipe_name,
                 "mode": mode.value,
                 "job_id": job.job_id,
@@ -707,21 +707,21 @@ async def provider_smoke_command(
             _finish_provider_smoke_summary(summary, started_at=started_at, config_dir=config_dir, plan=plan, write_artifact=write_artifact)
             return
         result = await runtime.dispatcher.execute_sync(plan)
-        summary = _provider_smoke_base_summary(runtime, provider, recipe_name, mode)
+        summary = _provider_smoke_base_summary(runtime, tuple, recipe_name, mode)
         summary["result"] = result.model_dump(mode="json")
         _finish_provider_smoke_summary(summary, started_at=started_at, config_dir=config_dir, plan=plan, write_artifact=write_artifact)
-    except ProviderError as exc:
-        summary = _provider_smoke_base_summary(runtime, provider, recipe_name, mode)
+    except TupleError as exc:
+        summary = _provider_smoke_base_summary(runtime, tuple, recipe_name, mode)
         summary["error"] = _provider_smoke_error(exc)
         _finish_provider_smoke_summary(summary, started_at=started_at, config_dir=config_dir, plan=plan, write_artifact=write_artifact)
         raise SystemExit(1) from exc
 
 
-def _provider_smoke_base_summary(runtime, provider: str, recipe_name: str, mode: ExecutionMode) -> dict[str, object]:
-    spec = runtime.compiler.providers.get(provider)
+def _provider_smoke_base_summary(runtime, tuple: str, recipe_name: str, mode: ExecutionMode) -> dict[str, object]:
+    spec = runtime.compiler.tuples.get(tuple)
     provider_contract = official_contract(spec)
     return {
-        "tuple": provider,
+        "tuple": tuple,
         "recipe": recipe_name,
         "mode": mode.value,
         "model_ref": getattr(spec, "model_ref", None),
@@ -739,7 +739,7 @@ def _provider_official_contract(spec) -> dict[str, object]:
     return official_contract(spec)
 
 
-def _provider_smoke_error(exc: ProviderError) -> dict[str, object]:
+def _provider_smoke_error(exc: TupleError) -> dict[str, object]:
     error: dict[str, object] = {
         "message": str(exc),
         "code": exc.code or "PROVIDER_ERROR",
@@ -747,13 +747,13 @@ def _provider_smoke_error(exc: ProviderError) -> dict[str, object]:
         "retryable": exc.retryable,
     }
     if exc.raw_output is not None:
-        error["provider_error_body_redacted"] = exc.raw_output
-        error["provider_error_body_sha256"] = hashlib.sha256(exc.raw_output.encode("utf-8")).hexdigest()
+        error["tuple_error_body_redacted"] = exc.raw_output
+        error["tuple_error_body_sha256"] = hashlib.sha256(exc.raw_output.encode("utf-8")).hexdigest()
     return error
 
 
-def _provider_smoke_request(runtime, recipe, mode: ExecutionMode, provider: str) -> TaskRequest:
-    spec = runtime.compiler.providers.get(provider)
+def _provider_smoke_request(runtime, recipe, mode: ExecutionMode, tuple: str) -> TaskRequest:
+    spec = runtime.compiler.tuples.get(tuple)
     input_contracts = set(getattr(spec, "input_contracts", []) or [])
     inline_inputs = {}
     messages = []
@@ -777,7 +777,7 @@ def _provider_smoke_request(runtime, recipe, mode: ExecutionMode, provider: str)
         task=recipe.task,
         mode=mode,
         recipe=recipe.name,
-        requested_provider=provider,
+        requested_tuple=tuple,
         messages=messages,
         inline_inputs=inline_inputs,
         input_refs=input_refs,
@@ -810,11 +810,11 @@ def _finish_provider_smoke_summary(
 
 
 def _write_live_validation_artifact(summary: dict[str, object]) -> Path:
-    root = default_state_dir() / "provider-validation"
+    root = default_state_dir() / "tuple-validation"
     root.mkdir(parents=True, exist_ok=True)
-    provider = str(summary.get("tuple") or "tuple").replace("/", "_")
+    tuple = str(summary.get("tuple") or "tuple").replace("/", "_")
     stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
-    path = root / f"{stamp}-{provider}.json"
+    path = root / f"{stamp}-{tuple}.json"
     path.write_text(json.dumps(summary, sort_keys=True, separators=(",", ":"), default=str) + "\n", encoding="utf-8")
     return path
 
@@ -935,7 +935,7 @@ def _gateway_smoke_summary(url: str, *, api_key: str | None, recipe: str | None 
         summary["sync"] = {
             **sync_body,
             "output_non_empty": bool(str(value or "").strip()),
-            "selected_provider": plan.get("selected_provider") if isinstance(plan, dict) else None,
+            "selected_tuple": plan.get("selected_tuple") if isinstance(plan, dict) else None,
             "recipe_name": plan.get("recipe_name") if isinstance(plan, dict) else None,
             "output_kind": result.get("kind") if isinstance(result, dict) else None,
         }
@@ -1003,7 +1003,7 @@ def _smoke_png() -> bytes:
 
 
 def _latest_live_validation_artifact(config_dir: Path | None = None) -> dict[str, object] | None:
-    root = default_state_dir() / "provider-validation"
+    root = default_state_dir() / "tuple-validation"
     if not root.exists():
         return None
     expected_commit = _git_commit()
@@ -1026,29 +1026,29 @@ def _latest_live_validation_artifact(config_dir: Path | None = None) -> dict[str
 
 def _required_live_validation_tuples(config) -> list[dict[str, object]]:
     tuples: dict[str, dict[str, object]] = {}
-    for provider in config.providers.values():
-        descriptor = adapter_descriptor(provider)
+    for tuple in config.tuples.values():
+        descriptor = adapter_descriptor(tuple)
         if descriptor is None:
             continue
         if descriptor.local_execution or not descriptor.production_eligible:
             continue
-        key = tuple_evidence_key(provider)
+        key = tuple_evidence_key(tuple)
         tuples[key] = {
             "tuple_key": key,
-            "label": tuple_evidence_label(provider),
-            "tuple": provider.name,
-            "adapter": provider.adapter,
+            "label": tuple_evidence_label(tuple),
+            "tuple": tuple.name,
+            "adapter": tuple.adapter,
         }
     return [tuples[key] for key in sorted(tuples)]
 
 
 def _live_validation_artifacts_by_tuple(config, config_dir: Path | None = None) -> dict[str, object]:
-    root = default_state_dir() / "provider-validation"
+    root = default_state_dir() / "tuple-validation"
     if not root.exists():
         return {}
     expected_commit = _git_commit()
     expected_config_hash = _config_hash(config_dir) if config_dir is not None else None
-    providers_by_name = {provider.name: provider for provider in config.providers.values()}
+    providers_by_name = {tuple.name: tuple for tuple in config.tuples.values()}
     required_keys = {str(item["tuple_key"]) for item in _required_live_validation_tuples(config)}
     artifacts: dict[str, object] = {}
     candidates = sorted(root.glob("*.json"), key=lambda path: path.stat().st_mtime, reverse=True)
@@ -1063,11 +1063,11 @@ def _live_validation_artifacts_by_tuple(config, config_dir: Path | None = None) 
             continue
         if not _live_validation_artifact_valid(data):
             continue
-        provider = providers_by_name.get(str(data.get("tuple") or ""))
-        if provider is None:
+        tuple = providers_by_name.get(str(data.get("tuple") or ""))
+        if tuple is None:
             continue
         contract = data.get("official_contract") if isinstance(data.get("official_contract"), dict) else {}
-        tuple_key = artifact_tuple_evidence_key(data, provider)
+        tuple_key = artifact_tuple_evidence_key(data, tuple)
         if tuple_key is None:
             continue
         if tuple_key not in required_keys or tuple_key in artifacts:
@@ -1075,8 +1075,8 @@ def _live_validation_artifacts_by_tuple(config, config_dir: Path | None = None) 
         artifacts[tuple_key] = {
             "path": str(path),
             "mtime": datetime.fromtimestamp(path.stat().st_mtime, timezone.utc).isoformat(),
-            "label": tuple_evidence_label(provider),
-            "tuple": provider.name,
+            "label": tuple_evidence_label(tuple),
+            "tuple": tuple.name,
             "data": data,
         }
     return artifacts
@@ -1085,32 +1085,32 @@ def _live_validation_artifacts_by_tuple(config, config_dir: Path | None = None) 
 def _gateway_smoke_live_tuples(gateway_smoke: dict[str, object] | None, config) -> list[str]:
     if not isinstance(gateway_smoke, dict) or gateway_smoke.get("ok") is not True:
         return []
-    providers_by_name = config.providers
+    providers_by_name = config.tuples
     tuple_keys: set[str] = set()
     sync = gateway_smoke.get("sync")
     if isinstance(sync, dict):
-        tuple_name = sync.get("selected_provider")
-        provider = providers_by_name.get(str(tuple_name or ""))
-        if provider is not None and sync.get("output_non_empty") is True:
-            tuple_keys.add(tuple_evidence_key(provider))
+        tuple_name = sync.get("selected_tuple")
+        tuple = providers_by_name.get(str(tuple_name or ""))
+        if tuple is not None and sync.get("output_non_empty") is True:
+            tuple_keys.add(tuple_evidence_key(tuple))
     vision = gateway_smoke.get("vision")
     if isinstance(vision, dict) and vision.get("ok") is True:
         body = vision.get("body")
         plan = body.get("plan") if isinstance(body, dict) else None
-        tuple_name = plan.get("selected_provider") if isinstance(plan, dict) else None
-        provider = providers_by_name.get(str(tuple_name or ""))
-        if provider is not None:
-            tuple_keys.add(tuple_evidence_key(provider))
+        tuple_name = plan.get("selected_tuple") if isinstance(plan, dict) else None
+        tuple = providers_by_name.get(str(tuple_name or ""))
+        if tuple is not None:
+            tuple_keys.add(tuple_evidence_key(tuple))
     return sorted(tuple_keys)
 
 
 def _capacity_unavailable_validation_tuples(config, config_dir: Path | None = None) -> list[str]:
-    root = default_state_dir() / "provider-validation"
+    root = default_state_dir() / "tuple-validation"
     if not root.exists():
         return []
     expected_commit = _git_commit()
     expected_config_hash = _config_hash(config_dir) if config_dir is not None else None
-    providers_by_name = {provider.name: provider for provider in config.providers.values()}
+    providers_by_name = {tuple.name: tuple for tuple in config.tuples.values()}
     tuple_keys: set[str] = set()
     for path in sorted(root.glob("*.json"), key=lambda item: item.stat().st_mtime, reverse=True):
         try:
@@ -1131,11 +1131,11 @@ def _capacity_unavailable_validation_tuples(config, config_dir: Path | None = No
         cleanup = data.get("cleanup") if isinstance(data.get("cleanup"), dict) else {}
         if cleanup.get("required") is True and cleanup.get("completed") is not True:
             continue
-        provider = providers_by_name.get(str(data.get("tuple") or ""))
+        tuple = providers_by_name.get(str(data.get("tuple") or ""))
         contract = data.get("official_contract") if isinstance(data.get("official_contract"), dict) else {}
-        if provider is None or not _official_contract_hash_valid(data, contract):
+        if tuple is None or not _official_contract_hash_valid(data, contract):
             continue
-        tuple_key = artifact_tuple_evidence_key(data, provider)
+        tuple_key = artifact_tuple_evidence_key(data, tuple)
         if tuple_key is not None:
             tuple_keys.add(tuple_key)
     return sorted(tuple_keys)
@@ -1258,9 +1258,9 @@ def cost_audit_command(config_dir: Path, *, live: bool = False) -> None:
     print(json.dumps(_cost_audit_report(config, creds, config_dir=config_dir, live=live), indent=2, sort_keys=True, default=str))
 
 
-def provider_audit_command(config_dir: Path, *, recipe: str | None = None, live: bool = False) -> None:
+def tuple_audit_command(config_dir: Path, *, recipe: str | None = None, live: bool = False) -> None:
     config = load_config(config_dir)
-    print(json.dumps(provider_audit_report(config, config_dir=config_dir, recipe_name=recipe, live=live), indent=2, sort_keys=True, default=str))
+    print(json.dumps(tuple_audit_report(config, config_dir=config_dir, recipe_name=recipe, live=live), indent=2, sort_keys=True, default=str))
 
 
 def _cost_audit_report(config, creds: dict[str, dict[str, str]], *, config_dir: Path, live: bool = False) -> dict[str, object]:
@@ -1268,10 +1268,10 @@ def _cost_audit_report(config, creds: dict[str, dict[str, str]], *, config_dir: 
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "config_dir": str(config_dir),
         "credentials_path": str(credentials_path()),
-        "providers": [_provider_cost_audit_row(provider) for provider in sorted(config.providers.values(), key=lambda item: item.name)],
+        "tuples": [_provider_cost_audit_row(tuple) for tuple in sorted(config.tuples.values(), key=lambda item: item.name)],
     }
     if live:
-        report["live"] = _live_cost_audit(config.providers, creds)
+        report["live"] = _live_cost_audit(config.tuples, creds)
     return report
 
 
@@ -1308,7 +1308,7 @@ def _active_resource_leases_from_manifest(path: Path) -> list[dict[str, object]]
 
 
 def _tuple_validation_cleanup_summary(config) -> dict[str, object]:
-    root = default_state_dir() / "provider-validation"
+    root = default_state_dir() / "tuple-validation"
     if not root.exists():
         return {"artifact_count": 0, "invalid_cleanup_artifacts": []}
     invalid: list[dict[str, object]] = []
@@ -1329,37 +1329,37 @@ def _tuple_validation_cleanup_summary(config) -> dict[str, object]:
     return {"artifact_count": count, "invalid_cleanup_artifacts": invalid}
 
 
-def _provider_cost_audit_row(provider) -> dict[str, object]:
+def _provider_cost_audit_row(tuple) -> dict[str, object]:
     cost_fields = {
-        "cost_per_second": float(provider.cost_per_second),
-        "expected_cold_start_seconds": provider.expected_cold_start_seconds,
-        "scaledown_window_seconds": provider.scaledown_window_seconds,
-        "min_billable_seconds": provider.min_billable_seconds,
-        "billing_granularity_seconds": provider.billing_granularity_seconds,
-        "standing_cost_per_second": provider.standing_cost_per_second,
-        "standing_cost_window_seconds": provider.standing_cost_window_seconds,
-        "endpoint_cost_per_second": provider.endpoint_cost_per_second,
-        "endpoint_cost_window_seconds": provider.endpoint_cost_window_seconds,
+        "cost_per_second": float(tuple.cost_per_second),
+        "expected_cold_start_seconds": tuple.expected_cold_start_seconds,
+        "scaledown_window_seconds": tuple.scaledown_window_seconds,
+        "min_billable_seconds": tuple.min_billable_seconds,
+        "billing_granularity_seconds": tuple.billing_granularity_seconds,
+        "standing_cost_per_second": tuple.standing_cost_per_second,
+        "standing_cost_window_seconds": tuple.standing_cost_window_seconds,
+        "endpoint_cost_per_second": tuple.endpoint_cost_per_second,
+        "endpoint_cost_window_seconds": tuple.endpoint_cost_window_seconds,
     }
     required = ["scaledown_window_seconds", "min_billable_seconds", "billing_granularity_seconds"]
-    missing = [key for key in required if cost_fields[key] is None and float(provider.cost_per_second) > 0]
+    missing = [key for key in required if cost_fields[key] is None and float(tuple.cost_per_second) > 0]
     return {
-        "name": provider.name,
-        "adapter": provider.adapter,
-        "execution_surface": provider.execution_surface.value if provider.execution_surface else None,
-        "target": provider.target,
-        "gpu": provider.gpu,
+        "name": tuple.name,
+        "adapter": tuple.adapter,
+        "execution_surface": tuple.execution_surface.value if tuple.execution_surface else None,
+        "target": tuple.target,
+        "gpu": tuple.gpu,
         "cost": cost_fields,
         "metadata_complete": not missing,
         "missing_metadata": missing,
     }
 
 
-def _live_cost_audit(providers: dict[str, object], creds: dict[str, dict[str, str]]) -> dict[str, object]:
+def _live_cost_audit(tuples: dict[str, object], creds: dict[str, dict[str, str]]) -> dict[str, object]:
     return {
-        "function_runtime": _function_runtime_live_cost_audit(providers),
-        "managed_endpoint": _managed_endpoint_live_cost_audit(providers, creds),
-        "iaas_vm_lease": _iaas_vm_live_cost_audit(providers, creds),
+        "function_runtime": _function_runtime_live_cost_audit(tuples),
+        "managed_endpoint": _managed_endpoint_live_cost_audit(tuples, creds),
+        "iaas_vm_lease": _iaas_vm_live_cost_audit(tuples, creds),
     }
 
 
@@ -1403,13 +1403,13 @@ def _live_cost_audit_findings(live: object) -> list[dict[str, object]]:
     return findings
 
 
-def _function_runtime_live_cost_audit(providers: dict[str, object]) -> dict[str, object]:
+def _function_runtime_live_cost_audit(tuples: dict[str, object]) -> dict[str, object]:
     function_providers = [
-        provider for provider in providers.values() if str(getattr(getattr(provider, "execution_surface", None), "value", "")) == "function_runtime"
+        tuple for tuple in tuples.values() if str(getattr(getattr(tuple, "execution_surface", None), "value", "")) == "function_runtime"
     ]
     if not function_providers:
         return {"configured": False}
-    family_names = sorted({provider_family_for_adapter(str(getattr(provider, "adapter", "") or "")) for provider in function_providers})
+    family_names = sorted({vendor_family_for_adapter(str(getattr(tuple, "adapter", "") or "")) for tuple in function_providers})
     modal = shutil.which("modal") if "modal" in family_names else None
     if "modal" in family_names and modal is None:
         return {"configured": True, "ok": False, "credential_families": family_names, "error": "modal CLI not found"}
@@ -1430,16 +1430,16 @@ def _function_runtime_live_cost_audit(providers: dict[str, object]) -> dict[str,
     }
 
 
-def _managed_endpoint_live_cost_audit(providers: dict[str, object], creds: dict[str, dict[str, str]]) -> dict[str, object]:
+def _managed_endpoint_live_cost_audit(tuples: dict[str, object], creds: dict[str, dict[str, str]]) -> dict[str, object]:
     endpoint_tuples = [
         tuple_spec
-        for tuple_spec in providers.values()
+        for tuple_spec in tuples.values()
         if str(getattr(getattr(tuple_spec, "execution_surface", None), "value", "")) == "managed_endpoint"
         and getattr(tuple_spec, "target", None)
     ]
     if not endpoint_tuples:
         return {"configured": False}
-    families = sorted({provider_family_for_adapter(str(getattr(tuple_spec, "adapter", "") or "")) for tuple_spec in endpoint_tuples})
+    families = sorted({vendor_family_for_adapter(str(getattr(tuple_spec, "adapter", "") or "")) for tuple_spec in endpoint_tuples})
     if families != ["runpod"]:
         return {"configured": True, "ok": False, "credential_families": families, "error": "managed endpoint live cost probe supports RunPod credentials only"}
     api_key = creds.get(families[0], {}).get("api_key")
@@ -1462,13 +1462,13 @@ def _managed_endpoint_live_cost_audit(providers: dict[str, object], creds: dict[
     return {"configured": True, "credential_families": families, "endpoints": rows}
 
 
-def _iaas_vm_live_cost_audit(providers: dict[str, object], creds: dict[str, dict[str, str]]) -> dict[str, object]:
+def _iaas_vm_live_cost_audit(tuples: dict[str, object], creds: dict[str, dict[str, str]]) -> dict[str, object]:
     vm_tuples = [
-        tuple_spec for tuple_spec in providers.values() if str(getattr(getattr(tuple_spec, "execution_surface", None), "value", "")) == "iaas_vm"
+        tuple_spec for tuple_spec in tuples.values() if str(getattr(getattr(tuple_spec, "execution_surface", None), "value", "")) == "iaas_vm"
     ]
     if not vm_tuples:
         return {"configured": False}
-    families = sorted({provider_family_for_adapter(str(getattr(tuple_spec, "adapter", "") or "")) for tuple_spec in vm_tuples})
+    families = sorted({vendor_family_for_adapter(str(getattr(tuple_spec, "adapter", "") or "")) for tuple_spec in vm_tuples})
     if families != ["hyperstack"]:
         return {"configured": True, "ok": False, "credential_families": families, "error": "iaas_vm live cost probe supports Hyperstack credentials only"}
     api_key = creds.get(families[0], {}).get("api_key")
@@ -1547,16 +1547,16 @@ def _routing_hygiene_findings(config) -> list[dict[str, str]]:
         if not recipe.auto_select:
             continue
         candidates: list[str] = []
-        for provider in config.providers.values():
-            if _provider_route_rejection_reason(config, recipe, provider) is not None:
+        for tuple in config.tuples.values():
+            if _provider_route_rejection_reason(config, recipe, tuple) is not None:
                 continue
-            candidates.append(provider.name)
+            candidates.append(tuple.name)
         if not candidates:
             findings.append(
                 {
                     "recipe": recipe.name,
                     "tuple": "",
-                    "reason": "auto-selected recipe has no production provider satisfying its requirements",
+                    "reason": "auto-selected recipe has no production tuple satisfying its requirements",
                 }
             )
     return findings
@@ -1567,12 +1567,12 @@ def _routing_decision_summary(config) -> dict[str, dict[str, object]]:
     for recipe in config.recipes.values():
         candidates: list[str] = []
         excluded: dict[str, str] = {}
-        for provider in config.providers.values():
-            reason = _provider_route_rejection_reason(config, recipe, provider)
+        for tuple in config.tuples.values():
+            reason = _provider_route_rejection_reason(config, recipe, tuple)
             if reason is None:
-                candidates.append(provider.name)
+                candidates.append(tuple.name)
             else:
-                excluded[provider.name] = reason
+                excluded[tuple.name] = reason
         summary[recipe.name] = {
             "auto_select": recipe.auto_select,
             "task": recipe.task,
@@ -1582,11 +1582,11 @@ def _routing_decision_summary(config) -> dict[str, dict[str, object]]:
     return summary
 
 
-def _provider_route_rejection_reason(config, recipe, provider) -> str | None:
-    return provider_route_rejection_reason(
+def _provider_route_rejection_reason(config, recipe, tuple) -> str | None:
+    return tuple_route_rejection_reason(
         policy=config.policy,
         recipe=recipe,
-        provider=provider,
+        tuple=tuple,
         required_len=recipe.max_model_len,
         require_auto_select=True,
     )
@@ -1610,7 +1610,7 @@ def _secret_presence_summary(creds: dict[str, dict[str, str]]) -> dict[str, bool
 
 def _configured_registry_snapshot(config) -> dict[str, dict[str, object]]:
     snapshot = ObservedRegistry(path=default_state_dir() / "registry.db").snapshot()
-    return {name: snapshot[name] for name in sorted(config.providers) if name in snapshot}
+    return {name: snapshot[name] for name in sorted(config.tuples) if name in snapshot}
 
 
 if __name__ == "__main__":

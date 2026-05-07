@@ -8,7 +8,7 @@ cost_per_second: 0.0
 modes: [async]
 endpoint_contract: ovhcloud-public-cloud-instance
 input_contracts: [chat_messages, data_refs]
-output_contract: gpucall-provider-result
+output_contract: gpucall-tuple-result
 stream_contract: none
 project_id: ""
 region: GRA11

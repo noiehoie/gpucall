@@ -9,7 +9,7 @@ modes: [async]
 endpoint: https://api.scaleway.com
 endpoint_contract: scaleway-instance
 input_contracts: [chat_messages, data_refs]
-output_contract: gpucall-provider-result
+output_contract: gpucall-tuple-result
 stream_contract: none
 project_id: ""
 zone: fr-par-1

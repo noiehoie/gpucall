@@ -6,7 +6,7 @@ import json
 from datetime import datetime, timezone
 from typing import Any
 
-from gpucall.domain import AttestationEvidence, KeyReleaseGrant, KeyReleaseRequirement, ProviderSpec, SecurityTier
+from gpucall.domain import AttestationEvidence, KeyReleaseGrant, KeyReleaseRequirement, ExecutionTupleSpec, SecurityTier
 
 
 def policy_hash(policy_payload: object) -> str:
@@ -19,16 +19,16 @@ class AttestationVerifier:
         self,
         evidence: AttestationEvidence,
         *,
-        provider: ProviderSpec,
+        tuple: ExecutionTupleSpec,
         expected_policy_hash: str,
         nonce: str,
         worker_image_digest: str | None = None,
     ) -> AttestationEvidence:
-        if evidence.provider != provider.name:
-            raise ValueError("attestation provider does not match selected provider")
-        if evidence.security_tier != provider.trust_profile.security_tier:
-            raise ValueError("attestation security_tier does not match provider trust_profile")
-        if provider.trust_profile.security_tier is SecurityTier.CONFIDENTIAL_TEE and not evidence.confidential_computing_mode:
+        if evidence.tuple != tuple.name:
+            raise ValueError("attestation tuple does not match selected tuple")
+        if evidence.security_tier != tuple.trust_profile.security_tier:
+            raise ValueError("attestation security_tier does not match tuple trust_profile")
+        if tuple.trust_profile.security_tier is SecurityTier.CONFIDENTIAL_TEE and not evidence.confidential_computing_mode:
             raise ValueError("confidential TEE attestation requires confidential_computing_mode")
         if not hmac.compare_digest(evidence.policy_hash, expected_policy_hash):
             raise ValueError("attestation policy_hash mismatch")
@@ -67,7 +67,7 @@ class KeyReleaseBroker:
 
 def attestation_audit_reference(evidence: AttestationEvidence) -> dict[str, Any]:
     return {
-        "provider": evidence.provider,
+        "tuple": evidence.tuple,
         "security_tier": evidence.security_tier.value,
         "evidence_ref": evidence.evidence_ref,
         "verified": evidence.verified,

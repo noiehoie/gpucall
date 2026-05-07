@@ -1,8 +1,8 @@
 from __future__ import annotations
 
 from gpucall.config import ConfigError, GpucallConfig, validate_config
-from gpucall.domain import Policy, ProviderSpec, Recipe
-from gpucall.provider_catalog import live_provider_catalog_findings
+from gpucall.domain import Policy, ExecutionTupleSpec, Recipe
+from gpucall.tuple_catalog import live_tuple_catalog_findings
 
 
 def test_hyperstack_live_catalog_check_rejects_unknown_image(monkeypatch) -> None:
@@ -36,8 +36,8 @@ def test_hyperstack_live_catalog_check_rejects_unknown_image(monkeypatch) -> Non
             raise AssertionError(url)
 
     monkeypatch.setitem(__import__("sys").modules, "requests", FakeRequests)
-    providers = {
-        "hyperstack-a100": ProviderSpec(
+    tuples = {
+        "hyperstack-a100": ExecutionTupleSpec(
             name="hyperstack-a100",
             adapter="hyperstack",
             gpu="A100",
@@ -51,14 +51,14 @@ def test_hyperstack_live_catalog_check_rejects_unknown_image(monkeypatch) -> Non
         )
     }
 
-    findings = live_provider_catalog_findings(providers, {"hyperstack": {"api_key": "test"}})
+    findings = live_tuple_catalog_findings(tuples, {"hyperstack": {"api_key": "test"}})
 
     assert findings
     assert findings[0]["field"] == "image"
 
 
 def test_runpod_vllm_provider_requires_official_worker_contract() -> None:
-    provider = ProviderSpec(
+    tuple = ExecutionTupleSpec(
         name="runpod-vllm-serverless",
         adapter="runpod-vllm-serverless",
         gpu="AMPERE_16",
@@ -91,10 +91,10 @@ def test_runpod_vllm_provider_requires_official_worker_contract() -> None:
             default_lease_ttl_seconds=60,
             max_lease_ttl_seconds=120,
             max_timeout_seconds=60,
-            providers={"allow": ["runpod-vllm-serverless"], "deny": []},
+            tuples={"allow": ["runpod-vllm-serverless"], "deny": []},
         ),
         recipes={recipe.name: recipe},
-        providers={provider.name: provider},
+        tuples={tuple.name: tuple},
     )
 
     try:
@@ -102,11 +102,11 @@ def test_runpod_vllm_provider_requires_official_worker_contract() -> None:
     except ConfigError as exc:
         assert "provider_params.worker_env" in str(exc)
     else:
-        raise AssertionError("RunPod worker-vLLM provider accepted missing official worker_env contract")
+        raise AssertionError("RunPod worker-vLLM tuple accepted missing official worker_env contract")
 
 
 def test_modal_provider_requires_deployed_function_target() -> None:
-    provider = ProviderSpec(
+    tuple = ExecutionTupleSpec(
         name="modal-a10g",
         adapter="modal",
         gpu="A10G",
@@ -138,10 +138,10 @@ def test_modal_provider_requires_deployed_function_target() -> None:
             default_lease_ttl_seconds=60,
             max_lease_ttl_seconds=120,
             max_timeout_seconds=60,
-            providers={"allow": ["modal-a10g"], "deny": []},
+            tuples={"allow": ["modal-a10g"], "deny": []},
         ),
         recipes={recipe.name: recipe},
-        providers={provider.name: provider},
+        tuples={tuple.name: tuple},
     )
 
     try:

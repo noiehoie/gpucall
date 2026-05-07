@@ -89,7 +89,7 @@ class RecipeResourceClass(StrEnum):
     DOCUMENT_VISION = "document_vision"
 
 
-class ProviderTrustProfile(BaseModel):
+class TupleTrustProfile(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     security_tier: SecurityTier = SecurityTier.SHARED_GPU
@@ -114,7 +114,7 @@ class SecurityPolicy(BaseModel):
 class AttestationEvidence(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    provider: str
+    tuple: str
     gpu_sku: str | None = None
     security_tier: SecurityTier
     confidential_computing_mode: str | None = None
@@ -200,7 +200,7 @@ class CompileArtifact(BaseModel):
     job_spec_hash: str
     policy_hash: str
     recipe_hash: str
-    provider_contract_hash: str
+    tuple_contract_hash: str
     selected_tuple_hash: str | None = None
     selected_tuple: dict[str, Any] | None = None
     governance_hash: str
@@ -256,7 +256,7 @@ class TaskRequest(BaseModel):
     input_refs: list[DataRef] = Field(default_factory=list)
     inline_inputs: dict[str, InlineValue] = Field(default_factory=dict)
     messages: list[ChatMessage] = Field(default_factory=list)
-    requested_provider: str | None = None
+    requested_tuple: str | None = None
     max_tokens: PositiveInt | None = None
     temperature: float | None = Field(default=None, ge=0.0, le=2.0)
     timeout_seconds: PositiveInt | None = None
@@ -277,7 +277,7 @@ class TaskRequest(BaseModel):
         return self
 
 
-class ProviderPolicy(BaseModel):
+class TuplePolicy(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     allow: list[str] = Field(default_factory=list)
@@ -291,7 +291,7 @@ class CostPolicy(BaseModel):
     max_estimated_cost_usd: NonNegativeFloat | None = None
     max_cold_start_cost_usd: NonNegativeFloat | None = None
     max_idle_cost_usd: NonNegativeFloat | None = None
-    require_budget_for_high_cost_provider: bool | None = None
+    require_budget_for_high_cost_tuple: bool | None = None
     high_cost_threshold_usd: NonNegativeFloat | None = None
 
 
@@ -304,7 +304,7 @@ class Policy(BaseModel):
     max_lease_ttl_seconds: PositiveInt
     max_timeout_seconds: PositiveInt
     tokenizer_safety_multiplier: NonNegativeFloat = 1.25
-    providers: ProviderPolicy
+    tuples: TuplePolicy
     cost_policy: CostPolicy = Field(default_factory=CostPolicy)
     security: SecurityPolicy = Field(default_factory=SecurityPolicy)
     immutable_audit: bool = True
@@ -359,7 +359,7 @@ class Recipe(BaseModel):
         if schema_version >= 2:
             present = old_resource_fields & set(payload)
             if present:
-                raise ValueError("recipe_schema_version=2 must not declare provider resource fields: " + ", ".join(sorted(present)))
+                raise ValueError("recipe_schema_version=2 must not declare tuple resource fields: " + ", ".join(sorted(present)))
             context_budget = int(payload.get("context_budget_tokens") or _context_budget_for(payload))
             payload["max_model_len"] = context_budget
             payload["min_vram_gb"] = _vram_for_recipe(payload, context_budget)
@@ -410,7 +410,7 @@ class EngineSpec(BaseModel):
     production_ready: bool = False
 
 
-class ProviderSpec(BaseModel):
+class ExecutionTupleSpec(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     name: str
@@ -418,7 +418,7 @@ class ProviderSpec(BaseModel):
     adapter: str = "echo"
     execution_surface: ExecutionSurface | None = None
     max_data_classification: DataClassification = DataClassification.CONFIDENTIAL
-    trust_profile: ProviderTrustProfile = Field(default_factory=ProviderTrustProfile)
+    trust_profile: TupleTrustProfile = Field(default_factory=TupleTrustProfile)
     gpu: str
     vram_gb: PositiveInt
     max_model_len: PositiveInt
@@ -464,7 +464,7 @@ class ProviderSpec(BaseModel):
 class ObjectStoreConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    provider: str = "s3"
+    tuple: str = "s3"
     bucket: str
     region: str | None = None
     endpoint: AnyHttpUrl | None = None
@@ -510,15 +510,25 @@ class PresignGetResponse(BaseModel):
     data_ref: DataRef
 
 
-class ProviderObservation(BaseModel):
-    provider: str
+class TupleObservation(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    tuple: str
     latency_ms: NonNegativeFloat
     success: bool
     cost: NonNegativeFloat
     observed_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
+    @model_validator(mode="before")
+    @classmethod
+    def normalize_legacy_registry_payload(cls, data: Any) -> Any:
+        if isinstance(data, dict) and "tuple" not in data and "provider" in data:
+            data = dict(data)
+            data["tuple"] = data.pop("provider")
+        return data
 
-class ProviderScore(BaseModel):
+
+class TupleScore(BaseModel):
     success_rate: float = 1.0
     p50_latency_ms: float | None = None
     cost_per_success: float | None = None
@@ -532,7 +542,7 @@ class CompiledPlan(BaseModel):
     task: str
     mode: ExecutionMode
     data_classification: DataClassification = DataClassification.CONFIDENTIAL
-    provider_chain: list[str]
+    tuple_chain: list[str]
     timeout_seconds: PositiveInt
     lease_ttl_seconds: PositiveInt
     tokenizer_family: str
@@ -556,7 +566,7 @@ class CompiledPlan(BaseModel):
         return datetime.now(timezone.utc) + timedelta(seconds=self.lease_ttl_seconds)
 
 
-class ProviderError(Exception):
+class TupleError(Exception):
     def __init__(
         self,
         message: str,
@@ -573,11 +583,11 @@ class ProviderError(Exception):
         self.raw_output = raw_output
 
 
-ProviderResultKind = Literal["inline", "ref", "artifact_manifest"]
+TupleResultKind = Literal["inline", "ref", "artifact_manifest"]
 
 
-class ProviderResult(BaseModel):
-    kind: ProviderResultKind
+class TupleResult(BaseModel):
+    kind: TupleResultKind
     value: str | None = None
     ref: DataRef | None = None
     artifact_manifest: ArtifactManifest | None = None
@@ -647,5 +657,5 @@ class JobRecord(BaseModel):
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     updated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     result_ref: DataRef | None = None
-    result: ProviderResult | None = None
+    result: TupleResult | None = None
     error: str | None = None

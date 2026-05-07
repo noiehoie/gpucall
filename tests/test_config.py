@@ -14,7 +14,7 @@ import yaml
 from gpucall.config import ConfigError, load_config
 from gpucall.cli import _provider_smoke_request
 from gpucall.compiler import GovernanceCompiler
-from gpucall.domain import DataRef, ExecutionMode, ProviderSpec, Recipe, SecurityTier, TaskRequest
+from gpucall.domain import DataRef, ExecutionMode, ExecutionTupleSpec, Recipe, SecurityTier, TaskRequest
 from gpucall.registry import ObservedRegistry
 
 
@@ -26,7 +26,7 @@ def copy_config(tmp_path: Path) -> Path:
 
 
 def test_recipe_v2_rejects_provider_resource_fields() -> None:
-    with pytest.raises(ValueError, match="provider resource fields"):
+    with pytest.raises(ValueError, match="tuple resource fields"):
         Recipe.model_validate(
             {
                 "name": "bad-v2",
@@ -64,7 +64,7 @@ tokenizer_family: qwen
         encoding="utf-8",
     )
 
-    with pytest.raises(ConfigError, match="no provider satisfying"):
+    with pytest.raises(ConfigError, match="no tuple satisfying"):
         load_config(root)
 
 
@@ -78,7 +78,7 @@ default_lease_ttl_seconds: 60
 max_lease_ttl_seconds: 600
 max_timeout_seconds: 300
 tokenizer_safety_multiplier: 1.25
-providers:
+tuples:
   allow: [local-echo]
   deny: []
   max_data_classification: confidential
@@ -100,7 +100,7 @@ tokenizer_family: qwen
 """.lstrip(),
         encoding="utf-8",
     )
-    (root / "providers" / "local-echo.yml").write_text(
+    (root / "tuples" / "local-echo.yml").write_text(
         """
 name: local-echo
 adapter: echo
@@ -115,7 +115,7 @@ endpoint: null
         encoding="utf-8",
     )
 
-    with pytest.raises(ConfigError, match="no provider satisfying"):
+    with pytest.raises(ConfigError, match="no tuple satisfying"):
         load_config(root)
 
 
@@ -181,7 +181,7 @@ def test_explain_config_outputs_execution_spec(tmp_path) -> None:
     )
 
     assert '"execution_spec"' in result.stdout
-    assert '"provider_chain"' in result.stdout
+    assert '"tuple_chain"' in result.stdout
     assert '"policy_ceiling"' in result.stdout
 
 
@@ -223,23 +223,23 @@ def test_standard_config_includes_verified_text_recipes(tmp_path) -> None:
     assert config.recipes["vision-image-standard"].task == "vision"
     assert config.recipes["vision-image-standard"].auto_select is True
     assert config.recipes["vision-image-standard"].allowed_mime_prefixes == ["image/"]
-    assert config.providers["hyperstack-a100"].max_model_len == 32768
-    assert config.providers["hyperstack-a100"].declared_model_max_len == 32768
-    assert config.providers["hyperstack-qwen-1m"].max_model_len == 524288
-    assert config.providers["hyperstack-qwen-1m"].declared_model_max_len == 1010000
-    assert config.providers["hyperstack-qwen-1m"].model == "Qwen/Qwen2.5-7B-Instruct-1M"
-    assert config.providers["hyperstack-a100"].trust_profile.dedicated_gpu is True
-    assert config.providers["modal-a10g"].trust_profile.security_tier is SecurityTier.ENCRYPTED_CAPSULE
-    assert config.providers["modal-a10g"].supports_vision is False
-    assert "image" not in config.providers["modal-a10g"].input_contracts
-    assert config.providers["modal-vision-a10g"].supports_vision is True
-    assert config.providers["modal-vision-a10g"].model == "Salesforce/blip-vqa-base"
-    assert "image" in config.providers["modal-vision-a10g"].input_contracts
+    assert config.tuples["hyperstack-a100"].max_model_len == 32768
+    assert config.tuples["hyperstack-a100"].declared_model_max_len == 32768
+    assert config.tuples["hyperstack-qwen-1m"].max_model_len == 524288
+    assert config.tuples["hyperstack-qwen-1m"].declared_model_max_len == 1010000
+    assert config.tuples["hyperstack-qwen-1m"].model == "Qwen/Qwen2.5-7B-Instruct-1M"
+    assert config.tuples["hyperstack-a100"].trust_profile.dedicated_gpu is True
+    assert config.tuples["modal-a10g"].trust_profile.security_tier is SecurityTier.ENCRYPTED_CAPSULE
+    assert config.tuples["modal-a10g"].supports_vision is False
+    assert "image" not in config.tuples["modal-a10g"].input_contracts
+    assert config.tuples["modal-vision-a10g"].supports_vision is True
+    assert config.tuples["modal-vision-a10g"].model == "Salesforce/blip-vqa-base"
+    assert "image" in config.tuples["modal-vision-a10g"].input_contracts
 
 
 def test_standard_config_routes_news_sized_prompts_to_long_recipes(tmp_path) -> None:
     config = load_config(copy_config(tmp_path))
-    compiler = GovernanceCompiler(policy=config.policy, recipes=config.recipes, providers=config.providers, registry=ObservedRegistry())
+    compiler = GovernanceCompiler(policy=config.policy, recipes=config.recipes, tuples=config.tuples, registry=ObservedRegistry())
 
     large_plan = compiler.compile(
         TaskRequest(
@@ -257,19 +257,19 @@ def test_standard_config_routes_news_sized_prompts_to_long_recipes(tmp_path) -> 
     )
 
     assert large_plan.recipe_name == "text-infer-large"
-    assert large_plan.provider_chain[0] == "hyperstack-qwen-1m"
+    assert large_plan.tuple_chain[0] == "hyperstack-qwen-1m"
     artifact = large_plan.attestations["compile_artifact"]
     assert artifact["selected_tuple"]["tuple"] == "hyperstack-qwen-1m"
     assert artifact["selected_tuple"]["execution_surface"] == "iaas_vm"
     assert artifact["selected_tuple_hash"]
     assert ultralong_plan.recipe_name == "text-infer-ultralong"
-    assert ultralong_plan.provider_chain[0] == "hyperstack-qwen-1m"
+    assert ultralong_plan.tuple_chain[0] == "hyperstack-qwen-1m"
 
 
 def test_provider_smoke_uses_chat_messages_for_chat_only_provider(tmp_path) -> None:
     config = load_config(copy_config(tmp_path))
     recipe = config.recipes["text-infer-light"]
-    provider = ProviderSpec(
+    tuple = ExecutionTupleSpec(
         name="runpod-vllm-serverless",
         adapter="runpod-vllm-serverless",
         max_data_classification="confidential",
@@ -287,9 +287,9 @@ def test_provider_smoke_uses_chat_messages_for_chat_only_provider(tmp_path) -> N
         model_ref="qwen2.5-1.5b-instruct",
         engine_ref="runpod-vllm-openai",
     )
-    runtime = SimpleNamespace(compiler=SimpleNamespace(providers={provider.name: provider}))
+    runtime = SimpleNamespace(compiler=SimpleNamespace(tuples={tuple.name: tuple}))
 
-    request = _provider_smoke_request(runtime, recipe, ExecutionMode.SYNC, provider.name)
+    request = _provider_smoke_request(runtime, recipe, ExecutionMode.SYNC, tuple.name)
 
     assert request.messages
     assert request.messages[0].role == "user"
@@ -318,7 +318,7 @@ def test_validate_config_cli(tmp_path) -> None:
 
 def test_provider_smoke_writes_live_validation_artifact(tmp_path, monkeypatch) -> None:
     root = copy_config(tmp_path)
-    monkeypatch.setenv("GPUCALL_ALLOW_FAKE_AUTO_PROVIDERS", "1")
+    monkeypatch.setenv("GPUCALL_ALLOW_FAKE_AUTO_TUPLES", "1")
     monkeypatch.setenv("GPUCALL_STATE_DIR", str(tmp_path / "state"))
 
     result = subprocess.run(
@@ -341,7 +341,7 @@ def test_provider_smoke_writes_live_validation_artifact(tmp_path, monkeypatch) -
     )
 
     assert '"artifact_path"' in result.stdout
-    artifacts = list((tmp_path / "state" / "provider-validation").glob("*.json"))
+    artifacts = list((tmp_path / "state" / "tuple-validation").glob("*.json"))
     assert len(artifacts) == 1
     payload = artifacts[0].read_text(encoding="utf-8")
     assert '"tuple":"local-echo"' in payload
@@ -357,7 +357,7 @@ def test_live_validation_artifact_must_match_current_commit_and_config(tmp_path,
 
     root = copy_config(tmp_path)
     state = tmp_path / "state"
-    artifact_dir = state / "provider-validation"
+    artifact_dir = state / "tuple-validation"
     artifact_dir.mkdir(parents=True)
     monkeypatch.setenv("GPUCALL_STATE_DIR", str(state))
     (artifact_dir / "old.json").write_text('{"tuple":"p","commit":"old","config_hash":"old"}\n', encoding="utf-8")
@@ -402,7 +402,7 @@ def test_live_validation_artifact_must_match_current_commit_and_config(tmp_path,
 
 def test_security_scan_rejects_secret_like_yaml(tmp_path) -> None:
     root = copy_config(tmp_path)
-    (root / "providers" / "bad.yml").write_text("api_key: secret\n", encoding="utf-8")
+    (root / "tuples" / "bad.yml").write_text("api_key: secret\n", encoding="utf-8")
 
     result = subprocess.run(
         [
@@ -421,7 +421,7 @@ def test_security_scan_rejects_secret_like_yaml(tmp_path) -> None:
     assert "bad.yml" in result.stdout
 
 
-def test_init_config_writes_split_provider_catalog_files(tmp_path) -> None:
+def test_init_config_writes_split_tuple_catalog_files(tmp_path) -> None:
     result = subprocess.run(
         [
             sys.executable,
@@ -461,8 +461,8 @@ def test_init_config_writes_valid_default_config(tmp_path) -> None:
         text=True,
     )
 
-    assert not (out / "providers" / "runpod-vllm-serverless.yml").exists()
-    assert (out / "providers" / "runpod-vllm-serverless.yml.example").exists()
+    assert not (out / "tuples" / "runpod-vllm-serverless.yml").exists()
+    assert (out / "tuples" / "runpod-vllm-serverless.yml.example").exists()
     load_config(out)
 
 
@@ -491,7 +491,7 @@ def test_cli_config_dir_does_not_override_xdg_credentials_path(tmp_path) -> None
     assert f'"credentials_path": "{expected_path}"' in payload
 
 
-def test_doctor_supports_live_provider_catalog_flag_without_credentials(tmp_path) -> None:
+def test_doctor_supports_live_tuple_catalog_flag_without_credentials(tmp_path) -> None:
     root = copy_config(tmp_path)
     env = os.environ.copy()
     env["GPUCALL_CREDENTIALS"] = str(tmp_path / "missing-credentials.yml")
@@ -503,7 +503,7 @@ def test_doctor_supports_live_provider_catalog_flag_without_credentials(tmp_path
             "doctor",
             "--config-dir",
             str(root),
-            "--live-provider-catalog",
+            "--live-tuple-catalog",
         ],
         check=True,
         capture_output=True,
@@ -511,5 +511,5 @@ def test_doctor_supports_live_provider_catalog_flag_without_credentials(tmp_path
         env=env,
     )
 
-    assert '"live_provider_catalog"' in result.stdout
+    assert '"live_tuple_catalog"' in result.stdout
     assert '"ok": false' in result.stdout

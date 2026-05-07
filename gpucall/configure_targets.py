@@ -39,7 +39,7 @@ def configure_runpod_serverless(_config_dir: Path) -> bool:
         if not api_key:
             return False
         save_credentials("runpod", {"api_key": api_key})
-        print("RunPod Serverless endpoint ID belongs in providers/runpod.yml as target.")
+        print("RunPod Serverless endpoint ID belongs in tuples/runpod.yml as target.")
         return True
     except (EOFError, KeyboardInterrupt):
         print("\nAborted.")

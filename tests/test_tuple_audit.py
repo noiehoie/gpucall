@@ -16,7 +16,7 @@ def copy_config(tmp_path: Path) -> Path:
     return root
 
 
-def test_provider_audit_reports_active_and_candidate_tuples(tmp_path) -> None:
+def test_tuple_audit_reports_active_and_candidate_tuples(tmp_path) -> None:
     root = copy_config(tmp_path)
     result = subprocess.run(
         [
@@ -56,13 +56,13 @@ def test_runpod_candidates_are_generated_from_catalog_source() -> None:
     candidates = load_tuple_candidate_payloads(root)
     runpod = [row for row in candidates if str(row.get("name", "")).startswith("runpod-")]
 
-    assert not list((root / "provider_candidates").glob("runpod-*.yml"))
+    assert not list((root / "tuple_candidates").glob("runpod-*.yml"))
     assert len(runpod) == 64
     assert sum(1 for row in runpod if row["adapter"] == "runpod-vllm-serverless") == 38
     assert sum(1 for row in runpod if row["adapter"] == "runpod-serverless") == 26
 
 
-def test_provider_audit_fails_closed_for_unknown_recipe(tmp_path) -> None:
+def test_tuple_audit_fails_closed_for_unknown_recipe(tmp_path) -> None:
     root = copy_config(tmp_path)
     result = subprocess.run(
         [

@@ -2,17 +2,17 @@ from __future__ import annotations
 
 from typing import Any
 
-from gpucall.execution.base import ProviderAdapter, RemoteHandle, ResourceLease
+from gpucall.execution.base import TupleAdapter, RemoteHandle, ResourceLease
 
 __all__ = [
     "AzureComputeVMAdapter",
-    "EchoProvider",
+    "EchoTuple",
     "GCPConfidentialSpaceVMAdapter",
     "HyperstackAdapter",
     "LocalOllamaAdapter",
     "ModalAdapter",
     "OVHCloudPublicCloudInstanceAdapter",
-    "ProviderAdapter",
+    "TupleAdapter",
     "RemoteHandle",
     "ResourceLease",
     "ScalewayInstanceAdapter",
@@ -49,8 +49,8 @@ def __getattr__(name: str) -> Any:
         from gpucall.execution_surfaces.function_runtime import ModalAdapter
 
         return ModalAdapter
-    if name in {"EchoProvider", "LocalOllamaAdapter"}:
-        from gpucall.execution_surfaces.local_runtime import EchoProvider, LocalOllamaAdapter
+    if name in {"EchoTuple", "LocalOllamaAdapter"}:
+        from gpucall.execution_surfaces.local_runtime import EchoTuple, LocalOllamaAdapter
 
-        return {"EchoProvider": EchoProvider, "LocalOllamaAdapter": LocalOllamaAdapter}[name]
+        return {"EchoTuple": EchoTuple, "LocalOllamaAdapter": LocalOllamaAdapter}[name]
     raise AttributeError(name)

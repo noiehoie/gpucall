@@ -21,8 +21,8 @@ from gpucall.audit import AuditTrail
 from gpucall.compiler import GovernanceCompiler, GovernanceError
 from gpucall.config import ConfigError, default_config_dir, default_state_dir, load_config
 from gpucall.credentials import load_credentials
-from gpucall.dispatcher import Dispatcher, LeaseReaper, ProviderReconciler
-from gpucall.domain import ChatMessage, DataRef, ExecutionMode, InlineValue, JobRecord, JobState, ProviderError, ResponseFormat, TaskRequest
+from gpucall.dispatcher import Dispatcher, LeaseReaper, TupleReconciler
+from gpucall.domain import ChatMessage, DataRef, ExecutionMode, InlineValue, JobRecord, JobState, TupleError, ResponseFormat, TaskRequest
 from gpucall.domain import PresignGetRequest, PresignGetResponse, PresignPutRequest, PresignPutResponse
 from gpucall.object_store import ObjectStore
 from gpucall.execution.factory import build_adapters
@@ -47,7 +47,7 @@ class Runtime(BaseModel):
     dispatcher: Dispatcher
     jobs: Any
     reaper: LeaseReaper
-    reconciler: ProviderReconciler
+    reconciler: TupleReconciler
     artifact_registry: SQLiteArtifactRegistry
     object_store: ObjectStore | None = None
     tenants: dict[str, Any] = {}
@@ -76,17 +76,17 @@ def build_runtime(config_dir: Path) -> Runtime:
     state_dir.mkdir(parents=True, exist_ok=True)
     policy = config.policy
     recipes = config.recipes
-    providers = config.providers
+    tuples = config.tuples
     registry = ObservedRegistry(path=state_dir / "registry.db")
     audit = AuditTrail(state_dir / "audit" / "trail.jsonl")
     artifact_registry = SQLiteArtifactRegistry(state_dir / "artifacts.db")
     object_store = ObjectStore(config.object_store) if config.object_store is not None else None
     jobs = SQLiteJobStore(state_dir / "state.db")
-    adapters = build_adapters(providers)
+    adapters = build_adapters(tuples)
     compiler = GovernanceCompiler(
         policy=policy,
         recipes=recipes,
-        providers=providers,
+        tuples=tuples,
         models=config.models,
         engines=config.engines,
         registry=registry,
@@ -96,11 +96,11 @@ def build_runtime(config_dir: Path) -> Runtime:
         registry=registry,
         audit=audit,
         jobs=jobs,
-        provider_costs={name: float(provider.cost_per_second) for name, provider in providers.items()},
+        tuple_costs={name: float(tuple.cost_per_second) for name, tuple in tuples.items()},
         artifact_registry=artifact_registry,
     )
     reaper = LeaseReaper(jobs=jobs, audit=audit, cancel_job=dispatcher.cancel_job)
-    reconciler = ProviderReconciler(adapters=adapters, audit=audit)
+    reconciler = TupleReconciler(adapters=adapters, audit=audit)
     return Runtime(
         compiler=compiler,
         dispatcher=dispatcher,
@@ -267,16 +267,16 @@ def create_app(config_dir: Path | None = None) -> FastAPI:
                 }
                 for name, recipe in sorted(runtime.compiler.recipes.items())
             },
-            "providers": {
+            "tuples": {
                 name: {
-                    "adapter": provider.adapter,
-                    "execution_surface": provider.execution_surface.value if provider.execution_surface else None,
-                    "max_model_len": provider.max_model_len,
-                    "model": provider.model,
-                    "modes": [mode.value for mode in provider.modes],
-                    "input_contracts": provider.input_contracts,
+                    "adapter": tuple.adapter,
+                    "execution_surface": tuple.execution_surface.value if tuple.execution_surface else None,
+                    "max_model_len": tuple.max_model_len,
+                    "model": tuple.model,
+                    "modes": [mode.value for mode in tuple.modes],
+                    "input_contracts": tuple.input_contracts,
                 }
-                for name, provider in sorted(runtime.compiler.providers.items())
+                for name, tuple in sorted(runtime.compiler.tuples.items())
             },
         }
 
@@ -317,10 +317,10 @@ def create_app(config_dir: Path | None = None) -> FastAPI:
             request = worker_readable_request(request, runtime)
             plan = plan_with_worker_refs(plan, request.input_refs, split_learning=request.split_learning)
             result = await runtime.dispatcher.execute_sync(plan)
-            headers = warning_headers(plan, runtime.compiler.providers)
+            headers = warning_headers(plan, runtime.compiler.tuples)
             content = {
                 "plan_id": plan.plan_id,
-                "plan": public_plan_summary(plan, runtime.compiler.providers),
+                "plan": public_plan_summary(plan, runtime.compiler.tuples),
                 "result": result.model_dump(mode="json"),
             }
             idempotency_store(
@@ -338,8 +338,8 @@ def create_app(config_dir: Path | None = None) -> FastAPI:
             return governance_error_response(exc, request=request)
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
-        except ProviderError as exc:
-            return provider_error_response(exc, request=request)
+        except TupleError as exc:
+            return tuple_error_response(exc, request=request)
         except TenantBudgetError as exc:
             return tenant_budget_error_response(exc, request=request)
 
@@ -379,7 +379,7 @@ def create_app(config_dir: Path | None = None) -> FastAPI:
             plan = runtime.compiler.compile(task_request)
             enforce_request_budget(runtime, http_request, plan)
             result = await runtime.dispatcher.execute_sync(plan)
-            headers = warning_headers(plan, runtime.compiler.providers)
+            headers = warning_headers(plan, runtime.compiler.tuples)
             if result.output_validated is not None:
                 headers["X-GPUCall-Output-Validated"] = "true" if result.output_validated else "false"
             return JSONResponse(
@@ -389,27 +389,27 @@ def create_app(config_dir: Path | None = None) -> FastAPI:
                     request.model,
                     result.value or "",
                     result.usage,
-                    gpucall=public_plan_summary(plan, runtime.compiler.providers),
+                    gpucall=public_plan_summary(plan, runtime.compiler.tuples),
                     output_validated=result.output_validated,
                 ),
             )
         except GovernanceError as exc:
             status_code = governance_status_code(exc)
-            code = "provider_unavailable" if status_code == 503 else exc.code.lower()
+            code = "tuple_unavailable" if status_code == 503 else exc.code.lower()
             return openai_error_response(
                 status_code,
                 str(exc),
                 code=code,
                 gpucall_failure_artifact=build_governance_failure_artifact(exc, task_request),
             )
-        except ProviderError as exc:
+        except TupleError as exc:
             headers: dict[str, str] = {}
             if exc.raw_output is not None:
                 headers["X-GPUCall-Output-Validated"] = "false"
             return openai_error_response(
                 exc.status_code,
-                public_provider_error(exc),
-                code=exc.code or "provider_error",
+                public_tuple_error(exc),
+                code=exc.code or "tuple_error",
                 headers=headers,
                 gpucall_failure_artifact=build_provider_failure_artifact(exc, task_request),
             )
@@ -441,12 +441,12 @@ def create_app(config_dir: Path | None = None) -> FastAPI:
             plan = plan_with_worker_refs(plan, request.input_refs, split_learning=request.split_learning)
             owner_identity = idempotency_identity(http_request)
             job = await runtime.dispatcher.submit_async(plan, owner_identity=owner_identity)
-            headers = warning_headers(plan, runtime.compiler.providers)
+            headers = warning_headers(plan, runtime.compiler.tuples)
             content = {
                 "job_id": job.job_id,
                 "state": job.state,
                 "status_url": f"/v2/jobs/{job.job_id}",
-                "plan": public_plan_summary(plan, runtime.compiler.providers),
+                "plan": public_plan_summary(plan, runtime.compiler.tuples),
             }
             idempotency_store(
                 request,
@@ -493,7 +493,7 @@ def create_app(config_dir: Path | None = None) -> FastAPI:
             events(),
             media_type="text/event-stream",
             status_code=200,
-            headers=tenant_headers(warning_headers(plan, runtime.compiler.providers), http_request),
+            headers=tenant_headers(warning_headers(plan, runtime.compiler.tuples), http_request),
         )
 
     @app.get("/v2/jobs/{job_id}")
@@ -537,8 +537,8 @@ async def recover_interrupted_jobs(runtime: Runtime) -> None:
         runtime.dispatcher.audit.append("job.interrupted", {"job_id": job.job_id, "plan_id": job.plan.plan_id})
 
 
-def warning_headers(plan, providers=None) -> dict[str, str]:
-    warnings = route_warning_tags(plan, providers)
+def warning_headers(plan, tuples=None) -> dict[str, str]:
+    warnings = route_warning_tags(plan, tuples)
     return {"X-GPUCall-Warning": ", ".join(warnings)} if warnings else {}
 
 
@@ -556,13 +556,13 @@ def enforce_request_budget(runtime: Runtime, request: Request, plan: Any) -> Non
     tenant = runtime.tenants.get(tenant_name) or runtime.tenants.get("default")
     cost = getattr(plan, "attestations", {}).get("cost_estimate", {}) if getattr(plan, "attestations", None) else {}
     estimated = float(cost.get("estimated_cost_usd") or 0)
-    provider_chain = list(getattr(plan, "provider_chain", []) or [])
+    tuple_chain = list(getattr(plan, "tuple_chain", []) or [])
     enforce_tenant_budget(
         tenant_id=tenant_name,
         tenant=tenant,
         ledger=runtime.tenant_usage,
         estimated_cost_usd=estimated,
-        provider=provider_chain[0] if provider_chain else None,
+        tuple=tuple_chain[0] if tuple_chain else None,
         recipe=getattr(plan, "recipe_name", None),
         plan_id=getattr(plan, "plan_id", None),
     )
@@ -602,8 +602,8 @@ def enforce_gateway_owned_routing(request: TaskRequest) -> None:
     forbidden: list[str] = []
     if request.recipe is not None:
         forbidden.append("recipe")
-    if request.requested_provider is not None:
-        forbidden.append("requested_provider")
+    if request.requested_tuple is not None:
+        forbidden.append("requested_tuple")
     if forbidden:
         joined = ", ".join(forbidden)
         raise GovernanceError(f"caller-controlled routing is disabled; omit {joined}")
@@ -637,10 +637,10 @@ def metric_route_path(request: Request) -> str:
 def governance_status_code(exc: GovernanceError) -> int:
     if exc.code in {"NO_AUTO_SELECTABLE_RECIPE", "REQUEST_EXCEEDS_RECIPE_CONTEXT"}:
         return 422
-    if exc.code == "NO_ELIGIBLE_PROVIDER":
+    if exc.code == "NO_ELIGIBLE_TUPLE":
         return 503
     message = str(exc)
-    if "circuit breaker" in message or "no eligible provider after policy, recipe, and circuit constraints" in message:
+    if "circuit breaker" in message or "no eligible tuple after policy, recipe, and circuit constraints" in message:
         return 503
     return 400
 
@@ -653,9 +653,9 @@ def governance_error_response(exc: GovernanceError, *, request: TaskRequest | No
     return JSONResponse(status_code=governance_status_code(exc), content=content)
 
 
-def provider_error_response(exc: ProviderError, *, request: TaskRequest | None = None) -> JSONResponse:
+def tuple_error_response(exc: TupleError, *, request: TaskRequest | None = None) -> JSONResponse:
     content = {
-        "detail": public_provider_error(exc),
+        "detail": public_tuple_error(exc),
         "code": exc.code or "PROVIDER_ERROR",
         "failure_artifact": build_provider_failure_artifact(exc, request),
     }
@@ -683,14 +683,14 @@ def build_governance_failure_artifact(exc: GovernanceError, request: TaskRequest
     return artifact
 
 
-def build_provider_failure_artifact(exc: ProviderError, request: TaskRequest | None = None) -> dict[str, Any]:
+def build_provider_failure_artifact(exc: TupleError, request: TaskRequest | None = None) -> dict[str, Any]:
     artifact: dict[str, Any] = {
         "schema_version": 1,
         "failure_id": f"pf-{uuid4().hex}",
-        "failure_kind": "provider_runtime",
+        "failure_kind": "tuple_runtime",
         "code": exc.code or "PROVIDER_ERROR",
         "status_code": exc.status_code,
-        "message": public_provider_error(exc),
+        "message": public_tuple_error(exc),
         "retryable": exc.retryable,
         "recipe_request_recommended": False,
         "caller_action": "retry_later" if exc.retryable else "contact_gpucall_admin",
@@ -699,21 +699,21 @@ def build_provider_failure_artifact(exc: ProviderError, request: TaskRequest | N
         "rejection_matrix": {},
         "redaction_guarantee": redaction_guarantee(),
     }
-    if exc.raw_output is not None and provider_error_body_is_safe_for_artifact(exc):
-        artifact["provider_error_body_redacted"] = exc.raw_output
-        artifact["provider_error_body_sha256"] = hashlib.sha256(exc.raw_output.encode("utf-8")).hexdigest()
+    if exc.raw_output is not None and tuple_error_body_is_safe_for_artifact(exc):
+        artifact["tuple_error_body_redacted"] = exc.raw_output
+        artifact["tuple_error_body_sha256"] = hashlib.sha256(exc.raw_output.encode("utf-8")).hexdigest()
     return artifact
 
 
-def provider_error_body_is_safe_for_artifact(exc: ProviderError) -> bool:
+def tuple_error_body_is_safe_for_artifact(exc: TupleError) -> bool:
     return (exc.code or "") in {"PROVIDER_PROVISION_FAILED", "PROVIDER_PROVISION_UNAVAILABLE"}
 
 
 def governance_failure_kind(exc: GovernanceError) -> str:
     if exc.code in {"NO_AUTO_SELECTABLE_RECIPE", "REQUEST_EXCEEDS_RECIPE_CONTEXT"}:
         return "no_recipe"
-    if exc.code == "NO_ELIGIBLE_PROVIDER":
-        return "no_provider"
+    if exc.code == "NO_ELIGIBLE_TUPLE":
+        return "no_tuple"
     message = str(exc)
     if "not eligible" in message or "security" in message or "policy" in message:
         return "policy_denied"
@@ -723,8 +723,8 @@ def governance_failure_kind(exc: GovernanceError) -> str:
 def caller_action_for_governance_failure(failure_kind: str) -> str:
     if failure_kind == "no_recipe":
         return "run_gpucall_recipe_draft_intake"
-    if failure_kind == "no_provider":
-        return "check_provider_health_or_retry_later"
+    if failure_kind == "no_tuple":
+        return "check_tuple_health_or_retry_later"
     if failure_kind == "policy_denied":
         return "contact_gpucall_admin"
     return "fix_request_or_run_gpucall_recipe_draft_intake"
@@ -732,8 +732,8 @@ def caller_action_for_governance_failure(failure_kind: str) -> str:
 
 def capability_gap_for_governance_failure(exc: GovernanceError) -> str | None:
     context = exc.context
-    if exc.code == "NO_ELIGIBLE_PROVIDER":
-        return "no_eligible_provider"
+    if exc.code == "NO_ELIGIBLE_TUPLE":
+        return "no_eligible_tuple"
     required_len = context.get("required_model_len")
     largest_len = context.get("largest_auto_recipe_model_len") or context.get("recipe_max_model_len")
     if isinstance(required_len, int) and isinstance(largest_len, int) and required_len > largest_len:
@@ -749,9 +749,9 @@ def rejection_matrix_from_context(context: dict[str, object]) -> dict[str, Any]:
     rejections = context.get("rejections")
     if isinstance(rejections, list):
         matrix["recipes"] = _named_rejection_list(rejections)
-    provider_rejections = context.get("provider_rejections")
-    if isinstance(provider_rejections, dict):
-        matrix["providers"] = {str(name): str(reason) for name, reason in sorted(provider_rejections.items())}
+    tuple_rejections = context.get("tuple_rejections")
+    if isinstance(tuple_rejections, dict):
+        matrix["tuples"] = {str(name): str(reason) for name, reason in sorted(tuple_rejections.items())}
     return matrix
 
 
@@ -799,7 +799,7 @@ def redaction_guarantee() -> dict[str, bool]:
         "data_ref_uri_included": False,
         "presigned_url_included": False,
         "api_key_included": False,
-        "provider_raw_output_included": False,
+        "tuple_raw_output_included": False,
     }
 
 
@@ -959,16 +959,16 @@ def openai_chat_response(
     return payload
 
 
-def public_plan_summary(plan: Any, providers: dict[str, Any] | None = None) -> dict[str, Any]:
-    chain = list(getattr(plan, "provider_chain", []) or [])
-    selected_provider = chain[0] if chain else None
-    selected_spec = providers.get(selected_provider) if providers and selected_provider else None
+def public_plan_summary(plan: Any, tuples: dict[str, Any] | None = None) -> dict[str, Any]:
+    chain = list(getattr(plan, "tuple_chain", []) or [])
+    selected_tuple = chain[0] if chain else None
+    selected_spec = tuples.get(selected_tuple) if tuples and selected_tuple else None
     attestations = getattr(plan, "attestations", {}) or {}
     return {
         "recipe_name": getattr(plan, "recipe_name", None),
-        "provider_chain": chain,
-        "selected_provider": selected_provider,
-        "selected_provider_model": getattr(selected_spec, "model", None) if selected_spec is not None else None,
+        "tuple_chain": chain,
+        "selected_tuple": selected_tuple,
+        "selected_tuple_model": getattr(selected_spec, "model", None) if selected_spec is not None else None,
         "governance_hash": attestations.get("governance_hash"),
         "system_prompt_transform": attestations.get("system_prompt_transform"),
         "output_validation_attempts": getattr(plan, "output_validation_attempts", None),
@@ -976,8 +976,8 @@ def public_plan_summary(plan: Any, providers: dict[str, Any] | None = None) -> d
     }
 
 
-def public_provider_error(exc: ProviderError) -> str:
-    return f"provider execution failed ({exc.code or 'PROVIDER_ERROR'})"
+def public_tuple_error(exc: TupleError) -> str:
+    return f"tuple execution failed ({exc.code or 'PROVIDER_ERROR'})"
 
 
 def openai_error_response(

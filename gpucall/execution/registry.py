@@ -4,17 +4,17 @@ from collections.abc import Callable
 from dataclasses import dataclass, field, replace
 from typing import Any
 
-from gpucall.domain import ExecutionSurface, ProviderSpec
+from gpucall.domain import ExecutionSurface, ExecutionTupleSpec
 from gpucall.plugin_loader import load_entry_point_group
-from gpucall.execution.base import ProviderAdapter
+from gpucall.execution.base import TupleAdapter
 
-AdapterFactory = Callable[[ProviderSpec, dict[str, dict[str, str]]], ProviderAdapter]
-ConfigValidator = Callable[[ProviderSpec], list[str]]
-CatalogValidator = Callable[[list[ProviderSpec], dict[str, dict[str, str]]], list[dict[str, Any]]]
+AdapterFactory = Callable[[ExecutionTupleSpec, dict[str, dict[str, str]]], TupleAdapter]
+ConfigValidator = Callable[[ExecutionTupleSpec], list[str]]
+CatalogValidator = Callable[[list[ExecutionTupleSpec], dict[str, dict[str, str]]], list[dict[str, Any]]]
 
 
 @dataclass(frozen=True)
-class ProviderAdapterDescriptor:
+class TupleAdapterDescriptor:
     execution_surface: ExecutionSurface | None = None
     endpoint_contract: str | None = None
     output_contract: str | None = None
@@ -32,7 +32,7 @@ class ProviderAdapterDescriptor:
 
 _ADAPTER_FACTORIES: dict[str, AdapterFactory] = {}
 _ALIASES: dict[str, str] = {}
-_DESCRIPTORS: dict[str, ProviderAdapterDescriptor] = {}
+_DESCRIPTORS: dict[str, TupleAdapterDescriptor] = {}
 _BUILTINS_LOADED = False
 _DEFAULT_EXECUTION_SURFACES = {
     "azure-compute-vm": ExecutionSurface.IAAS_VM,
@@ -52,7 +52,7 @@ _DEFAULT_EXECUTION_SURFACES = {
 def register_adapter(
     *names: str,
     aliases: tuple[str, ...] = (),
-    descriptor: ProviderAdapterDescriptor | None = None,
+    descriptor: TupleAdapterDescriptor | None = None,
 ) -> Callable[[AdapterFactory], AdapterFactory]:
     canonical = names[0] if names else None
     if not canonical:
@@ -89,9 +89,9 @@ def ensure_builtin_adapters_loaded() -> None:
 
 
 def build_registered_adapter(
-    spec: ProviderSpec,
+    spec: ExecutionTupleSpec,
     credentials: dict[str, dict[str, str]] | None = None,
-) -> ProviderAdapter:
+) -> TupleAdapter:
     ensure_builtin_adapters_loaded()
     load_entry_point_group("gpucall.adapters")
     credentials = credentials or {}
@@ -100,7 +100,7 @@ def build_registered_adapter(
     factory = _ADAPTER_FACTORIES.get(key)
     if factory is None:
         known = ", ".join(sorted(_ADAPTER_FACTORIES))
-        raise ValueError(f"unknown provider adapter: {spec.adapter} (known: {known})")
+        raise ValueError(f"unknown tuple adapter: {spec.adapter} (known: {known})")
     return factory(spec, credentials)
 
 
@@ -110,22 +110,22 @@ def registered_adapter_names() -> list[str]:
     return sorted(_ADAPTER_FACTORIES)
 
 
-def adapter_descriptor(spec_or_adapter: ProviderSpec | str) -> ProviderAdapterDescriptor | None:
+def adapter_descriptor(spec_or_adapter: ExecutionTupleSpec | str) -> TupleAdapterDescriptor | None:
     ensure_builtin_adapters_loaded()
     load_entry_point_group("gpucall.adapters")
-    adapter = spec_or_adapter.adapter if isinstance(spec_or_adapter, ProviderSpec) else spec_or_adapter
+    adapter = spec_or_adapter.adapter if isinstance(spec_or_adapter, ExecutionTupleSpec) else spec_or_adapter
     key = _normalize(adapter)
     key = _ALIASES.get(key, key)
     return _DESCRIPTORS.get(key)
 
 
-def registered_adapter_descriptors() -> dict[str, ProviderAdapterDescriptor]:
+def registered_adapter_descriptors() -> dict[str, TupleAdapterDescriptor]:
     ensure_builtin_adapters_loaded()
     load_entry_point_group("gpucall.adapters")
     return dict(sorted(_DESCRIPTORS.items()))
 
 
-def provider_family_for_adapter(adapter: str) -> str:
+def vendor_family_for_adapter(adapter: str) -> str:
     adapter = _normalize(adapter)
     if adapter.startswith("runpod-"):
         return "runpod"
@@ -146,12 +146,12 @@ def _normalize(value: str) -> str:
     return value.strip().lower()
 
 
-def _descriptor_for(adapter: str, descriptor: ProviderAdapterDescriptor | None) -> ProviderAdapterDescriptor | None:
+def _descriptor_for(adapter: str, descriptor: TupleAdapterDescriptor | None) -> TupleAdapterDescriptor | None:
     default_surface = _DEFAULT_EXECUTION_SURFACES.get(adapter)
     if descriptor is None:
         if default_surface is None:
             return None
-        return ProviderAdapterDescriptor(execution_surface=default_surface)
+        return TupleAdapterDescriptor(execution_surface=default_surface)
     if descriptor.execution_surface is None and default_surface is not None:
         return replace(descriptor, execution_surface=default_surface)
     return descriptor

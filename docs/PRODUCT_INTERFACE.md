@@ -77,7 +77,7 @@ print(response["parsed"])
 ```
 
 The SDK does not send provider or recipe. Governance, recipe selection,
-provider routing, fallback, lease cleanup, and audit remain gateway
+tuple routing, fallback, lease cleanup, and audit remain gateway
 responsibilities. Public task endpoints reject caller-controlled routing unless
 the gateway is explicitly started with a debug override.
 
@@ -87,7 +87,7 @@ Use `/v2/tasks/sync`, `/v2/tasks/async`, `/v2/tasks/stream`, and object-store
 presign endpoints for internal systems and advanced integrations.
 
 This level exposes `TaskRequest`, `DataRef`, `response_format`, and job polling
-directly. Public callers still must not set `recipe` or `requested_provider`;
+directly. Public callers still must not set `recipe` or `requested_tuple`;
 those fields are reserved for admin/debug flows. GPU and model selection are
 management-side catalog decisions, not caller payload fields.
 

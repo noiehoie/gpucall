@@ -70,4 +70,4 @@ def test_execution_catalog_cli_outputs_candidates() -> None:
 
     assert any(item["execution_surface"] == "iaas_vm" for item in payload)
     assert any(item["execution_surface"] == "function_runtime" for item in payload)
-    assert any(item["source"] == "provider_candidate" for item in payload)
+    assert any(item["source"] == "tuple_candidate" for item in payload)

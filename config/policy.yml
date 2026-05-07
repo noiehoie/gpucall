@@ -9,7 +9,7 @@ cost_policy:
   max_estimated_cost_usd: null
   max_cold_start_cost_usd: null
   max_idle_cost_usd: null
-  require_budget_for_high_cost_provider: true
+  require_budget_for_high_cost_tuple: true
   high_cost_threshold_usd: 5.0
 security:
   restricted_requires:
@@ -17,7 +17,7 @@ security:
     - split_learning
   confidential_allows_inline: true
   require_data_ref_sha256: true
-providers:
+tuples:
   max_data_classification: confidential
   allow: []
   deny: []

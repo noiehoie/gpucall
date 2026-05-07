@@ -12,17 +12,17 @@ from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
-from gpucall.domain import ArtifactManifest, CompiledPlan, ProviderError, ProviderResult
+from gpucall.domain import ArtifactManifest, CompiledPlan, TupleError, TupleResult
 from gpucall.config import default_state_dir
-from gpucall.execution.base import ProviderAdapter, RemoteHandle
+from gpucall.execution.base import TupleAdapter, RemoteHandle
 from gpucall.execution.payloads import plan_payload
-from gpucall.execution.registry import ProviderAdapterDescriptor, register_adapter
+from gpucall.execution.registry import TupleAdapterDescriptor, register_adapter
 
 HYPERSTACK_API_BASE = "https://infrahub-api.nexgencloud.com/v1"
 DEFAULT_HYPERSTACK_IMAGE = "Ubuntu Server 22.04 LTS R570 CUDA 12.8 with Docker"
 
 
-class HyperstackAdapter(ProviderAdapter):
+class HyperstackAdapter(TupleAdapter):
     def __init__(
         self,
         name: str = "hyperstack",
@@ -57,10 +57,10 @@ class HyperstackAdapter(ProviderAdapter):
 
     async def start(self, plan: CompiledPlan) -> RemoteHandle:
         if not self.api_key:
-            raise ProviderError("Hyperstack API key is not configured", retryable=False, status_code=401)
+            raise TupleError("Hyperstack API key is not configured", retryable=False, status_code=401)
         meta = await asyncio.to_thread(self._provision_and_start, plan)
         return RemoteHandle(
-            provider=self.name,
+            tuple=self.name,
             remote_id=meta["vm_id"],
             expires_at=plan.expires_at(),
             account_ref="hyperstack",
@@ -71,7 +71,7 @@ class HyperstackAdapter(ProviderAdapter):
             meta=meta,
         )
 
-    async def wait(self, handle: RemoteHandle, plan: CompiledPlan) -> ProviderResult:
+    async def wait(self, handle: RemoteHandle, plan: CompiledPlan) -> TupleResult:
         return await asyncio.to_thread(self._wait_sync, handle, plan)
 
     async def cancel_remote(self, handle: RemoteHandle) -> None:
@@ -86,7 +86,7 @@ class HyperstackAdapter(ProviderAdapter):
             from requests.adapters import HTTPAdapter
             from urllib3.util.retry import Retry
         except ImportError as exc:
-            raise ProviderError("requests/urllib3 are required for Hyperstack", retryable=False, status_code=501) from exc
+            raise TupleError("requests/urllib3 are required for Hyperstack", retryable=False, status_code=501) from exc
         session = requests.Session()
         retry = Retry(total=0)
         session.mount("https://", HTTPAdapter(max_retries=retry))
@@ -94,13 +94,13 @@ class HyperstackAdapter(ProviderAdapter):
 
     def _provision_and_start(self, plan: CompiledPlan) -> dict[str, Any]:
         if not self.ssh_remote_cidr:
-            raise ProviderError("Hyperstack ssh_remote_cidr must be explicitly configured", retryable=False, status_code=400)
+            raise TupleError("Hyperstack ssh_remote_cidr must be explicitly configured", retryable=False, status_code=400)
         try:
             network = ipaddress.ip_network(self.ssh_remote_cidr, strict=False)
         except ValueError as exc:
-            raise ProviderError("Hyperstack ssh_remote_cidr is invalid", retryable=False, status_code=400) from exc
+            raise TupleError("Hyperstack ssh_remote_cidr is invalid", retryable=False, status_code=400) from exc
         if network.prefixlen == 0:
-            raise ProviderError("Hyperstack ssh_remote_cidr must not allow all addresses", retryable=False, status_code=400)
+            raise TupleError("Hyperstack ssh_remote_cidr must not allow all addresses", retryable=False, status_code=400)
         session = self._session()
         vm_name = f"gpucall-managed-{plan.plan_id[:12]}-{uuid4().hex[:8]}"
         self._record_lease({"event": "provision.requested", "vm_name": vm_name, "plan_id": plan.plan_id, "expires_at": plan.expires_at().isoformat()})
@@ -117,7 +117,7 @@ class HyperstackAdapter(ProviderAdapter):
         instances = data.get("instances") or []
         vm_id = (instances[0].get("id") if instances else None) or data.get("id") or data.get("instance", {}).get("id")
         if not vm_id:
-            raise ProviderError("Hyperstack response did not include vm id", retryable=True, status_code=502)
+            raise TupleError("Hyperstack response did not include vm id", retryable=True, status_code=502)
         self._record_lease(
             {
                 "event": "provision.created",
@@ -220,16 +220,16 @@ class HyperstackAdapter(ProviderAdapter):
                         if ip:
                             return str(ip)
                     if status == "ERROR":
-                        raise ProviderError(f"Hyperstack VM {vm_id} entered ERROR", retryable=False, status_code=502)
+                        raise TupleError(f"Hyperstack VM {vm_id} entered ERROR", retryable=False, status_code=502)
                 elif response.status_code >= 500:
                     last_error = f"status {response.status_code}"
-            except ProviderError:
+            except TupleError:
                 raise
             except Exception as exc:
                 last_error = type(exc).__name__
             time.sleep(10)
         suffix = f" (last API error: {last_error})" if last_error else ""
-        raise ProviderError(f"Hyperstack VM {vm_id} did not become ACTIVE{suffix}", retryable=True, status_code=504)
+        raise TupleError(f"Hyperstack VM {vm_id} did not become ACTIVE{suffix}", retryable=True, status_code=504)
 
     def _ensure_ssh_rule(self, session: Any, vm_id: str) -> str | None:
         response = session.post(
@@ -260,7 +260,7 @@ class HyperstackAdapter(ProviderAdapter):
         try:
             import paramiko  # type: ignore
         except ImportError as exc:
-            raise ProviderError("paramiko is required for Hyperstack", retryable=False, status_code=501) from exc
+            raise TupleError("paramiko is required for Hyperstack", retryable=False, status_code=501) from exc
         deadline = time.monotonic() + 300
         ready = False
         while time.monotonic() < deadline:
@@ -271,7 +271,7 @@ class HyperstackAdapter(ProviderAdapter):
             except OSError:
                 time.sleep(5)
         if not ready:
-            raise ProviderError(f"SSH port not open on {ip_address}", retryable=True, status_code=504)
+            raise TupleError(f"SSH port not open on {ip_address}", retryable=True, status_code=504)
         ssh = paramiko.SSHClient()
         known_hosts = os.getenv("GPUCALL_HYPERSTACK_KNOWN_HOSTS")
         if known_hosts:
@@ -280,30 +280,30 @@ class HyperstackAdapter(ProviderAdapter):
         elif os.getenv("GPUCALL_ENV", "").strip().lower() in {"prod", "production"} or os.getenv(
             "GPUCALL_PRODUCTION", ""
         ).strip().lower() in {"1", "true", "yes", "on"}:
-            raise ProviderError("Hyperstack production SSH requires GPUCALL_HYPERSTACK_KNOWN_HOSTS", retryable=False, status_code=500)
+            raise TupleError("Hyperstack production SSH requires GPUCALL_HYPERSTACK_KNOWN_HOSTS", retryable=False, status_code=500)
         else:
             ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
         ssh.connect(ip_address, username="ubuntu", key_filename=self.ssh_key_path, timeout=10)
         return ssh
 
-    def _wait_sync(self, handle: RemoteHandle, plan: CompiledPlan) -> ProviderResult:
+    def _wait_sync(self, handle: RemoteHandle, plan: CompiledPlan) -> TupleResult:
         channel = handle.meta.get("ssh_channel")
         if channel is None:
-            raise ProviderError("Hyperstack missing SSH channel", retryable=False, status_code=502)
+            raise TupleError("Hyperstack missing SSH channel", retryable=False, status_code=502)
         deadline = time.monotonic() + plan.timeout_seconds
         while time.monotonic() < deadline:
             if channel.exit_status_ready():
                 status = channel.recv_exit_status()
                 if status != 0:
-                    raise ProviderError(f"Hyperstack script failed ({status})", retryable=True, status_code=502)
+                    raise TupleError(f"Hyperstack script failed ({status})", retryable=True, status_code=502)
                 ssh = handle.meta["ssh_client"]
                 _, stdout, _ = ssh.exec_command("cat /tmp/gpucall/output.txt")
                 value = stdout.read().decode().strip()
                 if plan.artifact_export is not None:
-                    return ProviderResult(kind="artifact_manifest", artifact_manifest=ArtifactManifest.model_validate_json(value))
-                return ProviderResult(kind="inline", value=value)
+                    return TupleResult(kind="artifact_manifest", artifact_manifest=ArtifactManifest.model_validate_json(value))
+                return TupleResult(kind="inline", value=value)
             time.sleep(2)
-        raise ProviderError("Hyperstack SSH execution timed out", retryable=True, status_code=504)
+        raise TupleError("Hyperstack SSH execution timed out", retryable=True, status_code=504)
 
     def _destroy_sync(self, meta: dict[str, Any]) -> None:
         ssh = meta.get("ssh_client")
@@ -355,7 +355,7 @@ class HyperstackAdapter(ProviderAdapter):
         if delete_accepted:
             self._record_lease({"event": "destroy.pending", "vm_id": vm_id, "recorded_at": datetime.now(timezone.utc).isoformat()})
             return
-        raise ProviderError(f"CRITICAL LEAK: failed to destroy Hyperstack VM {vm_id}", retryable=True, status_code=500)
+        raise TupleError(f"CRITICAL LEAK: failed to destroy Hyperstack VM {vm_id}", retryable=True, status_code=500)
 
     def _wait_vm_absent(self, session: Any, vm_id: str, *, deadline_seconds: float = 90) -> bool:
         deadline = time.monotonic() + deadline_seconds
@@ -427,7 +427,7 @@ class HyperstackAdapter(ProviderAdapter):
 
     def _record_lease(self, event: dict[str, Any]) -> None:
         self.lease_manifest_path.parent.mkdir(parents=True, exist_ok=True)
-        event = {"provider": self.name, "recorded_at": datetime.now(timezone.utc).isoformat(), **event}
+        event = {"tuple": self.name, "recorded_at": datetime.now(timezone.utc).isoformat(), **event}
         with self.lease_manifest_path.open("a", encoding="utf-8") as handle:
             handle.write(json.dumps(event, sort_keys=True, separators=(",", ":")) + "\n")
 
@@ -470,15 +470,15 @@ def region_from_hyperstack_environment(environment_name: str) -> str:
     return str(environment_name or "")
 
 
-def hyperstack_config_findings(provider: Any) -> list[str]:
-    if not provider.ssh_remote_cidr:
-        return [f"tuple {provider.name!r} must declare ssh_remote_cidr"]
+def hyperstack_config_findings(tuple: Any) -> list[str]:
+    if not tuple.ssh_remote_cidr:
+        return [f"tuple {tuple.name!r} must declare ssh_remote_cidr"]
     try:
-        network = ipaddress.ip_network(provider.ssh_remote_cidr, strict=False)
+        network = ipaddress.ip_network(tuple.ssh_remote_cidr, strict=False)
     except ValueError:
-        return [f"tuple {provider.name!r} ssh_remote_cidr is invalid"]
+        return [f"tuple {tuple.name!r} ssh_remote_cidr is invalid"]
     if network.prefixlen == 0:
-        return [f"tuple {provider.name!r} ssh_remote_cidr must not allow all addresses"]
+        return [f"tuple {tuple.name!r} ssh_remote_cidr must not allow all addresses"]
     return []
 
 
@@ -487,12 +487,12 @@ def hyperstack_catalog_findings(providers: list[Any], credentials: dict[str, dic
     if not api_key:
         return [
             {
-                "provider": provider.name,
-                "adapter": provider.adapter,
+                "tuple": tuple.name,
+                "adapter": tuple.adapter,
                 "severity": "error",
-                "reason": "missing Hyperstack API key; cannot verify official provider catalog",
+                "reason": "missing Hyperstack API key; cannot verify official tuple catalog",
             }
-            for provider in providers
+            for tuple in providers
         ]
     return _hyperstack_catalog_findings(providers, api_key)
 
@@ -503,17 +503,17 @@ def _hyperstack_catalog_findings(providers: list[Any], api_key: str) -> list[dic
     except ImportError as exc:
         return [
             {
-                "provider": provider.name,
-                "adapter": provider.adapter,
+                "tuple": tuple.name,
+                "adapter": tuple.adapter,
                 "severity": "error",
-                "reason": f"requests is unavailable; cannot verify official provider catalog: {exc}",
+                "reason": f"requests is unavailable; cannot verify official tuple catalog: {exc}",
             }
-            for provider in providers
+            for tuple in providers
         ]
 
     headers = {"api_key": api_key, "Accept": "application/json", "Content-Type": "application/json"}
     try:
-        base_urls = {str(provider.endpoint or HYPERSTACK_API_BASE).rstrip("/") for provider in providers}
+        base_urls = {str(tuple.endpoint or HYPERSTACK_API_BASE).rstrip("/") for tuple in providers}
         if len(base_urls) != 1:
             raise ValueError("all Hyperstack providers must use the same official endpoint during catalog validation")
         base_url = next(iter(base_urls))
@@ -525,50 +525,50 @@ def _hyperstack_catalog_findings(providers: list[Any], api_key: str) -> list[dic
     except Exception as exc:
         return [
             {
-                "provider": provider.name,
-                "adapter": provider.adapter,
+                "tuple": tuple.name,
+                "adapter": tuple.adapter,
                 "severity": "error",
                 "reason": f"official Hyperstack catalog lookup failed: {exc}",
             }
-            for provider in providers
+            for tuple in providers
         ]
 
     findings: list[dict[str, Any]] = []
-    for provider in providers:
-        region = region_from_hyperstack_environment(provider.target or "")
-        if provider.target not in environments:
+    for tuple in providers:
+        region = region_from_hyperstack_environment(tuple.target or "")
+        if tuple.target not in environments:
             findings.append(
                 {
-                    "provider": provider.name,
-                    "adapter": provider.adapter,
+                    "tuple": tuple.name,
+                    "adapter": tuple.adapter,
                     "severity": "error",
                     "field": "target",
-                    "configured": provider.target,
+                    "configured": tuple.target,
                     "reason": "environment_name is not present in official Hyperstack /core/environments catalog",
                 }
             )
-        if provider.image not in images.get(region, set()):
+        if tuple.image not in images.get(region, set()):
             findings.append(
                 {
-                    "provider": provider.name,
-                    "adapter": provider.adapter,
+                    "tuple": tuple.name,
+                    "adapter": tuple.adapter,
                     "severity": "error",
                     "field": "image",
-                    "configured": provider.image,
+                    "configured": tuple.image,
                     "region": region,
-                    "reason": "image_name is not present in official Hyperstack /core/images catalog for provider region",
+                    "reason": "image_name is not present in official Hyperstack /core/images catalog for tuple region",
                 }
             )
-        if provider.instance not in flavors.get(region, set()):
+        if tuple.instance not in flavors.get(region, set()):
             findings.append(
                 {
-                    "provider": provider.name,
-                    "adapter": provider.adapter,
+                    "tuple": tuple.name,
+                    "adapter": tuple.adapter,
                     "severity": "error",
                     "field": "instance",
-                    "configured": provider.instance,
+                    "configured": tuple.instance,
                     "region": region,
-                    "reason": "flavor_name is not present in official Hyperstack /core/flavors catalog for provider region",
+                    "reason": "flavor_name is not present in official Hyperstack /core/flavors catalog for tuple region",
                 }
             )
     return findings
@@ -610,7 +610,7 @@ def _hyperstack_environment_names(payload: dict[str, Any]) -> set[str]:
 
 @register_adapter(
     "hyperstack",
-    descriptor=ProviderAdapterDescriptor(
+    descriptor=TupleAdapterDescriptor(
         endpoint_contract="hyperstack-vm",
         output_contract="plain-text",
         config_validator=hyperstack_config_findings,
@@ -637,7 +637,7 @@ def build_hyperstack_adapter(spec, credentials):
         if value in {None, ""}
     ]
     if missing:
-        raise ValueError(f"hyperstack provider requires explicit fields: {', '.join(missing)}")
+        raise ValueError(f"hyperstack tuple requires explicit fields: {', '.join(missing)}")
     hyperstack = credentials.get("hyperstack", {})
     return HyperstackAdapter(
         name=spec.name,
@@ -682,7 +682,7 @@ def _validate_hyperstack_create_instances_payload(payload: dict[str, Any]) -> di
     try:
         from hyperstack.models.create_instances_payload import CreateInstancesPayload  # type: ignore
     except ImportError as exc:
-        raise ProviderError(
+        raise TupleError(
             "official Hyperstack SDK is required for VM create payload validation",
             retryable=False,
             status_code=501,
@@ -694,7 +694,7 @@ def _validate_hyperstack_create_instances_payload(payload: dict[str, Any]) -> di
             raise ValueError("empty payload")
         return instance.to_dict()
     except Exception as exc:
-        raise ProviderError(
+        raise TupleError(
             f"Hyperstack create payload failed official SDK validation: {type(exc).__name__}",
             retryable=False,
             status_code=500,
@@ -702,7 +702,7 @@ def _validate_hyperstack_create_instances_payload(payload: dict[str, Any]) -> di
         ) from exc
 
 
-def _hyperstack_response_error(response: Any, *, action: str, retryable: bool | None = None) -> ProviderError:
+def _hyperstack_response_error(response: Any, *, action: str, retryable: bool | None = None) -> TupleError:
     detail = _hyperstack_error_detail(response)
     if retryable is None:
         retryable = response.status_code in {404, 409, 423, 429, 500, 502, 503, 504}
@@ -713,7 +713,7 @@ def _hyperstack_response_error(response: Any, *, action: str, retryable: bool | 
     message = f"Hyperstack {action} failed: {response.status_code}"
     if detail:
         message += f" ({detail})"
-    return ProviderError(
+    return TupleError(
         message,
         retryable=retryable,
         status_code=503 if retryable else 502,
@@ -1100,4 +1100,4 @@ import os
 from typing import Any
 from uuid import uuid4
 
-from gpucall.domain import CompiledPlan, ProviderError
+from gpucall.domain import CompiledPlan, TupleError

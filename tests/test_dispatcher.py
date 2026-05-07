@@ -17,59 +17,59 @@ from gpucall.domain import (
     DataRef,
     ExecutionMode,
     InlineValue,
-    ProviderError,
-    ProviderResult,
+    TupleError,
+    TupleResult,
     ResponseFormat,
     ResponseFormatType,
 )
-from gpucall.execution import EchoProvider, RemoteHandle
+from gpucall.execution import EchoTuple, RemoteHandle
 from gpucall.registry import ObservedRegistry
 
 
-class FailingProvider(EchoProvider):
+class FailingTuple(EchoTuple):
     def __init__(self, name: str, *, retryable: bool) -> None:
         super().__init__(name=name)
         self.retryable = retryable
 
-    async def wait(self, handle: RemoteHandle, plan: CompiledPlan) -> ProviderResult:
-        raise ProviderError("failed", retryable=self.retryable, status_code=401 if not self.retryable else 502)
+    async def wait(self, handle: RemoteHandle, plan: CompiledPlan) -> TupleResult:
+        raise TupleError("failed", retryable=self.retryable, status_code=401 if not self.retryable else 502)
 
 
-class BuggyProvider(EchoProvider):
-    async def wait(self, handle: RemoteHandle, plan: CompiledPlan) -> ProviderResult:
+class BuggyTuple(EchoTuple):
+    async def wait(self, handle: RemoteHandle, plan: CompiledPlan) -> TupleResult:
         raise RuntimeError("sdk exploded")
 
 
-class HangingProvider(EchoProvider):
-    async def wait(self, handle: RemoteHandle, plan: CompiledPlan) -> ProviderResult:
+class HangingTuple(EchoTuple):
+    async def wait(self, handle: RemoteHandle, plan: CompiledPlan) -> TupleResult:
         await asyncio.sleep(60)
-        return ProviderResult(kind="inline", value="late")
+        return TupleResult(kind="inline", value="late")
 
 
-class SequenceProvider(EchoProvider):
+class SequenceTuple(EchoTuple):
     def __init__(self, name: str, values: list[str]) -> None:
         super().__init__(name=name)
         self.values = values
         self.calls = 0
 
-    async def wait(self, handle: RemoteHandle, plan: CompiledPlan) -> ProviderResult:
+    async def wait(self, handle: RemoteHandle, plan: CompiledPlan) -> TupleResult:
         value = self.values[min(self.calls, len(self.values) - 1)]
         self.calls += 1
-        return ProviderResult(kind="inline", value=value)
+        return TupleResult(kind="inline", value=value)
 
 
-class BadStreamProvider(EchoProvider):
+class BadStreamTuple(EchoTuple):
     async def stream(self, handle: RemoteHandle, plan: CompiledPlan):
         yield "not-sse"
 
 
-class ArtifactProvider(EchoProvider):
+class ArtifactTuple(EchoTuple):
     def __init__(self, name: str, manifest: ArtifactManifest) -> None:
         super().__init__(name=name)
         self.manifest = manifest
 
-    async def wait(self, handle: RemoteHandle, plan: CompiledPlan) -> ProviderResult:
-        return ProviderResult(kind="artifact_manifest", artifact_manifest=self.manifest)
+    async def wait(self, handle: RemoteHandle, plan: CompiledPlan) -> TupleResult:
+        return TupleResult(kind="artifact_manifest", artifact_manifest=self.manifest)
 
 
 def plan(chain: list[str]) -> CompiledPlan:
@@ -78,7 +78,7 @@ def plan(chain: list[str]) -> CompiledPlan:
         recipe_name="r1",
         task="infer",
         mode=ExecutionMode.SYNC,
-        provider_chain=chain,
+        tuple_chain=chain,
         timeout_seconds=2,
         lease_ttl_seconds=10,
         tokenizer_family="qwen",
@@ -143,7 +143,7 @@ def sensitive_plan(chain: list[str]) -> CompiledPlan:
 @pytest.mark.asyncio
 async def test_dispatcher_fails_over_retryable_provider(tmp_path) -> None:
     dispatcher = Dispatcher(
-        adapters={"bad": FailingProvider("bad", retryable=True), "good": EchoProvider("good")},
+        adapters={"bad": FailingTuple("bad", retryable=True), "good": EchoTuple("good")},
         registry=ObservedRegistry(),
         audit=AuditTrail(tmp_path / "audit.jsonl"),
         jobs=JobStore(),
@@ -158,7 +158,7 @@ async def test_dispatcher_fails_over_retryable_provider(tmp_path) -> None:
 async def test_dispatcher_audit_uses_redacted_plan_summary(tmp_path) -> None:
     audit_path = tmp_path / "audit.jsonl"
     dispatcher = Dispatcher(
-        adapters={"good": EchoProvider("good")},
+        adapters={"good": EchoTuple("good")},
         registry=ObservedRegistry(),
         audit=AuditTrail(audit_path),
         jobs=JobStore(),
@@ -183,7 +183,7 @@ async def test_dispatcher_audit_uses_redacted_plan_summary(tmp_path) -> None:
 async def test_async_job_created_audit_uses_redacted_plan_summary(tmp_path) -> None:
     audit_path = tmp_path / "audit.jsonl"
     dispatcher = Dispatcher(
-        adapters={"good": EchoProvider("good")},
+        adapters={"good": EchoTuple("good")},
         registry=ObservedRegistry(),
         audit=AuditTrail(audit_path),
         jobs=JobStore(),
@@ -218,13 +218,13 @@ def test_storage_safe_plan_removes_secret_execution_fields() -> None:
 @pytest.mark.asyncio
 async def test_dispatcher_does_not_fail_over_non_retryable_provider(tmp_path) -> None:
     dispatcher = Dispatcher(
-        adapters={"bad": FailingProvider("bad", retryable=False), "good": EchoProvider("good")},
+        adapters={"bad": FailingTuple("bad", retryable=False), "good": EchoTuple("good")},
         registry=ObservedRegistry(),
         audit=AuditTrail(tmp_path / "audit.jsonl"),
         jobs=JobStore(),
     )
 
-    with pytest.raises(ProviderError) as caught:
+    with pytest.raises(TupleError) as caught:
         await dispatcher.execute_sync(plan(["bad", "good"]))
 
     assert caught.value.retryable is False
@@ -233,7 +233,7 @@ async def test_dispatcher_does_not_fail_over_non_retryable_provider(tmp_path) ->
 
 @pytest.mark.asyncio
 async def test_dispatcher_cleanup_runs_after_wait_failure(tmp_path) -> None:
-    bad = FailingProvider("bad", retryable=True)
+    bad = FailingTuple("bad", retryable=True)
     audit_path = tmp_path / "audit.jsonl"
     dispatcher = Dispatcher(
         adapters={"bad": bad},
@@ -242,7 +242,7 @@ async def test_dispatcher_cleanup_runs_after_wait_failure(tmp_path) -> None:
         jobs=JobStore(),
     )
 
-    with pytest.raises(ProviderError):
+    with pytest.raises(TupleError):
         await dispatcher.execute_sync(plan(["bad"]))
 
     assert bad.cancelled
@@ -254,7 +254,7 @@ async def test_dispatcher_cleanup_runs_after_wait_failure(tmp_path) -> None:
 
 @pytest.mark.asyncio
 async def test_dispatcher_records_untyped_provider_exception(tmp_path) -> None:
-    bad = BuggyProvider("bad")
+    bad = BuggyTuple("bad")
     dispatcher = Dispatcher(
         adapters={"bad": bad},
         registry=ObservedRegistry(),
@@ -262,7 +262,7 @@ async def test_dispatcher_records_untyped_provider_exception(tmp_path) -> None:
         jobs=JobStore(),
     )
 
-    with pytest.raises(ProviderError) as caught:
+    with pytest.raises(TupleError) as caught:
         await dispatcher.execute_sync(plan(["bad"]))
 
     assert "sdk exploded" not in str(caught.value)
@@ -286,7 +286,7 @@ async def test_dispatcher_registers_valid_artifact_manifest(tmp_path) -> None:
     )
     registry = SQLiteArtifactRegistry(tmp_path / "artifacts.db")
     dispatcher = Dispatcher(
-        adapters={"artifact": ArtifactProvider("artifact", manifest)},
+        adapters={"artifact": ArtifactTuple("artifact", manifest)},
         registry=ObservedRegistry(),
         audit=AuditTrail(tmp_path / "audit.jsonl"),
         jobs=JobStore(),
@@ -313,20 +313,20 @@ async def test_dispatcher_rejects_artifact_manifest_that_breaks_lineage(tmp_path
         producer_plan_hash="c" * 64,
     )
     dispatcher = Dispatcher(
-        adapters={"artifact": ArtifactProvider("artifact", manifest)},
+        adapters={"artifact": ArtifactTuple("artifact", manifest)},
         registry=ObservedRegistry(),
         audit=AuditTrail(tmp_path / "audit.jsonl"),
         jobs=JobStore(),
     )
 
-    with pytest.raises(ProviderError, match="artifact manifest"):
+    with pytest.raises(TupleError, match="artifact manifest"):
         await dispatcher.execute_sync(artifact_plan(["artifact"]))
 
 
 @pytest.mark.asyncio
 async def test_async_cancel_persists_cancelled_state(tmp_path) -> None:
     dispatcher = Dispatcher(
-        adapters={"slow": HangingProvider("slow")},
+        adapters={"slow": HangingTuple("slow")},
         registry=ObservedRegistry(),
         audit=AuditTrail(tmp_path / "audit.jsonl"),
         jobs=JobStore(),
@@ -355,7 +355,7 @@ async def test_async_storage_safe_plan_is_not_executed_after_restart(tmp_path) -
     job = await jobs.create(_storage_safe_plan(plan(["echo"])))
 
     restarted = Dispatcher(
-        adapters={"echo": EchoProvider("echo")},
+        adapters={"echo": EchoTuple("echo")},
         registry=ObservedRegistry(),
         audit=AuditTrail(tmp_path / "audit2.jsonl"),
         jobs=jobs,
@@ -370,23 +370,23 @@ async def test_async_storage_safe_plan_is_not_executed_after_restart(tmp_path) -
 @pytest.mark.asyncio
 async def test_stream_events_must_match_sse_contract(tmp_path) -> None:
     dispatcher = Dispatcher(
-        adapters={"bad": BadStreamProvider("bad")},
+        adapters={"bad": BadStreamTuple("bad")},
         registry=ObservedRegistry(),
         audit=AuditTrail(tmp_path / "audit.jsonl"),
         jobs=JobStore(),
     )
     stream_plan = plan(["bad"]).model_copy(update={"mode": ExecutionMode.STREAM})
 
-    with pytest.raises(ProviderError, match="SSE-framed"):
+    with pytest.raises(TupleError, match="SSE-framed"):
         async for _event in dispatcher.execute_stream(stream_plan):
             pass
 
 
 @pytest.mark.asyncio
 async def test_stream_execution_enforces_security_gate_before_start(tmp_path) -> None:
-    provider = BadStreamProvider("bad")
+    tuple = BadStreamTuple("bad")
     dispatcher = Dispatcher(
-        adapters={"bad": provider},
+        adapters={"bad": tuple},
         registry=ObservedRegistry(),
         audit=AuditTrail(tmp_path / "audit.jsonl"),
         jobs=JobStore(),
@@ -404,7 +404,7 @@ async def test_stream_execution_enforces_security_gate_before_start(tmp_path) ->
         }
     )
 
-    with pytest.raises(ProviderError, match="key release grant is required"):
+    with pytest.raises(TupleError, match="key release grant is required"):
         async for _event in dispatcher.execute_stream(stream_plan):
             pass
 
@@ -412,7 +412,7 @@ async def test_stream_execution_enforces_security_gate_before_start(tmp_path) ->
 @pytest.mark.asyncio
 async def test_key_release_gate_rejects_policy_mismatch_and_expiry(tmp_path) -> None:
     dispatcher = Dispatcher(
-        adapters={"good": EchoProvider("good")},
+        adapters={"good": EchoTuple("good")},
         registry=ObservedRegistry(),
         audit=AuditTrail(tmp_path / "audit.jsonl"),
         jobs=JobStore(),
@@ -432,7 +432,7 @@ async def test_key_release_gate_rejects_policy_mismatch_and_expiry(tmp_path) -> 
         },
     }
 
-    with pytest.raises(ProviderError, match="policy_hash"):
+    with pytest.raises(TupleError, match="policy_hash"):
         await dispatcher.execute_sync(plan(["good"]).model_copy(update={"attestations": base_attestations}))
 
     expired = {
@@ -443,15 +443,15 @@ async def test_key_release_gate_rejects_policy_mismatch_and_expiry(tmp_path) -> 
             "expires_at": (datetime.now(timezone.utc) - timedelta(minutes=5)).isoformat(),
         },
     }
-    with pytest.raises(ProviderError, match="expired"):
+    with pytest.raises(TupleError, match="expired"):
         await dispatcher.execute_sync(plan(["good"]).model_copy(update={"attestations": expired}))
 
 
 @pytest.mark.asyncio
 async def test_structured_output_marks_valid_json(tmp_path) -> None:
-    provider = SequenceProvider("json", ['{"ok": true}'])
+    tuple = SequenceTuple("json", ['{"ok": true}'])
     dispatcher = Dispatcher(
-        adapters={"json": provider},
+        adapters={"json": tuple},
         registry=ObservedRegistry(),
         audit=AuditTrail(tmp_path / "audit.jsonl"),
         jobs=JobStore(),
@@ -465,9 +465,9 @@ async def test_structured_output_marks_valid_json(tmp_path) -> None:
 
 @pytest.mark.asyncio
 async def test_structured_output_retries_same_provider_without_breaker_penalty(tmp_path) -> None:
-    provider = SequenceProvider("json", ["not json", '{"ok": true}'])
+    tuple = SequenceTuple("json", ["not json", '{"ok": true}'])
     dispatcher = Dispatcher(
-        adapters={"json": provider, "other": SequenceProvider("other", ['{"wrong": true}'])},
+        adapters={"json": tuple, "other": SequenceTuple("other", ['{"wrong": true}'])},
         registry=ObservedRegistry(),
         audit=AuditTrail(tmp_path / "audit.jsonl"),
         jobs=JobStore(),
@@ -476,16 +476,16 @@ async def test_structured_output_retries_same_provider_without_breaker_penalty(t
     result = await dispatcher.execute_sync(json_plan(["json", "other"]))
 
     assert result.value == '{"ok": true}'
-    assert provider.calls == 2
+    assert tuple.calls == 2
     assert dispatcher.registry.score("json").samples == 1
     assert dispatcher.registry.score("other").samples == 0
 
 
 @pytest.mark.asyncio
 async def test_structured_output_failure_does_not_open_circuit_or_fail_over(tmp_path) -> None:
-    provider = SequenceProvider("json", ["not json", "still not json", "bad again"])
+    tuple = SequenceTuple("json", ["not json", "still not json", "bad again"])
     dispatcher = Dispatcher(
-        adapters={"json": provider, "other": SequenceProvider("other", ['{"wrong": true}'])},
+        adapters={"json": tuple, "other": SequenceTuple("other", ['{"wrong": true}'])},
         registry=ObservedRegistry(),
         audit=AuditTrail(tmp_path / "audit.jsonl"),
         jobs=JobStore(),
@@ -494,28 +494,28 @@ async def test_structured_output_failure_does_not_open_circuit_or_fail_over(tmp_
     result = await dispatcher.execute_sync(json_plan(["json", "other"]))
 
     assert result.value == '{"wrong": true}'
-    assert provider.calls == 3
+    assert tuple.calls == 3
     assert dispatcher.registry.score("json").samples == 0
     assert dispatcher.registry.score("other").samples == 1
 
 
 @pytest.mark.asyncio
 async def test_structured_output_all_providers_failure_returns_422_without_opening_circuit(tmp_path) -> None:
-    provider = SequenceProvider("json", ["not json", "still not json", "bad again"])
-    other = SequenceProvider("other", ["also bad", "bad too", "bad finally"])
+    tuple = SequenceTuple("json", ["not json", "still not json", "bad again"])
+    other = SequenceTuple("other", ["also bad", "bad too", "bad finally"])
     dispatcher = Dispatcher(
-        adapters={"json": provider, "other": other},
+        adapters={"json": tuple, "other": other},
         registry=ObservedRegistry(),
         audit=AuditTrail(tmp_path / "audit.jsonl"),
         jobs=JobStore(),
     )
 
-    with pytest.raises(ProviderError) as caught:
+    with pytest.raises(TupleError) as caught:
         await dispatcher.execute_sync(json_plan(["json", "other"]))
 
     assert caught.value.code == "MALFORMED_OUTPUT"
     assert caught.value.retryable is False
-    assert provider.calls == 3
+    assert tuple.calls == 3
     assert other.calls == 3
     assert dispatcher.registry.score("json").samples == 0
     assert dispatcher.registry.score("other").samples == 0
@@ -523,9 +523,9 @@ async def test_structured_output_all_providers_failure_returns_422_without_openi
 
 @pytest.mark.asyncio
 async def test_empty_output_retries_same_provider_once_without_breaker_penalty(tmp_path) -> None:
-    provider = SequenceProvider("p1", ["", "ok"])
+    tuple = SequenceTuple("p1", ["", "ok"])
     dispatcher = Dispatcher(
-        adapters={"p1": provider, "other": SequenceProvider("other", ["wrong"])},
+        adapters={"p1": tuple, "other": SequenceTuple("other", ["wrong"])},
         registry=ObservedRegistry(),
         audit=AuditTrail(tmp_path / "audit.jsonl"),
         jobs=JobStore(),
@@ -534,16 +534,16 @@ async def test_empty_output_retries_same_provider_once_without_breaker_penalty(t
     result = await dispatcher.execute_sync(checked_plan(["p1", "other"]))
 
     assert result.value == "ok"
-    assert provider.calls == 2
+    assert tuple.calls == 2
     assert dispatcher.registry.score("p1").samples == 1
     assert dispatcher.registry.score("other").samples == 0
 
 
 @pytest.mark.asyncio
 async def test_empty_output_failure_is_422_and_does_not_open_circuit(tmp_path) -> None:
-    provider = SequenceProvider("p1", ["", ""])
+    tuple = SequenceTuple("p1", ["", ""])
     dispatcher = Dispatcher(
-        adapters={"p1": provider, "other": SequenceProvider("other", ["wrong"])},
+        adapters={"p1": tuple, "other": SequenceTuple("other", ["wrong"])},
         registry=ObservedRegistry(),
         audit=AuditTrail(tmp_path / "audit.jsonl"),
         jobs=JobStore(),
@@ -552,6 +552,6 @@ async def test_empty_output_failure_is_422_and_does_not_open_circuit(tmp_path) -
     result = await dispatcher.execute_sync(checked_plan(["p1", "other"]))
 
     assert result.value == "wrong"
-    assert provider.calls == 2
+    assert tuple.calls == 2
     assert dispatcher.registry.score("p1").samples == 0
     assert dispatcher.registry.score("other").samples == 1

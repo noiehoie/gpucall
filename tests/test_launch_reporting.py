@@ -30,8 +30,8 @@ def test_launch_report_is_go_for_sample_config(tmp_path, monkeypatch) -> None:
     assert checks["secret_scan_ok"] is True
     assert "/v2/tasks/sync" in checks["openapi_paths"]
     assert checks["mvp_scope"]["tasks"] == ["infer", "vision"]
-    assert checks["cost_audit"]["providers"]
-    assert all(row["metadata_complete"] for row in checks["cost_audit"]["providers"])
+    assert checks["cost_audit"]["tuples"]
+    assert all(row["metadata_complete"] for row in checks["cost_audit"]["tuples"])
     assert checks["cleanup_audit"]["ok"] is True
 
 
@@ -39,9 +39,9 @@ def test_launch_report_blocks_missing_cost_metadata(tmp_path, monkeypatch) -> No
     monkeypatch.setenv("GPUCALL_STATE_DIR", str(tmp_path / "state"))
     root = copy_config(tmp_path)
     provider_path = root / "surfaces" / "modal-a10g.yml"
-    provider = yaml.safe_load(provider_path.read_text(encoding="utf-8"))
-    provider.pop("scaledown_window_seconds", None)
-    provider_path.write_text(yaml.safe_dump(provider, sort_keys=False), encoding="utf-8")
+    tuple = yaml.safe_load(provider_path.read_text(encoding="utf-8"))
+    tuple.pop("scaledown_window_seconds", None)
+    provider_path.write_text(yaml.safe_dump(tuple, sort_keys=False), encoding="utf-8")
 
     report = build_launch_report(root, profile="static")
 
@@ -90,9 +90,9 @@ def test_launch_report_blocks_smoke_provider_in_auto_recipe(tmp_path, monkeypatc
     monkeypatch.setenv("GPUCALL_STATE_DIR", str(tmp_path / "state"))
     root = copy_config(tmp_path)
     for path in (root / "surfaces").glob("*.yml"):
-        provider = yaml.safe_load(path.read_text(encoding="utf-8"))
-        provider["adapter"] = "echo"
-        path.write_text(yaml.safe_dump(provider, sort_keys=False), encoding="utf-8")
+        tuple = yaml.safe_load(path.read_text(encoding="utf-8"))
+        tuple["adapter"] = "echo"
+        path.write_text(yaml.safe_dump(tuple, sort_keys=False), encoding="utf-8")
     for path in (root / "workers").glob("*.yml"):
         worker = yaml.safe_load(path.read_text(encoding="utf-8"))
         worker["adapter"] = "echo"
@@ -102,7 +102,7 @@ def test_launch_report_blocks_smoke_provider_in_auto_recipe(tmp_path, monkeypatc
     try:
         report = build_launch_report(root)
     except ConfigError as exc:
-        assert "no provider satisfying" in str(exc)
+        assert "no tuple satisfying" in str(exc)
         return
 
     assert report["go"] is False

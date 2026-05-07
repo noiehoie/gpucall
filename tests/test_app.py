@@ -18,7 +18,7 @@ from gpucall.app import (
 from gpucall.audit import AuditTrail
 from gpucall.compiler import GovernanceError
 from gpucall.dispatcher import Dispatcher, JobStore
-from gpucall.domain import CompiledPlan, DataRef, ExecutionMode, JobState, PresignGetResponse, ProviderResult, TaskRequest
+from gpucall.domain import CompiledPlan, DataRef, ExecutionMode, JobState, PresignGetResponse, TupleResult, TaskRequest
 from gpucall.registry import ObservedRegistry
 from gpucall.sqlite_store import SQLiteJobStore
 
@@ -56,7 +56,7 @@ def copy_config(tmp_path: Path) -> Path:
         target = root / path.relative_to(source)
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_text(path.read_text(encoding="utf-8"), encoding="utf-8")
-    for provider_path in (root / "providers").glob("*.yml"):
+    for provider_path in (root / "tuples").glob("*.yml"):
         if provider_path.name != "local-echo.yml":
             provider_path.unlink()
     for split_dir in ("surfaces", "workers"):
@@ -80,7 +80,7 @@ import pytest
 
 @pytest.fixture(autouse=True)
 def isolate_gateway_env(monkeypatch, tmp_path) -> None:
-    monkeypatch.setenv("GPUCALL_ALLOW_FAKE_AUTO_PROVIDERS", "1")
+    monkeypatch.setenv("GPUCALL_ALLOW_FAKE_AUTO_TUPLES", "1")
     credentials = tmp_path / "credentials.yml"
     credentials.write_text("version: 1\nproviders: {}\n", encoding="utf-8")
     monkeypatch.setenv("GPUCALL_CREDENTIALS", str(credentials))
@@ -155,7 +155,7 @@ def test_readyz_reports_recipe_and_provider_capacity(tmp_path) -> None:
     payload = response.json()
     assert response.status_code == 200
     assert payload["recipes"]["text-infer-standard"]["max_model_len"] == 32768
-    assert payload["providers"]["local-echo"]["max_model_len"] == 32768
+    assert payload["tuples"]["local-echo"]["max_model_len"] == 32768
 
 
 def test_runtime_state_uses_xdg_state_dir(tmp_path, monkeypatch) -> None:
@@ -222,7 +222,7 @@ async def test_sqlite_job_store_persists_inline_result(tmp_path) -> None:
             recipe_name="r1",
             task="infer",
             mode=ExecutionMode.ASYNC,
-            provider_chain=["local-echo"],
+            tuple_chain=["local-echo"],
             timeout_seconds=2,
             lease_ttl_seconds=10,
             tokenizer_family="qwen",
@@ -232,7 +232,7 @@ async def test_sqlite_job_store_persists_inline_result(tmp_path) -> None:
         )
     )
 
-    await store.update(job.job_id, state=JobState.COMPLETED, result=ProviderResult(kind="inline", value="ok"))
+    await store.update(job.job_id, state=JobState.COMPLETED, result=TupleResult(kind="inline", value="ok"))
     loaded = await SQLiteJobStore(tmp_path / "state.db").get(job.job_id)
 
     assert loaded.result.kind == "inline"
@@ -313,12 +313,12 @@ def test_tenant_budget_rejects_before_provider_execution(tmp_path, monkeypatch) 
     monkeypatch.setenv("GPUCALL_TENANT_API_KEYS", "tenant-a:secret-a")
     root = copy_config(tmp_path)
     provider_path = root / "surfaces" / "local-echo.yml"
-    provider = yaml.safe_load(provider_path.read_text(encoding="utf-8"))
-    provider["cost_per_second"] = 1
-    provider_path.write_text(yaml.safe_dump(provider, sort_keys=False), encoding="utf-8")
+    tuple = yaml.safe_load(provider_path.read_text(encoding="utf-8"))
+    tuple["cost_per_second"] = 1
+    provider_path.write_text(yaml.safe_dump(tuple, sort_keys=False), encoding="utf-8")
     policy_path = root / "policy.yml"
     policy = yaml.safe_load(policy_path.read_text(encoding="utf-8"))
-    policy["cost_policy"]["require_budget_for_high_cost_provider"] = False
+    policy["cost_policy"]["require_budget_for_high_cost_tuple"] = False
     policy_path.write_text(yaml.safe_dump(policy, sort_keys=False), encoding="utf-8")
     tenant_path = root / "tenants" / "tenant-a.yml"
     tenant_path.write_text(
@@ -531,7 +531,7 @@ def test_warning_header_announces_remote_worker_cold_start() -> None:
         recipe_name="text-infer-standard",
         task="infer",
         mode=ExecutionMode.ASYNC,
-        provider_chain=["modal-a10g"],
+        tuple_chain=["modal-a10g"],
         timeout_seconds=30,
         lease_ttl_seconds=60,
         tokenizer_family="qwen",
@@ -549,7 +549,7 @@ def test_warning_header_announces_dataref_worker_fetch() -> None:
         recipe_name="text-infer-standard",
         task="infer",
         mode=ExecutionMode.ASYNC,
-        provider_chain=["modal-a10g"],
+        tuple_chain=["modal-a10g"],
         timeout_seconds=30,
         lease_ttl_seconds=60,
         tokenizer_family="qwen",
@@ -602,15 +602,15 @@ def test_public_task_endpoint_rejects_caller_recipe(tmp_path) -> None:
     assert "caller-controlled routing is disabled" in response.json()["detail"]
 
 
-def test_public_task_endpoint_rejects_requested_provider(tmp_path) -> None:
+def test_public_task_endpoint_rejects_requested_tuple(tmp_path) -> None:
     with TestClient(create_app(copy_config(tmp_path))) as client:
         response = client.post(
             "/v2/tasks/sync",
-            json={"task": "infer", "mode": "sync", "requested_provider": "local-echo"},
+            json={"task": "infer", "mode": "sync", "requested_tuple": "local-echo"},
         )
 
     assert response.status_code == 400
-    assert "requested_provider" in response.json()["detail"]
+    assert "requested_tuple" in response.json()["detail"]
 
 
 def test_public_task_endpoint_has_no_requested_gpu_field(tmp_path) -> None:
@@ -629,7 +629,7 @@ def test_debug_flag_allows_caller_routing(tmp_path, monkeypatch) -> None:
     with TestClient(create_app(copy_config(tmp_path))) as client:
         response = client.post(
             "/v2/tasks/sync",
-            json={"task": "infer", "mode": "sync", "recipe": "text-infer-standard", "requested_provider": "local-echo"},
+            json={"task": "infer", "mode": "sync", "recipe": "text-infer-standard", "requested_tuple": "local-echo"},
         )
 
     assert response.status_code == 200
@@ -676,7 +676,7 @@ def test_openai_chat_completions_facade_rejects_non_auto_model(tmp_path) -> None
         response = client.post(
             "/v1/chat/completions",
             json={
-                "model": "provider:model",
+                "model": "tuple:model",
                 "messages": [{"role": "user", "content": "hello"}],
             },
         )
@@ -690,7 +690,7 @@ def test_openai_facade_prompt_does_not_add_user_prefix(tmp_path, monkeypatch) ->
 
     async def fake_execute_sync(plan):
         captured["prompt"] = plan.messages[-1].content
-        return ProviderResult(kind="inline", value="ok")
+        return TupleResult(kind="inline", value="ok")
 
     with TestClient(create_app(copy_config(tmp_path))) as client:
         monkeypatch.setattr(client.app.state.runtime.dispatcher, "execute_sync", fake_execute_sync)
@@ -729,11 +729,11 @@ def test_openai_facade_rejects_structured_message_content(tmp_path) -> None:
     assert "string message content only" in response.json()["detail"]
 
 
-def test_provider_error_response_does_not_expose_internal_detail(tmp_path, monkeypatch) -> None:
+def test_tuple_error_response_does_not_expose_internal_detail(tmp_path, monkeypatch) -> None:
     async def fake_execute_sync(_plan):
-        from gpucall.domain import ProviderError
+        from gpucall.domain import TupleError
 
-        raise ProviderError(
+        raise TupleError(
             "upstream failed https://bucket/object?X-Amz-Signature=secret Authorization: Bearer token",
             retryable=True,
             status_code=503,
@@ -748,19 +748,19 @@ def test_provider_error_response_does_not_expose_internal_detail(tmp_path, monke
     assert response.status_code == 503
     assert "X-Amz-Signature" not in raw
     assert "Bearer" not in raw
-    assert response.json()["detail"] == "provider execution failed (PROVIDER_UPSTREAM)"
+    assert response.json()["detail"] == "tuple execution failed (PROVIDER_UPSTREAM)"
     artifact = response.json()["failure_artifact"]
-    assert artifact["failure_kind"] == "provider_runtime"
+    assert artifact["failure_kind"] == "tuple_runtime"
     assert artifact["retryable"] is True
     assert artifact["caller_action"] == "retry_later"
-    assert artifact["redaction_guarantee"]["provider_raw_output_included"] is False
+    assert artifact["redaction_guarantee"]["tuple_raw_output_included"] is False
 
 
-def test_provider_error_response_does_not_expose_raw_output(tmp_path, monkeypatch) -> None:
+def test_tuple_error_response_does_not_expose_raw_output(tmp_path, monkeypatch) -> None:
     async def fake_execute_sync(_plan):
-        from gpucall.domain import ProviderError
+        from gpucall.domain import TupleError
 
-        raise ProviderError(
+        raise TupleError(
             "malformed structured output",
             retryable=True,
             status_code=422,
@@ -774,8 +774,8 @@ def test_provider_error_response_does_not_expose_raw_output(tmp_path, monkeypatc
 
     assert response.status_code == 422
     assert "caller content" not in response.text
-    assert response.json()["detail"] == "provider execution failed (MALFORMED_OUTPUT)"
-    assert response.json()["failure_artifact"]["redaction_guarantee"]["provider_raw_output_included"] is False
+    assert response.json()["detail"] == "tuple execution failed (MALFORMED_OUTPUT)"
+    assert response.json()["failure_artifact"]["redaction_guarantee"]["tuple_raw_output_included"] is False
 
 
 def test_validation_error_response_does_not_expose_request_input(tmp_path) -> None:
@@ -812,9 +812,9 @@ def test_openai_validation_error_response_does_not_expose_message_content(tmp_pa
 
 def test_async_failed_job_does_not_expose_raw_output(tmp_path, monkeypatch) -> None:
     async def fake_execute_sync(_plan):
-        from gpucall.domain import ProviderError
+        from gpucall.domain import TupleError
 
-        raise ProviderError(
+        raise TupleError(
             "malformed structured output",
             retryable=False,
             status_code=422,
@@ -856,7 +856,7 @@ def test_openai_chat_completions_sets_output_validated_header_for_json(tmp_path)
 
 def test_openai_chat_completions_exposes_output_validated_in_body(tmp_path, monkeypatch) -> None:
     async def fake_execute_sync(_plan):
-        return ProviderResult(kind="inline", value='{"ok": true}', output_validated=True)
+        return TupleResult(kind="inline", value='{"ok": true}', output_validated=True)
 
     with TestClient(create_app(copy_config(tmp_path))) as client:
         monkeypatch.setattr(client.app.state.runtime.dispatcher, "execute_sync", fake_execute_sync)
@@ -886,8 +886,8 @@ def test_openai_chat_completions_includes_gpucall_plan_metadata(tmp_path) -> Non
 
     payload = response.json()
     assert response.status_code == 200
-    assert payload["gpucall"]["selected_provider"] == "local-echo"
-    assert "selected_provider_model" in payload["gpucall"]
+    assert payload["gpucall"]["selected_tuple"] == "local-echo"
+    assert "selected_tuple_model" in payload["gpucall"]
     assert payload["gpucall"]["governance_hash"]
 
 
@@ -897,7 +897,7 @@ def test_plan_with_worker_refs_rehashes_executable_plan() -> None:
         recipe_name="r1",
         task="infer",
         mode=ExecutionMode.SYNC,
-        provider_chain=["p1"],
+        tuple_chain=["p1"],
         timeout_seconds=1,
         lease_ttl_seconds=10,
         tokenizer_family="qwen",
@@ -952,7 +952,7 @@ async def test_startup_recovery_expires_interrupted_jobs(tmp_path) -> None:
         recipe_name="r1",
         task="infer",
         mode=ExecutionMode.ASYNC,
-        provider_chain=["local-echo"],
+        tuple_chain=["local-echo"],
         timeout_seconds=1,
         lease_ttl_seconds=10,
         tokenizer_family="qwen",
@@ -1020,6 +1020,6 @@ def test_worker_readable_request_requires_object_store_for_data_refs() -> None:
 
 
 def test_governance_circuit_errors_are_service_unavailable() -> None:
-    assert governance_status_code(GovernanceError("requested provider 'p1' is unavailable due to circuit breaker")) == 503
-    assert governance_status_code(GovernanceError("no eligible provider after policy, recipe, and circuit constraints")) == 503
+    assert governance_status_code(GovernanceError("requested tuple 'p1' is unavailable due to circuit breaker")) == 503
+    assert governance_status_code(GovernanceError("no eligible tuple after policy, recipe, and circuit constraints")) == 503
     assert governance_status_code(GovernanceError("unsupported task for v2.0 MVP: train")) == 400

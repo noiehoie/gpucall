@@ -29,12 +29,12 @@ def test_audit_trail_redacts_inline_inputs_and_signed_urls(tmp_path) -> None:
     assert '"redacted":true' in raw
 
 
-def test_audit_trail_redacts_provider_error_text(tmp_path) -> None:
+def test_audit_trail_redacts_tuple_error_text(tmp_path) -> None:
     audit = AuditTrail(tmp_path / "trail.jsonl")
     audit.append(
-        "provider.failed",
+        "tuple.failed",
         {
-            "provider": "storage",
+            "tuple": "storage",
             "error": (
                 "PUT https://bucket.example/object?"
                 "X-Amz-Credential=cred&X-Amz-Signature=sig with Authorization: Bearer token123"
@@ -90,7 +90,7 @@ def test_redacted_plan_for_audit_is_allowlisted() -> None:
         recipe_name="r1",
         task="infer",
         mode=ExecutionMode.SYNC,
-        provider_chain=["modal-a10g"],
+        tuple_chain=["modal-a10g"],
         timeout_seconds=2,
         lease_ttl_seconds=10,
         tokenizer_family="qwen",
@@ -116,7 +116,7 @@ def test_redacted_plan_for_audit_is_allowlisted() -> None:
     raw = str(redacted)
 
     assert redacted["plan_id"] == plan.plan_id
-    assert redacted["provider_chain"] == ["modal-a10g"]
+    assert redacted["tuple_chain"] == ["modal-a10g"]
     assert redacted["inline_inputs"]["prompt"]["bytes"] == len("secret prompt")
     assert redacted["input_refs"][0]["bytes"] == 123
     assert redacted["input_refs"][0]["sha256_prefix"] == "a" * 12

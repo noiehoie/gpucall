@@ -24,12 +24,12 @@ def test_capability_catalog_materializes_config(tmp_path) -> None:
         provider["name"] == "hyperstack-qwen-1m"
         and provider["model_ref"] == "qwen2.5-7b-instruct-1m"
         and provider["execution_surface"] == "iaas_vm"
-        for provider in snapshot["providers"]
+        for provider in snapshot["tuples"]
     )
     assert any(
         candidate["name"] == "modal-h200x4-qwen25-14b-1m"
         and candidate["execution_surface"] == "function_runtime"
-        for candidate in snapshot["provider_candidates"]
+        for candidate in snapshot["tuple_candidates"]
     )
 
 
@@ -59,5 +59,5 @@ def test_catalog_cli_builds_sqlite_snapshot(tmp_path) -> None:
     assert any(
         candidate["name"] == "modal-h100-qwen25-vl-7b"
         and candidate["execution_surface"] == "function_runtime"
-        for candidate in payload["provider_candidates"]
+        for candidate in payload["tuple_candidates"]
     )

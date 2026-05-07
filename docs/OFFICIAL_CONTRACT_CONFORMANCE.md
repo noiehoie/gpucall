@@ -1,6 +1,6 @@
-# Provider Official Conformance
+# Official Contract Conformance
 
-This file records the official provider contracts used by gpucall adapters. It is not a substitute for billable live validation; it is the source map for code-level conformance tests.
+This file records the official execution contracts used by gpucall surfaces. It is not a substitute for billable live validation; it is the source map for code-level conformance tests.
 
 ## Modal
 
@@ -46,7 +46,7 @@ This file records the official provider contracts used by gpucall adapters. It i
 - Production status: not production eligible until billable validation artifacts prove the SDK path and cleanup lifecycle.
 - Code mapping:
   - Descriptor contract is `runpod-flash-sdk`, not `openai-chat-completions`.
-  - Output contract is `gpucall-provider-result`.
+  - Output contract is `gpucall-tuple-result`.
 
 ## Hyperstack
 

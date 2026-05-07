@@ -15,7 +15,7 @@ from gpucall.domain import (
     KeyReleaseRequirement,
     ModelSpec,
     Policy,
-    ProviderSpec,
+    ExecutionTupleSpec,
     Recipe,
     SecurityTier,
     TaskRequest,
@@ -23,7 +23,7 @@ from gpucall.domain import (
 from gpucall.domain import ChatMessage, ResponseFormatType
 from gpucall.execution.contracts import account_ref_for_spec
 from gpucall.registry import ObservedRegistry
-from gpucall.routing import classification_rank, is_production_route_candidate, provider_route_rejection_reason, required_model_len, token_budget
+from gpucall.routing import classification_rank, is_production_route_candidate, tuple_route_rejection_reason, required_model_len, token_budget
 
 
 class GovernanceError(ValueError):
@@ -40,14 +40,14 @@ class GovernanceCompiler:
         *,
         policy: Policy,
         recipes: dict[str, Recipe],
-        providers: dict[str, ProviderSpec],
+        tuples: dict[str, ExecutionTupleSpec],
         registry: ObservedRegistry,
         models: dict[str, ModelSpec] | None = None,
         engines: dict[str, EngineSpec] | None = None,
     ) -> None:
         self.policy = policy
         self.recipes = recipes
-        self.providers = providers
+        self.tuples = tuples
         self.models = models or {}
         self.engines = engines or {}
         self.registry = registry
@@ -55,7 +55,7 @@ class GovernanceCompiler:
     def compile(self, request: TaskRequest) -> CompiledPlan:
         recipe = self._recipe_for(request)
         self._validate_request_against_recipe(request, recipe)
-        provider_chain = self._provider_chain(request, recipe, auto_selected=request.recipe is None)
+        tuple_chain = self._tuple_chain(request, recipe, auto_selected=request.recipe is None)
 
         compiled_token_budget = self._token_budget(request)
         compiled_required_model_len = self._required_model_len(request, recipe)
@@ -91,7 +91,7 @@ class GovernanceCompiler:
             task=recipe.task,
             mode=request.mode,
             data_classification=recipe.data_classification,
-            provider_chain=provider_chain,
+            tuple_chain=tuple_chain,
             timeout_seconds=timeout,
             lease_ttl_seconds=ttl,
             tokenizer_family=recipe.tokenizer_family,
@@ -119,23 +119,23 @@ class GovernanceCompiler:
             "required_model_len": compiled_required_model_len,
             "token_budget": compiled_token_budget,
         }
-        selected_provider = self.providers[provider_chain[0]]
-        selected_tuple = self._execution_tuple(recipe=recipe, provider=selected_provider)
+        selected_spec = self.tuples[tuple_chain[0]]
+        selected_tuple = self._execution_tuple(recipe=recipe, tuple_spec=selected_spec)
         plan.attestations["selected_execution_tuple"] = selected_tuple
-        plan.attestations["cost_estimate"] = self._cost_estimate(selected_provider, request, recipe, timeout)
-        plan.attestations["security_gate"] = self._security_gate(recipe, selected_provider)
+        plan.attestations["cost_estimate"] = self._cost_estimate(selected_spec, request, recipe, timeout)
+        plan.attestations["security_gate"] = self._security_gate(recipe, selected_spec)
         if request.artifact_export is not None or recipe.requires_key_release:
             plan.attestations["key_release_requirement"] = self._key_release_requirement(
                 request=request,
                 recipe=recipe,
-                provider=selected_provider,
+                tuple=selected_spec,
             ).model_dump(mode="json")
         governance_hash = self._stable_hash(self._governance_material(plan))
         plan.attestations["governance_hash"] = governance_hash
         plan.attestations["compile_artifact"] = self._compile_artifact(
             request=request,
             recipe=recipe,
-            provider_chain=provider_chain,
+            tuple_chain=tuple_chain,
             selected_tuple=selected_tuple,
             governance_hash=governance_hash,
         ).model_dump(mode="json")
@@ -257,62 +257,62 @@ class GovernanceCompiler:
                 if not any(ref.content_type.startswith(prefix) for prefix in recipe.allowed_mime_prefixes):
                     raise GovernanceError(f"input content_type {ref.content_type!r} is not allowed for recipe {recipe.name}")
 
-    def _provider_chain(self, request: TaskRequest, recipe: Recipe, *, auto_selected: bool) -> list[str]:
-        if request.requested_provider:
-            allowed = self._eligible_providers([request.requested_provider], request, recipe, auto_selected=False)
-            if request.requested_provider not in allowed:
-                raise GovernanceError(f"requested provider {request.requested_provider!r} is not eligible for recipe {recipe.name}")
-            if not self.registry.is_available(request.requested_provider):
-                raise GovernanceError(f"requested provider {request.requested_provider!r} is unavailable due to circuit breaker")
-            return [request.requested_provider]
+    def _tuple_chain(self, request: TaskRequest, recipe: Recipe, *, auto_selected: bool) -> list[str]:
+        if request.requested_tuple:
+            allowed = self._eligible_tuples([request.requested_tuple], request, recipe, auto_selected=False)
+            if request.requested_tuple not in allowed:
+                raise GovernanceError(f"requested tuple {request.requested_tuple!r} is not eligible for recipe {recipe.name}")
+            if not self.registry.is_available(request.requested_tuple):
+                raise GovernanceError(f"requested tuple {request.requested_tuple!r} is unavailable due to circuit breaker")
+            return [request.requested_tuple]
 
-        eligible = self._eligible_providers(sorted(self.providers), request, recipe, auto_selected=True)
+        eligible = self._eligible_tuples(sorted(self.tuples), request, recipe, auto_selected=True)
         ranked = self._rank_by_fit_then_observations(eligible, request, recipe)
         if not ranked:
             raise GovernanceError(
-                "no eligible provider after policy, recipe, and circuit constraints",
-                code="NO_ELIGIBLE_PROVIDER",
+                "no eligible tuple after policy, recipe, and circuit constraints",
+                code="NO_ELIGIBLE_TUPLE",
                 context={
                     "task": request.task,
                     "mode": request.mode.value,
                     "recipe": recipe.name,
                     "required_model_len": self._required_model_len(request, recipe),
-                    "provider_rejections": self._provider_rejections(request, recipe, auto_selected=True),
+                    "tuple_rejections": self._tuple_rejections(request, recipe, auto_selected=True),
                 },
             )
         return ranked
 
     def _rank_by_fit_then_observations(
-        self, providers: list[str], request: TaskRequest, recipe: Recipe
+        self, tuples: list[str], request: TaskRequest, recipe: Recipe
     ) -> list[str]:
-        ordered = self._fit_ordered_providers(providers, request, recipe)
+        ordered = self._fit_ordered_tuples(tuples, request, recipe)
         ranked: list[str] = []
         current_key: tuple[int, int, float] | None = None
         current_group: list[str] = []
-        for provider in ordered:
-            fit_key = self._provider_fit_key(provider, request, recipe)
+        for tuple in ordered:
+            fit_key = self._tuple_fit_key(tuple, request, recipe)
             if current_key is not None and fit_key != current_key:
                 ranked.extend(self.registry.rank(current_group))
                 current_group = []
             current_key = fit_key
-            current_group.append(provider)
+            current_group.append(tuple)
         if current_group:
             ranked.extend(self.registry.rank(current_group))
         return ranked
 
-    def _fit_ordered_providers(self, providers: list[str], request: TaskRequest, recipe: Recipe) -> list[str]:
-        return sorted(providers, key=lambda name: (*self._provider_fit_key(name, request, recipe), name))
+    def _fit_ordered_tuples(self, tuples: list[str], request: TaskRequest, recipe: Recipe) -> list[str]:
+        return sorted(tuples, key=lambda name: (*self._tuple_fit_key(name, request, recipe), name))
 
-    def _provider_fit_key(self, name: str, request: TaskRequest, recipe: Recipe) -> tuple[int, int, float]:
+    def _tuple_fit_key(self, name: str, request: TaskRequest, recipe: Recipe) -> tuple[int, int, float]:
         compiled_required_model_len = self._required_model_len(request, recipe)
-        spec = self.providers[name]
+        spec = self.tuples[name]
         return (
             spec.vram_gb,
             spec.max_model_len - compiled_required_model_len,
             float(spec.cost_per_second),
         )
 
-    def _eligible_providers(
+    def _eligible_tuples(
         self,
         candidates: list[str],
         request: TaskRequest,
@@ -326,13 +326,13 @@ class GovernanceCompiler:
             if not name or name in seen:
                 continue
             seen.add(name)
-            spec = self.providers.get(name)
+            spec = self.tuples.get(name)
             if spec is None:
                 continue
-            reason = provider_route_rejection_reason(
+            reason = tuple_route_rejection_reason(
                 policy=self.policy,
                 recipe=recipe,
-                provider=spec,
+                tuple=spec,
                 model=self.models.get(spec.model_ref) if spec.model_ref else None,
                 engine=self.engines.get(spec.engine_ref) if spec.engine_ref else None,
                 mode=request.mode,
@@ -342,8 +342,8 @@ class GovernanceCompiler:
             )
             if reason is not None:
                 continue
-            cost_reason = self._provider_cost_rejection_reason(
-                provider=spec,
+            cost_reason = self._tuple_cost_rejection_reason(
+                tuple=spec,
                 request=request,
                 recipe=recipe,
                 auto_selected=auto_selected,
@@ -353,14 +353,14 @@ class GovernanceCompiler:
             eligible.append(name)
         return eligible
 
-    def _provider_rejections(self, request: TaskRequest, recipe: Recipe, *, auto_selected: bool) -> dict[str, str]:
+    def _tuple_rejections(self, request: TaskRequest, recipe: Recipe, *, auto_selected: bool) -> dict[str, str]:
         rejected: dict[str, str] = {}
-        for name in sorted(self.providers):
-            spec = self.providers[name]
-            reason = provider_route_rejection_reason(
+        for name in sorted(self.tuples):
+            spec = self.tuples[name]
+            reason = tuple_route_rejection_reason(
                 policy=self.policy,
                 recipe=recipe,
-                provider=spec,
+                tuple=spec,
                 model=self.models.get(spec.model_ref) if spec.model_ref else None,
                 engine=self.engines.get(spec.engine_ref) if spec.engine_ref else None,
                 mode=request.mode,
@@ -369,10 +369,10 @@ class GovernanceCompiler:
                 auto_selected=auto_selected,
             )
             if reason is None and not self.registry.is_available(name):
-                reason = "provider is unavailable due to circuit breaker"
+                reason = "tuple is unavailable due to circuit breaker"
             if reason is None:
-                reason = self._provider_cost_rejection_reason(
-                    provider=spec,
+                reason = self._tuple_cost_rejection_reason(
+                    tuple=spec,
                     request=request,
                     recipe=recipe,
                     auto_selected=auto_selected,
@@ -381,7 +381,7 @@ class GovernanceCompiler:
                 rejected[name] = reason
         return rejected
 
-    def _is_production_route_candidate(self, spec: ProviderSpec) -> bool:
+    def _is_production_route_candidate(self, spec: ExecutionTupleSpec) -> bool:
         return is_production_route_candidate(spec)
 
     def _token_budget(self, request: TaskRequest) -> int | None:
@@ -390,10 +390,10 @@ class GovernanceCompiler:
     def _required_model_len(self, request: TaskRequest, recipe: Recipe) -> int:
         return required_model_len(request, recipe, self.policy)
 
-    def _provider_cost_rejection_reason(
+    def _tuple_cost_rejection_reason(
         self,
         *,
-        provider: ProviderSpec,
+        tuple: ExecutionTupleSpec,
         request: TaskRequest,
         recipe: Recipe,
         auto_selected: bool,
@@ -401,7 +401,7 @@ class GovernanceCompiler:
         if not auto_selected:
             return None
         timeout = min(request.timeout_seconds or recipe.timeout_seconds, self.policy.max_timeout_seconds)
-        estimate = self._cost_estimate(provider, request, recipe, timeout)
+        estimate = self._cost_estimate(tuple, request, recipe, timeout)
         policy = self._effective_cost_policy(recipe)
         explicit_budget = any(
             value is not None
@@ -426,7 +426,7 @@ class GovernanceCompiler:
                 f"estimated cost {estimate['estimated_cost_usd']:.4f} exceeds "
                 f"max_estimated_cost_usd {float(policy.max_estimated_cost_usd):.4f}"
             )
-        require_budget = policy.require_budget_for_high_cost_provider
+        require_budget = policy.require_budget_for_high_cost_tuple
         if require_budget is None:
             require_budget = True
         threshold = policy.high_cost_threshold_usd
@@ -441,31 +441,31 @@ class GovernanceCompiler:
 
     def _cost_estimate(
         self,
-        provider: ProviderSpec,
+        tuple: ExecutionTupleSpec,
         request: TaskRequest,
         recipe: Recipe,
         timeout_seconds: int,
     ) -> dict[str, float | int | str]:
-        cold_start_seconds = float(provider.expected_cold_start_seconds or recipe.expected_cold_start_seconds or 0)
-        idle_seconds = float(provider.scaledown_window_seconds or 0)
+        cold_start_seconds = float(tuple.expected_cold_start_seconds or recipe.expected_cold_start_seconds or 0)
+        idle_seconds = float(tuple.scaledown_window_seconds or 0)
         runtime_seconds = float(timeout_seconds)
-        standing_cost_seconds = float(provider.standing_cost_window_seconds or 0)
-        endpoint_cost_seconds = float(provider.endpoint_cost_window_seconds or 0)
+        standing_cost_seconds = float(tuple.standing_cost_window_seconds or 0)
+        endpoint_cost_seconds = float(tuple.endpoint_cost_window_seconds or 0)
         billable_seconds = cold_start_seconds + runtime_seconds + idle_seconds
-        if provider.min_billable_seconds is not None:
-            billable_seconds = max(billable_seconds, float(provider.min_billable_seconds))
-        if provider.billing_granularity_seconds:
-            granularity = float(provider.billing_granularity_seconds)
+        if tuple.min_billable_seconds is not None:
+            billable_seconds = max(billable_seconds, float(tuple.min_billable_seconds))
+        if tuple.billing_granularity_seconds:
+            granularity = float(tuple.billing_granularity_seconds)
             billable_seconds = ceil(billable_seconds / granularity) * granularity
-        cost_per_second = float(provider.cost_per_second)
+        cost_per_second = float(tuple.cost_per_second)
         execution_cost_usd = cost_per_second * billable_seconds
-        standing_cost_per_second = float(provider.standing_cost_per_second or 0)
-        endpoint_cost_per_second = float(provider.endpoint_cost_per_second or 0)
+        standing_cost_per_second = float(tuple.standing_cost_per_second or 0)
+        endpoint_cost_per_second = float(tuple.endpoint_cost_per_second or 0)
         standing_cost_usd = standing_cost_per_second * standing_cost_seconds
         endpoint_cost_usd = endpoint_cost_per_second * endpoint_cost_seconds
         return {
             "method": "cost_per_second_times_cold_start_runtime_idle_and_standing_estimate",
-            "tuple": provider.name,
+            "tuple": tuple.name,
             "cost_per_second": cost_per_second,
             "cold_start_seconds": cold_start_seconds,
             "runtime_seconds": runtime_seconds,
@@ -498,9 +498,9 @@ class GovernanceCompiler:
             max_idle_cost_usd=override.max_idle_cost_usd
             if override.max_idle_cost_usd is not None
             else base.max_idle_cost_usd,
-            require_budget_for_high_cost_provider=override.require_budget_for_high_cost_provider
-            if override.require_budget_for_high_cost_provider is not None
-            else base.require_budget_for_high_cost_provider,
+            require_budget_for_high_cost_tuple=override.require_budget_for_high_cost_tuple
+            if override.require_budget_for_high_cost_tuple is not None
+            else base.require_budget_for_high_cost_tuple,
             high_cost_threshold_usd=override.high_cost_threshold_usd
             if override.high_cost_threshold_usd is not None
             else base.high_cost_threshold_usd,
@@ -571,7 +571,7 @@ class GovernanceCompiler:
         *,
         request: TaskRequest,
         recipe: Recipe,
-        provider_chain: list[str],
+        tuple_chain: list[str],
         selected_tuple: dict[str, object],
         governance_hash: str,
     ) -> CompileArtifact:
@@ -579,37 +579,37 @@ class GovernanceCompiler:
             job_spec_hash=self._stable_hash(request.model_dump(mode="json", exclude={"idempotency_key"})),
             policy_hash=self._stable_hash(self.policy.model_dump(mode="json")),
             recipe_hash=self._stable_hash(recipe.model_dump(mode="json")),
-            provider_contract_hash=self._stable_hash(
-                {name: self.providers[name].model_dump(mode="json") for name in provider_chain if name in self.providers}
+            tuple_contract_hash=self._stable_hash(
+                {name: self.tuples[name].model_dump(mode="json") for name in tuple_chain if name in self.tuples}
             ),
             selected_tuple_hash=self._stable_hash(selected_tuple),
             selected_tuple=selected_tuple,
             governance_hash=governance_hash,
         )
 
-    def _execution_tuple(self, *, recipe: Recipe, provider: ProviderSpec) -> dict[str, object]:
+    def _execution_tuple(self, *, recipe: Recipe, tuple_spec: ExecutionTupleSpec) -> dict[str, object]:
         return {
             "recipe": recipe.name,
-            "tuple": provider.name,
-            "account_ref": account_ref_for_spec(provider),
-            "adapter": provider.adapter,
-            "execution_surface": provider.execution_surface.value if provider.execution_surface else None,
+            "tuple": tuple_spec.name,
+            "account_ref": account_ref_for_spec(tuple_spec),
+            "adapter": tuple_spec.adapter,
+            "execution_surface": tuple_spec.execution_surface.value if tuple_spec.execution_surface else None,
             "resource": {
-                "gpu": provider.gpu,
-                "vram_gb": provider.vram_gb,
-                "max_model_len": provider.max_model_len,
-                "cost_per_second": provider.cost_per_second,
-                "region": provider.region,
-                "zone": provider.zone,
+                "gpu": tuple_spec.gpu,
+                "vram_gb": tuple_spec.vram_gb,
+                "max_model_len": tuple_spec.max_model_len,
+                "cost_per_second": tuple_spec.cost_per_second,
+                "region": tuple_spec.region,
+                "zone": tuple_spec.zone,
             },
             "worker": {
-                "model_ref": provider.model_ref,
-                "engine_ref": provider.engine_ref,
-                "modes": [mode.value for mode in provider.modes],
-                "input_contracts": list(provider.input_contracts),
-                "output_contract": provider.output_contract,
-                "stream_contract": provider.stream_contract,
-                "target_configured": bool(provider.target),
+                "model_ref": tuple_spec.model_ref,
+                "engine_ref": tuple_spec.engine_ref,
+                "modes": [mode.value for mode in tuple_spec.modes],
+                "input_contracts": list(tuple_spec.input_contracts),
+                "output_contract": tuple_spec.output_contract,
+                "stream_contract": tuple_spec.stream_contract,
+                "target_configured": bool(tuple_spec.target),
             },
             "contract": {
                 "data_classification": recipe.data_classification.value,
@@ -620,11 +620,11 @@ class GovernanceCompiler:
             },
         }
 
-    def _security_gate(self, recipe: Recipe, provider: ProviderSpec) -> dict[str, object]:
-        profile = provider.trust_profile
+    def _security_gate(self, recipe: Recipe, tuple: ExecutionTupleSpec) -> dict[str, object]:
+        profile = tuple.trust_profile
         attestation_required = bool(profile.requires_attestation or profile.security_tier is SecurityTier.CONFIDENTIAL_TEE)
         return {
-            "tuple": provider.name,
+            "tuple": tuple.name,
             "data_classification": recipe.data_classification.value,
             "security_tier": profile.security_tier.value,
             "dedicated_gpu": profile.dedicated_gpu,
@@ -637,12 +637,12 @@ class GovernanceCompiler:
         *,
         request: TaskRequest,
         recipe: Recipe,
-        provider: ProviderSpec,
+        tuple: ExecutionTupleSpec,
     ) -> KeyReleaseRequirement:
         if request.artifact_export is None:
             raise GovernanceError(f"recipe {recipe.name} requires artifact_export key_id")
-        if provider.trust_profile.security_tier is SecurityTier.CONFIDENTIAL_TEE and not provider.trust_profile.supports_key_release:
-            raise GovernanceError("confidential TEE artifact export requires provider key-release support")
+        if tuple.trust_profile.security_tier is SecurityTier.CONFIDENTIAL_TEE and not tuple.trust_profile.supports_key_release:
+            raise GovernanceError("confidential TEE artifact export requires tuple key-release support")
         policy_hash = self._stable_hash(self.policy.model_dump(mode="json"))
         return KeyReleaseRequirement(
             key_id=request.artifact_export.key_id,
