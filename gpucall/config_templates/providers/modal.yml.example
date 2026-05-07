@@ -11,6 +11,6 @@ endpoint_contract: modal-function
 input_contracts: [text, chat_messages, data_refs]
 output_contract: plain-text
 stream_contract: none
-target: gpucall-worker-json:run_inference_on_modal
+target: gpucall-worker:run_inference_on_modal
 model: Qwen/Qwen2.5-1.5B-Instruct
 declared_model_max_len: 32768

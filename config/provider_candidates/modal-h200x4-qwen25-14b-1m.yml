@@ -19,7 +19,7 @@ endpoint_contract: modal-function
 input_contracts: [text, chat_messages, data_refs]
 output_contract: plain-text
 stream_contract: none
-target: gpucall-worker-json:run_inference_on_modal_h200x4
+target: gpucall-worker:run_inference_on_modal_h200x4
 provider_params:
   tensor_parallel_size: 4
   long_context: true

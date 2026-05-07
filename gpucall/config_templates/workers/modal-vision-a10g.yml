@@ -14,7 +14,7 @@ input_contracts:
 - text
 output_contract: plain-text
 stream_contract: none
-target: gpucall-worker-json:run_inference_on_modal
+target: gpucall-worker:run_inference_on_modal
 stream_target: null
 endpoint_contract: modal-function
 model: Salesforce/blip-vqa-base

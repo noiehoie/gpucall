@@ -14,7 +14,7 @@ input_contracts:
 - data_refs
 output_contract: plain-text
 stream_contract: none
-target: gpucall-worker-json:run_inference_on_modal_h200x4
+target: gpucall-worker:run_inference_on_modal_h200x4
 stream_target: null
 endpoint_contract: modal-function
 model: Qwen/Qwen2.5-14B-Instruct-1M
