@@ -21,7 +21,7 @@ from gpucall.domain import (
     TaskRequest,
 )
 from gpucall.domain import ChatMessage, ResponseFormatType
-from gpucall.execution.registry import provider_family_for_adapter
+from gpucall.execution.contracts import account_ref_for_spec
 from gpucall.registry import ObservedRegistry
 from gpucall.routing import classification_rank, is_production_route_candidate, provider_route_rejection_reason, required_model_len, token_budget
 
@@ -591,7 +591,7 @@ class GovernanceCompiler:
         return {
             "recipe": recipe.name,
             "provider": provider.name,
-            "account_ref": provider_family_for_adapter(provider.adapter),
+            "account_ref": account_ref_for_spec(provider),
             "adapter": provider.adapter,
             "execution_surface": provider.execution_surface.value if provider.execution_surface else None,
             "resource": {

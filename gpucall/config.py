@@ -154,7 +154,6 @@ def _load_split_provider_payloads(root: Path) -> list[tuple[Path, dict[str, obje
         payload.pop("surface_ref", None)
         payload.pop("worker_ref", None)
         payload.pop("provider_name", None)
-        payload.pop("account_ref", None)
         payload.pop("stock_state", None)
         payloads.append((surface_path, payload))
     orphan_workers = sorted(name for name in workers if name not in used_worker_keys)

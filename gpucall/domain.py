@@ -414,6 +414,7 @@ class ProviderSpec(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     name: str
+    account_ref: str | None = None
     adapter: str = "echo"
     execution_surface: ExecutionSurface | None = None
     max_data_classification: DataClassification = DataClassification.CONFIDENTIAL

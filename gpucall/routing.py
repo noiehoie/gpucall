@@ -219,9 +219,8 @@ def provider_security_rejection_reason(*, policy: Policy, recipe: Recipe, provid
 def is_local_execution_provider(provider: ProviderSpec | None) -> bool:
     if provider is None:
         return False
-    name = provider.name.lower()
     descriptor = adapter_descriptor(provider)
-    return bool(descriptor and descriptor.local_execution) or name.startswith("local-")
+    return bool(descriptor and descriptor.local_execution)
 
 
 def route_warning_tags(plan: CompiledPlan, providers: dict[str, ProviderSpec] | None = None) -> list[str]:
@@ -229,8 +228,6 @@ def route_warning_tags(plan: CompiledPlan, providers: dict[str, ProviderSpec] | 
     first_provider_name = plan.provider_chain[0] if plan.provider_chain else None
     first_provider = providers.get(first_provider_name) if providers and first_provider_name else None
     local_first = is_local_execution_provider(first_provider)
-    if first_provider is None and first_provider_name:
-        local_first = first_provider_name.startswith("local-")
     if first_provider_name and not local_first:
         warnings.append("remote_worker_cold_start_possible")
     if plan.input_refs:
