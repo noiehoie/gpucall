@@ -55,9 +55,11 @@ boto3.
 
 ## Recipe Draft Helper
 
-The SDK distribution also includes `gpucall-recipe-draft`, an operator-assist CLI for workloads that the gateway cannot route with its current recipes/providers, and for `200 OK` outputs that fail caller-side business quality checks.
+The SDK distribution also includes `gpucall-recipe-draft`, the caller-side helper in the three-part gpucall product. The other two parts are the gateway runtime and the administrator-side `gpucall-recipe-admin` helper.
 
-It does not change gateway routing and it does not bypass policy. The `intake` phase is deterministic and strips prompt bodies, DataRef URIs, presigned URLs, and secrets before any draft is produced.
+Use `gpucall-recipe-draft` for workloads that the gateway cannot route with its current recipe catalog and production tuples, and for `200 OK` outputs that fail caller-side business quality checks.
+
+It does not change gateway routing and it does not bypass policy. It also does not choose providers, GPUs, models, engines, or tuples. The `intake` phase is deterministic and strips prompt bodies, DataRef URIs, presigned URLs, and secrets before any draft is produced.
 
 ```bash
 gpucall-recipe-draft preflight \
@@ -82,9 +84,9 @@ gpucall-recipe-draft quality \
   --content-type image/jpeg \
   --bytes 1136521 \
   --dimension 1200x2287 \
-  --selected-recipe vision-image-standard \
-  --selected-tuple modal-vision-a10g \
-  --selected-tuple-model Salesforce/blip-vqa-base \
+  --observed-recipe vision-image-standard \
+  --observed-tuple modal-vision-a10g \
+  --observed-tuple-model Salesforce/blip-vqa-base \
   --quality-failure-kind insufficient_ocr \
   --quality-failure-reason "short answer only; expected top headlines" \
   --remote-inbox admin@gpucall.example.internal:/srv/gpucall/state/recipe_requests/inbox \

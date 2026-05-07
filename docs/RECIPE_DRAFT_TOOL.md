@@ -7,7 +7,17 @@ It is intentionally separate from the gateway runtime.
 - The gateway remains deterministic and does not inspect prompt meaning.
 - The caller-side tool collects sanitized failure metadata for gpucall administrators.
 - The caller-side tool does not call an LLM.
-- Any generated recipe or provider draft requires human review before production use.
+- Any generated recipe intent draft requires human review before production use.
+
+## Product Role
+
+gpucall has three product components:
+
+- the gateway runtime, which performs deterministic admission, recipe selection, tuple routing, policy, audit, cleanup, and validation-gated execution;
+- the caller-side helper, `gpucall-recipe-draft`, which turns external workload intent and failure/quality metadata into sanitized intake bundles;
+- the administrator-side helper, `gpucall-recipe-admin`, which reviews intake, materializes recipe intent, derives missing tuple contracts, and promotes only validated production tuples.
+
+This document covers the caller-side helper and the handoff to the administrator-side helper. The caller-side helper must not choose providers, GPUs, models, engines, or tuples. It describes workload intent and context needs; catalog management and production promotion belong to administrators.
 
 ## When To Use It
 

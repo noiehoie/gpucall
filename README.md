@@ -2,6 +2,16 @@
 
 L7 governance gateway for leased GPU task execution. The v2.0 MVP is scoped to `infer` and `vision` only.
 
+## Product Shape
+
+gpucall is a three-part product, not just a gateway binary:
+
+- **Gateway runtime scripts**: deterministic request admission, recipe selection, tuple routing, policy enforcement, audit, validation gates, cleanup, and fail-closed execution.
+- **Caller-side helper**: the SDK-distributed `gpucall-recipe-draft` tool. It lets external systems submit sanitized workload intent, preflight metadata, post-failure intake, and low-quality-success feedback without exposing raw content or choosing providers, GPUs, models, or tuples.
+- **Administrator-side helper**: the gateway-distributed `gpucall-recipe-admin` tool. It reviews caller intake, materializes recipe intent, derives missing execution contracts, promotes candidate tuples through isolated config and billable validation, and only then allows production activation.
+
+The responsibility boundary is part of the product contract: callers describe workload intent; administrators manage catalogs, tuples, validation evidence, and production promotion; the gateway executes only validated policy decisions.
+
 ## Quickstart
 
 ```bash
