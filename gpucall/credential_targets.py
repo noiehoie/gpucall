@@ -22,51 +22,61 @@ register_env_override("aws", "endpoint_url", "AWS_ENDPOINT_URL_S3")
 register_env_override("auth", "api_keys", "GPUCALL_API_KEYS")
 
 
-@register_configured_probe("modal")
+@register_configured_probe("sdk_profile:modal")
 def _modal_token_exists(_creds: dict[str, dict[str, str]]) -> bool:
     return any(path.exists() for path in (Path.home() / ".modal.toml", Path.home() / ".config" / "modal" / "modal.toml"))
 
 
-@register_configured_probe("runpod-flash")
+@register_configured_probe("sdk_profile:runpod-flash")
 def _flash_token_exists(_creds: dict[str, dict[str, str]]) -> bool:
     return any(path.exists() for path in (Path.home() / ".flash" / "config.json", Path.home() / ".runpod" / "config.toml"))
 
 
-@register_configured_probe("runpod-serverless")
-def _runpod_serverless_configured(creds: dict[str, dict[str, str]]) -> bool:
-    return bool(creds.get("runpod"))
+@register_configured_probe("api_key:runpod")
+def _runpod_api_key_configured(creds: dict[str, dict[str, str]]) -> bool:
+    return bool(creds.get("runpod", {}).get("api_key"))
 
 
-@register_configured_probe("hyperstack")
-def _hyperstack_configured(creds: dict[str, dict[str, str]]) -> bool:
-    return bool(creds.get("hyperstack"))
+@register_configured_probe("endpoint_ref:runpod")
+def _runpod_endpoint_ref_configured(creds: dict[str, dict[str, str]]) -> bool:
+    return bool(creds.get("runpod", {}).get("endpoint_id"))
 
 
-@register_configured_probe("azure")
+@register_configured_probe("api_key:hyperstack")
+def _hyperstack_api_key_configured(creds: dict[str, dict[str, str]]) -> bool:
+    return bool(creds.get("hyperstack", {}).get("api_key"))
+
+
+@register_configured_probe("ssh_key:hyperstack")
+def _hyperstack_ssh_key_configured(creds: dict[str, dict[str, str]]) -> bool:
+    return bool(creds.get("hyperstack", {}).get("ssh_key_path"))
+
+
+@register_configured_probe("cloud_subscription:azure")
 def _azure_configured(creds: dict[str, dict[str, str]]) -> bool:
     return bool(creds.get("azure"))
 
 
-@register_configured_probe("gcp")
+@register_configured_probe("cloud_project:gcp")
 def _gcp_configured(creds: dict[str, dict[str, str]]) -> bool:
     return bool(creds.get("gcp"))
 
 
-@register_configured_probe("scaleway")
+@register_configured_probe("api_key:scaleway")
 def _scaleway_configured(creds: dict[str, dict[str, str]]) -> bool:
     return bool(creds.get("scaleway"))
 
 
-@register_configured_probe("ovhcloud")
+@register_configured_probe("cloud_project:ovhcloud")
 def _ovhcloud_configured(creds: dict[str, dict[str, str]]) -> bool:
     return bool(creds.get("ovhcloud"))
 
 
-@register_configured_probe("cloudflare-r2")
+@register_configured_probe("object_store:s3")
 def _cloudflare_r2_configured(creds: dict[str, dict[str, str]]) -> bool:
     return bool(creds.get("aws"))
 
 
-@register_configured_probe("auth")
+@register_configured_probe("gateway_auth:api_keys")
 def _auth_configured(creds: dict[str, dict[str, str]]) -> bool:
     return bool(creds.get("auth"))

@@ -36,7 +36,7 @@ Conformance requirements:
   before production routing.
 - The official worker-vLLM image does not become a gpucall DataRef worker merely
   because it accepts text. If DataRef fetch is not implemented inside that
-  official worker contract, the provider must reject DataRef plans and let the
+  official worker contract, the tuple must reject DataRef plans and let the
   router fall back.
 - Large-model timeout, worker initialization, model cache, and endpoint health
   are official operational concerns. A provider is not "good" only because one
@@ -83,7 +83,7 @@ Conformance requirements:
 
 Implications for gpucall:
 
-- Hyperstack provider YAML must fail validation when image/flavor/environment are
+- Hyperstack tuple YAML must fail validation when image/flavor/environment are
   not found in the live official catalog.
 - Hyperstack live validation must record VM id, image, flavor, environment,
   security-rule id, deletion result, and post-delete/list confirmation.
@@ -129,18 +129,18 @@ Implications for gpucall:
   - `GPUCALL_MODAL_H200X4_MIN_CONTAINERS`
   - `GPUCALL_MODAL_VISION_H100_MIN_CONTAINERS`
   - matching `*_SCALEDOWN_WINDOW` variables
-- Vision providers must prove that the deployed function and model actually match
+- Vision tuples must prove that the deployed function and model actually match
   the declared recipe capability; an HTTP 200 short-answer VQA response is not
   sufficient validation for document understanding.
 - Modal live validation must bind the artifact to app name, function name, GPU,
   model, image/dependency contract, timeout, output contract, and quality category.
 
-## Cross-Provider Rule
+## Cross-Vendor Rule
 
-Provider implementation work must proceed in this order:
+Execution-surface implementation work must proceed in this order:
 
 1. Read official docs/repositories.
-2. Write the provider contract in config/schema terms.
+2. Write the execution contract in config/schema terms.
 3. Implement only what the official contract supports.
 4. Reject unsupported plans explicitly.
 5. Validate with billable live artifacts before production routing.
@@ -148,10 +148,10 @@ Provider implementation work must proceed in this order:
 
 ## Implementation Lesson: 2026-05-06
 
-Provider adapters must be implemented from official documentation, official SDKs,
+Execution-surface adapters must be implemented from official documentation, official SDKs,
 or official repositories before live testing. A working smoke path is not
 evidence of official conformance. For Hyperstack specifically, VM create payloads
 must be validated through the official SDK/OpenAPI `CreateInstancesPayload`
-contract, and provider error bodies must be redacted and preserved. Discarding
-provider 400 bodies or inventing unofficial post-create lifecycle steps wastes
-billable validation time and hides the actual provider-side failure reason.
+contract, and vendor error bodies must be redacted and preserved. Discarding
+vendor 400 bodies or inventing unofficial post-create lifecycle steps wastes
+billable validation time and hides the actual vendor-side failure reason.

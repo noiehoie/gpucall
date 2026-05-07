@@ -190,7 +190,7 @@ def _provider_from_payload(path: Path, payload: dict[str, object]) -> ProviderSp
 def _load_provider(path: Path) -> ProviderSpec:
     payload = _load_yaml(path)
     if not isinstance(payload, dict):
-        raise ConfigError(f"invalid provider YAML in {path}: root must be a mapping")
+        raise ConfigError(f"invalid execution tuple YAML in {path}: root must be a mapping")
     return _provider_from_payload(path, payload)
 
 def load_models(config_dir: Path | None = None) -> dict[str, ModelSpec]:
@@ -333,20 +333,20 @@ def validate_config(config: GpucallConfig) -> None:
         requires_contracts = descriptor.requires_contracts if descriptor is not None else True
         if requires_contracts:
             if not provider.endpoint_contract:
-                raise ConfigError(f"provider {provider.name!r} must declare endpoint_contract")
+                raise ConfigError(f"tuple {provider.name!r} must declare endpoint_contract")
             if not provider.input_contracts:
-                raise ConfigError(f"provider {provider.name!r} must declare input_contracts")
+                raise ConfigError(f"tuple {provider.name!r} must declare input_contracts")
             if not provider.output_contract:
-                raise ConfigError(f"provider {provider.name!r} must declare output_contract")
+                raise ConfigError(f"tuple {provider.name!r} must declare output_contract")
         expected = descriptor.endpoint_contract if descriptor is not None else None
         if expected is not None and provider.endpoint_contract != expected:
-            raise ConfigError(f"provider {provider.name!r} endpoint_contract must be {expected!r}")
+            raise ConfigError(f"tuple {provider.name!r} endpoint_contract must be {expected!r}")
         expected_output = descriptor.output_contract if descriptor is not None else None
         if expected_output is not None and provider.output_contract != expected_output:
-            raise ConfigError(f"provider {provider.name!r} output_contract must be {expected_output!r}")
+            raise ConfigError(f"tuple {provider.name!r} output_contract must be {expected_output!r}")
         expected_stream = descriptor.stream_contract if descriptor is not None else None
         if expected_stream is not None and provider.stream_contract != expected_stream:
-            raise ConfigError(f"provider {provider.name!r} stream_contract must be {expected_stream!r}")
+            raise ConfigError(f"tuple {provider.name!r} stream_contract must be {expected_stream!r}")
         if descriptor is not None and descriptor.config_validator is not None:
             findings = descriptor.config_validator(provider)
             if findings:

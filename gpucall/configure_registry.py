@@ -13,6 +13,7 @@ class ConfigureTarget:
     label: str
     run: Callable[[Path], bool]
     success_message: str | None = None
+    credential_contracts: tuple[str, ...] = ()
 
 
 _TARGETS: dict[str, ConfigureTarget] = {}
@@ -23,6 +24,7 @@ def register_configure_target(
     *,
     label: str | None = None,
     success_message: str | None = None,
+    credential_contracts: tuple[str, ...] = (),
 ) -> Callable[[Callable[[Path], bool]], Callable[[Path], bool]]:
     def decorator(run: Callable[[Path], bool]) -> Callable[[Path], bool]:
         _TARGETS[name] = ConfigureTarget(
@@ -30,6 +32,7 @@ def register_configure_target(
             label=label or name,
             run=run,
             success_message=success_message,
+            credential_contracts=credential_contracts,
         )
         return run
 

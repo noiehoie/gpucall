@@ -149,4 +149,4 @@ def test_modal_provider_requires_deployed_function_target() -> None:
     except ConfigError as exc:
         assert "target must be '<modal-app>:<function>'" in str(exc)
     else:
-        raise AssertionError("Modal provider accepted a non-deployed-function target")
+        raise AssertionError("Modal tuple accepted a non-deployed-function target")

@@ -1,10 +1,11 @@
 # RunPod Serverless Catalog
 
 RunPod Serverless is modeled as a `managed_endpoint` execution surface. The
-catalog is intentionally wider than the active production endpoints: candidate
-tuples describe possible GPU, model, engine, and worker-contract combinations,
-while production routing uses only tuples with endpoint configuration and live
-validation evidence.
+catalog is intentionally wider than the active production endpoints. The source
+of truth is `candidate_sources/runpod_serverless.yml`, which expands GPU, model,
+and worker-family matrices into deterministic tuple candidates. Production
+routing uses only tuples with endpoint configuration and live validation
+evidence.
 
 ## Catalog Families
 

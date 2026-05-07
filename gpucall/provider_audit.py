@@ -7,8 +7,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Mapping
 
-import yaml
-
+from gpucall.candidate_sources import load_tuple_candidate_payloads
 from gpucall.config import default_state_dir
 from gpucall.credentials import credentials_path, load_credentials
 from gpucall.domain import ExecutionMode, ProviderSpec, Recipe
@@ -20,7 +19,7 @@ from gpucall.routing import provider_route_rejection_reason
 
 def provider_audit_report(config: Any, *, config_dir: Path, recipe_name: str | None = None, live: bool = False) -> dict[str, Any]:
     recipes = _selected_recipes(config.recipes, recipe_name)
-    candidates = _load_provider_candidates(config_dir)
+    candidates = _load_tuple_candidates(config_dir)
     creds = load_credentials()
     report: dict[str, Any] = {
         "schema_version": 1,
@@ -172,7 +171,7 @@ def _candidate_row(
         contract = _official_contract(provider)
     decision = _candidate_decision(reason=reason, config_findings=config_findings, validation=validation)
     return {
-        "source": "provider_candidates",
+        "source": "candidate_catalog",
         "name": candidate.get("name"),
         "path": candidate.get("_path"),
         "tuple": _tuple_summary(provider) if provider is not None else _candidate_tuple_summary(candidate),
@@ -322,18 +321,8 @@ def _official_contract_hash_valid(data: Mapping[str, Any], contract: Mapping[str
     return data.get("official_contract_hash") == official_contract_hash(contract)
 
 
-def _load_provider_candidates(config_dir: Path) -> list[dict[str, Any]]:
-    root = config_dir / "provider_candidates"
-    if not root.exists():
-        return []
-    candidates: list[dict[str, Any]] = []
-    for path in sorted(root.glob("*.yml")):
-        payload = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
-        if not isinstance(payload, dict):
-            continue
-        payload["_path"] = str(path)
-        candidates.append(payload)
-    return candidates
+def _load_tuple_candidates(config_dir: Path) -> list[dict[str, Any]]:
+    return load_tuple_candidate_payloads(config_dir)
 
 
 def _required_input_contracts(recipe: Recipe) -> set[str]:

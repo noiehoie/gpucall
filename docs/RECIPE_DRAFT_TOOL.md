@@ -258,7 +258,7 @@ gpucall validate-config --config-dir config
 gpucall launch-check --profile static --config-dir config
 ```
 
-If validation reports that no provider satisfies the new recipe, the administrator must add or enable an appropriate provider before production use.
+If validation reports that no execution tuple satisfies the new recipe, the administrator must add or enable an appropriate tuple before production use.
 
 ### Inbox Automation
 

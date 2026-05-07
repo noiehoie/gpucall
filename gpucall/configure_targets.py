@@ -13,7 +13,7 @@ from gpucall.configure_registry import register_configure_target
 from gpucall.credentials import save_credentials
 
 
-@register_configure_target("modal", success_message=None)
+@register_configure_target("modal", success_message=None, credential_contracts=("sdk_profile:modal",))
 def configure_modal(_config_dir: Path) -> bool:
     if not shutil.which("modal"):
         print("Error: 'modal' CLI not found.", file=sys.stderr)
@@ -32,7 +32,7 @@ def configure_modal(_config_dir: Path) -> bool:
     return True
 
 
-@register_configure_target("runpod-serverless", success_message=None)
+@register_configure_target("runpod-serverless", success_message=None, credential_contracts=("api_key:runpod",))
 def configure_runpod_serverless(_config_dir: Path) -> bool:
     try:
         api_key = getpass.getpass("Enter your RunPod API Key (will be hidden): ").strip()
@@ -46,7 +46,7 @@ def configure_runpod_serverless(_config_dir: Path) -> bool:
         return False
 
 
-@register_configure_target("runpod-flash", label="runpod flash sdk login", success_message=None)
+@register_configure_target("runpod-flash", label="runpod flash sdk login", success_message=None, credential_contracts=("sdk_profile:runpod-flash",))
 def configure_runpod_flash(config_dir: Path) -> bool:
     if not shutil.which("flash"):
         print("Error: 'flash' CLI not found.", file=sys.stderr)
@@ -66,7 +66,7 @@ def configure_runpod_flash(config_dir: Path) -> bool:
     return True
 
 
-@register_configure_target("hyperstack")
+@register_configure_target("hyperstack", credential_contracts=("api_key:hyperstack", "ssh_key:hyperstack"))
 def configure_hyperstack(_config_dir: Path) -> bool:
     try:
         api_key = getpass.getpass("Enter your Hyperstack API Key (will be hidden): ").strip()
@@ -80,7 +80,7 @@ def configure_hyperstack(_config_dir: Path) -> bool:
         return False
 
 
-@register_configure_target("cloudflare-r2", label="cloudflare r2 object store")
+@register_configure_target("cloudflare-r2", label="cloudflare r2 object store", credential_contracts=("object_store:s3",))
 def configure_cloudflare_r2(config_dir: Path) -> bool:
     try:
         access_key = getpass.getpass("Enter Cloudflare R2 Access Key ID (will be hidden): ").strip()
@@ -99,7 +99,7 @@ def configure_cloudflare_r2(config_dir: Path) -> bool:
         return False
 
 
-@register_configure_target("auth", label="gateway auth")
+@register_configure_target("auth", label="gateway auth", credential_contracts=("gateway_auth:api_keys",))
 def configure_auth(_config_dir: Path) -> bool:
     try:
         api_key = getpass.getpass("Enter gpucall Gateway API key for clients (will be hidden): ").strip()

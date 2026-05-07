@@ -1431,27 +1431,27 @@ def _function_runtime_live_cost_audit(providers: dict[str, object]) -> dict[str,
 
 
 def _managed_endpoint_live_cost_audit(providers: dict[str, object], creds: dict[str, dict[str, str]]) -> dict[str, object]:
-    endpoint_providers = [
-        provider
-        for provider in providers.values()
-        if str(getattr(getattr(provider, "execution_surface", None), "value", "")) == "managed_endpoint"
-        and getattr(provider, "target", None)
+    endpoint_tuples = [
+        tuple_spec
+        for tuple_spec in providers.values()
+        if str(getattr(getattr(tuple_spec, "execution_surface", None), "value", "")) == "managed_endpoint"
+        and getattr(tuple_spec, "target", None)
     ]
-    if not endpoint_providers:
+    if not endpoint_tuples:
         return {"configured": False}
-    families = sorted({provider_family_for_adapter(str(getattr(provider, "adapter", "") or "")) for provider in endpoint_providers})
+    families = sorted({provider_family_for_adapter(str(getattr(tuple_spec, "adapter", "") or "")) for tuple_spec in endpoint_tuples})
     if families != ["runpod"]:
         return {"configured": True, "ok": False, "credential_families": families, "error": "managed endpoint live cost probe supports RunPod credentials only"}
     api_key = creds.get(families[0], {}).get("api_key")
     if not api_key:
         return {"configured": True, "ok": False, "credential_families": families, "error": "managed endpoint api_key is not configured"}
     rows: list[dict[str, object]] = []
-    for provider in endpoint_providers:
-        base_url = str(getattr(provider, "endpoint", None) or "https://api.runpod.ai/v2").rstrip("/")
-        endpoint_id = str(getattr(provider, "target"))
+    for tuple_spec in endpoint_tuples:
+        base_url = str(getattr(tuple_spec, "endpoint", None) or "https://api.runpod.ai/v2").rstrip("/")
+        endpoint_id = str(getattr(tuple_spec, "target"))
         rows.append(
             {
-                "tuple": getattr(provider, "name", ""),
+                "tuple": getattr(tuple_spec, "name", ""),
                 "endpoint_id": endpoint_id,
                 "health": _http_json(
                     f"{base_url}/{endpoint_id}/health",
@@ -1463,18 +1463,18 @@ def _managed_endpoint_live_cost_audit(providers: dict[str, object], creds: dict[
 
 
 def _iaas_vm_live_cost_audit(providers: dict[str, object], creds: dict[str, dict[str, str]]) -> dict[str, object]:
-    vm_providers = [
-        provider for provider in providers.values() if str(getattr(getattr(provider, "execution_surface", None), "value", "")) == "iaas_vm"
+    vm_tuples = [
+        tuple_spec for tuple_spec in providers.values() if str(getattr(getattr(tuple_spec, "execution_surface", None), "value", "")) == "iaas_vm"
     ]
-    if not vm_providers:
+    if not vm_tuples:
         return {"configured": False}
-    families = sorted({provider_family_for_adapter(str(getattr(provider, "adapter", "") or "")) for provider in vm_providers})
+    families = sorted({provider_family_for_adapter(str(getattr(tuple_spec, "adapter", "") or "")) for tuple_spec in vm_tuples})
     if families != ["hyperstack"]:
         return {"configured": True, "ok": False, "credential_families": families, "error": "iaas_vm live cost probe supports Hyperstack credentials only"}
     api_key = creds.get(families[0], {}).get("api_key")
     if not api_key:
         return {"configured": True, "ok": False, "credential_families": families, "error": "iaas_vm api_key is not configured"}
-    base_url = str(getattr(vm_providers[0], "endpoint", None) or "https://infrahub-api.nexgencloud.com/v1").rstrip("/")
+    base_url = str(getattr(vm_tuples[0], "endpoint", None) or "https://infrahub-api.nexgencloud.com/v1").rstrip("/")
     return {
         "configured": True,
         "credential_families": families,

@@ -1,8 +1,16 @@
 # Provider Adapter Conformance
 
-gpucall provider adapters are isolated per cloud API surface. An adapter may own provider lifecycle operations only when it can call the provider's official API or SDK. It must not report production inference success unless a gpucall worker bootstrap and result retrieval path is configured and verified.
+gpucall execution-surface adapters are isolated per cloud API surface. An
+adapter may own lifecycle operations only when it can call the vendor's official
+API or SDK. It must not report production inference success unless a gpucall
+worker bootstrap and result retrieval path is configured and verified.
 
-Each adapter module registers its own builder and `ProviderAdapterDescriptor`. Router core code consumes descriptors for endpoint/output contract validation, production route eligibility, local execution tagging, stream preconditions, and optional live catalog checks. Provider-specific names must not be hardcoded in `config.py`, `routing.py`, `provider_catalog.py`, `compiler.py`, `dispatcher.py`, or `providers/factory.py`.
+Each adapter module registers its own builder and `ProviderAdapterDescriptor`.
+Router core code consumes descriptors for endpoint/output contract validation,
+production route eligibility, local execution tagging, stream preconditions, and
+optional live catalog checks. Vendor-specific names must not be hardcoded in
+`config.py`, `routing.py`, `provider_catalog.py`, `compiler.py`, `dispatcher.py`,
+or `providers/factory.py`.
 
 ## Implemented Lifecycle Adapters
 
@@ -15,7 +23,7 @@ Each adapter module registers its own builder and `ProviderAdapterDescriptor`. R
 
 - Lifecycle-only adapters raise `PROVIDER_WORKER_BOOTSTRAP_NOT_CONFIGURED` with HTTP `501` from `wait` and `stream`.
 - Lifecycle-only adapters are not production-eligible for deterministic routing until worker bootstrap, result retrieval, and billable live validation are implemented.
-- Credentials are loaded from environment variables or `credentials.yml`; secrets do not belong in provider YAML.
+- Credentials are loaded from environment variables or `credentials.yml`; secrets do not belong in tuple YAML.
 - Provider YAML examples declare resource shape and routing metadata only.
 
 ## Official References

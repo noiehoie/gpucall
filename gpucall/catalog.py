@@ -5,8 +5,7 @@ import sqlite3
 from pathlib import Path
 from typing import Any
 
-import yaml
-
+from gpucall.candidate_sources import load_tuple_candidate_payloads
 from gpucall.config import GpucallConfig
 from gpucall.execution.registry import adapter_descriptor
 
@@ -56,7 +55,7 @@ class SQLiteCapabilityCatalog:
                     ),
                 )
             if root is not None:
-                for candidate in _load_candidate_payloads(root / "provider_candidates"):
+                for candidate in load_tuple_candidate_payloads(root):
                     conn.execute(
                         """
                         INSERT INTO provider_candidates(name, adapter, execution_surface, model_ref, engine_ref, status, payload)
@@ -147,21 +146,6 @@ def _surface_for_adapter(adapter: str) -> str | None:
     if descriptor is None or descriptor.execution_surface is None:
         return None
     return descriptor.execution_surface.value
-
-
-def _load_candidate_payloads(root: Path) -> list[dict[str, Any]]:
-    payloads: list[dict[str, Any]] = []
-    if not root.exists():
-        return payloads
-    for path in sorted(root.glob("*.yml")):
-        with path.open("r", encoding="utf-8") as handle:
-            payload = yaml.safe_load(handle) or {}
-        if not isinstance(payload, dict):
-            raise ValueError(f"invalid candidate payload in {path}")
-        if not payload.get("name") or not payload.get("adapter"):
-            raise ValueError(f"candidate provider must define name and adapter: {path}")
-        payloads.append(payload)
-    return payloads
 
 
 def dumps_snapshot(snapshot: dict[str, Any]) -> str:

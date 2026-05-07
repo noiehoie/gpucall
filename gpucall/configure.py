@@ -47,7 +47,7 @@ def _select_provider(targets: list[ConfigureTarget], already: list[str]) -> str:
 def _select_provider_by_prompt(targets: list[ConfigureTarget], already: list[str]) -> str:
     print("\nSelect item to configure:")
     for index, target in enumerate(targets, start=1):
-        marker = "✓" if target.name in already else " "
+        marker = "✓" if _target_configured(target, already) else " "
         print(f"  {index}. {marker} {target.label}")
     print("  0. done  - finish setup")
     raw = input("> ").strip().lower()
@@ -107,10 +107,17 @@ def _render_menu(options: list[ConfigureTarget | str], already: list[str], selec
             marker = " "
         else:
             label = option.label
-            marker = "✓" if option.name in already else " "
+            marker = "✓" if _target_configured(option, already) else " "
         sys.stdout.write("\x1b[2K")
         sys.stdout.write(f"  {cursor} {index + 1 if option != 'done' else 0}. {marker} {label}\n")
     sys.stdout.flush()
+
+
+def _target_configured(target: ConfigureTarget, already: list[str]) -> bool:
+    configured = set(already)
+    if target.name in configured:
+        return True
+    return bool(configured.intersection(target.credential_contracts))
 
 
 def _prompt_yes_no(message: str, default_yes: bool = False) -> bool:

@@ -33,6 +33,7 @@ def test_configure_runpod_interactive_flow(tmp_path, monkeypatch, capsys) -> Non
     creds = load_credentials()
     out = capsys.readouterr().out
     assert creds["runpod"] == {"api_key": "secret-key"}
+    assert "api_key:runpod" in configured_credentials()
     assert "providers/runpod.yml" in out
     assert "runpod-serverless" in out
     assert "Setup session finished" in out
@@ -107,4 +108,4 @@ def test_runpod_flash_detects_runpod_config_toml(tmp_path, monkeypatch) -> None:
     (tmp_path / ".runpod").mkdir()
     (tmp_path / ".runpod" / "config.toml").write_text("[credentials]\n", encoding="utf-8")
 
-    assert "runpod-flash" in configured_credentials()
+    assert "sdk_profile:runpod-flash" in configured_credentials()

@@ -5,7 +5,7 @@ gpucall routing is not allowed to infer model ability from prompt text. Unknown 
 1. Recipe: what the workload requires.
 2. Model: what a model declares it can do.
 3. Engine: what the runtime can guarantee.
-4. Provider/GPU: where the engine/model tuple can run.
+4. Execution tuple: account + surface + resource + worker + model + engine.
 
 The gateway then requires live validation evidence before an administrator treats a new tuple as production-ready.
 
@@ -19,6 +19,7 @@ config/
   engines/*.yml
   surfaces/*.yml
   workers/*.yml
+  candidate_sources/*.yml
   provider_candidates/*.yml
   providers/*.yml.example
 ```
@@ -72,10 +73,16 @@ disagree on account, adapter, or execution surface. The joined tuple is the
 active execution surface eligible for production routing after policy,
 validation, circuit, and cleanup checks.
 
-Provider candidates are not production routing entries. They are a queue of plausible
-provider/model/engine tuples that need endpoint credentials, official-adapter
-conformance review, and billable live validation before they can be promoted into
-active `surfaces/*.yml` and `workers/*.yml`.
+Tuple candidates are not production routing entries. They are plausible
+account/surface/resource/worker/model/engine combinations that need endpoint
+credentials, official-contract review, and billable live validation before they
+can be promoted into active `surfaces/*.yml` and `workers/*.yml`.
+
+Candidate sources such as `candidate_sources/*.yml` are deterministic generators
+for broad surfaces. For example, RunPod Serverless candidates are generated from
+GPU, model, and worker-family matrices instead of maintaining one YAML file per
+possible tuple. `provider_candidates/*.yml` remains available for small explicit
+candidate definitions and for compatibility with existing catalog tooling.
 
 ## Catalog DB
 
@@ -91,7 +98,10 @@ Default path:
 $XDG_STATE_HOME/gpucall/capability-catalog.db
 ```
 
-The DB is a deterministic materialization of YAML config. YAML remains the source of truth; the DB is for review, inspection, and operational tooling. Active providers and candidate providers are stored separately so unvalidated candidates cannot enter production auto-routing.
+The DB is a deterministic materialization of YAML config. YAML remains the source
+of truth; the DB is for review, inspection, and operational tooling. Active
+tuples and candidate tuples are stored separately so unvalidated candidates
+cannot enter production auto-routing.
 
 ## Execution Catalog
 
@@ -116,7 +126,7 @@ validation for the exact tuple, and cleanup guarantees.
 
 ## Execution Tuple Audit
 
-Use the execution tuple audit before promoting provider candidates or changing routing:
+Use the execution tuple audit before promoting tuple candidates or changing routing:
 
 ```bash
 gpucall tuple-audit --config-dir config
@@ -124,11 +134,13 @@ gpucall tuple-audit --config-dir config --recipe text-infer-standard --live
 ```
 
 The audit treats the recipe as the authority. It evaluates every active joined
-surface/worker tuple and every `provider_candidates/*.yml` tuple against recipe requirements,
-model catalog declarations, engine catalog guarantees, resource catalog metadata,
-official execution contracts, endpoint configuration, and exact tuple validation
-artifacts. Candidate tuples that fit the recipe remain outside production routing
-until they have endpoint/lifecycle configuration and billable validation evidence.
+surface/worker tuple and every tuple candidate, whether explicit or generated
+from `candidate_sources/*.yml`, against recipe requirements, model catalog
+declarations, engine catalog guarantees, resource catalog metadata, official
+execution contracts, endpoint configuration, and exact tuple validation
+artifacts. Candidate tuples that fit the recipe remain outside production
+routing until they have endpoint/lifecycle configuration and billable validation
+evidence.
 The audit also reports surface distribution so Modal function-runtime candidates,
 RunPod managed endpoints, and Hyperstack VM routes are compared as different
 official execution surfaces instead of pretending they are equivalent provider
@@ -136,7 +148,8 @@ wrappers.
 
 ## Admin Review
 
-Caller submissions are reviewed against recipes, models, engines, providers, policy, and live validation artifacts:
+Caller submissions are reviewed against recipes, models, engines, execution
+tuples, policy, and live validation artifacts:
 
 ```bash
 gpucall-recipe-admin review \
@@ -145,10 +158,9 @@ gpucall-recipe-admin review \
 ```
 
 If active tuples are insufficient, the report includes `required_execution_contract`.
-If `provider_candidates/*.yml` contains tuples that satisfy that contract, the same
-report includes `tuple_candidate_matches` and the compatibility alias
-`tuple_candidate_matches`. These matches are tuple promotion plans, not routing
-entries.
+If the candidate catalog contains tuples that satisfy that contract, the same
+report includes `tuple_candidate_matches`. These matches are tuple promotion
+plans, not routing entries.
 
 Each candidate match carries:
 
@@ -161,9 +173,9 @@ The automated path is:
 
 1. Caller submission reaches the admin inbox.
 2. `gpucall-recipe-admin review` writes a recipe candidate and computes `required_execution_contract`.
-3. The reviewer matches that contract against `provider_candidates`.
-4. `gpucall-recipe-admin promote` creates an isolated promotion workspace containing the generated recipe, candidate provider YAML, and split surface/worker YAML.
-5. An administrator or automation fills provider-specific endpoint credentials and runs billable validation.
+3. The reviewer matches that contract against the candidate catalog.
+4. `gpucall-recipe-admin promote` creates an isolated promotion workspace containing the generated recipe, candidate tuple YAML, and split surface/worker YAML.
+5. An administrator or automation fills execution-surface endpoint credentials and runs billable validation.
 6. Only after validation evidence exists can the candidate be copied into active `surfaces/*.yml` and `workers/*.yml` and made eligible for production routing.
 
 Promotion command:
@@ -178,7 +190,7 @@ gpucall-recipe-admin promote \
 
 Possible promotion decisions:
 
-- `READY_FOR_ENDPOINT_CONFIGURATION`: generated provider YAML exists, but provider-specific required fields such as endpoint id or Modal target are still missing.
+- `READY_FOR_ENDPOINT_CONFIGURATION`: generated tuple YAML exists, but execution-surface required fields such as endpoint id or Modal target are still missing.
 - `READY_FOR_BILLABLE_VALIDATION`: generated config validates, but no matching live validation artifact exists.
 - `VALIDATION_FAILED`: `--run-validation` was requested and the billable smoke failed.
 - `VALIDATED_READY_TO_ACTIVATE`: matching validation exists and the provider can be activated.

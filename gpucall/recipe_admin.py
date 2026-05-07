@@ -16,6 +16,7 @@ from typing import Any
 
 import yaml
 
+from gpucall.candidate_sources import load_tuple_candidate_payloads
 from gpucall.config import ConfigError, default_state_dir, load_config
 from gpucall.domain import ExecutionMode, ProviderSpec, Recipe
 from gpucall.execution.contracts import artifact_tuple_evidence_key, tuple_evidence_key
@@ -63,7 +64,7 @@ def main(argv: list[str] | None = None) -> int:
     review.add_argument("--validation-dir", help="provider live validation artifact directory")
     review.add_argument("--output", "-o", help="write review report JSON")
 
-    promote = subcommands.add_parser("promote", help="prepare, validate, and optionally activate a provider candidate from a review report")
+    promote = subcommands.add_parser("promote", help="prepare, validate, and optionally activate a tuple candidate from a review report")
     promote.add_argument("--review", required=True, help="admin review JSON produced by gpucall-recipe-admin review")
     promote.add_argument("--candidate", help="candidate name; defaults to the first tuple_candidate_matches entry")
     promote.add_argument("--config-dir", required=True, help="active gpucall config directory")
@@ -341,7 +342,7 @@ def promote_candidate(
         promotion_report["decision"] = "READY_FOR_ENDPOINT_CONFIGURATION"
         promotion_report["next_actions"].insert(
             0,
-            "fill provider-specific required fields in the generated provider YAML, then rerun promote with --run-validation",
+            "fill execution-surface required fields in the generated tuple YAML, then rerun promote with --run-validation",
         )
         if run_validation or activate:
             raise ValueError("refusing validation/activation because generated promotion config is not valid: " + str(exc)) from exc
@@ -507,7 +508,7 @@ def _review_config_and_providers(
             contract=report.get("required_execution_contract") or {},
         )
         report["tuple_candidate_matches"] = matches
-        report["warnings"].append({"check": "provider_fit", "reason": "no provider satisfies recipe, policy, mode, and contract requirements"})
+        report["warnings"].append({"check": "tuple_fit", "reason": "no execution tuple satisfies recipe, policy, mode, and contract requirements"})
         report["warnings"].append(
             {
                 "check": "tuple_authoring_required",
@@ -563,7 +564,7 @@ def _provider_review_row(provider: ProviderSpec, reason: str | None) -> dict[str
 
 
 def _candidate_matches(*, config_dir: Path | None, config: Any, contract: Mapping[str, Any]) -> list[dict[str, Any]]:
-    candidates = _load_provider_candidates(config_dir)
+    candidates = _load_tuple_candidates(config_dir)
     matches: list[dict[str, Any]] = []
     for candidate in candidates:
         result = _candidate_match(candidate, config=config, contract=contract)
@@ -572,20 +573,10 @@ def _candidate_matches(*, config_dir: Path | None, config: Any, contract: Mappin
     return sorted(matches, key=lambda item: (item["promotion_rank"], item["name"]))
 
 
-def _load_provider_candidates(config_dir: Path | None) -> list[dict[str, Any]]:
+def _load_tuple_candidates(config_dir: Path | None) -> list[dict[str, Any]]:
     if config_dir is None:
         return []
-    root = config_dir / "provider_candidates"
-    if not root.exists():
-        return []
-    candidates: list[dict[str, Any]] = []
-    for path in sorted(root.glob("*.yml")):
-        payload = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
-        if not isinstance(payload, dict):
-            continue
-        payload["_path"] = str(path)
-        candidates.append(payload)
-    return candidates
+    return load_tuple_candidate_payloads(config_dir)
 
 
 def _candidate_match(candidate: Mapping[str, Any], *, config: Any, contract: Mapping[str, Any]) -> dict[str, Any]:
@@ -623,7 +614,7 @@ def _candidate_match(candidate: Mapping[str, Any], *, config: Any, contract: Map
         "eligible": eligible,
         "name": candidate.get("name"),
         "path": candidate.get("_path"),
-        "tuple_source": "provider_candidates",
+        "tuple_source": "candidate_catalog",
         "adapter": candidate.get("adapter"),
         "execution_surface": candidate.get("execution_surface") or _surface_for_adapter(str(candidate.get("adapter") or "")),
         "gpu": candidate.get("gpu"),
@@ -888,7 +879,7 @@ def _promotion_actions(candidate: Mapping[str, Any]) -> list[str]:
     name = str(candidate.get("name") or "<candidate>")
     return [
         f"review official execution contract conformance for tuple {name}",
-        f"materialize active surface/worker YAML from provider_candidates/{name}.yml only after credentials/endpoint ids are filled",
+        f"materialize active surface/worker YAML from tuple candidate {name!r} only after credentials/endpoint ids are filled",
         f"run gpucall tuple-smoke {name} --write-artifact against the exact billable tuple",
         "rerun gpucall-recipe-admin review with --validation-dir pointing to provider-validation artifacts",
         "promote to production auto-routing only after review returns READY_FOR_PRODUCTION or AUTO_SELECT_SAFE",

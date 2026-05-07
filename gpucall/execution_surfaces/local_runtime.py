@@ -147,7 +147,7 @@ class LocalOllamaAdapter(ProviderAdapter):
 )
 def build_local_ollama_adapter(spec, _credentials):
     if not spec.endpoint or not spec.model:
-        raise ValueError("local-ollama provider requires explicit endpoint and model")
+        raise ValueError("local-ollama tuple requires explicit endpoint and model")
     return LocalOllamaAdapter(
         name=spec.name,
         base_url=str(spec.endpoint),

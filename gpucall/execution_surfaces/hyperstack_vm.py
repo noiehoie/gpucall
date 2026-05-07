@@ -472,13 +472,13 @@ def region_from_hyperstack_environment(environment_name: str) -> str:
 
 def hyperstack_config_findings(provider: Any) -> list[str]:
     if not provider.ssh_remote_cidr:
-        return [f"provider {provider.name!r} must declare ssh_remote_cidr"]
+        return [f"tuple {provider.name!r} must declare ssh_remote_cidr"]
     try:
         network = ipaddress.ip_network(provider.ssh_remote_cidr, strict=False)
     except ValueError:
-        return [f"provider {provider.name!r} ssh_remote_cidr is invalid"]
+        return [f"tuple {provider.name!r} ssh_remote_cidr is invalid"]
     if network.prefixlen == 0:
-        return [f"provider {provider.name!r} ssh_remote_cidr must not allow all addresses"]
+        return [f"tuple {provider.name!r} ssh_remote_cidr must not allow all addresses"]
     return []
 
 

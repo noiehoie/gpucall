@@ -32,7 +32,9 @@ to the gateway catalogs.
 
 Requests that combine `messages` with `inline_inputs` or `input_refs` are rejected in v2.0. This prevents provider adapters from silently dropping one input class while preserving another. Text and DataRef inputs may be combined only on provider paths that declare both contracts and serialize both classes deterministically.
 
-`vision` requires an image `DataRef` with a content type beginning with `image/`. A provider must declare the `image` input contract to receive vision routes. A text-only worker that hex-encodes image bytes is not a vision provider.
+`vision` requires an image `DataRef` with a content type beginning with `image/`.
+An execution tuple must declare the `image` input contract to receive vision
+routes. A text-only worker that hex-encodes image bytes is not a vision tuple.
 
 Recipe system prompts are gateway policy transforms. The compiled plan exposes an audit-safe `system_prompt_transform` with the recipe, source field, byte count, and hash so callers can see that the provider-facing messages were governed by recipe policy.
 
@@ -53,17 +55,17 @@ declared requirements.
   must not be eligible for production auto-routing.
 - Modal text vLLM workers are not eligible for vision routing unless replaced by a real multimodal worker that preserves image semantics.
 
-Adding RunPod, Hyperstack, or another provider to production routing is valid
-only after its ProviderSpec describes a real worker model and its worker returns
-real model output for the same TaskRequest contract.
+Adding RunPod, Hyperstack, or another vendor-backed surface to production
+routing is valid only after the execution tuple describes a real worker model
+and its worker returns real model output for the same TaskRequest contract.
 
 `model:` is treated as the production-readiness declaration for external GPU
-workers. A provider without `model:` is considered provisionable/testable but
-not a production inference target.
+workers. A tuple without `model:` is considered provisionable/testable but not a
+production inference target.
 
 ## Cost Metadata
 
-Provider YAML must describe provider billing mechanics that affect routing:
+Tuple YAML must describe billing mechanics that affect routing:
 
 - `scaledown_window_seconds`: billed idle/runtime window after useful work.
 - `min_billable_seconds`: minimum billable execution unit.

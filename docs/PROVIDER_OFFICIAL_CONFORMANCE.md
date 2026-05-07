@@ -131,7 +131,7 @@ This file records the official provider contracts used by gpucall adapters. It i
 
 ## Non-Negotiables
 
-- A provider adapter descriptor must not claim an official OpenAI-compatible contract if its code path returns a gpucall-specific result contract.
+- An execution-surface adapter descriptor must not claim an official OpenAI-compatible contract if its code path returns a gpucall-specific result contract.
 - Built-in registration must happen in an execution-surface module, not a provider-name compatibility shim.
 - Production-eligible external adapters must carry official source URLs in their descriptor.
 - Lifecycle-only adapters must not be production-eligible for deterministic routing until they implement worker bootstrap, result retrieval, and billable live validation.

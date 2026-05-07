@@ -223,7 +223,7 @@ def test_admin_review_outputs_provider_contract_when_existing_providers_are_insu
     assert all(match["execution_surface"] == "function_runtime" for match in report["tuple_candidate_matches"])
 
 
-def test_admin_review_matches_long_context_provider_candidates() -> None:
+def test_admin_review_matches_long_context_tuple_candidates() -> None:
     artifact = {
         "phase": "deterministic-intake",
         "sanitized_request": {

@@ -6,9 +6,9 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Literal, Mapping
 
-import yaml
 from pydantic import BaseModel, ConfigDict, Field
 
+from gpucall.candidate_sources import load_tuple_candidate_payloads
 from gpucall.config import GpucallConfig
 from gpucall.domain import ExecutionMode, Recipe
 from gpucall.execution.registry import adapter_descriptor, provider_family_for_adapter
@@ -103,7 +103,7 @@ class TupleCandidate(BaseModel):
 def build_resource_catalog_snapshot(config: GpucallConfig, *, config_dir: Path | None = None) -> ResourceCatalogSnapshot:
     rows = [_active_provider_payload(provider) for provider in sorted(config.providers.values(), key=lambda item: item.name)]
     if config_dir is not None:
-        rows.extend(_candidate_payloads(config_dir / "provider_candidates"))
+        rows.extend(_candidate_payloads(config_dir))
     accounts = _accounts_for(rows)
     resources = [_resource_entry(row) for row in rows]
     workers = [_worker_contract(row) for row in rows]
@@ -173,16 +173,10 @@ def _active_provider_payload(provider: Any) -> dict[str, Any]:
     return payload
 
 
-def _candidate_payloads(root: Path) -> list[dict[str, Any]]:
-    if not root.exists():
-        return []
-    payloads: list[dict[str, Any]] = []
-    for path in sorted(root.glob("*.yml")):
-        payload = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
-        if not isinstance(payload, dict):
-            continue
+def _candidate_payloads(config_dir: Path) -> list[dict[str, Any]]:
+    payloads = load_tuple_candidate_payloads(config_dir)
+    for payload in payloads:
         payload["source"] = "provider_candidate"
-        payloads.append(payload)
     return payloads
 
 

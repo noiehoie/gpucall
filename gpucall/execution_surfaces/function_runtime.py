@@ -289,20 +289,20 @@ def modal_config_findings(provider: Any) -> list[str]:
     findings: list[str] = []
     app_name, function_name = _split_modal_target(provider.target)
     if not app_name or not function_name:
-        findings.append(f"provider {provider.name!r} target must be '<modal-app>:<function>' for deployed Modal functions")
+        findings.append(f"tuple {provider.name!r} target must be '<modal-app>:<function>' for deployed Modal functions")
     stream_contract = str(provider.stream_contract or "none")
     if stream_contract != "none":
         stream_app_name, stream_function_name = _split_modal_target(provider.stream_target)
         if not stream_app_name or not stream_function_name:
-            findings.append(f"provider {provider.name!r} stream_target must be '<modal-app>:<function>' when streaming is declared")
+            findings.append(f"tuple {provider.name!r} stream_target must be '<modal-app>:<function>' when streaming is declared")
         elif app_name and stream_app_name != app_name:
-            findings.append(f"provider {provider.name!r} stream_target must use the same Modal app as target")
+            findings.append(f"tuple {provider.name!r} stream_target must use the same Modal app as target")
     elif provider.stream_target:
-        findings.append(f"provider {provider.name!r} stream_target must not be set when stream_contract is none")
+        findings.append(f"tuple {provider.name!r} stream_target must not be set when stream_contract is none")
     if not provider.model:
-        findings.append(f"provider {provider.name!r} must declare the model served by the Modal function")
+        findings.append(f"tuple {provider.name!r} must declare the model served by the Modal function")
     if provider.endpoint is not None:
-        findings.append(f"provider {provider.name!r} must not set endpoint for Modal SDK function invocation")
+        findings.append(f"tuple {provider.name!r} must not set endpoint for Modal SDK function invocation")
     return findings
 
 

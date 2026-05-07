@@ -15,7 +15,7 @@ class CredentialEnvOverride:
 
 @dataclass(frozen=True)
 class ConfiguredCredentialProbe:
-    name: str
+    contract: str
     is_configured: Callable[[dict[str, dict[str, str]]], bool]
 
 
@@ -34,10 +34,10 @@ def env_overrides() -> list[CredentialEnvOverride]:
     return list(_ENV_OVERRIDES)
 
 
-def register_configured_probe(name: str) -> Callable[[Callable[[dict[str, dict[str, str]]], bool]], Callable[[dict[str, dict[str, str]]], bool]]:
+def register_configured_probe(contract: str) -> Callable[[Callable[[dict[str, dict[str, str]]], bool]], Callable[[dict[str, dict[str, str]]], bool]]:
     def decorator(func: Callable[[dict[str, dict[str, str]]], bool]) -> Callable[[dict[str, dict[str, str]]], bool]:
-        if not any(probe.name == name for probe in _CONFIGURED_PROBES):
-            _CONFIGURED_PROBES.append(ConfiguredCredentialProbe(name=name, is_configured=func))
+        if not any(probe.contract == contract for probe in _CONFIGURED_PROBES):
+            _CONFIGURED_PROBES.append(ConfiguredCredentialProbe(contract=contract, is_configured=func))
         return func
 
     return decorator

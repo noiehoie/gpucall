@@ -179,19 +179,19 @@ def runpod_vllm_health_rejection_reason(health: dict[str, Any]) -> str | None:
 def runpod_vllm_config_findings(provider: Any) -> list[str]:
     findings: list[str] = []
     if not provider.target:
-        findings.append(f"provider {provider.name!r} must declare RunPod endpoint id in target")
+        findings.append(f"tuple {provider.name!r} must declare RunPod endpoint id in target")
     if not provider.model:
-        findings.append(f"provider {provider.name!r} must declare deployed worker-vLLM model")
+        findings.append(f"tuple {provider.name!r} must declare deployed worker-vLLM model")
     if not provider.image:
-        findings.append(f"provider {provider.name!r} must declare official worker-vLLM image")
+        findings.append(f"tuple {provider.name!r} must declare official worker-vLLM image")
     elif not str(provider.image).startswith("runpod/worker-v1-vllm:"):
-        findings.append(f"provider {provider.name!r} image must be the official runpod/worker-v1-vllm image")
+        findings.append(f"tuple {provider.name!r} image must be the official runpod/worker-v1-vllm image")
     if "data_refs" in set(provider.input_contracts or []):
-        findings.append(f"provider {provider.name!r} official worker-vLLM path must not declare DataRef input support")
+        findings.append(f"tuple {provider.name!r} official worker-vLLM path must not declare DataRef input support")
 
     worker_env = (provider.provider_params or {}).get("worker_env")
     if not isinstance(worker_env, dict):
-        findings.append(f"provider {provider.name!r} must declare provider_params.worker_env for official worker-vLLM deployment")
+        findings.append(f"tuple {provider.name!r} must declare provider_params.worker_env for official worker-vLLM deployment")
         return findings
 
     model_name = str(worker_env.get("MODEL_NAME") or "")
@@ -199,19 +199,19 @@ def runpod_vllm_config_findings(provider: Any) -> list[str]:
     declared_model = str(provider.model or "")
     if declared_model and declared_model not in {model_name, served_name}:
         findings.append(
-            f"provider {provider.name!r} model must match MODEL_NAME or OPENAI_SERVED_MODEL_NAME_OVERRIDE in worker_env"
+            f"tuple {provider.name!r} model must match MODEL_NAME or OPENAI_SERVED_MODEL_NAME_OVERRIDE in worker_env"
         )
     try:
         max_model_len = int(worker_env.get("MAX_MODEL_LEN"))
     except (TypeError, ValueError):
-        findings.append(f"provider {provider.name!r} worker_env.MAX_MODEL_LEN must be an integer")
+        findings.append(f"tuple {provider.name!r} worker_env.MAX_MODEL_LEN must be an integer")
     else:
         if max_model_len < int(provider.max_model_len):
-            findings.append(f"provider {provider.name!r} worker_env.MAX_MODEL_LEN is below provider max_model_len")
+            findings.append(f"tuple {provider.name!r} worker_env.MAX_MODEL_LEN is below tuple max_model_len")
     if "GPU_MEMORY_UTILIZATION" not in worker_env:
-        findings.append(f"provider {provider.name!r} worker_env.GPU_MEMORY_UTILIZATION must be declared")
+        findings.append(f"tuple {provider.name!r} worker_env.GPU_MEMORY_UTILIZATION must be declared")
     if "MAX_CONCURRENCY" not in worker_env:
-        findings.append(f"provider {provider.name!r} worker_env.MAX_CONCURRENCY must be declared")
+        findings.append(f"tuple {provider.name!r} worker_env.MAX_CONCURRENCY must be declared")
     return findings
 
 

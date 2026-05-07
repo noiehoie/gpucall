@@ -70,7 +70,7 @@ def save_credentials(provider: str, values: dict[str, str]) -> None:
 
 def configured_credentials() -> list[str]:
     creds = load_credentials()
-    return [probe.name for probe in configured_probes() if probe.is_configured(creds)]
+    return [probe.contract for probe in configured_probes() if probe.is_configured(creds)]
 
 
 def _env_override(providers: dict[str, dict[str, str]], provider: str, key: str, env: str) -> None:
