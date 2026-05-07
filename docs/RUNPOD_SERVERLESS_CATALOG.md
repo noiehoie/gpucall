@@ -50,7 +50,7 @@ Candidate tuples must not enter production routing until all of these are true:
 - official execution contract validates
 - model and worker environment agree
 - cost metadata is present
-- billable provider smoke passes for the exact recipe/resource/model/engine/contract tuple
+- billable tuple smoke passes for the exact recipe/resource/model/engine/contract tuple
 - cleanup audit remains green
 
 For OpenAI-compatible LLM traffic, prefer `runpod-vllm-*`. Use

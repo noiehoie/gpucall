@@ -1,5 +1,4 @@
 worker_ref: hyperstack-a100
-provider_name: hyperstack-a100
 account_ref: hyperstack
 adapter: hyperstack
 execution_surface: iaas_vm

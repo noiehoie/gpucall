@@ -52,6 +52,9 @@ def account_ref_for_spec(spec: ProviderSpec | None) -> str | None:
 
 
 def tuple_evidence_key(spec: ProviderSpec) -> str:
+    # This key names what was validated, not who sold the GPU. It stays stable
+    # across provider display-name changes but changes when the executable
+    # contract, worker, model, or account boundary changes.
     payload = {
         "account_ref": account_ref_for_spec(spec),
         "execution_surface": spec.execution_surface.value if spec.execution_surface else None,

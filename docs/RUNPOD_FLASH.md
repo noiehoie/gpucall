@@ -110,8 +110,8 @@ For `runpod-vllm-flashboot`, gpucall uses `gpucall/worker_contracts/runpod_flash
 ## Validation
 
 ```bash
-gpucall provider-smoke runpod-vllm-serverless --recipe text-infer-light --mode sync
-gpucall provider-smoke runpod-vllm-flashboot --recipe text-infer-light --mode sync
+gpucall tuple-smoke runpod-vllm-serverless --recipe text-infer-light --mode sync
+gpucall tuple-smoke runpod-vllm-flashboot --recipe text-infer-light --mode sync
 gpucall validate-config
 gpucall doctor
 ```

@@ -29,7 +29,7 @@ from gpucall.execution_surfaces.managed_endpoint import RunpodServerlessAdapter
 from gpucall.execution_surfaces.managed_endpoint import RunpodVllmServerlessAdapter, runpod_vllm_health_rejection_reason
 
 
-def test_router_core_does_not_hardcode_builtin_provider_names() -> None:
+def test_router_core_does_not_hardcode_builtin_tuple_implementations() -> None:
     root = Path(__file__).resolve().parents[1]
     core_files = [
         root / "gpucall" / "config.py",

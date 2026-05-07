@@ -210,17 +210,17 @@ def test_admin_review_outputs_provider_contract_when_existing_providers_are_insu
     report = review_artifact(artifact, config_dir="gpucall/config_templates")
 
     assert report["decision"] == "CANDIDATE_ONLY"
-    assert report["required_provider_contract"]["model_capabilities"] == [
+    assert report["required_execution_contract"]["model_capabilities"] == [
         "document_understanding",
         "visual_question_answering",
         "instruction_following",
     ]
-    assert report["required_provider_contract"]["live_validation_required"] is True
-    assert report["required_provider_contract"]["quality_failure_to_correct"]["kind"] == "insufficient_ocr"
-    assert any(match["name"] == "modal-h100-qwen25-vl-7b" for match in report["provider_candidate_matches"])
-    assert report["tuple_candidate_matches"] == report["provider_candidate_matches"]
-    assert all(match["eligible"] is True for match in report["provider_candidate_matches"])
-    assert all(match["execution_surface"] == "function_runtime" for match in report["provider_candidate_matches"])
+    assert report["required_execution_contract"]["live_validation_required"] is True
+    assert report["required_execution_contract"]["quality_failure_to_correct"]["kind"] == "insufficient_ocr"
+    assert any(match["name"] == "modal-h100-qwen25-vl-7b" for match in report["tuple_candidate_matches"])
+    assert report["tuple_candidate_matches"] == report["tuple_candidate_matches"]
+    assert all(match["eligible"] is True for match in report["tuple_candidate_matches"])
+    assert all(match["execution_surface"] == "function_runtime" for match in report["tuple_candidate_matches"])
 
 
 def test_admin_review_matches_long_context_provider_candidates() -> None:
@@ -245,13 +245,13 @@ def test_admin_review_matches_long_context_provider_candidates() -> None:
     report = review_artifact(artifact, config_dir="gpucall/config_templates")
 
     assert report["decision"] == "CANDIDATE_ONLY"
-    assert report["required_provider_contract"]["min_model_len"] == 1010000
-    assert report["required_provider_contract"]["min_vram_gb"] == 320
-    names = {match["name"] for match in report["provider_candidate_matches"]}
+    assert report["required_execution_contract"]["min_model_len"] == 1010000
+    assert report["required_execution_contract"]["min_vram_gb"] == 320
+    names = {match["name"] for match in report["tuple_candidate_matches"]}
     assert "modal-h200x4-qwen25-14b-1m" in names
     assert "modal-h200-qwen25-14b-1m" not in names
     assert "runpod-vllm-h200-qwen25-14b-1m" not in names
-    assert all("run gpucall provider-smoke" in " ".join(match["promotion_actions"]) for match in report["provider_candidate_matches"])
+    assert all("run gpucall tuple-smoke" in " ".join(match["promotion_actions"]) for match in report["tuple_candidate_matches"])
 
 
 def test_promote_candidate_writes_isolated_config_without_activation(tmp_path) -> None:

@@ -1,5 +1,4 @@
 worker_ref: modal-h200x4-qwen25-14b-1m
-provider_name: modal-h200x4-qwen25-14b-1m
 account_ref: modal
 adapter: modal
 execution_surface: function_runtime

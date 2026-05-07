@@ -74,13 +74,13 @@ def test_production_launch_report_blocks_without_live_requirements(tmp_path, mon
     checks = {blocker["check"] for blocker in report["blockers"]}
     assert "gateway_auth" in checks
     assert "gateway_live_smoke" in checks
-    assert "provider_live_validation" in checks
-    assert "provider_live_cost_audit" in checks
+    assert "tuple_live_validation" in checks
+    assert "tuple_live_cost_audit" in checks
     assert report["checks"]["cost_audit_live_ok"] is False
     assert report["checks"]["cost_audit_live_findings"]
-    provider_live_validation = report["provider_live_validation"]
-    assert provider_live_validation["missing_tuples"] == provider_live_validation["required_tuples"]
-    labels = {row["label"] for row in provider_live_validation["required_tuples"]}
+    tuple_live_validation = report["tuple_live_validation"]
+    assert tuple_live_validation["missing_tuples"] == tuple_live_validation["required_tuples"]
+    labels = {row["label"] for row in tuple_live_validation["required_tuples"]}
     assert "function_runtime:modal-function:qwen2.5-1.5b-instruct:modal-vllm" in labels
     assert "managed_endpoint:openai-chat-completions:qwen2.5-1.5b-instruct:runpod-vllm-openai" in labels
     assert "iaas_vm:hyperstack-vm:qwen2.5-7b-instruct-1m:hyperstack-vllm" in labels

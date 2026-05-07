@@ -1,5 +1,4 @@
 worker_ref: runpod-vllm-serverless
-provider_name: runpod-vllm-serverless
 account_ref: runpod
 adapter: runpod-vllm-serverless
 execution_surface: managed_endpoint

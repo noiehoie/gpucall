@@ -1,5 +1,4 @@
 worker_ref: hyperstack-l40
-provider_name: hyperstack-l40
 account_ref: hyperstack
 adapter: hyperstack
 execution_surface: iaas_vm

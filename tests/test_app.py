@@ -490,7 +490,7 @@ def test_warning_header_is_emitted_for_local_fallback(tmp_path) -> None:
         response = client.post("/v2/tasks/sync", json={"task": "infer", "mode": "sync"})
 
     assert response.status_code == 200
-    assert "local_fallback_provider" in response.headers["x-gpucall-warning"]
+    assert "local_fallback_tuple" in response.headers["x-gpucall-warning"]
 
 
 def test_metrics_groups_job_ids_by_route_template(tmp_path) -> None:

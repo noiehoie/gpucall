@@ -3,11 +3,11 @@
 External provider validation can create billable resources. Run these only after credentials, quotas, and cost guardrails are confirmed.
 
 ```bash
-gpucall provider-smoke modal-a10g --recipe text-infer-standard --mode sync
-gpucall provider-smoke runpod-vllm-serverless --recipe text-infer-light --mode sync
-gpucall provider-smoke runpod-vllm-flashboot --recipe text-infer-light --mode sync
-gpucall provider-smoke local-ollama --recipe text-infer-standard --mode sync
-gpucall provider-smoke hyperstack-a100 --recipe text-infer-standard --mode sync
+gpucall tuple-smoke modal-a10g --recipe text-infer-standard --mode sync
+gpucall tuple-smoke runpod-vllm-serverless --recipe text-infer-light --mode sync
+gpucall tuple-smoke runpod-vllm-flashboot --recipe text-infer-light --mode sync
+gpucall tuple-smoke local-ollama --recipe text-infer-standard --mode sync
+gpucall tuple-smoke hyperstack-a100 --recipe text-infer-standard --mode sync
 ```
 
 RunPod production validation uses the official worker-vLLM OpenAI-compatible route:
@@ -24,7 +24,7 @@ Do not declare `stream` for Modal unless the deployed function provides true inc
 
 RunPod Serverless native queue validation uses `/runsync`, `/run`, `/status/{job_id}`, and `/cancel/{job_id}`. That path is distinct from worker-vLLM's OpenAI-compatible route.
 
-Keep smoke/stub endpoints out of production auto-routing. If a provider returns a fixed value such as `Hello World`, name it accordingly, for example `runpod-serverless-smoke`, and validate it only through `gpucall provider-smoke` or a non-auto-selected smoke recipe such as `smoke-text-small`.
+Keep smoke/stub endpoints out of production auto-routing. If a provider returns a fixed value such as `Hello World`, name it accordingly, for example `runpod-serverless-smoke`, and validate it only through `gpucall tuple-smoke` or a non-auto-selected smoke recipe such as `smoke-text-small`.
 
 For external GPU providers, `model:` is the production-readiness declaration. Do not set it on smoke endpoints. Once set, the provider can become eligible for auto-routing if policy, recipe requirements, modes, VRAM, and context length all match.
 
@@ -43,7 +43,7 @@ Required top-level fields:
 ```json
 {
   "validation_schema_version": 1,
-  "provider": "modal-a10g",
+  "tuple": "modal-a10g",
   "recipe": "text-infer-standard",
   "mode": "sync",
   "passed": true,

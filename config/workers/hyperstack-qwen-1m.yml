@@ -1,5 +1,4 @@
 worker_ref: hyperstack-qwen-1m
-provider_name: hyperstack-qwen-1m
 account_ref: hyperstack
 adapter: hyperstack
 execution_surface: iaas_vm

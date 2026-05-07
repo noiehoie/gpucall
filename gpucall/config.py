@@ -134,12 +134,14 @@ def _load_split_provider_payloads(root: Path) -> list[tuple[Path, dict[str, obje
         surface = _load_yaml(surface_path)
         if not isinstance(surface, dict):
             raise ConfigError(f"invalid surface YAML in {surface_path}: root must be a mapping")
-        provider_name = str(surface.get("provider_name") or surface.get("surface_ref") or surface_path.stem)
-        worker_key = str(surface.get("worker_ref") or surface.get("provider_name") or surface.get("surface_ref") or surface_path.stem)
+        surface_ref = _required_ref(surface, "surface_ref", surface_path)
+        worker_key = _required_ref(surface, "worker_ref", surface_path)
         worker_entry = workers.get(worker_key)
         if worker_entry is None:
-            raise ConfigError(f"surface {provider_name!r} references missing worker {worker_key!r}")
+            raise ConfigError(f"surface {surface_ref!r} references missing worker {worker_key!r}")
         worker_path, worker = worker_entry
+        # Surface and worker files are intentionally joined by worker_ref, not by
+        # cloud provider. One execution surface can host different worker contracts.
         for field in ("account_ref", "adapter", "execution_surface"):
             surface_value = surface.get(field)
             worker_value = worker.get(field)
@@ -149,11 +151,10 @@ def _load_split_provider_payloads(root: Path) -> list[tuple[Path, dict[str, obje
                     f"{surface_value!r} != {worker_value!r}"
                 )
         payload: dict[str, object] = {**surface, **worker}
-        payload["name"] = provider_name
+        payload["name"] = surface_ref
         used_worker_keys.add(worker_key)
         payload.pop("surface_ref", None)
         payload.pop("worker_ref", None)
-        payload.pop("provider_name", None)
         payload.pop("stock_state", None)
         payloads.append((surface_path, payload))
     orphan_workers = sorted(name for name in workers if name not in used_worker_keys)
@@ -163,7 +164,14 @@ def _load_split_provider_payloads(root: Path) -> list[tuple[Path, dict[str, obje
 
 
 def _worker_binding_ref(worker: dict[str, object], worker_path: Path) -> str:
-    return str(worker.get("worker_ref") or worker.get("provider_name") or worker_path.stem)
+    return _required_ref(worker, "worker_ref", worker_path)
+
+
+def _required_ref(payload: dict[str, object], field: str, path: Path) -> str:
+    value = str(payload.get(field) or "").strip()
+    if not value:
+        raise ConfigError(f"{path} must define {field}")
+    return value
 
 
 def _provider_from_payload(path: Path, payload: dict[str, object]) -> ProviderSpec:
@@ -245,10 +253,10 @@ def load_tenants(config_dir: Path | None = None) -> dict[str, TenantSpec]:
 
 
 def validate_config(config: GpucallConfig) -> None:
-    provider_names = set(config.providers)
+    tuple_names = set(config.providers)
     allowed = set(config.policy.providers.allow)
     denied = set(config.policy.providers.deny)
-    missing_policy = (allowed | denied) - provider_names
+    missing_policy = (allowed | denied) - tuple_names
     if missing_policy:
         raise ConfigError(f"policy references unknown providers: {', '.join(sorted(missing_policy))}")
     overlap = allowed & denied

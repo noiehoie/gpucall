@@ -1,5 +1,4 @@
 worker_ref: modal-h100-florence-2-large-ft
-provider_name: modal-h100-florence-2-large-ft
 account_ref: modal
 adapter: modal
 execution_surface: function_runtime

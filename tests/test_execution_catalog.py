@@ -31,16 +31,16 @@ def test_execution_catalog_generates_snapshot_pinned_tuple_candidates() -> None:
     snapshot = build_resource_catalog_snapshot(config, config_dir=Path("config"))
     candidates = generate_tuple_candidates(snapshot, recipe=config.recipes["text-infer-standard"])
 
-    assert any(candidate.provider_name == "hyperstack-a100" and candidate.execution_surface == "iaas_vm" for candidate in candidates)
-    assert any(candidate.provider_name == "modal-a10g" and candidate.execution_surface == "function_runtime" for candidate in candidates)
+    assert any(candidate.tuple_name == "hyperstack-a100" and candidate.execution_surface == "iaas_vm" for candidate in candidates)
+    assert any(candidate.tuple_name == "modal-a10g" and candidate.execution_surface == "function_runtime" for candidate in candidates)
     assert any(
-        candidate.provider_name.startswith("runpod-vllm-")
+        candidate.tuple_name.startswith("runpod-vllm-")
         and candidate.execution_surface == "managed_endpoint"
         and candidate.production_state == "candidate_draft"
         for candidate in candidates
     )
     assert any(
-        candidate.provider_name.startswith("runpod-native-")
+        candidate.tuple_name.startswith("runpod-native-")
         and candidate.execution_surface == "managed_endpoint"
         and candidate.production_state == "candidate_draft"
         for candidate in candidates

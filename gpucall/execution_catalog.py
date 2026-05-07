@@ -30,7 +30,7 @@ class ResourceCatalogEntry(BaseModel):
     resource_ref: str
     source: Literal["active_provider", "provider_candidate"]
     account_ref: str
-    provider_name: str
+    tuple_name: str
     surface_ref: str
     worker_binding_ref: str
     adapter: str
@@ -49,7 +49,7 @@ class WorkerContractSpec(BaseModel):
 
     worker_ref: str
     source: Literal["active_provider", "provider_candidate"]
-    provider_name: str
+    tuple_name: str
     worker_binding_ref: str
     adapter: str
     execution_surface: str
@@ -83,7 +83,7 @@ class TupleCandidate(BaseModel):
     snapshot_id: str
     source: Literal["active_provider", "provider_candidate"]
     account_ref: str
-    provider_name: str
+    tuple_name: str
     adapter: str
     execution_surface: str
     resource_ref: str
@@ -130,6 +130,8 @@ def generate_tuple_candidates(snapshot: ResourceCatalogSnapshot, *, recipe: Reci
     workers = {worker.worker_binding_ref: worker for worker in snapshot.workers}
     candidates: list[TupleCandidate] = []
     for resource in snapshot.resources:
+        # Candidate generation is a surface/resource plus worker-contract join.
+        # Provider family is account metadata, not the routing unit.
         worker = workers.get(resource.worker_binding_ref)
         if worker is None:
             continue
@@ -137,7 +139,7 @@ def generate_tuple_candidates(snapshot: ResourceCatalogSnapshot, *, recipe: Reci
             "snapshot_id": snapshot.snapshot_id,
             "source": resource.source,
             "account_ref": resource.account_ref,
-            "provider_name": resource.provider_name,
+            "tuple_name": resource.tuple_name,
             "adapter": resource.adapter,
             "execution_surface": resource.execution_surface,
             "resource_ref": resource.resource_ref,
@@ -154,7 +156,7 @@ def generate_tuple_candidates(snapshot: ResourceCatalogSnapshot, *, recipe: Reci
         }
         tuple_ref = hashlib.sha256(json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")).hexdigest()
         candidates.append(TupleCandidate(tuple_ref=tuple_ref, **payload))
-    return sorted(candidates, key=lambda item: (item.production_state, item.execution_surface, item.price_per_second, item.provider_name))
+    return sorted(candidates, key=lambda item: (item.production_state, item.execution_surface, item.price_per_second, item.tuple_name))
 
 
 def dumps_snapshot(snapshot: ResourceCatalogSnapshot) -> str:
@@ -207,9 +209,9 @@ def _resource_entry(row: Mapping[str, Any]) -> ResourceCatalogEntry:
         resource_ref=f"{source}:{name}:resource",
         source=source,
         account_ref=_account_ref(row),
-        provider_name=name,
+        tuple_name=name,
         surface_ref=str(row.get("surface_ref") or name),
-        worker_binding_ref=str(row.get("worker_ref") or row.get("provider_name") or name),
+        worker_binding_ref=str(row.get("worker_ref") or name),
         adapter=adapter,
         execution_surface=str(row.get("execution_surface") or _surface_for_adapter(adapter) or "unknown"),
         gpu=str(row.get("gpu") or "unknown"),
@@ -229,8 +231,8 @@ def _worker_contract(row: Mapping[str, Any]) -> WorkerContractSpec:
     return WorkerContractSpec(
         worker_ref=f"{source}:{name}:worker",
         source=source,
-        provider_name=name,
-        worker_binding_ref=str(row.get("worker_ref") or row.get("provider_name") or name),
+        tuple_name=name,
+        worker_binding_ref=str(row.get("worker_ref") or name),
         adapter=adapter,
         execution_surface=str(row.get("execution_surface") or _surface_for_adapter(adapter) or "unknown"),
         model_ref=str(row.get("model_ref") or "") or None,

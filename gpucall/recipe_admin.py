@@ -65,11 +65,11 @@ def main(argv: list[str] | None = None) -> int:
 
     promote = subcommands.add_parser("promote", help="prepare, validate, and optionally activate a provider candidate from a review report")
     promote.add_argument("--review", required=True, help="admin review JSON produced by gpucall-recipe-admin review")
-    promote.add_argument("--candidate", help="candidate name; defaults to the first provider_candidate_matches entry")
+    promote.add_argument("--candidate", help="candidate name; defaults to the first tuple_candidate_matches entry")
     promote.add_argument("--config-dir", required=True, help="active gpucall config directory")
     promote.add_argument("--work-dir", required=True, help="promotion workspace for generated config and reports")
     promote.add_argument("--validation-dir", help="provider live validation artifact directory")
-    promote.add_argument("--run-validation", action="store_true", help="run billable gpucall provider-smoke in the promotion workspace")
+    promote.add_argument("--run-validation", action="store_true", help="run billable gpucall tuple-smoke in the promotion workspace")
     promote.add_argument("--activate", action="store_true", help="copy validated recipe/provider into the active config directory")
     promote.add_argument("--force", action="store_true", help="overwrite generated or active recipe/provider files")
     promote.add_argument("--output", "-o", help="write promotion report JSON")
@@ -249,10 +249,9 @@ def review_artifact(
         "findings": [],
         "blockers": [],
         "warnings": [],
-        "provider_matrix": {},
-        "provider_candidate_matches": [],
+        "tuple_matrix": {},
         "tuple_candidate_matches": [],
-        "required_provider_contract": {},
+        "required_execution_contract": {},
         "live_validation": {"matched": []},
     }
     try:
@@ -264,7 +263,7 @@ def review_artifact(
         recipe_dict = canonical_recipe_from_artifact(artifact)
         recipe = Recipe.model_validate(recipe_dict)
         report["canonical_recipe"] = recipe.model_dump(mode="json")
-        report["required_provider_contract"] = provider_contract_requirements(artifact, recipe)
+        report["required_execution_contract"] = provider_contract_requirements(artifact, recipe)
         _review_config_and_providers(
             report,
             recipe=recipe,
@@ -317,7 +316,7 @@ def promote_candidate(
         "started_at": started,
         "candidate": candidate,
         "recipe": recipe["name"],
-        "provider": provider["name"],
+        "tuple": provider["name"],
         "promotion_config_dir": str(promotion_config),
         "generated_recipe_path": str(recipe_path),
         "generated_provider_path": str(provider_path),
@@ -328,7 +327,7 @@ def promote_candidate(
         "activation_paths": {},
         "next_actions": [
             f"run gpucall validate-config --config-dir {promotion_config}",
-            f"run gpucall provider-smoke {provider['name']} --config-dir {promotion_config} --recipe {recipe['name']} --mode sync --write-artifact",
+            f"run gpucall tuple-smoke {provider['name']} --config-dir {promotion_config} --recipe {recipe['name']} --mode sync --write-artifact",
             "rerun gpucall-recipe-admin review with the validation artifact directory",
             "activate only after validation passes for the exact recipe/provider/model/engine tuple",
         ],
@@ -373,7 +372,7 @@ def promote_candidate(
         active_provider = _write_yaml_guarded(config_root / "providers" / f"{provider['name']}.yml", provider, force=force)
         _validate_config_dir(config_root)
         promotion_report["activated"] = True
-        promotion_report["activation_paths"] = {"recipe": str(active_recipe), "provider": str(active_provider)}
+        promotion_report["activation_paths"] = {"recipe": str(active_recipe), "tuple": str(active_provider)}
         promotion_report["decision"] = "ACTIVATED"
     else:
         promotion_report["decision"] = "VALIDATED_READY_TO_ACTIVATE"
@@ -482,7 +481,7 @@ def _review_config_and_providers(
     report["config_dir"] = str(config_dir) if config_dir else None
     report["policy_version"] = config.policy.version
     required_contracts = _required_input_contracts(recipe)
-    provider_matrix: dict[str, Any] = {}
+    tuple_matrix: dict[str, Any] = {}
     eligible: list[str] = []
     for provider in sorted(config.providers.values(), key=lambda item: item.name):
         reason = provider_route_rejection_reason(
@@ -496,24 +495,23 @@ def _review_config_and_providers(
             required_input_contracts=required_contracts,
             auto_selected=True,
         )
-        provider_matrix[provider.name] = _provider_review_row(provider, reason)
+        tuple_matrix[provider.name] = _provider_review_row(provider, reason)
         if reason is None:
             eligible.append(provider.name)
-    report["provider_matrix"] = provider_matrix
-    report["eligible_providers"] = eligible
+    report["tuple_matrix"] = tuple_matrix
+    report["eligible_tuples"] = eligible
     if not eligible:
         matches = _candidate_matches(
             config_dir=config_dir,
             config=config,
-            contract=report.get("required_provider_contract") or {},
+            contract=report.get("required_execution_contract") or {},
         )
         report["tuple_candidate_matches"] = matches
-        report["provider_candidate_matches"] = matches
         report["warnings"].append({"check": "provider_fit", "reason": "no provider satisfies recipe, policy, mode, and contract requirements"})
         report["warnings"].append(
             {
-                "check": "provider_authoring_required",
-                "reason": "existing providers are insufficient; use required_provider_contract to add or update a provider spec and run billable validation",
+                "check": "tuple_authoring_required",
+                "reason": "existing execution tuples are insufficient; use required_execution_contract to add or update surface/worker specs and run billable validation",
             }
         )
         report["decision_hint"] = "CANDIDATE_ONLY"
@@ -641,18 +639,18 @@ def _candidate_match(candidate: Mapping[str, Any], *, config: Any, contract: Map
 
 
 def _select_review_candidate(review: Mapping[str, Any], candidate_name: str | None) -> Mapping[str, Any]:
-    matches = review.get("provider_candidate_matches")
+    matches = review.get("tuple_candidate_matches")
     if not isinstance(matches, list) or not matches:
-        raise ValueError("review does not contain provider_candidate_matches")
+        raise ValueError("review does not contain tuple_candidate_matches")
     if candidate_name is None:
         selected = matches[0]
         if not isinstance(selected, Mapping):
-            raise ValueError("invalid provider_candidate_matches entry")
+            raise ValueError("invalid tuple_candidate_matches entry")
         return selected
     for match in matches:
         if isinstance(match, Mapping) and match.get("name") == candidate_name:
             return match
-    raise ValueError(f"candidate {candidate_name!r} is not present in review provider_candidate_matches")
+    raise ValueError(f"candidate {candidate_name!r} is not present in review tuple_candidate_matches")
 
 
 def _provider_from_candidate(candidate: Mapping[str, Any], *, active_config: Any) -> dict[str, Any]:
@@ -726,7 +724,7 @@ def _write_split_provider(config_root: Path, provider: Mapping[str, Any], *, for
     surface = _drop_none(
         {
             "surface_ref": name,
-            "provider_name": name,
+            "worker_ref": name,
             "account_ref": account_ref,
             "adapter": provider.get("adapter"),
             "execution_surface": provider.get("execution_surface"),
@@ -755,7 +753,6 @@ def _write_split_provider(config_root: Path, provider: Mapping[str, Any], *, for
     worker = _drop_none(
         {
             "worker_ref": name,
-            "provider_name": name,
             "account_ref": account_ref,
             "adapter": provider.get("adapter"),
             "execution_surface": provider.get("execution_surface"),
@@ -795,7 +792,7 @@ def _run_provider_validation(provider: str, recipe: str, config_dir: Path, *, va
         sys.executable,
         "-m",
         "gpucall.cli",
-        "provider-smoke",
+        "tuple-smoke",
         provider,
         "--config-dir",
         str(config_dir),
@@ -833,7 +830,7 @@ def _run_provider_validation(provider: str, recipe: str, config_dir: Path, *, va
             result["artifact"] = payload
             result["passed"] = payload.get("passed") is True
         except json.JSONDecodeError:
-            result["parse_error"] = "provider-smoke stdout was not JSON"
+            result["parse_error"] = "tuple-smoke stdout was not JSON"
     return result
 
 
@@ -861,7 +858,7 @@ def _find_validation_for_promotion(
             continue
         if data.get("validation_schema_version") != 1 or data.get("passed") is not True:
             continue
-        if data.get("provider") != provider or data.get("recipe") != recipe:
+        if data.get("tuple") != provider or data.get("recipe") != recipe:
             continue
         if data.get("model_ref") != model_ref or data.get("engine_ref") != engine_ref:
             continue
@@ -869,7 +866,7 @@ def _find_validation_for_promotion(
             continue
         if expected_commit and data.get("commit") != expected_commit:
             continue
-        matched.append({"path": str(path), "provider": provider, "recipe": recipe})
+        matched.append({"path": str(path), "tuple": provider, "recipe": recipe})
     result["matched"] = matched
     return result
 
@@ -892,7 +889,7 @@ def _promotion_actions(candidate: Mapping[str, Any]) -> list[str]:
     return [
         f"review official execution contract conformance for tuple {name}",
         f"materialize active surface/worker YAML from provider_candidates/{name}.yml only after credentials/endpoint ids are filled",
-        f"run gpucall provider-smoke {name} --write-artifact against the exact billable tuple",
+        f"run gpucall tuple-smoke {name} --write-artifact against the exact billable tuple",
         "rerun gpucall-recipe-admin review with --validation-dir pointing to provider-validation artifacts",
         "promote to production auto-routing only after review returns READY_FOR_PRODUCTION or AUTO_SELECT_SAFE",
     ]
@@ -1058,7 +1055,7 @@ def _matching_live_validation(
         matched.append(
             {
                 "path": str(path),
-                "provider": data.get("provider"),
+                "tuple": data.get("tuple"),
                 "recipe": data.get("recipe"),
                 "mode": data.get("mode"),
                 "tuple_key": matched_key,

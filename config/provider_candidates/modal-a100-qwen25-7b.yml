@@ -13,4 +13,4 @@ stream_contract: none
 official_doc_refs:
   - https://modal.com/docs/guide/gpu
 live_validation_required: true
-notes: Candidate only; not eligible for production routing until provider-smoke/live validation exists.
+notes: Candidate only; not eligible for production routing until tuple-smoke/live validation exists.

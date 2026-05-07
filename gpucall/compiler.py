@@ -465,7 +465,7 @@ class GovernanceCompiler:
         endpoint_cost_usd = endpoint_cost_per_second * endpoint_cost_seconds
         return {
             "method": "cost_per_second_times_cold_start_runtime_idle_and_standing_estimate",
-            "provider": provider.name,
+            "tuple": provider.name,
             "cost_per_second": cost_per_second,
             "cold_start_seconds": cold_start_seconds,
             "runtime_seconds": runtime_seconds,
@@ -590,7 +590,7 @@ class GovernanceCompiler:
     def _execution_tuple(self, *, recipe: Recipe, provider: ProviderSpec) -> dict[str, object]:
         return {
             "recipe": recipe.name,
-            "provider": provider.name,
+            "tuple": provider.name,
             "account_ref": account_ref_for_spec(provider),
             "adapter": provider.adapter,
             "execution_surface": provider.execution_surface.value if provider.execution_surface else None,
@@ -624,7 +624,7 @@ class GovernanceCompiler:
         profile = provider.trust_profile
         attestation_required = bool(profile.requires_attestation or profile.security_tier is SecurityTier.CONFIDENTIAL_TEE)
         return {
-            "provider": provider.name,
+            "tuple": provider.name,
             "data_classification": recipe.data_classification.value,
             "security_tier": profile.security_tier.value,
             "dedicated_gpu": profile.dedicated_gpu,

@@ -1,5 +1,5 @@
 surface_ref: modal-a10g
-provider_name: modal-a10g
+worker_ref: modal-a10g
 account_ref: modal
 adapter: modal
 execution_surface: function_runtime

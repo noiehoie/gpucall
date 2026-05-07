@@ -1,5 +1,4 @@
 worker_ref: local-echo
-provider_name: local-echo
 account_ref: local
 adapter: echo
 execution_surface: local_runtime

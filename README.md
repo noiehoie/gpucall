@@ -9,7 +9,7 @@ gpucall init
 gpucall configure
 gpucall validate-config
 gpucall doctor
-gpucall provider-audit
+gpucall tuple-audit
 gpucall execution-catalog candidates --recipe text-infer-standard
 gpucall lease-reaper
 gpucall cost-audit
@@ -160,7 +160,7 @@ Provider outages, remote capacity exhaustion, authentication failures, and provi
 ```bash
 gpucall validate-config
 gpucall doctor
-gpucall provider-audit
+gpucall tuple-audit
 gpucall cost-audit
 gpucall cleanup-audit
 gpucall launch-check --profile static

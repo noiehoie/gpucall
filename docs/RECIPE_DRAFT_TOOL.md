@@ -237,7 +237,7 @@ gpucall-recipe-admin review \
   --config-dir config
 ```
 
-The review checks the sanitized request against recipe, model, engine, provider/GPU, policy, and live validation evidence. If existing providers are insufficient, the report includes a `required_provider_contract` describing the missing model/engine/provider tuple that must be authored and validated.
+The review checks the sanitized request against recipe, model, engine, resource catalog, policy, and live validation evidence. If existing execution tuples are insufficient, the report includes a `required_execution_contract` describing the missing model/engine/resource/contract tuple that must be authored and validated.
 
 For low-friction operations, a gpucall administrator may choose an explicit accept-all policy for sanitized caller intake:
 

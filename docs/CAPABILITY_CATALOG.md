@@ -67,11 +67,10 @@ can own multiple execution surfaces:
   function or endpoint contract.
 
 The loader joins `surfaces/*.yml` to `workers/*.yml` by explicit `worker_ref`.
-Existing configs may still omit `worker_ref`, in which case the file stem or
-legacy `provider_name` is the compatibility key. The loader fails closed if a
-surface and worker are missing a counterpart or disagree on account, adapter, or
-execution surface. The joined tuple is the active execution surface eligible for
-production routing after policy, validation, circuit, and cleanup checks.
+The loader fails closed if a surface and worker are missing a counterpart or
+disagree on account, adapter, or execution surface. The joined tuple is the
+active execution surface eligible for production routing after policy,
+validation, circuit, and cleanup checks.
 
 Provider candidates are not production routing entries. They are a queue of plausible
 provider/model/engine tuples that need endpoint credentials, official-adapter
@@ -115,13 +114,13 @@ The snapshot is a candidate-selection cache, not live truth. Production executio
 still requires endpoint/lifecycle configuration, policy checks, billable live
 validation for the exact tuple, and cleanup guarantees.
 
-## Provider Tuple Audit
+## Execution Tuple Audit
 
-Use the provider tuple audit before promoting provider candidates or changing routing:
+Use the execution tuple audit before promoting provider candidates or changing routing:
 
 ```bash
-gpucall provider-audit --config-dir config
-gpucall provider-audit --config-dir config --recipe text-infer-standard --live
+gpucall tuple-audit --config-dir config
+gpucall tuple-audit --config-dir config --recipe text-infer-standard --live
 ```
 
 The audit treats the recipe as the authority. It evaluates every active joined
@@ -145,23 +144,23 @@ gpucall-recipe-admin review \
   --config-dir config
 ```
 
-If active providers are insufficient, the report includes `required_provider_contract`.
+If active tuples are insufficient, the report includes `required_execution_contract`.
 If `provider_candidates/*.yml` contains tuples that satisfy that contract, the same
 report includes `tuple_candidate_matches` and the compatibility alias
-`provider_candidate_matches`. These matches are tuple promotion plans, not routing
+`tuple_candidate_matches`. These matches are tuple promotion plans, not routing
 entries.
 
 Each candidate match carries:
 
 - candidate name and source path
-- model/engine/provider tuple
+- model/engine/resource/contract tuple
 - fit rank
 - promotion actions
 
 The automated path is:
 
 1. Caller submission reaches the admin inbox.
-2. `gpucall-recipe-admin review` writes a recipe candidate and computes `required_provider_contract`.
+2. `gpucall-recipe-admin review` writes a recipe candidate and computes `required_execution_contract`.
 3. The reviewer matches that contract against `provider_candidates`.
 4. `gpucall-recipe-admin promote` creates an isolated promotion workspace containing the generated recipe, candidate provider YAML, and split surface/worker YAML.
 5. An administrator or automation fills provider-specific endpoint credentials and runs billable validation.

@@ -24,7 +24,7 @@ def provider_audit_report(config: Any, *, config_dir: Path, recipe_name: str | N
     creds = load_credentials()
     report: dict[str, Any] = {
         "schema_version": 1,
-        "phase": "provider-tuple-governance-audit",
+        "phase": "execution-tuple-governance-audit",
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "config_dir": str(config_dir),
         "credentials_path": str(credentials_path()),
@@ -86,7 +86,7 @@ def _recipe_audit(config: Any, *, config_dir: Path, recipe: Recipe, candidates: 
         "candidate_fit_count": len(candidate_fit),
         "surfaces": _surface_summary(active_rows, candidate_rows),
         "routing_decision": _routing_decision(production_ready, validation_ready, candidate_fit),
-        "active_providers": active_rows,
+        "active_tuples": active_rows,
         "candidate_tuples": candidate_rows,
     }
 
@@ -198,13 +198,13 @@ def _routing_decision(production_ready: list[dict[str, Any]], validation_ready: 
     if production_ready:
         return {
             "decision": "ROUTABLE",
-            "reason": "at least one active provider tuple has exact live validation evidence",
+            "reason": "at least one active execution tuple has exact live validation evidence",
             "providers": [row["name"] for row in production_ready],
         }
     if validation_ready:
         return {
             "decision": "READY_FOR_VALIDATION",
-            "reason": "active provider tuples fit the recipe but lack exact live validation evidence",
+            "reason": "active execution tuples fit the recipe but lack exact live validation evidence",
             "providers": [row["name"] for row in validation_ready],
         }
     if candidate_fit:
@@ -312,7 +312,7 @@ def _matching_validation(*, provider: ProviderSpec, recipe: Recipe, config_dir: 
         contract = data.get("official_contract") if isinstance(data.get("official_contract"), dict) else {}
         if not _official_contract_hash_valid(data, contract):
             continue
-        result["matched"].append({"path": str(path), "provider": data.get("provider"), "recipe": recipe.name, "tuple_key": tuple_evidence_key(provider)})
+        result["matched"].append({"path": str(path), "tuple": data.get("tuple"), "recipe": recipe.name, "tuple_key": tuple_evidence_key(provider)})
     return result
 
 
@@ -354,7 +354,7 @@ def _tuple_summary(provider: ProviderSpec | None) -> dict[str, Any]:
     if provider is None:
         return {}
     return {
-        "provider": provider.name,
+        "tuple": provider.name,
         "adapter": provider.adapter,
         "execution_surface": provider.execution_surface.value if provider.execution_surface else None,
         "gpu": provider.gpu,
@@ -370,7 +370,7 @@ def _tuple_summary(provider: ProviderSpec | None) -> dict[str, Any]:
 
 def _candidate_tuple_summary(candidate: Mapping[str, Any]) -> dict[str, Any]:
     return {
-        "provider": candidate.get("name"),
+        "tuple": candidate.get("name"),
         "adapter": candidate.get("adapter"),
         "execution_surface": candidate.get("execution_surface") or _surface_for_adapter(str(candidate.get("adapter") or "")),
         "gpu": candidate.get("gpu"),

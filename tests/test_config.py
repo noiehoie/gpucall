@@ -259,7 +259,7 @@ def test_standard_config_routes_news_sized_prompts_to_long_recipes(tmp_path) -> 
     assert large_plan.recipe_name == "text-infer-large"
     assert large_plan.provider_chain[0] == "hyperstack-qwen-1m"
     artifact = large_plan.attestations["compile_artifact"]
-    assert artifact["selected_tuple"]["provider"] == "hyperstack-qwen-1m"
+    assert artifact["selected_tuple"]["tuple"] == "hyperstack-qwen-1m"
     assert artifact["selected_tuple"]["execution_surface"] == "iaas_vm"
     assert artifact["selected_tuple_hash"]
     assert ultralong_plan.recipe_name == "text-infer-ultralong"
@@ -293,7 +293,7 @@ def test_provider_smoke_uses_chat_messages_for_chat_only_provider(tmp_path) -> N
 
     assert request.messages
     assert request.messages[0].role == "user"
-    assert request.messages[0].content == "gpucall provider smoke"
+    assert request.messages[0].content == "gpucall tuple smoke"
     assert request.inline_inputs == {}
 
 
@@ -325,7 +325,7 @@ def test_provider_smoke_writes_live_validation_artifact(tmp_path, monkeypatch) -
         [
             sys.executable,
             str(Path(__file__).resolve().parents[1] / "gpucall" / "cli.py"),
-            "provider-smoke",
+            "tuple-smoke",
             "local-echo",
             "--config-dir",
             str(root),
@@ -344,7 +344,7 @@ def test_provider_smoke_writes_live_validation_artifact(tmp_path, monkeypatch) -
     artifacts = list((tmp_path / "state" / "provider-validation").glob("*.json"))
     assert len(artifacts) == 1
     payload = artifacts[0].read_text(encoding="utf-8")
-    assert '"provider":"local-echo"' in payload
+    assert '"tuple":"local-echo"' in payload
     assert '"config_hash"' in payload
     assert '"validation_schema_version":1' in payload
     assert '"passed":true' in payload
@@ -360,9 +360,9 @@ def test_live_validation_artifact_must_match_current_commit_and_config(tmp_path,
     artifact_dir = state / "provider-validation"
     artifact_dir.mkdir(parents=True)
     monkeypatch.setenv("GPUCALL_STATE_DIR", str(state))
-    (artifact_dir / "old.json").write_text('{"provider":"p","commit":"old","config_hash":"old"}\n', encoding="utf-8")
+    (artifact_dir / "old.json").write_text('{"tuple":"p","commit":"old","config_hash":"old"}\n', encoding="utf-8")
     current = {
-        "provider": "p",
+        "tuple": "p",
         "recipe": "smoke-text-small",
         "mode": "sync",
         "started_at": "2026-01-01T00:00:00+00:00",
