@@ -101,7 +101,6 @@ class GPUCallClient:
     def infer(
         self,
         *,
-        recipe: str | None = None,
         prompt: str | None = None,
         files: list[str | Path] | None = None,
         mode: str = "sync",
@@ -114,10 +113,8 @@ class GPUCallClient:
         poll: bool = True,
         poll_interval: float = 1.0,
     ) -> dict[str, Any]:
-        _reject_caller_routing(recipe=recipe)
         payload = self._task_payload(
             task=task,
-            recipe=recipe,
             mode=mode,
             prompt=prompt,
             files=files,
@@ -138,16 +135,13 @@ class GPUCallClient:
     def vision(
         self,
         *,
-        recipe: str | None = None,
         image: str | Path,
         prompt: str | None = None,
         mode: str = "sync",
         response_format: dict[str, Any] | None = None,
         poll: bool = True,
     ) -> dict[str, Any]:
-        _reject_caller_routing(recipe=recipe)
         return self.infer(
-            recipe=recipe,
             prompt=prompt,
             files=[image],
             mode=mode,
@@ -159,16 +153,13 @@ class GPUCallClient:
     def stream(
         self,
         *,
-        recipe: str | None = None,
         prompt: str | None = None,
         files: list[str | Path] | None = None,
         task: str = "infer",
         response_format: dict[str, Any] | None = None,
     ):
-        _reject_caller_routing(recipe=recipe)
         payload = self._task_payload(
             task=task,
-            recipe=recipe,
             mode="stream",
             prompt=prompt,
             files=files,
@@ -199,7 +190,6 @@ class GPUCallClient:
         self,
         *,
         task: str,
-        recipe: str | None,
         mode: str,
         prompt: str | None,
         files: list[str | Path] | None,
@@ -274,7 +264,6 @@ class AsyncGPUCallClient:
     async def infer(
         self,
         *,
-        recipe: str | None = None,
         prompt: str | None = None,
         files: list[str | Path] | None = None,
         mode: str = "sync",
@@ -287,10 +276,8 @@ class AsyncGPUCallClient:
         poll: bool = True,
         poll_interval: float = 1.0,
     ) -> dict[str, Any]:
-        _reject_caller_routing(recipe=recipe)
         payload = await self._task_payload(
             task=task,
-            recipe=recipe,
             mode=mode,
             prompt=prompt,
             files=files,
@@ -311,16 +298,13 @@ class AsyncGPUCallClient:
     async def vision(
         self,
         *,
-        recipe: str | None = None,
         image: str | Path,
         prompt: str | None = None,
         mode: str = "sync",
         response_format: dict[str, Any] | None = None,
         poll: bool = True,
     ) -> dict[str, Any]:
-        _reject_caller_routing(recipe=recipe)
         return await self.infer(
-            recipe=recipe,
             prompt=prompt,
             files=[image],
             mode=mode,
@@ -332,16 +316,13 @@ class AsyncGPUCallClient:
     async def stream(
         self,
         *,
-        recipe: str | None = None,
         prompt: str | None = None,
         files: list[str | Path] | None = None,
         task: str = "infer",
         response_format: dict[str, Any] | None = None,
     ):
-        _reject_caller_routing(recipe=recipe)
         payload = await self._task_payload(
             task=task,
-            recipe=recipe,
             mode="stream",
             prompt=prompt,
             files=files,
@@ -391,7 +372,6 @@ class AsyncGPUCallClient:
         self,
         *,
         task: str,
-        recipe: str | None,
         mode: str,
         prompt: str | None,
         files: list[str | Path] | None,
@@ -543,18 +523,6 @@ def _extract_result_text(result: dict[str, Any]) -> str:
     payload = result.get("result") or {}
     value = payload.get("value")
     return value if isinstance(value, str) else ""
-
-
-def _reject_caller_routing(*, recipe: str | None) -> None:
-    forbidden = []
-    if recipe is not None:
-        forbidden.append("recipe")
-    if forbidden:
-        raise GPUCallCallerRoutingError(
-            "caller-controlled routing is not supported; omit "
-            + ", ".join(forbidden)
-            + " and let the gpucall gateway select the recipe and execution tuple"
-        )
 
 
 def _raise_if_empty_output(value: str) -> None:

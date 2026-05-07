@@ -82,7 +82,7 @@ def test_runpod_vllm_provider_requires_official_worker_contract() -> None:
         max_model_len=8192,
         timeout_seconds=30,
         lease_ttl_seconds=60,
-        tokenizer_family="qwen",
+        token_estimation_profile="qwen",
     )
     config = GpucallConfig(
         policy=Policy(
@@ -129,7 +129,7 @@ def test_modal_provider_requires_deployed_function_target() -> None:
         max_model_len=8192,
         timeout_seconds=30,
         lease_ttl_seconds=60,
-        tokenizer_family="qwen",
+        token_estimation_profile="qwen",
     )
     config = GpucallConfig(
         policy=Policy(

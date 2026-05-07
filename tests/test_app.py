@@ -154,7 +154,7 @@ def test_readyz_reports_recipe_and_provider_capacity(tmp_path) -> None:
 
     payload = response.json()
     assert response.status_code == 200
-    assert payload["recipes"]["text-infer-standard"]["max_model_len"] == 32768
+    assert payload["recipes"]["text-infer-standard"]["context_budget_tokens"] == 32768
     assert payload["tuples"]["local-echo"]["max_model_len"] == 32768
 
 
@@ -225,7 +225,7 @@ async def test_sqlite_job_store_persists_inline_result(tmp_path) -> None:
             tuple_chain=["local-echo"],
             timeout_seconds=2,
             lease_ttl_seconds=10,
-            tokenizer_family="qwen",
+            token_estimation_profile="qwen",
             token_budget=None,
             input_refs=[],
             inline_inputs={},
@@ -534,7 +534,7 @@ def test_warning_header_announces_remote_worker_cold_start() -> None:
         tuple_chain=["modal-a10g"],
         timeout_seconds=30,
         lease_ttl_seconds=60,
-        tokenizer_family="qwen",
+        token_estimation_profile="qwen",
         token_budget=None,
         input_refs=[],
         inline_inputs={},
@@ -552,7 +552,7 @@ def test_warning_header_announces_dataref_worker_fetch() -> None:
         tuple_chain=["modal-a10g"],
         timeout_seconds=30,
         lease_ttl_seconds=60,
-        tokenizer_family="qwen",
+        token_estimation_profile="qwen",
         token_budget=None,
         input_refs=[DataRef(uri="s3://bucket/prompt.txt", sha256="a" * 64, bytes=32768, content_type="text/plain")],
         inline_inputs={},
@@ -900,7 +900,7 @@ def test_plan_with_worker_refs_rehashes_executable_plan() -> None:
         tuple_chain=["p1"],
         timeout_seconds=1,
         lease_ttl_seconds=10,
-        tokenizer_family="qwen",
+        token_estimation_profile="qwen",
         token_budget=None,
         input_refs=[],
         inline_inputs={},
@@ -955,7 +955,7 @@ async def test_startup_recovery_expires_interrupted_jobs(tmp_path) -> None:
         tuple_chain=["local-echo"],
         timeout_seconds=1,
         lease_ttl_seconds=10,
-        tokenizer_family="qwen",
+        token_estimation_profile="qwen",
         token_budget=None,
         input_refs=[],
         inline_inputs={},

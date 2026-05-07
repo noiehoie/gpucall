@@ -311,10 +311,10 @@ def test_python_sdk_emits_warning_header() -> None:
         client.infer()
 
 
-def test_python_sdk_rejects_caller_routing() -> None:
+def test_python_sdk_has_no_caller_routing_selector() -> None:
     client = GPUCallClient("http://gpucall.test", transport=httpx.MockTransport(lambda request: httpx.Response(500)))
 
-    with pytest.raises(GPUCallCallerRoutingError):
+    with pytest.raises(TypeError):
         client.infer(recipe="text-infer-standard")
     with pytest.raises(TypeError):
         client.infer(provider="local-echo")

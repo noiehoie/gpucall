@@ -28,7 +28,7 @@ def build_compiler() -> GovernanceCompiler:
         max_model_len=100,
         timeout_seconds=10,
         lease_ttl_seconds=20,
-        tokenizer_family="qwen",
+        token_estimation_profile="qwen",
     )
     tuples = {
         "p1": ExecutionTupleSpec(
@@ -122,14 +122,14 @@ def test_compiler_auto_selects_smallest_capable_recipe_for_weight() -> None:
     small = compiler.recipes["r1"].model_copy(
         update={
             "name": "small",
-            "max_model_len": 100,
+            "context_budget_tokens": 100,
             "max_input_bytes": 100,
         }
     )
     large = compiler.recipes["r1"].model_copy(
         update={
             "name": "large",
-            "max_model_len": 1000,
+            "context_budget_tokens": 1000,
             "max_input_bytes": 1000,
         }
     )
@@ -223,7 +223,7 @@ def test_compiler_auto_selection_uses_request_content_type() -> None:
     }
     text_recipe = compiler.recipes["r1"].model_copy(update={"name": "text", "allowed_mime_prefixes": ["text/"]})
     image_recipe = compiler.recipes["r1"].model_copy(
-        update={"name": "image", "task": "vision", "allowed_mime_prefixes": ["image/"], "max_model_len": 512}
+        update={"name": "image", "task": "vision", "allowed_mime_prefixes": ["image/"], "context_budget_tokens": 512}
     )
     compiler.recipes = {"text": text_recipe, "image": image_recipe}
     request = TaskRequest(
@@ -249,7 +249,7 @@ def test_vision_recipe_allows_text_prompt_as_inline_companion() -> None:
             "task": "vision",
             "allowed_mime_prefixes": ["image/"],
             "allowed_inline_mime_prefixes": ["text/"],
-            "max_model_len": 512,
+            "context_budget_tokens": 512,
         }
     )
     compiler.recipes = {"vision": vision}
@@ -428,7 +428,7 @@ def test_provider_fit_dominates_observed_score_across_different_fit_classes() ->
 
 def test_tuple_chain_filters_by_request_weight() -> None:
     compiler = build_compiler()
-    compiler.recipes["r1"] = compiler.recipes["r1"].model_copy(update={"max_model_len": 1000})
+    compiler.recipes["r1"] = compiler.recipes["r1"].model_copy(update={"context_budget_tokens": 1000})
     compiler.tuples["p2"] = compiler.tuples["p2"].model_copy(update={"max_model_len": 1000})
     request = TaskRequest(
         task="infer",

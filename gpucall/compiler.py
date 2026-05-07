@@ -19,6 +19,7 @@ from gpucall.domain import (
     Recipe,
     SecurityTier,
     TaskRequest,
+    recipe_requirements,
 )
 from gpucall.domain import ChatMessage, ResponseFormatType
 from gpucall.execution.contracts import account_ref_for_spec
@@ -59,13 +60,14 @@ class GovernanceCompiler:
 
         compiled_token_budget = self._token_budget(request)
         compiled_required_model_len = self._required_model_len(request, recipe)
-        if compiled_required_model_len > recipe.max_model_len:
+        requirements = recipe_requirements(recipe)
+        if compiled_required_model_len > requirements.context_budget_tokens:
             raise GovernanceError(
-                f"required model length {compiled_required_model_len} exceeds recipe max_model_len {recipe.max_model_len}",
+                f"required model length {compiled_required_model_len} exceeds recipe context budget {requirements.context_budget_tokens}",
                 code="REQUEST_EXCEEDS_RECIPE_CONTEXT",
                 context={
                     "required_model_len": compiled_required_model_len,
-                    "recipe_max_model_len": recipe.max_model_len,
+                    "recipe_context_budget_tokens": requirements.context_budget_tokens,
                     "recipe": recipe.name,
                     "task": request.task,
                 },
@@ -94,7 +96,7 @@ class GovernanceCompiler:
             tuple_chain=tuple_chain,
             timeout_seconds=timeout,
             lease_ttl_seconds=ttl,
-            tokenizer_family=recipe.tokenizer_family,
+            token_estimation_profile=recipe.token_estimation_profile,
             token_budget=compiled_token_budget,
             max_tokens=request.max_tokens,
             temperature=compiled_temperature,
@@ -187,11 +189,13 @@ class GovernanceCompiler:
             return f"mode {request.mode} is not allowed"
         if request.max_tokens is not None:
             token_budget = self._token_budget(request)
-            if token_budget is not None and token_budget > recipe.max_model_len:
-                return f"token budget {token_budget} exceeds max_model_len {recipe.max_model_len}"
+            ceiling = recipe_requirements(recipe).context_budget_tokens
+            if token_budget is not None and token_budget > ceiling:
+                return f"token budget {token_budget} exceeds recipe context budget {ceiling}"
         required_model_len = self._required_model_len(request, recipe)
-        if required_model_len > recipe.max_model_len:
-            return f"required model length {required_model_len} exceeds max_model_len {recipe.max_model_len}"
+        ceiling = recipe_requirements(recipe).context_budget_tokens
+        if required_model_len > ceiling:
+            return f"required model length {required_model_len} exceeds recipe context budget {ceiling}"
         for ref in request.input_refs:
             if recipe.max_input_bytes is not None and ref.bytes is not None and ref.bytes > recipe.max_input_bytes:
                 return f"input data_ref exceeds max_input_bytes {recipe.max_input_bytes}"
@@ -209,7 +213,8 @@ class GovernanceCompiler:
     def _recipe_selection_key(self, recipe: Recipe) -> tuple[int, int, int, str]:
         # Prefer the smallest matching recipe. Larger/expensive recipes remain
         # available for requests that exceed lighter recipe limits.
-        return (classification_rank(recipe.data_classification), recipe.min_vram_gb, recipe.max_model_len, recipe.name)
+        requirements = recipe_requirements(recipe)
+        return (classification_rank(recipe.data_classification), requirements.minimum_vram_gb, requirements.context_budget_tokens, recipe.name)
 
     def _validate_request_against_recipe(self, request: TaskRequest, recipe: Recipe) -> None:
         if request.mode not in recipe.allowed_modes:
@@ -517,7 +522,7 @@ class GovernanceCompiler:
         return max(required_model_len(request, recipe, self.policy) for recipe in matching)
 
     def _largest_auto_recipe_model_len(self, task: str) -> int | None:
-        values = [recipe.max_model_len for recipe in self.recipes.values() if recipe.task == task and recipe.auto_select]
+        values = [recipe_requirements(recipe).context_budget_tokens for recipe in self.recipes.values() if recipe.task == task and recipe.auto_select]
         return max(values) if values else None
 
     @staticmethod
@@ -526,11 +531,10 @@ class GovernanceCompiler:
             name="__synthetic__",
             task=request.task,
             allowed_modes=[request.mode],
-            min_vram_gb=1,
-            max_model_len=1,
+            context_budget_tokens=1,
             timeout_seconds=1,
             lease_ttl_seconds=1,
-            tokenizer_family="unknown",
+            token_estimation_profile="generic_utf8",
         )
 
     @staticmethod
@@ -614,8 +618,8 @@ class GovernanceCompiler:
             "contract": {
                 "data_classification": recipe.data_classification.value,
                 "context_budget_tokens": recipe.context_budget_tokens,
-                "required_model_len": recipe.max_model_len,
-                "min_vram_gb": recipe.min_vram_gb,
+                "required_context_tokens": recipe_requirements(recipe).context_budget_tokens,
+                "minimum_vram_gb": recipe_requirements(recipe).minimum_vram_gb,
                 "output_contract": recipe.output_contract,
             },
         }

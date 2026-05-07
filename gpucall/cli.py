@@ -26,7 +26,7 @@ from gpucall.compiler import GovernanceCompiler
 from gpucall.config import ConfigError, default_config_dir, default_state_dir, load_config
 from gpucall.configure import configure_command
 from gpucall.credentials import configured_credentials, credentials_path, load_credentials
-from gpucall.domain import ExecutionMode, JobState, PresignPutRequest, TupleError, TaskRequest
+from gpucall.domain import ExecutionMode, JobState, PresignPutRequest, TupleError, TaskRequest, recipe_requirements
 from gpucall.execution_catalog import build_resource_catalog_snapshot, dumps_candidates, dumps_snapshot as dumps_execution_snapshot, generate_tuple_candidates
 from gpucall.execution.contracts import (
     artifact_tuple_evidence_key,
@@ -1587,7 +1587,7 @@ def _provider_route_rejection_reason(config, recipe, tuple) -> str | None:
         policy=config.policy,
         recipe=recipe,
         tuple=tuple,
-        required_len=recipe.max_model_len,
+        required_len=recipe_requirements(recipe).context_budget_tokens,
         require_auto_select=True,
     )
 

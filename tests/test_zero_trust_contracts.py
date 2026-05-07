@@ -45,7 +45,7 @@ def _compiler_for_security(tuple: ExecutionTupleSpec, recipe: Recipe | None = No
             max_model_len=4096,
             timeout_seconds=10,
             lease_ttl_seconds=20,
-            tokenizer_family="qwen",
+            token_estimation_profile="qwen",
         )
     return GovernanceCompiler(
         policy=policy,
@@ -157,7 +157,7 @@ def test_train_plan_requires_explicit_artifact_export_and_key_release() -> None:
         max_model_len=4096,
         timeout_seconds=10,
         lease_ttl_seconds=20,
-        tokenizer_family="qwen",
+        token_estimation_profile="qwen",
         artifact_export=True,
         requires_key_release=True,
     )
@@ -195,7 +195,7 @@ def test_split_learning_plan_uses_activation_ref_without_inline_payload() -> Non
         max_model_len=4096,
         timeout_seconds=10,
         lease_ttl_seconds=20,
-        tokenizer_family="activation",
+        token_estimation_profile="activation",
     )
     compiler = _compiler_for_security(tuple, recipe)
 

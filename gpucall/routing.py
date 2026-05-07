@@ -3,7 +3,19 @@ from __future__ import annotations
 import math
 import os
 
-from gpucall.domain import CompiledPlan, DataClassification, EngineSpec, ExecutionMode, ModelSpec, Policy, ExecutionTupleSpec, Recipe, SecurityTier, TaskRequest
+from gpucall.domain import (
+    CompiledPlan,
+    DataClassification,
+    EngineSpec,
+    ExecutionMode,
+    ModelSpec,
+    Policy,
+    ExecutionTupleSpec,
+    Recipe,
+    SecurityTier,
+    TaskRequest,
+    recipe_requirements,
+)
 from gpucall.execution.registry import adapter_descriptor
 
 
@@ -102,9 +114,10 @@ def tuple_route_rejection_reason(
     security_reason = tuple_security_rejection_reason(policy=policy, recipe=recipe, tuple=tuple)
     if security_reason is not None:
         return security_reason
-    if tuple.vram_gb < recipe.min_vram_gb:
-        return "tuple vram_gb is below recipe min_vram_gb"
-    minimum_model_len = required_len if required_len is not None else recipe.max_model_len
+    requirements = recipe_requirements(recipe)
+    if tuple.vram_gb < requirements.minimum_vram_gb:
+        return "tuple vram_gb is below derived recipe requirement"
+    minimum_model_len = required_len if required_len is not None else requirements.context_budget_tokens
     if tuple.max_model_len < minimum_model_len:
         return "tuple max_model_len is below required model length"
     catalog_reason = catalog_route_rejection_reason(

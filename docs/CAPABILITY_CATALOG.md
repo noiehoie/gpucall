@@ -24,9 +24,9 @@ config/
   tuples/*.yml.example
 ```
 
-Recipes use the caller-facing v2 DSL and contain workload requirements:
+Recipes use the caller-facing v3 DSL and contain workload requirements:
 
-- `recipe_schema_version: 2`
+- `recipe_schema_version: 3`
 - `intent`
 - `context_budget_tokens`
 - `resource_class`
@@ -37,8 +37,8 @@ Recipes use the caller-facing v2 DSL and contain workload requirements:
 - classification and allowed modes
 
 Recipes must not declare provider resource fields such as `gpu`,
-`min_vram_gb`, or `max_model_len`. The loader derives the internal provider
-contract from the v2 workload fields.
+`min_vram_gb`, or `max_model_len`. The loader derives the internal tuple
+contract from the v3 workload fields.
 
 Models contain semantic and resource declarations:
 
@@ -194,9 +194,9 @@ Possible promotion decisions:
 - `READY_FOR_BILLABLE_VALIDATION`: generated config validates, but no matching live validation artifact exists.
 - `VALIDATION_FAILED`: `--run-validation` was requested and the billable smoke failed.
 - `VALIDATED_READY_TO_ACTIVATE`: matching validation exists and the provider can be activated.
-- `ACTIVATED`: validated recipe/provider were copied into the active config directory.
+- `ACTIVATED`: validated recipe and production tuple were copied into the active config directory.
 
-Activation is refused unless the exact generated recipe/provider/model/engine tuple has a matching live validation artifact.
+Activation is refused unless the exact generated recipe/tuple/model/engine contract has a matching live validation artifact.
 
 Possible decisions:
 

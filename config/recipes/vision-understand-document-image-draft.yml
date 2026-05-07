@@ -1,5 +1,5 @@
 name: vision-understand-document-image-draft
-recipe_schema_version: 2
+recipe_schema_version: 3
 task: vision
 intent: understand_document_image
 auto_select: true
@@ -12,7 +12,7 @@ latency_class: long_running
 quality_floor: draft
 timeout_seconds: 1800
 lease_ttl_seconds: 2100
-tokenizer_family: qwen
+token_estimation_profile: generic_utf8
 max_input_bytes: 16777216
 allowed_mime_prefixes:
 - image/

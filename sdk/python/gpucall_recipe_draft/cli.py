@@ -37,7 +37,7 @@ def main(argv: list[str] | None = None) -> int:
     intake.add_argument("--remote-inbox", help="also submit to USER@HOST:/absolute/admin/inbox over SSH")
     intake.add_argument("--source", help="caller/source label for automatic submission")
 
-    draft = subcommands.add_parser("draft", help="create a human-reviewed recipe/provider draft from sanitized intake JSON")
+    draft = subcommands.add_parser("draft", help="create a human-reviewed recipe intent draft from sanitized intake JSON")
     draft.add_argument("--input", "-i", required=True, help="path to sanitized intake JSON, or '-' for stdin")
     draft.add_argument("--output", "-o", help="write draft JSON to this path")
 
@@ -70,9 +70,9 @@ def main(argv: list[str] | None = None) -> int:
     quality.add_argument("--bytes", dest="byte_values", action="append", type=int, default=[])
     quality.add_argument("--dimension", action="append", default=[], help="input dimensions such as 1200x2287; never pass raw media")
     quality.add_argument("--required-model-len", type=int)
-    quality.add_argument("--selected-recipe")
-    quality.add_argument("--selected-tuple")
-    quality.add_argument("--selected-tuple-model")
+    quality.add_argument("--observed-recipe")
+    quality.add_argument("--observed-tuple")
+    quality.add_argument("--observed-tuple-model")
     quality.add_argument("--output-validated", choices=["true", "false", "unknown"], default="unknown")
     quality.add_argument("--quality-failure-kind", default="low_quality_success")
     quality.add_argument("--quality-failure-reason", default="")
@@ -145,9 +145,9 @@ def main(argv: list[str] | None = None) -> int:
                 byte_values=tuple(args.byte_values),
                 dimensions=tuple(args.dimension),
                 required_model_len=args.required_model_len,
-                selected_recipe=args.selected_recipe,
-                selected_tuple=args.selected_tuple,
-                selected_tuple_model=args.selected_tuple_model,
+                observed_recipe=args.observed_recipe,
+                observed_tuple=args.observed_tuple,
+                observed_tuple_model=args.observed_tuple_model,
                 output_validated=_parse_bool(args.output_validated),
                 quality_failure_kind=args.quality_failure_kind,
                 quality_failure_reason=args.quality_failure_reason,

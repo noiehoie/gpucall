@@ -93,7 +93,7 @@ def test_redacted_plan_for_audit_is_allowlisted() -> None:
         tuple_chain=["modal-a10g"],
         timeout_seconds=2,
         lease_ttl_seconds=10,
-        tokenizer_family="qwen",
+        token_estimation_profile="qwen",
         token_budget=128,
         max_tokens=64,
         input_refs=[

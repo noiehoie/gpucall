@@ -121,9 +121,10 @@ def test_draft_uses_sanitized_intake_only() -> None:
     assert draft["human_review_required"] is True
     assert draft["source"] == "sanitized_request_only"
     assert draft["proposed_recipe"]["name"] == "vision-understand-document-image-draft"
-    assert draft["proposed_recipe"]["max_model_len"] == 32768
-    assert draft["proposed_recipe"]["min_vram_gb"] == 80
-    assert draft["tuple_requirements"]["input_contracts"] == ["image", "data_refs", "text"]
+    assert draft["proposed_recipe"]["recipe_schema_version"] == 3
+    assert draft["proposed_recipe"]["context_budget_tokens"] == 32768
+    assert draft["proposed_recipe"]["resource_class"] == "document_vision"
+    assert draft["workload_contract"]["input_contracts"] == ["image", "data_refs", "text"]
 
 
 def test_recipe_draft_cli_intake_and_draft(tmp_path, capsys) -> None:
@@ -132,7 +133,7 @@ def test_recipe_draft_cli_intake_and_draft(tmp_path, capsys) -> None:
     error_path.write_text(
         json.dumps(
             {
-                "detail": "no auto-selectable recipe for task 'infer': text-infer-standard: required model length 40000 exceeds max_model_len 32768",
+                "detail": "no auto-selectable recipe for task 'infer': text-infer-standard: required context budget 40000 exceeds 32768",
                 "context": {"task": "infer", "mode": "sync", "required_model_len": 40000},
                 "inline_inputs": {"prompt": {"value": "secret text", "content_type": "text/plain"}},
             }
@@ -146,7 +147,7 @@ def test_recipe_draft_cli_intake_and_draft(tmp_path, capsys) -> None:
 
     assert output["proposed_recipe"]["task"] == "infer"
     assert output["proposed_recipe"]["required_model_capabilities"] == ["summarization"]
-    assert output["proposed_recipe"]["max_model_len"] == 65536
+    assert output["proposed_recipe"]["context_budget_tokens"] == 65536
 
 
 def test_submit_writes_file_based_bundle(tmp_path) -> None:
@@ -294,9 +295,9 @@ def test_quality_feedback_intake_is_sanitized_metadata_only() -> None:
             content_types=("image/jpeg",),
             byte_values=(1136521,),
             dimensions=("1200x2287",),
-            selected_recipe="vision-image-standard",
-            selected_tuple="modal-vision-a10g",
-            selected_tuple_model="Salesforce/blip-vqa-base",
+            observed_recipe="vision-image-standard",
+            observed_tuple="modal-vision-a10g",
+            observed_tuple_model="Salesforce/blip-vqa-base",
             output_validated=None,
             quality_failure_kind="insufficient_ocr",
             quality_failure_reason="short answer only; expected top headlines, not raw page text",
@@ -308,7 +309,7 @@ def test_quality_feedback_intake_is_sanitized_metadata_only() -> None:
     assert intake["phase"] == "deterministic-quality-feedback-intake"
     assert sanitized["error"]["code"] == "LOW_QUALITY_SUCCESS"
     assert sanitized["error"]["capability_gap"] == "model_or_recipe_capability_mismatch"
-    assert sanitized["runtime_selection"]["tuple_model"] == "Salesforce/blip-vqa-base"
+    assert sanitized["runtime_selection"]["observed_tuple_model"] == "Salesforce/blip-vqa-base"
     assert sanitized["quality_feedback"]["kind"] == "insufficient_ocr"
     assert sanitized["input_summary"]["dimensions"] == ["1200x2287"]
     assert intake["redaction_report"]["prompt_body_forwarded"] is False
@@ -425,11 +426,11 @@ def test_recipe_draft_cli_quality_can_auto_submit(tmp_path, capsys) -> None:
                 "1136521",
                 "--dimension",
                 "1200x2287",
-                "--selected-recipe",
+                "--observed-recipe",
                 "vision-image-standard",
-                "--selected-tuple",
+                "--observed-tuple",
                 "modal-vision-a10g",
-                "--selected-tuple-model",
+                "--observed-tuple-model",
                 "Salesforce/blip-vqa-base",
                 "--quality-failure-kind",
                 "insufficient_ocr",

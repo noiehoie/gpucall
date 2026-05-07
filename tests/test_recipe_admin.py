@@ -5,7 +5,7 @@ import json
 import pytest
 import yaml
 
-from gpucall.recipe_admin import canonical_recipe_from_artifact, main, process_inbox, promote_candidate, recipe_request_status, review_artifact
+from gpucall.recipe_admin import canonical_recipe_from_artifact, main, process_inbox, promote_production_tuple, recipe_request_status, review_artifact
 
 
 def test_admin_materializes_intake_to_canonical_recipe() -> None:
@@ -27,8 +27,9 @@ def test_admin_materializes_intake_to_canonical_recipe() -> None:
 
     assert recipe["name"] == "vision-understand-document-image-draft"
     assert recipe["task"] == "vision"
-    assert recipe["min_vram_gb"] == 80
-    assert recipe["max_model_len"] == 32768
+    assert recipe["recipe_schema_version"] == 3
+    assert recipe["resource_class"] == "document_vision"
+    assert recipe["context_budget_tokens"] == 32768
     assert recipe["allowed_mime_prefixes"] == ["image/"]
     assert recipe["allowed_inline_mime_prefixes"] == ["text/"]
     assert recipe["required_model_capabilities"] == ["document_understanding", "visual_question_answering", "instruction_following"]
@@ -84,7 +85,8 @@ def test_admin_materialize_writes_yaml_and_report(tmp_path) -> None:
     report = json.loads(report_path.read_text(encoding="utf-8"))
 
     assert recipe["name"] == "infer-summarize-text-draft"
-    assert recipe["max_model_len"] == 65536
+    assert recipe["recipe_schema_version"] == 3
+    assert recipe["context_budget_tokens"] == 65536
     assert report["policy"] == "accept-all"
     assert report["human_review_bypassed"] is True
 
@@ -254,7 +256,7 @@ def test_admin_review_matches_long_context_tuple_candidates() -> None:
     assert all("run gpucall tuple-smoke" in " ".join(match["promotion_actions"]) for match in report["tuple_candidate_matches"])
 
 
-def test_promote_candidate_writes_isolated_config_without_activation(tmp_path) -> None:
+def test_promote_production_tuple_writes_isolated_config_without_activation(tmp_path) -> None:
     artifact = {
         "phase": "deterministic-quality-feedback-intake",
         "sanitized_request": {
@@ -275,7 +277,7 @@ def test_promote_candidate_writes_isolated_config_without_activation(tmp_path) -
     }
     review = review_artifact(artifact, config_dir="gpucall/config_templates")
 
-    report = promote_candidate(
+    report = promote_production_tuple(
         review=review,
         candidate_name="modal-h100-qwen25-vl-7b",
         config_dir="gpucall/config_templates",

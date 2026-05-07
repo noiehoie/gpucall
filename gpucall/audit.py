@@ -223,7 +223,7 @@ def redacted_plan_for_audit(plan: Any) -> dict[str, Any]:
         "tuple_chain": list(getattr(plan, "tuple_chain", []) or []),
         "timeout_seconds": getattr(plan, "timeout_seconds", None),
         "lease_ttl_seconds": getattr(plan, "lease_ttl_seconds", None),
-        "tokenizer_family": getattr(plan, "tokenizer_family", None),
+        "token_estimation_profile": getattr(plan, "token_estimation_profile", None),
         "token_budget": getattr(plan, "token_budget", None),
         "max_tokens": getattr(plan, "max_tokens", None),
         "temperature": getattr(plan, "temperature", None),

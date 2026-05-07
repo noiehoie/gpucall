@@ -10,7 +10,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from gpucall.candidate_sources import load_tuple_candidate_payloads
 from gpucall.config import GpucallConfig
-from gpucall.domain import ExecutionMode, Recipe
+from gpucall.domain import ExecutionMode, Recipe, recipe_requirements
 from gpucall.execution.registry import adapter_descriptor, vendor_family_for_adapter
 
 
@@ -245,9 +245,10 @@ def _recipe_fit(resource: ResourceCatalogEntry, worker: WorkerContractSpec, reci
     if recipe is None:
         return {"eligible": True, "reasons": []}
     reasons: list[str] = []
-    if resource.vram_gb < int(recipe.min_vram_gb):
-        reasons.append("resource vram_gb is below recipe requirement")
-    if resource.max_model_len < int(recipe.max_model_len):
+    requirements = recipe_requirements(recipe)
+    if resource.vram_gb < int(requirements.minimum_vram_gb):
+        reasons.append("resource vram_gb is below derived recipe requirement")
+    if resource.max_model_len < int(requirements.context_budget_tokens):
         reasons.append("resource max_model_len is below recipe requirement")
     recipe_modes = {mode.value if isinstance(mode, ExecutionMode) else str(mode) for mode in recipe.allowed_modes}
     worker_modes = set(worker.modes)

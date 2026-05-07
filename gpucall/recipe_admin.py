@@ -18,7 +18,7 @@ import yaml
 
 from gpucall.candidate_sources import load_tuple_candidate_payloads
 from gpucall.config import ConfigError, default_state_dir, load_config
-from gpucall.domain import ExecutionMode, ExecutionTupleSpec, Recipe
+from gpucall.domain import ExecutionMode, ExecutionTupleSpec, Recipe, recipe_requirements
 from gpucall.execution.contracts import artifact_tuple_evidence_key, tuple_evidence_key
 from gpucall.execution.registry import adapter_descriptor, vendor_family_for_adapter
 from gpucall.routing import tuple_route_rejection_reason
@@ -54,7 +54,7 @@ def main(argv: list[str] | None = None) -> int:
     materialize.add_argument("--input", "-i", required=True, help="path to caller intake/draft JSON, or '-' for stdin")
     materialize.add_argument("--output-dir", help="directory to write recipe YAML")
     materialize.add_argument("--report", help="write materialization report JSON")
-    materialize.add_argument("--accept-all", action="store_true", help="explicitly accept caller artifact into a recipe candidate")
+    materialize.add_argument("--accept-all", action="store_true", help="explicitly accept caller artifact into a recipe intent candidate")
     materialize.add_argument("--force", action="store_true", help="overwrite existing recipe YAML")
     materialize.add_argument("--dry-run", action="store_true", help="print YAML without writing files")
 
@@ -64,9 +64,9 @@ def main(argv: list[str] | None = None) -> int:
     review.add_argument("--validation-dir", help="tuple live validation artifact directory")
     review.add_argument("--output", "-o", help="write review report JSON")
 
-    promote = subcommands.add_parser("promote", help="prepare, validate, and optionally activate a tuple candidate from a review report")
+    promote = subcommands.add_parser("promote", help="prepare, validate, and optionally activate a production tuple from a review report")
     promote.add_argument("--review", required=True, help="admin review JSON produced by gpucall-recipe-admin review")
-    promote.add_argument("--candidate", help="candidate name; defaults to the first tuple_candidate_matches entry")
+    promote.add_argument("--candidate", help="tuple candidate name; defaults to the first tuple_candidate_matches entry")
     promote.add_argument("--config-dir", required=True, help="active gpucall config directory")
     promote.add_argument("--work-dir", required=True, help="promotion workspace for generated config and reports")
     promote.add_argument("--validation-dir", help="tuple live validation artifact directory")
@@ -127,7 +127,7 @@ def main(argv: list[str] | None = None) -> int:
         _write_json(report, args.output)
         return 0
     if args.command == "promote":
-        report = promote_candidate(
+        report = promote_production_tuple(
             review=_load_json(args.review),
             candidate_name=args.candidate,
             config_dir=args.config_dir,
@@ -186,19 +186,26 @@ def canonical_recipe_from_artifact(artifact: Mapping[str, Any]) -> dict[str, Any
     proposed = _proposed_recipe_from_artifact(artifact)
     task = str(proposed.get("task") or "infer")
     name = _canonical_name(str(proposed.get("name") or f"{task}-draft"))
-    max_model_len = _positive_int(proposed.get("max_model_len"), default=32768)
+    context_budget_tokens = _positive_int(proposed.get("context_budget_tokens") or proposed.get("max_model_len"), default=32768)
     recipe: dict[str, Any] = {
         "name": name,
+        "recipe_schema_version": 3,
         "task": task,
+        "intent": str(proposed.get("intent") or f"{task}_draft"),
         "auto_select": bool(proposed.get("auto_select", True)),
         "data_classification": str(proposed.get("data_classification") or "confidential"),
         "allowed_modes": _allowed_modes(proposed),
-        "min_vram_gb": _positive_int(proposed.get("min_vram_gb"), default=_default_vram(task, proposed)),
-        "max_model_len": max_model_len,
-        "timeout_seconds": _timeout_for(task, max_model_len),
-        "lease_ttl_seconds": _lease_for(task, max_model_len),
-        "tokenizer_family": "qwen",
-        "max_input_bytes": _max_input_bytes(task, max_model_len),
+        "context_budget_tokens": context_budget_tokens,
+        "resource_class": str(proposed.get("resource_class") or _resource_class_for(task, context_budget_tokens)),
+        "latency_class": str(
+            proposed.get("latency_class")
+            or ("long_running" if context_budget_tokens >= 524288 else ("batch" if context_budget_tokens >= 65536 else "standard"))
+        ),
+        "quality_floor": "draft",
+        "timeout_seconds": _timeout_for(task, context_budget_tokens),
+        "lease_ttl_seconds": _lease_for(task, context_budget_tokens),
+        "token_estimation_profile": str(proposed.get("token_estimation_profile") or "generic_utf8"),
+        "max_input_bytes": _max_input_bytes(task, context_budget_tokens),
         "allowed_mime_prefixes": _allowed_mime_prefixes(task, proposed),
         "default_temperature": 0.2 if task == "vision" else 0.7,
         "structured_temperature": 0.0,
@@ -278,7 +285,7 @@ def review_artifact(
     return report
 
 
-def promote_candidate(
+def promote_production_tuple(
     *,
     review: Mapping[str, Any],
     candidate_name: str | None,
@@ -309,7 +316,7 @@ def promote_candidate(
     reports.mkdir(parents=True, exist_ok=True)
     _copy_config_tree(config_root, promotion_config, force=force)
     recipe_path = _write_yaml_guarded(promotion_config / "recipes" / f"{recipe['name']}.yml", recipe, force=force)
-    provider_path = _write_yaml_guarded(promotion_config / "tuples" / f"{tuple['name']}.yml", tuple, force=force)
+    tuple_path = _write_yaml_guarded(promotion_config / "tuples" / f"{tuple['name']}.yml", tuple, force=force)
     surface_path, worker_path = _write_split_tuple(promotion_config, tuple, force=force)
     promotion_report: dict[str, Any] = {
         "schema_version": 1,
@@ -320,7 +327,7 @@ def promote_candidate(
         "tuple": tuple["name"],
         "promotion_config_dir": str(promotion_config),
         "generated_recipe_path": str(recipe_path),
-        "generated_provider_path": str(provider_path),
+        "generated_tuple_path": str(tuple_path),
         "generated_surface_path": str(surface_path),
         "generated_worker_path": str(worker_path),
         "validation": None,
@@ -378,6 +385,29 @@ def promote_candidate(
     else:
         promotion_report["decision"] = "VALIDATED_READY_TO_ACTIVATE"
     return promotion_report
+
+
+def promote_candidate(
+    *,
+    review: Mapping[str, Any],
+    candidate_name: str | None,
+    config_dir: str | Path,
+    work_dir: str | Path,
+    validation_dir: str | Path | None = None,
+    run_validation: bool = False,
+    activate: bool = False,
+    force: bool = False,
+) -> dict[str, Any]:
+    return promote_production_tuple(
+        review=review,
+        candidate_name=candidate_name,
+        config_dir=config_dir,
+        work_dir=work_dir,
+        validation_dir=validation_dir,
+        run_validation=run_validation,
+        activate=activate,
+        force=force,
+    )
 
 
 def process_inbox(
@@ -492,7 +522,7 @@ def _review_config_and_providers(
             model=config.models.get(tuple.model_ref) if tuple.model_ref else None,
             engine=config.engines.get(tuple.engine_ref) if tuple.engine_ref else None,
             mode=_first_mode(recipe),
-            required_len=recipe.max_model_len,
+            required_len=recipe_requirements(recipe).context_budget_tokens,
             required_input_contracts=required_contracts,
             auto_selected=True,
         )
@@ -927,8 +957,8 @@ def tuple_contract_requirements(artifact: Mapping[str, Any], recipe: Recipe) -> 
     requirements: dict[str, Any] = {
         "task": recipe.task,
         "model_capabilities": [str(item) for item in desired_capabilities],
-        "min_vram_gb": recipe.min_vram_gb,
-        "min_model_len": recipe.max_model_len,
+        "min_vram_gb": recipe_requirements(recipe).minimum_vram_gb,
+        "min_model_len": recipe_requirements(recipe).context_budget_tokens,
         "modes": [str(mode) for mode in recipe.allowed_modes],
         "input_contracts": sorted(_required_input_contracts(recipe)),
         "max_data_classification": str(recipe.data_classification),
@@ -1060,8 +1090,9 @@ def _matching_live_validation(
 
 def _auto_select_shadowing(recipe: Recipe, recipes: Mapping[str, Recipe]) -> dict[str, Any]:
     same_task = [item for item in recipes.values() if item.task == recipe.task and item.auto_select]
-    larger_than_existing = all(recipe.max_model_len > item.max_model_len for item in same_task) if same_task else True
-    cheaper_or_equal = all(recipe.min_vram_gb <= item.min_vram_gb for item in same_task) if same_task else True
+    candidate_requirements = recipe_requirements(recipe)
+    larger_than_existing = all(candidate_requirements.context_budget_tokens > recipe_requirements(item).context_budget_tokens for item in same_task) if same_task else True
+    cheaper_or_equal = all(candidate_requirements.minimum_vram_gb <= recipe_requirements(item).minimum_vram_gb for item in same_task) if same_task else True
     return {
         "candidate_auto_select": recipe.auto_select,
         "existing_auto_select_recipes": [item.name for item in same_task],
@@ -1185,15 +1216,20 @@ def _proposed_recipe_from_sanitized(sanitized: Mapping[str, Any]) -> dict[str, A
     if not isinstance(capabilities, list) or not capabilities:
         capabilities = CAPABILITY_BY_INTENT.get(intent) or TASK_DEFAULT_CAPABILITIES.get(task, ["instruction_following"])
     required_len = _mapping(_mapping(sanitized.get("error")).get("context")).get("required_model_len")
+    context_budget_tokens = _round_context_budget(required_len)
     return {
         "name": _recipe_name(task, intent),
+        "recipe_schema_version": 3,
         "task": task,
+        "intent": intent,
         "auto_select": True,
         "data_classification": str(sanitized.get("classification") or "confidential"),
         "allowed_modes": [str(sanitized.get("mode") or "sync")],
         "required_model_capabilities": [str(item) for item in capabilities],
-        "min_vram_gb": _default_vram(task, {"required_model_capabilities": capabilities, "max_model_len": required_len}),
-        "max_model_len": _round_model_len(required_len),
+        "context_budget_tokens": context_budget_tokens,
+        "resource_class": _resource_class_for(task, context_budget_tokens),
+        "latency_class": "long_running" if context_budget_tokens >= 524288 else ("batch" if context_budget_tokens >= 65536 else "standard"),
+        "token_estimation_profile": "generic_utf8",
         "allowed_mime_prefixes": _mime_prefixes_for(task),
         "output_contract": sanitized.get("expected_output") or "plain_text",
     }
@@ -1238,7 +1274,7 @@ def _positive_int(value: Any, *, default: int) -> int:
     return max(1, number)
 
 
-def _round_model_len(value: Any) -> int:
+def _round_context_budget(value: Any) -> int:
     try:
         required = int(value)
     except (TypeError, ValueError):
@@ -1256,17 +1292,18 @@ def _allowed_modes(proposed: Mapping[str, Any]) -> list[str]:
     return ["sync", "async"]
 
 
-def _default_vram(task: str, proposed: Mapping[str, Any]) -> int:
-    capabilities = proposed.get("required_model_capabilities") or []
-    max_model_len = _positive_int(proposed.get("max_model_len"), default=8192)
-    base = 80 if task in {"vision", "video"} else 24
-    if max_model_len > 524288:
-        base = max(base, 320)
-    if max_model_len > 131072:
-        base = max(base, 80)
-    if any(str(capability) in {"document_understanding", "video_understanding"} for capability in capabilities):
-        base = max(base, 80)
-    return base
+def _resource_class_for(task: str, context_budget_tokens: int) -> str:
+    if task == "vision":
+        return "document_vision" if context_budget_tokens >= 8192 else "standard"
+    if context_budget_tokens <= 8192:
+        return "light"
+    if context_budget_tokens <= 32768:
+        return "standard"
+    if context_budget_tokens <= 65536:
+        return "large"
+    if context_budget_tokens <= 131072:
+        return "exlarge"
+    return "ultralong"
 
 
 def _timeout_for(task: str, max_model_len: int) -> int:

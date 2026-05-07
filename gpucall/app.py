@@ -22,7 +22,7 @@ from gpucall.compiler import GovernanceCompiler, GovernanceError
 from gpucall.config import ConfigError, default_config_dir, default_state_dir, load_config
 from gpucall.credentials import load_credentials
 from gpucall.dispatcher import Dispatcher, LeaseReaper, TupleReconciler
-from gpucall.domain import ChatMessage, DataRef, ExecutionMode, InlineValue, JobRecord, JobState, TupleError, ResponseFormat, TaskRequest
+from gpucall.domain import ChatMessage, DataRef, ExecutionMode, InlineValue, JobRecord, JobState, TupleError, ResponseFormat, TaskRequest, recipe_requirements
 from gpucall.domain import PresignGetRequest, PresignGetResponse, PresignPutRequest, PresignPutResponse
 from gpucall.object_store import ObjectStore
 from gpucall.execution.factory import build_adapters
@@ -263,7 +263,7 @@ def create_app(config_dir: Path | None = None) -> FastAPI:
                 name: {
                     "task": recipe.task,
                     "auto_select": recipe.auto_select,
-                    "max_model_len": recipe.max_model_len,
+                    "context_budget_tokens": recipe_requirements(recipe).context_budget_tokens,
                 }
                 for name, recipe in sorted(runtime.compiler.recipes.items())
             },

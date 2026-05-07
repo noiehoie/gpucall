@@ -1,5 +1,5 @@
 name: text-infer-standard
-recipe_schema_version: 2
+recipe_schema_version: 3
 task: infer
 intent: standard_text_inference
 data_classification: confidential
@@ -12,7 +12,7 @@ latency_class: standard
 quality_floor: standard
 timeout_seconds: 180
 lease_ttl_seconds: 240
-tokenizer_family: qwen
+token_estimation_profile: generic_utf8
 max_input_bytes: 16777216
 allowed_mime_prefixes:
 - text/

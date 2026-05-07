@@ -14,7 +14,7 @@ import yaml
 from gpucall.config import ConfigError, load_config
 from gpucall.cli import _provider_smoke_request
 from gpucall.compiler import GovernanceCompiler
-from gpucall.domain import DataRef, ExecutionMode, ExecutionTupleSpec, Recipe, SecurityTier, TaskRequest
+from gpucall.domain import DataRef, ExecutionMode, ExecutionTupleSpec, Recipe, SecurityTier, TaskRequest, recipe_requirements
 from gpucall.registry import ObservedRegistry
 
 
@@ -25,12 +25,12 @@ def copy_config(tmp_path: Path) -> Path:
     return root
 
 
-def test_recipe_v2_rejects_provider_resource_fields() -> None:
+def test_recipe_v3_rejects_provider_resource_fields() -> None:
     with pytest.raises(ValueError, match="tuple resource fields"):
         Recipe.model_validate(
             {
-                "name": "bad-v2",
-                "recipe_schema_version": 2,
+                "name": "bad-v3",
+                "recipe_schema_version": 3,
                 "task": "infer",
                 "intent": "bad",
                 "data_classification": "confidential",
@@ -42,7 +42,7 @@ def test_recipe_v2_rejects_provider_resource_fields() -> None:
                 "gpu": "A10G",
                 "timeout_seconds": 30,
                 "lease_ttl_seconds": 60,
-                "tokenizer_family": "qwen",
+                "token_estimation_profile": "qwen",
             }
         )
 
@@ -52,14 +52,16 @@ def test_load_config_rejects_recipe_without_capable_provider(tmp_path) -> None:
     (root / "recipes" / "text-infer-standard.yml").write_text(
         """
 name: text-infer-standard
+recipe_schema_version: 3
 task: infer
+intent: too_large
 data_classification: confidential
 allowed_modes: [sync]
-min_vram_gb: 999
-max_model_len: 999999
+context_budget_tokens: 999999999
+resource_class: ultralong
 timeout_seconds: 30
 lease_ttl_seconds: 120
-tokenizer_family: qwen
+token_estimation_profile: qwen
 """.lstrip(),
         encoding="utf-8",
     )
@@ -89,14 +91,16 @@ immutable_audit: true
     (root / "recipes" / "text-infer-standard.yml").write_text(
         """
 name: text-infer-standard
+recipe_schema_version: 3
 task: infer
+intent: text_infer
 data_classification: confidential
 allowed_modes: [sync]
-min_vram_gb: 24
-max_model_len: 32768
+context_budget_tokens: 32768
+resource_class: standard
 timeout_seconds: 30
 lease_ttl_seconds: 120
-tokenizer_family: qwen
+token_estimation_profile: qwen
 """.lstrip(),
         encoding="utf-8",
     )
@@ -213,10 +217,10 @@ def test_standard_config_includes_verified_text_recipes(tmp_path) -> None:
 
     assert config.recipes["text-infer-light"].task == "infer"
     assert config.recipes["text-infer-standard"].task == "infer"
-    assert config.recipes["text-infer-large"].max_model_len == 65536
-    assert config.recipes["text-infer-exlarge"].max_model_len == 131072
-    assert config.recipes["text-infer-ultralong"].max_model_len == 524288
-    assert config.recipes["text-infer-standard"].max_model_len == 32768
+    assert recipe_requirements(config.recipes["text-infer-large"]).context_budget_tokens == 65536
+    assert recipe_requirements(config.recipes["text-infer-exlarge"]).context_budget_tokens == 131072
+    assert recipe_requirements(config.recipes["text-infer-ultralong"]).context_budget_tokens == 524288
+    assert recipe_requirements(config.recipes["text-infer-standard"]).context_budget_tokens == 32768
     assert config.recipes["text-infer-standard"].max_input_bytes == 16777216
     assert config.recipes["text-infer-light"].output_validation_attempts == 2
     assert config.recipes["text-infer-ultralong"].output_validation_attempts == 2

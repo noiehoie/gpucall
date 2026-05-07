@@ -134,16 +134,16 @@ gpucall-recipe-draft quality \
   --content-type image/jpeg \
   --bytes 1136521 \
   --dimension 1200x2287 \
-  --selected-recipe vision-image-standard \
-  --selected-tuple modal-vision-a10g \
-  --selected-tuple-model Salesforce/blip-vqa-base \
+  --observed-recipe vision-image-standard \
+  --observed-tuple modal-vision-a10g \
+  --observed-tuple-model Salesforce/blip-vqa-base \
   --quality-failure-kind insufficient_ocr \
   --quality-failure-reason "short answer only; expected top headlines" \
   --remote-inbox admin@gpucall.example.internal:/srv/gpucall/state/recipe_requests/inbox \
   --source news-system
 ```
 
-This creates a `deterministic-quality-feedback-intake` submission. It is a request to review recipe/provider capability, not proof that gpucall routed incorrectly.
+This creates a `deterministic-quality-feedback-intake` submission. It is a request to review recipe intent and production tuple capability, not proof that gpucall routed incorrectly.
 
 ### Phase 2: Local Draft Summary
 
@@ -221,7 +221,7 @@ For `restricted` workloads, use the intake artifact only, or use an approved loc
 2. Caller sends `intake.json` and a business-level description to the gpucall administrator.
 3. Administrator decides whether recipe authoring is appropriate.
 4. If the organization has adopted an accept-all policy, administrator runs the gateway-side `gpucall-recipe-admin` helper.
-5. Administrator writes canonical gpucall recipe/provider YAML.
+5. Administrator writes canonical gpucall recipe intent and production tuple YAML.
 6. Administrator runs `gpucall validate-config`, tests, provider validation, and `gpucall launch-check`.
 7. Only reviewed and validated config is committed and deployed.
 

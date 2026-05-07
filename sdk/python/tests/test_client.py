@@ -234,10 +234,10 @@ def test_redacts_presigned_httpx_url_log_args() -> None:
     assert "signature" not in record.getMessage()
 
 
-def test_infer_rejects_recipe_and_has_no_tuple_selector() -> None:
+def test_infer_has_no_caller_routing_selector() -> None:
     client = GPUCallClient("http://gpucall.test", transport=httpx.MockTransport(lambda request: httpx.Response(500)))
 
-    with pytest.raises(GPUCallCallerRoutingError):
+    with pytest.raises(TypeError):
         client.infer(recipe="text-infer-standard")
     with pytest.raises(TypeError):
         client.infer(provider="modal-a10g")

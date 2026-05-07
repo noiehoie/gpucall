@@ -81,7 +81,7 @@ def plan(chain: list[str]) -> CompiledPlan:
         tuple_chain=chain,
         timeout_seconds=2,
         lease_ttl_seconds=10,
-        tokenizer_family="qwen",
+        token_estimation_profile="qwen",
         token_budget=None,
         input_refs=[],
         inline_inputs={},

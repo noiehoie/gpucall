@@ -39,14 +39,6 @@ TASK_DEFAULT_CAPABILITIES = {
     "video": ["video_understanding"],
 }
 
-VRAM_BY_TASK = {
-    "infer": 24,
-    "vision": 80,
-    "transcribe": 24,
-    "video": 80,
-}
-
-
 @dataclass(frozen=True)
 class DraftInputs:
     error_payload: Mapping[str, Any]
@@ -83,9 +75,9 @@ class QualityFeedbackInputs:
     byte_values: tuple[int, ...] = ()
     dimensions: tuple[str, ...] = ()
     required_model_len: int | None = None
-    selected_recipe: str | None = None
-    selected_tuple: str | None = None
-    selected_tuple_model: str | None = None
+    observed_recipe: str | None = None
+    observed_tuple: str | None = None
+    observed_tuple_model: str | None = None
     output_validated: bool | None = None
     quality_failure_kind: str = "low_quality_success"
     quality_failure_reason: str = ""
@@ -223,9 +215,9 @@ def intake_from_quality_feedback(inputs: QualityFeedbackInputs) -> dict[str, Any
                 "dimensions": sorted(set(inputs.dimensions)),
             },
             "runtime_selection": {
-                "recipe": inputs.selected_recipe,
-                "tuple": inputs.selected_tuple,
-                "tuple_model": inputs.selected_tuple_model,
+                "observed_recipe": inputs.observed_recipe,
+                "observed_tuple": inputs.observed_tuple,
+                "observed_tuple_model": inputs.observed_tuple_model,
                 "output_validated": inputs.output_validated,
             },
             "quality_feedback": {
@@ -297,36 +289,39 @@ def draft_from_intake(intake: Mapping[str, Any]) -> dict[str, Any]:
     capabilities = [str(item) for item in sanitized.get("desired_capabilities") or TASK_DEFAULT_CAPABILITIES.get(task, [])]
     classification = _str_or_none(sanitized.get("classification")) or "confidential"
     required_model_len = _as_mapping(_as_mapping(sanitized.get("error")).get("context")).get("required_model_len")
-    max_model_len = _round_model_len(required_model_len)
+    context_budget_tokens = _round_context_budget(required_model_len)
     recipe_name = _recipe_name(task, intent)
-    min_vram = _vram_for(task, capabilities, max_model_len)
     return {
         "schema_version": 1,
         "phase": "draft",
         "source": "sanitized_request_only",
         "human_review_required": True,
         "proposed_recipe": {
+            "recipe_schema_version": 3,
             "name": recipe_name,
             "task": task,
+            "intent": intent,
             "auto_select": True,
             "data_classification": classification,
             "allowed_modes": [_str_or_none(sanitized.get("mode")) or "sync"],
             "required_model_capabilities": capabilities,
-            "min_vram_gb": min_vram,
-            "max_model_len": max_model_len,
+            "context_budget_tokens": context_budget_tokens,
+            "resource_class": _resource_class_for(task, context_budget_tokens),
+            "latency_class": _latency_class_for(context_budget_tokens),
+            "quality_floor": "draft",
+            "token_estimation_profile": "generic_utf8",
             "allowed_mime_prefixes": _mime_prefixes_for(task),
             "output_contract": sanitized.get("expected_output") or "plain_text",
         },
-        "tuple_requirements": {
-            "model_capabilities": capabilities,
-            "instruction_tuned": "instruction_following" in capabilities,
-            "min_vram_gb": min_vram,
-            "min_model_len": max_model_len,
+        "workload_contract": {
+            "required_capabilities": capabilities,
+            "context_budget_tokens": context_budget_tokens,
             "input_contracts": _input_contracts_for(task),
+            "output_contract": sanitized.get("expected_output") or "plain_text",
         },
         "operator_notes": [
             "This draft was produced from sanitized metadata only.",
-            "Do not commit this draft directly; map it to gpucall's canonical recipe/provider schema and run validation.",
+            "Do not commit this draft directly; materialize it through the gpucall admin workflow and run validation.",
             "If the caller's intent is wrong or too broad, revise the intent before adding a production recipe.",
         ],
     }
@@ -532,7 +527,7 @@ def _detail_kind(detail: Any) -> str:
     return "unknown"
 
 
-def _round_model_len(value: Any) -> int:
+def _round_context_budget(value: Any) -> int:
     try:
         required = int(value)
     except (TypeError, ValueError):
@@ -541,15 +536,6 @@ def _round_model_len(value: Any) -> int:
         if required <= candidate:
             return candidate
     return required
-
-
-def _vram_for(task: str, capabilities: list[str], max_model_len: int) -> int:
-    base = VRAM_BY_TASK.get(task, 24)
-    if max_model_len > 131072:
-        base = max(base, 80)
-    if any(capability in capabilities for capability in {"document_understanding", "video_understanding"}):
-        base = max(base, 80)
-    return base
 
 
 def _recipe_name(task: str, intent: str) -> str:
@@ -575,6 +561,28 @@ def _input_contracts_for(task: str) -> list[str]:
     if task == "video":
         return ["data_refs"]
     return ["text", "chat_messages", "data_refs"]
+
+
+def _resource_class_for(task: str, context_budget_tokens: int) -> str:
+    if task == "vision":
+        return "document_vision" if context_budget_tokens >= 8192 else "standard"
+    if context_budget_tokens <= 8192:
+        return "light"
+    if context_budget_tokens <= 32768:
+        return "standard"
+    if context_budget_tokens <= 65536:
+        return "large"
+    if context_budget_tokens <= 131072:
+        return "exlarge"
+    return "ultralong"
+
+
+def _latency_class_for(context_budget_tokens: int) -> str:
+    if context_budget_tokens >= 524288:
+        return "long_running"
+    if context_budget_tokens >= 65536:
+        return "batch"
+    return "standard"
 
 
 def _as_mapping(value: Any) -> Mapping[str, Any]:

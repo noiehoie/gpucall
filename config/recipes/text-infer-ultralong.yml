@@ -1,5 +1,5 @@
 name: text-infer-ultralong
-recipe_schema_version: 2
+recipe_schema_version: 3
 task: infer
 intent: ultralong_text_inference
 data_classification: confidential
@@ -12,7 +12,7 @@ latency_class: long_running
 quality_floor: high
 timeout_seconds: 600
 lease_ttl_seconds: 900
-tokenizer_family: qwen
+token_estimation_profile: generic_utf8
 max_input_bytes: 536870912
 allowed_mime_prefixes:
 - text/

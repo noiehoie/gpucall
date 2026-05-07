@@ -10,7 +10,7 @@ from typing import Any, Mapping
 from gpucall.candidate_sources import load_tuple_candidate_payloads
 from gpucall.config import default_state_dir
 from gpucall.credentials import credentials_path, load_credentials
-from gpucall.domain import ExecutionMode, ExecutionTupleSpec, Recipe
+from gpucall.domain import ExecutionMode, ExecutionTupleSpec, Recipe, recipe_requirements
 from gpucall.execution.contracts import artifact_tuple_evidence_key, official_contract, official_contract_hash, tuple_evidence_key
 from gpucall.tuple_catalog import live_tuple_catalog_findings
 from gpucall.execution.registry import adapter_descriptor
@@ -107,7 +107,7 @@ def _active_tuple_row(
         model=model,
         engine=engine,
         mode=_first_mode(recipe),
-        required_len=recipe.max_model_len,
+        required_len=recipe_requirements(recipe).context_budget_tokens,
         required_input_contracts=required_inputs,
         auto_selected=True,
     )
@@ -162,7 +162,7 @@ def _candidate_row(
             model=model,
             engine=engine,
             mode=_first_mode(recipe),
-            required_len=recipe.max_model_len,
+            required_len=recipe_requirements(recipe).context_budget_tokens,
             required_input_contracts=required_inputs,
             auto_selected=False,
         )

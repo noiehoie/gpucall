@@ -14,7 +14,7 @@ def plan_payload(plan: CompiledPlan) -> dict[str, Any]:
         "recipe": plan.recipe_name,
         "mode": plan.mode.value,
         "data_classification": plan.data_classification.value,
-        "tokenizer_family": plan.tokenizer_family,
+        "token_estimation_profile": plan.token_estimation_profile,
         "token_budget": plan.token_budget,
         "max_tokens": plan.max_tokens,
         "temperature": plan.temperature,

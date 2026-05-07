@@ -7,7 +7,7 @@ from typing import TypeVar
 import yaml
 from pydantic import BaseModel, ValidationError
 
-from gpucall.domain import EngineSpec, ModelSpec, ObjectStoreConfig, Policy, ExecutionTupleSpec, Recipe, TenantSpec
+from gpucall.domain import EngineSpec, ModelSpec, ObjectStoreConfig, Policy, ExecutionTupleSpec, Recipe, TenantSpec, recipe_requirements
 from gpucall.execution.registry import adapter_descriptor
 from gpucall.routing import tuple_route_rejection_reason
 
@@ -280,7 +280,7 @@ def validate_config(config: GpucallConfig) -> None:
                     tuple=tuple_spec,
                     model=config.models.get(tuple_spec.model_ref) if tuple_spec.model_ref else None,
                     engine=config.engines.get(tuple_spec.engine_ref) if tuple_spec.engine_ref else None,
-                    required_len=recipe.max_model_len,
+                    required_len=recipe_requirements(recipe).context_budget_tokens,
                     auto_selected=True,
                 )
                 if reason is not None:

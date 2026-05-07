@@ -315,7 +315,7 @@ class Recipe(BaseModel):
 
     name: str
     task: str
-    recipe_schema_version: PositiveInt = 1
+    recipe_schema_version: PositiveInt = 3
     intent: str | None = None
     context_budget_tokens: PositiveInt | None = None
     resource_class: RecipeResourceClass | None = None
@@ -325,11 +325,9 @@ class Recipe(BaseModel):
     auto_select: bool = True
     data_classification: DataClassification = DataClassification.CONFIDENTIAL
     allowed_modes: list[ExecutionMode]
-    min_vram_gb: PositiveInt
-    max_model_len: PositiveInt
     timeout_seconds: PositiveInt
     lease_ttl_seconds: PositiveInt
-    tokenizer_family: str
+    token_estimation_profile: str = "generic_utf8"
     max_input_bytes: PositiveInt | None = None
     allowed_mime_prefixes: list[str] = Field(default_factory=list)
     allowed_inline_mime_prefixes: list[str] = Field(default_factory=list)
@@ -355,21 +353,47 @@ class Recipe(BaseModel):
             return data
         payload = dict(data)
         schema_version = int(payload.get("recipe_schema_version") or 1)
+        if "tokenizer_family" in payload and "token_estimation_profile" not in payload:
+            payload["token_estimation_profile"] = payload.pop("tokenizer_family")
         old_resource_fields = {"gpu", "min_vram_gb", "max_model_len"}
-        if schema_version >= 2:
+        if schema_version >= 3:
             present = old_resource_fields & set(payload)
             if present:
-                raise ValueError("recipe_schema_version=2 must not declare tuple resource fields: " + ", ".join(sorted(present)))
-            context_budget = int(payload.get("context_budget_tokens") or _context_budget_for(payload))
-            payload["max_model_len"] = context_budget
-            payload["min_vram_gb"] = _vram_for_recipe(payload, context_budget)
-            if "max_input_bytes" not in payload:
-                payload["max_input_bytes"] = _max_input_bytes_for(payload, context_budget)
-            if "timeout_seconds" not in payload:
-                payload["timeout_seconds"] = _timeout_for_recipe(payload, context_budget)
-            if "lease_ttl_seconds" not in payload:
-                payload["lease_ttl_seconds"] = _lease_for_recipe(payload, context_budget)
+                raise ValueError("recipe_schema_version=3 must not declare tuple resource fields: " + ", ".join(sorted(present)))
+        elif old_resource_fields & set(payload):
+            if "context_budget_tokens" not in payload and "max_model_len" in payload:
+                payload["context_budget_tokens"] = payload["max_model_len"]
+            for field in old_resource_fields:
+                payload.pop(field, None)
+        context_budget = int(payload.get("context_budget_tokens") or _context_budget_for(payload))
+        if "max_input_bytes" not in payload:
+            payload["max_input_bytes"] = _max_input_bytes_for(payload, context_budget)
+        if "timeout_seconds" not in payload:
+            payload["timeout_seconds"] = _timeout_for_recipe(payload, context_budget)
+        if "lease_ttl_seconds" not in payload:
+            payload["lease_ttl_seconds"] = _lease_for_recipe(payload, context_budget)
         return payload
+
+
+class DerivedRecipeRequirements(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    context_budget_tokens: PositiveInt
+    minimum_vram_gb: PositiveInt
+    max_input_bytes: PositiveInt
+    timeout_seconds: PositiveInt
+    lease_ttl_seconds: PositiveInt
+
+
+def recipe_requirements(recipe: Recipe) -> DerivedRecipeRequirements:
+    context_budget = int(recipe.context_budget_tokens or _context_budget_for(recipe.model_dump(mode="json")))
+    return DerivedRecipeRequirements(
+        context_budget_tokens=context_budget,
+        minimum_vram_gb=_vram_for_recipe(recipe.model_dump(mode="json"), context_budget),
+        max_input_bytes=int(recipe.max_input_bytes or _max_input_bytes_for(recipe.model_dump(mode="json"), context_budget)),
+        timeout_seconds=int(recipe.timeout_seconds or _timeout_for_recipe(recipe.model_dump(mode="json"), context_budget)),
+        lease_ttl_seconds=int(recipe.lease_ttl_seconds or _lease_for_recipe(recipe.model_dump(mode="json"), context_budget)),
+    )
 
 
 InputContract = Literal["text", "chat_messages", "data_refs", "image", "activation_refs", "artifact_refs"]
@@ -545,7 +569,7 @@ class CompiledPlan(BaseModel):
     tuple_chain: list[str]
     timeout_seconds: PositiveInt
     lease_ttl_seconds: PositiveInt
-    tokenizer_family: str
+    token_estimation_profile: str
     token_budget: PositiveInt | None
     max_tokens: PositiveInt | None = None
     temperature: float | None = None
@@ -610,6 +634,8 @@ def _context_budget_for(payload: dict[str, Any]) -> int:
 
 def _vram_for_recipe(payload: dict[str, Any], context_budget: int) -> int:
     resource_class = str(payload.get("resource_class") or "")
+    if context_budget > 524288:
+        return 320
     if resource_class == "smoke":
         return 1
     if resource_class == "light":
@@ -618,8 +644,6 @@ def _vram_for_recipe(payload: dict[str, Any], context_budget: int) -> int:
         return 80 if resource_class == "document_vision" else 24
     if resource_class in {"large", "exlarge", "ultralong"}:
         return 80
-    if context_budget > 524288:
-        return 320
     if context_budget > 32768:
         return 80
     if context_budget > 8192:

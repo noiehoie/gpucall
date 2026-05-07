@@ -1,5 +1,5 @@
 name: text-infer-large
-recipe_schema_version: 2
+recipe_schema_version: 3
 task: infer
 intent: large_context_text_inference
 data_classification: confidential
@@ -12,7 +12,7 @@ latency_class: batch
 quality_floor: high
 timeout_seconds: 600
 lease_ttl_seconds: 900
-tokenizer_family: qwen
+token_estimation_profile: generic_utf8
 max_input_bytes: 67108864
 allowed_mime_prefixes:
 - text/
