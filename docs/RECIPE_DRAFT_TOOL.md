@@ -38,7 +38,7 @@ In normal operation, unknown workloads are handled as follows:
 2. Caller submits the sanitized preflight intake to the gpucall administrator.
 3. Administrator materializes or rejects the workload class.
 4. If production still fails, gpucall returns `422 NO_AUTO_SELECTABLE_RECIPE` or `503 no eligible provider after policy, recipe, and circuit constraints`.
-5. Caller runs post-failure `intake` and `compare` to distinguish workload drift from admin/provider/runtime failure.
+5. Caller runs post-failure `intake` and `compare` to distinguish workload drift from admin/catalog/runtime failure.
 6. If gpucall returns `200 OK` but caller-side validation fails, caller runs `quality` and submits that sanitized feedback to the same admin inbox.
 
 The helper is designed to remove raw prompt bodies, message bodies, documents, media bytes, DataRef URIs, presigned URLs, and secrets. It produces an intake artifact for gpucall administrators. LLM-assisted recipe authoring belongs on the administrator side, after the administrator accepts the sanitized intake into an audited workflow.
@@ -56,7 +56,7 @@ gpucall-recipe-draft preflight \
   --intent understand_document_image \
   --content-type image/png \
   --bytes 2000000 \
-  --required-model-len 9000 \
+  --context-budget-tokens 9000 \
   --classification confidential \
   --output preflight-intake.json
 ```
@@ -199,7 +199,7 @@ Examples:
 - `summarize_audio`
 - `summarize_video`
 
-gpucall administrators map these intents to recipe and provider contracts.
+gpucall administrators map these intents to recipe intent and tuple contracts.
 
 ## Security Rules
 

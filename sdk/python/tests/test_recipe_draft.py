@@ -24,8 +24,8 @@ def test_intake_redacts_sensitive_payload_and_keeps_metadata() -> None:
         "context": {
             "task": "vision",
             "mode": "sync",
-            "required_model_len": 9000,
-            "largest_auto_recipe_model_len": 512,
+            "context_budget_tokens": 9000,
+            "largest_auto_recipe_context_budget_tokens": 512,
             "rejections": ["vision-image-standard: required capability is missing"],
         },
         "input_refs": [
@@ -112,7 +112,7 @@ def test_draft_uses_sanitized_intake_only() -> None:
             "classification": "confidential",
             "expected_output": "plain_text",
             "desired_capabilities": ["document_understanding", "visual_question_answering", "instruction_following"],
-            "error": {"context": {"required_model_len": 9000}},
+            "error": {"context": {"context_budget_tokens": 9000}},
         }
     }
 
@@ -134,7 +134,7 @@ def test_recipe_draft_cli_intake_and_draft(tmp_path, capsys) -> None:
         json.dumps(
             {
                 "detail": "no auto-selectable recipe for task 'infer': text-infer-standard: required context budget 40000 exceeds 32768",
-                "context": {"task": "infer", "mode": "sync", "required_model_len": 40000},
+                "context": {"task": "infer", "mode": "sync", "context_budget_tokens": 40000},
                 "inline_inputs": {"prompt": {"value": "secret text", "content_type": "text/plain"}},
             }
         ),
@@ -267,7 +267,7 @@ def test_preflight_intake_is_sanitized_metadata_only() -> None:
             classification="confidential",
             content_types=("image/png",),
             byte_values=(123456,),
-            required_model_len=9000,
+            context_budget_tokens=9000,
         )
     )
 
@@ -318,10 +318,10 @@ def test_quality_feedback_intake_is_sanitized_metadata_only() -> None:
 
 def test_compare_preflight_to_failure_detects_workload_drift() -> None:
     preflight = intake_from_preflight(
-        PreflightInputs(task="infer", intent="summarize_text", content_types=("text/plain",), required_model_len=40000)
+        PreflightInputs(task="infer", intent="summarize_text", content_types=("text/plain",), context_budget_tokens=40000)
     )
     failure = intake_from_preflight(
-        PreflightInputs(task="vision", intent="understand_document_image", content_types=("image/png",), required_model_len=9000)
+        PreflightInputs(task="vision", intent="understand_document_image", content_types=("image/png",), context_budget_tokens=9000)
     )
 
     report = compare_preflight_to_failure(preflight, failure)
@@ -333,10 +333,10 @@ def test_compare_preflight_to_failure_detects_workload_drift() -> None:
 
 def test_compare_preflight_to_failure_matches() -> None:
     preflight = intake_from_preflight(
-        PreflightInputs(task="infer", intent="summarize_text", content_types=("text/plain",), required_model_len=40000)
+        PreflightInputs(task="infer", intent="summarize_text", content_types=("text/plain",), context_budget_tokens=40000)
     )
     failure = intake_from_preflight(
-        PreflightInputs(task="infer", intent="summarize_text", content_types=("text/plain",), required_model_len=40000)
+        PreflightInputs(task="infer", intent="summarize_text", content_types=("text/plain",), context_budget_tokens=40000)
     )
 
     report = compare_preflight_to_failure(preflight, failure)
@@ -359,7 +359,7 @@ def test_recipe_draft_cli_preflight_and_compare(tmp_path, capsys) -> None:
                 "summarize_text",
                 "--content-type",
                 "text/plain",
-                "--required-model-len",
+                "--context-budget-tokens",
                 "40000",
                 "--output",
                 str(preflight_path),
@@ -377,7 +377,7 @@ def test_recipe_draft_cli_preflight_and_compare(tmp_path, capsys) -> None:
                     "classification": "confidential",
                     "expected_output": "plain_text",
                     "desired_capabilities": ["summarization"],
-                    "error": {"context": {"required_model_len": 40000}},
+                    "error": {"context": {"context_budget_tokens": 40000}},
                     "input_summary": {"content_types": ["text/plain"], "max_bytes": None},
                 }
             }

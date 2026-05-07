@@ -60,6 +60,7 @@ class PreflightInputs:
     expected_output: str = "plain_text"
     content_types: tuple[str, ...] = ()
     byte_values: tuple[int, ...] = ()
+    context_budget_tokens: int | None = None
     required_model_len: int | None = None
 
 
@@ -74,6 +75,7 @@ class QualityFeedbackInputs:
     content_types: tuple[str, ...] = ()
     byte_values: tuple[int, ...] = ()
     dimensions: tuple[str, ...] = ()
+    context_budget_tokens: int | None = None
     required_model_len: int | None = None
     observed_recipe: str | None = None
     observed_tuple: str | None = None
@@ -92,6 +94,8 @@ def intake_from_error(inputs: DraftInputs) -> dict[str, Any]:
     if code is None:
         code = _str_or_none(failure_artifact.get("code"))
     context = _as_mapping(error.get("context")) or _as_mapping(failure_artifact.get("context"))
+    context_budget = _context_budget_from_context(context)
+    largest_auto_context_budget = _first_int(context, "largest_auto_recipe_context_budget_tokens", "largest_auto_recipe_model_len")
     task = inputs.task or _str_or_none(context.get("task")) or _str_or_none(safe_summary.get("task")) or _task_from_detail(error.get("detail")) or "infer"
     mode = inputs.mode or _str_or_none(context.get("mode")) or _str_or_none(safe_summary.get("mode")) or "sync"
     rejections = _extract_rejections(error, context)
@@ -113,8 +117,8 @@ def intake_from_error(inputs: DraftInputs) -> dict[str, Any]:
             "caller_action": failure_artifact.get("caller_action"),
             "capability_gap": failure_artifact.get("capability_gap"),
             "context": {
-                "required_model_len": context.get("required_model_len"),
-                "largest_auto_recipe_model_len": context.get("largest_auto_recipe_model_len"),
+                "context_budget_tokens": context_budget,
+                "largest_auto_recipe_context_budget_tokens": largest_auto_context_budget,
             },
             "rejections": rejections,
         },
@@ -142,6 +146,7 @@ def intake_from_error(inputs: DraftInputs) -> dict[str, Any]:
 def intake_from_preflight(inputs: PreflightInputs) -> dict[str, Any]:
     desired_capabilities = _capabilities_for(task=inputs.task, intent=inputs.intent)
     max_bytes = max(inputs.byte_values) if inputs.byte_values else None
+    context_budget = inputs.context_budget_tokens if inputs.context_budget_tokens is not None else inputs.required_model_len
     return {
         "schema_version": 1,
         "phase": "deterministic-preflight-intake",
@@ -157,8 +162,8 @@ def intake_from_preflight(inputs: PreflightInputs) -> dict[str, Any]:
                 "code": None,
                 "detail_kind": "preflight",
                 "context": {
-                    "required_model_len": inputs.required_model_len,
-                    "largest_auto_recipe_model_len": None,
+                    "context_budget_tokens": context_budget,
+                    "largest_auto_recipe_context_budget_tokens": None,
                 },
                 "rejections": [],
             },
@@ -184,6 +189,7 @@ def intake_from_preflight(inputs: PreflightInputs) -> dict[str, Any]:
 def intake_from_quality_feedback(inputs: QualityFeedbackInputs) -> dict[str, Any]:
     desired_capabilities = _capabilities_for(task=inputs.task, intent=inputs.intent)
     max_bytes = max(inputs.byte_values) if inputs.byte_values else None
+    context_budget = inputs.context_budget_tokens if inputs.context_budget_tokens is not None else inputs.required_model_len
     return {
         "schema_version": 1,
         "phase": "deterministic-quality-feedback-intake",
@@ -202,8 +208,8 @@ def intake_from_quality_feedback(inputs: QualityFeedbackInputs) -> dict[str, Any
                 "caller_action": "submit_quality_feedback_to_gpucall_admin",
                 "capability_gap": _quality_capability_gap(inputs.quality_failure_kind),
                 "context": {
-                    "required_model_len": inputs.required_model_len,
-                    "largest_auto_recipe_model_len": None,
+                    "context_budget_tokens": context_budget,
+                    "largest_auto_recipe_context_budget_tokens": None,
                 },
                 "rejections": [],
             },
@@ -250,9 +256,9 @@ def compare_preflight_to_failure(preflight: Mapping[str, Any], failure_intake: M
         ("classification", before.get("classification"), after.get("classification")),
         ("expected_output", before.get("expected_output"), after.get("expected_output")),
         (
-            "required_model_len",
-            _as_mapping(_as_mapping(before.get("error")).get("context")).get("required_model_len"),
-            _as_mapping(_as_mapping(after.get("error")).get("context")).get("required_model_len"),
+            "context_budget_tokens",
+            _context_budget_from_context(_as_mapping(_as_mapping(before.get("error")).get("context"))),
+            _context_budget_from_context(_as_mapping(_as_mapping(after.get("error")).get("context"))),
         ),
         ("content_types", _as_mapping(before.get("input_summary")).get("content_types"), _as_mapping(after.get("input_summary")).get("content_types")),
         ("max_bytes", _as_mapping(before.get("input_summary")).get("max_bytes"), _as_mapping(after.get("input_summary")).get("max_bytes")),
@@ -265,8 +271,8 @@ def compare_preflight_to_failure(preflight: Mapping[str, Any], failure_intake: M
     ]
     if not differences:
         classification = "preflight_matched_runtime_failure"
-        action = "check admin status and provider/runtime failures"
-    elif any(item["field"] in {"task", "required_model_len", "content_types", "desired_capabilities"} for item in differences):
+        action = "check admin status and catalog/runtime failures"
+    elif any(item["field"] in {"task", "context_budget_tokens", "content_types", "desired_capabilities"} for item in differences):
         classification = "workload_drift"
         action = "submit updated intake"
     else:
@@ -288,8 +294,7 @@ def draft_from_intake(intake: Mapping[str, Any]) -> dict[str, Any]:
     intent = _str_or_none(sanitized.get("intent")) or task
     capabilities = [str(item) for item in sanitized.get("desired_capabilities") or TASK_DEFAULT_CAPABILITIES.get(task, [])]
     classification = _str_or_none(sanitized.get("classification")) or "confidential"
-    required_model_len = _as_mapping(_as_mapping(sanitized.get("error")).get("context")).get("required_model_len")
-    context_budget_tokens = _round_context_budget(required_model_len)
+    context_budget_tokens = _round_context_budget(_context_budget_from_context(_as_mapping(_as_mapping(sanitized.get("error")).get("context"))))
     recipe_name = _recipe_name(task, intent)
     return {
         "schema_version": 1,
@@ -525,6 +530,22 @@ def _detail_kind(detail: Any) -> str:
     if isinstance(detail, str) and "no eligible tuple" in detail:
         return "tuple_selection_failure"
     return "unknown"
+
+
+def _context_budget_from_context(context: Mapping[str, Any]) -> int | None:
+    return _first_int(context, "context_budget_tokens", "required_model_len")
+
+
+def _first_int(payload: Mapping[str, Any], *keys: str) -> int | None:
+    for key in keys:
+        value = payload.get(key)
+        if value is None:
+            continue
+        try:
+            return int(value)
+        except (TypeError, ValueError):
+            continue
+    return None
 
 
 def _round_context_budget(value: Any) -> int:

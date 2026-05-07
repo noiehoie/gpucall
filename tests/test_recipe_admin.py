@@ -18,7 +18,7 @@ def test_admin_materializes_intake_to_canonical_recipe() -> None:
             "classification": "confidential",
             "expected_output": "plain_text",
             "desired_capabilities": ["document_understanding", "visual_question_answering", "instruction_following"],
-            "error": {"context": {"required_model_len": 9000}},
+            "error": {"context": {"context_budget_tokens": 9000}},
         },
         "redaction_report": {"prompt_body_forwarded": False, "data_ref_uri_forwarded": False, "presigned_url_forwarded": False},
     }
@@ -56,7 +56,7 @@ def test_admin_materialize_writes_yaml_and_report(tmp_path) -> None:
                     "intent": "summarize_text",
                     "classification": "confidential",
                     "desired_capabilities": ["summarization"],
-                    "error": {"context": {"required_model_len": 40000}},
+                    "error": {"context": {"context_budget_tokens": 40000}},
                 },
                 "redaction_report": {"prompt_body_forwarded": False, "data_ref_uri_forwarded": False, "presigned_url_forwarded": False},
             }
@@ -106,7 +106,7 @@ def test_admin_process_inbox_materializes_submission(tmp_path) -> None:
                 "intent": "summarize_text",
                 "classification": "confidential",
                 "desired_capabilities": ["summarization"],
-                    "error": {"context": {"required_model_len": 40000}},
+                    "error": {"context": {"context_budget_tokens": 40000}},
                 },
                 "redaction_report": {"prompt_body_forwarded": False, "data_ref_uri_forwarded": False, "presigned_url_forwarded": False},
             },
@@ -235,7 +235,7 @@ def test_admin_review_matches_long_context_tuple_candidates() -> None:
             "classification": "confidential",
             "expected_output": "plain_text",
             "desired_capabilities": ["summarization"],
-            "error": {"context": {"required_model_len": 938000}},
+            "error": {"context": {"context_budget_tokens": 938000}},
         },
         "redaction_report": {
             "prompt_body_forwarded": False,

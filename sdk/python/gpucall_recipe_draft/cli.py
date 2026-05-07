@@ -50,7 +50,8 @@ def main(argv: list[str] | None = None) -> int:
     preflight.add_argument("--expected-output", default="plain_text")
     preflight.add_argument("--content-type", action="append", default=[])
     preflight.add_argument("--bytes", dest="byte_values", action="append", type=int, default=[])
-    preflight.add_argument("--required-model-len", type=int)
+    preflight.add_argument("--context-budget-tokens", type=int)
+    preflight.add_argument("--required-model-len", type=int, help=argparse.SUPPRESS)
     preflight.add_argument("--output", "-o", help="write preflight intake JSON to this path")
     preflight.add_argument("--inbox-dir", help="also submit the sanitized intake to this file-based admin inbox")
     preflight.add_argument("--remote-inbox", help="also submit to USER@HOST:/absolute/admin/inbox over SSH")
@@ -69,7 +70,8 @@ def main(argv: list[str] | None = None) -> int:
     quality.add_argument("--content-type", action="append", default=[])
     quality.add_argument("--bytes", dest="byte_values", action="append", type=int, default=[])
     quality.add_argument("--dimension", action="append", default=[], help="input dimensions such as 1200x2287; never pass raw media")
-    quality.add_argument("--required-model-len", type=int)
+    quality.add_argument("--context-budget-tokens", type=int)
+    quality.add_argument("--required-model-len", type=int, help=argparse.SUPPRESS)
     quality.add_argument("--observed-recipe")
     quality.add_argument("--observed-tuple")
     quality.add_argument("--observed-tuple-model")
@@ -126,6 +128,7 @@ def main(argv: list[str] | None = None) -> int:
                 expected_output=args.expected_output,
                 content_types=tuple(args.content_type),
                 byte_values=tuple(args.byte_values),
+                context_budget_tokens=args.context_budget_tokens,
                 required_model_len=args.required_model_len,
             )
         )
@@ -144,6 +147,7 @@ def main(argv: list[str] | None = None) -> int:
                 content_types=tuple(args.content_type),
                 byte_values=tuple(args.byte_values),
                 dimensions=tuple(args.dimension),
+                context_budget_tokens=args.context_budget_tokens,
                 required_model_len=args.required_model_len,
                 observed_recipe=args.observed_recipe,
                 observed_tuple=args.observed_tuple,

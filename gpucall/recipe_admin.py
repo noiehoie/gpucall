@@ -1018,7 +1018,7 @@ def _capability_warnings(artifact: Mapping[str, Any], recipe: Recipe, tuples: li
                 "check": "model_capability_evidence",
                 "reason": "tuple specs do not yet carry explicit semantic model capability evidence",
                 "requested_capabilities": [str(item) for item in capabilities],
-                "eligible_provider_models": {tuple.name: tuple.model for tuple in tuples},
+                "eligible_tuple_models": {tuple.name: tuple.model for tuple in tuples},
             }
         )
     if recipe.task == "vision" and any("document_understanding" == str(item) for item in capabilities or []):
@@ -1215,8 +1215,7 @@ def _proposed_recipe_from_sanitized(sanitized: Mapping[str, Any]) -> dict[str, A
     capabilities = sanitized.get("desired_capabilities")
     if not isinstance(capabilities, list) or not capabilities:
         capabilities = CAPABILITY_BY_INTENT.get(intent) or TASK_DEFAULT_CAPABILITIES.get(task, ["instruction_following"])
-    required_len = _mapping(_mapping(sanitized.get("error")).get("context")).get("required_model_len")
-    context_budget_tokens = _round_context_budget(required_len)
+    context_budget_tokens = _round_context_budget(_context_budget_from_context(_mapping(_mapping(sanitized.get("error")).get("context"))))
     return {
         "name": _recipe_name(task, intent),
         "recipe_schema_version": 3,
@@ -1283,6 +1282,18 @@ def _round_context_budget(value: Any) -> int:
         if required <= candidate:
             return candidate
     return required
+
+
+def _context_budget_from_context(context: Mapping[str, Any]) -> int | None:
+    for key in ("context_budget_tokens", "required_model_len"):
+        value = context.get(key)
+        if value is None:
+            continue
+        try:
+            return int(value)
+        except (TypeError, ValueError):
+            continue
+    return None
 
 
 def _allowed_modes(proposed: Mapping[str, Any]) -> list[str]:
