@@ -296,14 +296,14 @@ class HyperstackAdapter(TupleAdapter):
             if channel.exit_status_ready():
                 status = channel.recv_exit_status()
                 if status != 0:
-                    stdout = channel.recv(8192).decode(errors="replace") if channel.recv_ready() else ""
-                    stderr = channel.recv_stderr(8192).decode(errors="replace") if channel.recv_stderr_ready() else ""
+                    stdout = _drain_channel_stdout(channel)
+                    stderr = _drain_channel_stderr(channel)
                     raw = "\n".join(part for part in (stdout.strip(), stderr.strip()) if part)
                     raise TupleError(
                         f"Hyperstack script failed ({status})",
                         retryable=True,
                         status_code=502,
-                        raw_output=raw[:4000] if raw else None,
+                        raw_output=_compact_error_output(raw) if raw else None,
                     )
                 ssh = handle.meta["ssh_client"]
                 _, stdout, _ = ssh.exec_command("cat /tmp/gpucall/output.txt")
@@ -457,6 +457,27 @@ class HyperstackAdapter(TupleAdapter):
                 elif row.get("event") == "provision.created":
                     active[str(vm_id)] = row
         return list(active.values())
+
+
+def _drain_channel_stdout(channel: Any) -> str:
+    chunks: list[bytes] = []
+    while channel.recv_ready():
+        chunks.append(channel.recv(8192))
+    return b"".join(chunks).decode(errors="replace")
+
+
+def _drain_channel_stderr(channel: Any) -> str:
+    chunks: list[bytes] = []
+    while channel.recv_stderr_ready():
+        chunks.append(channel.recv_stderr(8192))
+    return b"".join(chunks).decode(errors="replace")
+
+
+def _compact_error_output(raw: str, *, limit: int = 4000) -> str:
+    if len(raw) <= limit:
+        return raw
+    half = max(1, (limit - 80) // 2)
+    return raw[:half] + "\n...[truncated middle]...\n" + raw[-half:]
 
 
 def _parse_dt(value: Any) -> datetime | None:
