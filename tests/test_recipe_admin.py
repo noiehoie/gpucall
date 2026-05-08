@@ -224,6 +224,7 @@ def test_admin_process_inbox_can_auto_promote_from_config(tmp_path, monkeypatch)
     report = json.loads((inbox / "reports" / "rr-test.report.json").read_text(encoding="utf-8"))
     assert report["promotion"]["decision"] == "ACTIVATED"
     assert report["promotion"]["validation"] == {"returncode": 0, "passed": True}
+    assert report["promotion"]["validation_attempts"][0]["passed"] is True
 
 
 def test_admin_cli_watch_one_iteration(tmp_path, capsys) -> None:

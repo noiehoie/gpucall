@@ -317,22 +317,37 @@ def _auto_validate_existing_tuple(
 ) -> dict[str, Any]:
     recipe = _mapping(review.get("canonical_recipe"))
     recipe_name = str(recipe.get("name") or "")
-    tuple_name = _selected_existing_tuple_for_review(review, config_dir=config_dir)
-    if not recipe_name or not tuple_name:
+    tuple_chain = _existing_tuple_chain_for_review(review, config_dir=config_dir)
+    if not recipe_name or not tuple_chain:
         raise ValueError("review does not contain an eligible active tuple")
     report: dict[str, Any] = {
         "phase": "active-tuple-validation",
         "recipe": recipe_name,
-        "tuple": tuple_name,
+        "tuple": tuple_chain[0],
+        "tuple_chain": tuple_chain,
         "activated": False,
         "validation": None,
+        "validation_attempts": [],
     }
     if not automation.recipe_inbox_auto_run_validation:
         report["decision"] = "READY_FOR_BILLABLE_VALIDATION"
         return report
-    validation = _run_existing_tuple_validation(tuple_name, recipe_name, config_dir, validation_dir=validation_dir)
-    report["validation"] = validation
-    if validation.get("returncode") != 0 or validation.get("passed") is not True:
+    validation = None
+    for tuple_name in tuple_chain:
+        validation = _run_existing_tuple_validation(tuple_name, recipe_name, config_dir, validation_dir=validation_dir)
+        report["validation_attempts"].append(
+            {
+                "tuple": tuple_name,
+                "returncode": validation.get("returncode"),
+                "passed": validation.get("passed") is True,
+            }
+        )
+        if validation.get("returncode") == 0 and validation.get("passed") is True:
+            report["tuple"] = tuple_name
+            report["validation"] = validation
+            break
+    if validation is None or validation.get("returncode") != 0 or validation.get("passed") is not True:
+        report["validation"] = validation
         report["decision"] = "VALIDATION_FAILED"
         return report
     if automation.recipe_inbox_auto_activate:
@@ -385,7 +400,7 @@ def _run_existing_tuple_validation(
     return result
 
 
-def _selected_existing_tuple_for_review(review: Mapping[str, Any], *, config_dir: Path) -> str:
+def _existing_tuple_chain_for_review(review: Mapping[str, Any], *, config_dir: Path) -> list[str]:
     recipe = _mapping(review.get("canonical_recipe"))
     recipe_name = str(recipe.get("name") or "")
     task = str(recipe.get("task") or "")
@@ -403,9 +418,9 @@ def _selected_existing_tuple_for_review(review: Mapping[str, Any], *, config_dir
         )
         plan = compiler.compile(TaskRequest(task=task, mode=ExecutionMode(mode), recipe=recipe_name))
         if plan.tuple_chain:
-            return str(plan.tuple_chain[0])
+            return [str(item) for item in plan.tuple_chain]
     eligible = review.get("eligible_tuples")
-    return str(eligible[0]) if isinstance(eligible, list) and eligible else ""
+    return [str(item) for item in eligible] if isinstance(eligible, list) else []
 
 
 def _admin_automation(config_dir: str | Path | None) -> RecipeAdminAutomationConfig:
