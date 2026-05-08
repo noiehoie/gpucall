@@ -12,6 +12,27 @@ gpucall is a three-part product, not just a gateway binary:
 
 The responsibility boundary is part of the product contract: callers describe workload intent; administrators manage catalogs, tuples, validation evidence, and production promotion; the gateway executes only validated policy decisions.
 
+## Why Not an Existing Router or Inference Stack?
+
+gpucall is not trying to replace every LLM gateway, Kubernetes inference stack, or GPU provisioner. It occupies a narrower control-plane gap: policy-enforced execution across heterogeneous leased GPU surfaces where the gateway owns recipe selection, tuple routing, validation evidence, price freshness, cleanup, and audit.
+
+Adjacent systems solve different layers:
+
+| Category | Examples | What they are good at | gpucall boundary |
+| :--- | :--- | :--- | :--- |
+| LLM API gateways | [LiteLLM](https://docs.litellm.ai/), [Portkey AI Gateway](https://portkey.ai/docs/product/ai-gateway) | Unified API access to many hosted model providers, virtual keys, fallback, cost tracking, guardrails, and observability | gpucall manages leased GPU execution surfaces and production tuple promotion, not only hosted API provider selection |
+| Model/provider marketplaces | [OpenRouter](https://openrouter.ai/docs/guides/routing/provider-selection) | Routing across model providers behind a SaaS API | gpucall is designed for operator-owned governance over recipes, tuples, validation artifacts, object-store DataRefs, and provider lifecycle |
+| Kubernetes inference stacks | [llm-d](https://llm-d.ai/) and Kubernetes inference-gateway patterns | High-performance distributed inference inside Kubernetes, KV-cache-aware routing, prefill/decode separation, cluster-native operations | gpucall does not require all execution to live inside one Kubernetes cluster; it normalizes Modal functions, RunPod endpoints, Hyperstack VMs, and local runtimes under one governance contract |
+| GPU provisioning tools | GPU cloud provisioners and cluster schedulers | Acquiring or scheduling GPU capacity | gpucall treats capacity as one input to deterministic routing, then adds recipe fit, model/engine compatibility, security policy, validation evidence, cost freshness, and cleanup/audit contracts |
+
+The non-overlap is deliberate. gpucall's differentiated surface is the combination of:
+
+- **Heterogeneous execution governance**: Modal serverless functions, RunPod managed endpoints, Hyperstack VMs, and local runtimes are represented as execution tuples rather than caller-selected providers.
+- **Deterministic four-catalog routing**: recipe, model, engine, and execution tuple compatibility are evaluated without LLM-based routing.
+- **Validation evidence before production**: tuples are promoted through review, endpoint configuration, billable validation, and activation gates instead of being trusted because a YAML entry exists.
+- **Price freshness as policy input**: configured prices and live price evidence are separated; strict budget mode can fail closed on stale or unknown price data.
+- **Data-plane-less caller integration**: external systems can submit `DataRef`s and sanitized recipe requests without giving the gateway raw payload bytes or provider choice.
+
 ## LLM Boundary
 
 The gateway runtime is a deterministic governance runtime. It must not use an LLM to choose recipes, tuples, providers, GPUs, models, prices, stock state, fallback order, cleanup actions, or production promotion.
