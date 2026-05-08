@@ -8,6 +8,7 @@ It is intentionally separate from the gateway runtime.
 - The caller-side tool collects sanitized failure metadata for gpucall administrators.
 - The caller-side tool does not call an LLM.
 - Any generated recipe intent draft requires human review before production use.
+- LLM-assisted recipe authoring, if used, belongs only in an audited administrator-side workflow over sanitized intake. It is never part of gateway routing, tuple selection, live catalog evaluation, validation gates, cleanup, or production activation.
 
 ## Product Role
 
@@ -18,6 +19,8 @@ gpucall has three product components:
 - the administrator-side helper, `gpucall-recipe-admin`, which reviews intake, materializes recipe intent, derives missing tuple contracts, and promotes only validated production tuples.
 
 This document covers the caller-side helper and the handoff to the administrator-side helper. The caller-side helper must not choose providers, GPUs, models, engines, or tuples. It describes workload intent and context needs; catalog management and production promotion belong to administrators.
+
+The boundary is strict: external callers may use human judgment or their own AI systems to decide what they want to request, but gpucall treats that as caller-side input. gpucall turns only sanitized metadata into deterministic review artifacts. The gateway never delegates governance decisions to an LLM.
 
 ## When To Use It
 

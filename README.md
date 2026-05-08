@@ -12,6 +12,14 @@ gpucall is a three-part product, not just a gateway binary:
 
 The responsibility boundary is part of the product contract: callers describe workload intent; administrators manage catalogs, tuples, validation evidence, and production promotion; the gateway executes only validated policy decisions.
 
+## LLM Boundary
+
+The gateway runtime is a deterministic governance runtime. It must not use an LLM to choose recipes, tuples, providers, GPUs, models, prices, stock state, fallback order, cleanup actions, or production promotion.
+
+LLM inference is allowed only after deterministic routing has selected a production tuple and delivered the worker payload to the chosen execution surface. At that point, the provider worker may run vLLM, Transformers, worker-vLLM, or another declared model engine to process the caller's task.
+
+The caller-side and administrator-side helpers are boundary tools. The caller-side helper remains deterministic and only prepares sanitized intake. If LLM-assisted recipe authoring is ever used, it belongs only in an audited administrator-side workflow over sanitized intake; production activation still requires deterministic materialization, validation evidence, launch checks, and deployment.
+
 ## Quickstart
 
 ```bash
