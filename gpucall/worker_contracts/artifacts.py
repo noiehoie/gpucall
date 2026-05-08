@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import secrets
 from datetime import datetime, timezone
 from typing import Any
 
@@ -43,7 +44,7 @@ def _encrypted_artifact_export(payload: dict[str, Any], *, task: str) -> dict[st
     export = payload["artifact_export"]
     key = _artifact_dek(payload, export)
     plaintext = _artifact_plaintext(payload, task=task)
-    nonce = _artifact_nonce(payload, export)
+    nonce = secrets.token_bytes(12)
     try:
         from cryptography.hazmat.primitives.ciphers.aead import AESGCM
     except ImportError as exc:
@@ -61,6 +62,7 @@ def _encrypted_artifact_export(payload: dict[str, Any], *, task: str) -> dict[st
         "classification": str(payload.get("data_classification") or "restricted"),
         "ciphertext_uri": uri,
         "ciphertext_sha256": ciphertext_sha256,
+        "encryption_nonce": nonce.hex(),
         "key_id": export["key_id"],
         "producer_plan_hash": str((payload.get("attestations") or {}).get("governance_hash") or ""),
         "attestation_evidence_ref": _attestation_ref(payload),
@@ -153,20 +155,6 @@ def _artifact_dek_bytes() -> bytes:
     if len(key) != 32:
         raise RuntimeError("GPUCALL_WORKER_ARTIFACT_DEK_HEX must encode a 32-byte AES-256 key")
     return key
-
-
-def _artifact_nonce(payload: dict[str, Any], export: dict[str, Any]) -> bytes:
-    material = json.dumps(
-        {
-            "artifact_chain_id": export.get("artifact_chain_id"),
-            "version": export.get("version"),
-            "plan_hash": (payload.get("attestations") or {}).get("governance_hash"),
-            "plan_id": payload.get("plan_id"),
-        },
-        sort_keys=True,
-        separators=(",", ":"),
-    ).encode("utf-8")
-    return hashlib.sha256(material).digest()[:12]
 
 
 def _associated_data(payload: dict[str, Any], export: dict[str, Any]) -> bytes:

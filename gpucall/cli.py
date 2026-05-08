@@ -76,6 +76,7 @@ def main() -> None:
     seed.add_argument("--count", type=int, default=3)
     seed.add_argument("--interval", type=float, default=0.0, help="seconds to sleep between seeds; with --count 0, run until interrupted")
     seed.add_argument("--budget-usd", type=float, required=True, help="hard cost ceiling for all seed executions")
+    seed.add_argument("--allow-zero-estimate", action="store_true", help="allow seed execution when the compiled tuple cost estimate is zero")
     smoke = sub.add_parser("smoke")
     smoke.add_argument("--url", default="http://127.0.0.1:18088")
     smoke.add_argument("--api-key", default=None)
@@ -207,7 +208,16 @@ def main() -> None:
     elif args.command == "validate-config":
         validate_config_command(args.config_dir)
     elif args.command == "seed-liveness":
-        asyncio.run(seed_liveness(args.config_dir, args.recipe_name, args.count, interval=args.interval, budget_usd=args.budget_usd))
+        asyncio.run(
+            seed_liveness(
+                args.config_dir,
+                args.recipe_name,
+                args.count,
+                interval=args.interval,
+                budget_usd=args.budget_usd,
+                allow_zero_estimate=args.allow_zero_estimate,
+            )
+        )
     elif args.command == "smoke":
         smoke_gateway(args.url, api_key=args.api_key, recipe=args.recipe)
     elif args.command == "tuple-smoke":
@@ -645,7 +655,15 @@ async def post_launch_report_command(config_dir: Path) -> None:
     print(json.dumps({**report, "report_path": str(path)}, indent=2, sort_keys=True, default=str))
 
 
-async def seed_liveness(config_dir: Path, recipe_name: str, count: int, *, interval: float = 0.0, budget_usd: float) -> None:
+async def seed_liveness(
+    config_dir: Path,
+    recipe_name: str,
+    count: int,
+    *,
+    interval: float = 0.0,
+    budget_usd: float,
+    allow_zero_estimate: bool = False,
+) -> None:
     if budget_usd < 0:
         raise SystemExit("--budget-usd must be non-negative")
     runtime = build_runtime(config_dir)
@@ -663,6 +681,8 @@ async def seed_liveness(config_dir: Path, recipe_name: str, count: int, *, inter
         )
         plan = runtime.compiler.compile(request)
         estimated = float((plan.attestations.get("cost_estimate") or {}).get("estimated_cost_usd") or 0.0)
+        if estimated <= 0.0 and not allow_zero_estimate:
+            raise SystemExit("seed-liveness refuses zero-cost estimates unless --allow-zero-estimate is set")
         if reserved_cost + estimated > budget_usd:
             raise SystemExit(
                 f"seed-liveness budget exceeded before execution: reserved={reserved_cost:.6f}, next={estimated:.6f}, budget={budget_usd:.6f}"

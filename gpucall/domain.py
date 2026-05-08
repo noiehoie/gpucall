@@ -158,6 +158,7 @@ class ArtifactManifest(BaseModel):
     classification: DataClassification
     ciphertext_uri: AnyUrl
     ciphertext_sha256: str = Field(min_length=64, max_length=64)
+    encryption_nonce: str | None = Field(default=None, min_length=24, max_length=24)
     key_id: str
     producer_plan_hash: str
     attestation_evidence_ref: str | None = None

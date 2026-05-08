@@ -100,6 +100,10 @@ reasons such as `validation_budget_exhausted`,
 control surface a background validator daemon should consume before running
 `tuple-smoke --write-artifact`.
 
+`seed-liveness` is also billable and fails closed when a compiled plan has a
+zero or missing cost estimate. Use `--allow-zero-estimate` only for local
+non-billable tuples.
+
 `live_status_overlay.next_revalidate_after` marks when a TTL-scoped provider
 observation should be refreshed. `validation_evidence.expires_at` marks when an
 exact tuple smoke artifact stops satisfying production readiness.
@@ -111,6 +115,12 @@ Workers support governed artifact execution only when the worker environment has
 - `GPUCALL_WORKER_ARTIFACT_DEK_FILE`: path to a chmod 600 32-byte AES-256 key file, or `GPUCALL_WORKER_ARTIFACT_DEK_HEX`: 32-byte AES-256 key encoded as hex. This must be released to the worker by tenant KMS/HYOK/BYOK or an attestation-bound mechanism; the gateway must not generate it.
 - `GPUCALL_WORKER_ARTIFACT_BUCKET` plus optional `GPUCALL_WORKER_ARTIFACT_PREFIX`, or an explicit `GPUCALL_WORKER_ARTIFACT_URI`.
 
-For `train` and `fine-tune`, the worker fetches DataRefs, encrypts a chained artifact bundle with AES-GCM, writes ciphertext directly to object storage, and returns an `artifact_manifest`. For `split-infer`, the worker fetches the activation ref, verifies the bytes through the DataRef path, and returns a deterministic split-learning acceptance result. Missing key material or object-store destination is a hard worker error, not a production success.
+For `train` and `fine-tune`, the worker fetches DataRefs, derives a per-artifact
+AES-256 key with HKDF, encrypts a chained artifact bundle with AES-GCM using a
+fresh random nonce, writes ciphertext directly to object storage, and returns an
+`artifact_manifest` with the nonce hex. For `split-infer`, the worker fetches the
+activation ref, verifies the bytes through the DataRef path, and returns a
+deterministic split-learning acceptance result. Missing key material or
+object-store destination is a hard worker error, not a production success.
 
 Hyperstack worker bootstrap uploads `input.json` and `worker.py` via SFTP. The shell command no longer embeds request JSON or worker source through heredocs.

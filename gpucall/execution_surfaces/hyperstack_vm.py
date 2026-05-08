@@ -454,6 +454,8 @@ class HyperstackAdapter(TupleAdapter):
                     active.pop(str(vm_id), None)
                 elif row.get("event") == "provision.created":
                     active[str(vm_id)] = row
+                elif row.get("event") in {"destroy.requested", "destroy.pending"}:
+                    active[str(vm_id)] = {**active.get(str(vm_id), {}), **row}
         return list(active.values())
 
 
@@ -888,7 +890,7 @@ def execute_artifact_workload(payload):
     export = payload["artifact_export"]
     key = artifact_dek(payload, export)
     plaintext = artifact_plaintext(payload, task=task)
-    nonce = artifact_nonce(payload, export)
+    nonce = secrets.token_bytes(12)
     try:
         from cryptography.hazmat.primitives.ciphers.aead import AESGCM
     except ImportError as exc:
@@ -914,6 +916,7 @@ def execute_artifact_workload(payload):
         "classification": str(payload.get("data_classification") or "restricted"),
         "ciphertext_uri": uri,
         "ciphertext_sha256": ciphertext_sha256,
+        "encryption_nonce": nonce.hex(),
         "key_id": export["key_id"],
         "producer_plan_hash": str((payload.get("attestations") or {}).get("governance_hash") or ""),
         "attestation_evidence_ref": None,
@@ -972,20 +975,6 @@ def artifact_dek_bytes():
     if len(key) != 32:
         raise RuntimeError("GPUCALL_WORKER_ARTIFACT_DEK_HEX must encode a 32-byte AES-256 key")
     return key
-
-
-def artifact_nonce(payload, export):
-    material = json.dumps(
-        {
-            "artifact_chain_id": export.get("artifact_chain_id"),
-            "version": export.get("version"),
-            "plan_hash": (payload.get("attestations") or {}).get("governance_hash"),
-            "plan_id": payload.get("plan_id"),
-        },
-        sort_keys=True,
-        separators=(",", ":"),
-    ).encode("utf-8")
-    return hashlib.sha256(material).digest()[:12]
 
 
 def write_artifact_ciphertext(export, ciphertext):

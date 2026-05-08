@@ -34,7 +34,7 @@ def test_worker_artifact_export_encrypts_and_returns_manifest(monkeypatch, tmp_p
     assert output.read_bytes()
 
 
-def test_worker_artifact_export_derives_nonce_from_artifact_identity(monkeypatch, tmp_path) -> None:
+def test_worker_artifact_export_uses_random_nonce(monkeypatch, tmp_path) -> None:
     output = tmp_path / "artifact.bin"
     monkeypatch.setenv("GPUCALL_WORKER_ARTIFACT_DEK_HEX", "11" * 32)
     monkeypatch.setenv("GPUCALL_WORKER_ARTIFACT_URI", f"file://{output}")
@@ -51,14 +51,13 @@ def test_worker_artifact_export_derives_nonce_from_artifact_identity(monkeypatch
 
     first = execute_artifact_workload(payload)
     first_blob = output.read_bytes()
-    second_payload = dict(payload)
-    second_payload["artifact_export"] = {**payload["artifact_export"], "version": "0002"}
-    second = execute_artifact_workload(second_payload)
+    second = execute_artifact_workload(payload)
     second_blob = output.read_bytes()
 
     assert first is not None
     assert second is not None
     assert first["artifact_manifest"]["ciphertext_sha256"] != second["artifact_manifest"]["ciphertext_sha256"]
+    assert first["artifact_manifest"]["encryption_nonce"] != second["artifact_manifest"]["encryption_nonce"]
     assert first_blob[:12] != second_blob[:12]
 
 

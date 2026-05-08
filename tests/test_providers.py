@@ -908,6 +908,10 @@ def test_hyperstack_manifest_tracks_active_and_destroyed_leases(tmp_path) -> Non
         }
     )
     assert adapter._active_manifest_leases()[0]["vm_id"] == "vm-1"
+    adapter._record_lease({"event": "destroy.pending", "vm_id": "vm-1"})
+    pending = adapter._active_manifest_leases()[0]
+    assert pending["event"] == "destroy.pending"
+    assert pending["vm_name"] == "gpucall-managed-plan-vm"
 
     adapter._record_lease({"event": "destroyed", "vm_id": "vm-1"})
 
