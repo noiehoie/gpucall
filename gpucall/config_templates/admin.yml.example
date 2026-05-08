@@ -1,0 +1,2 @@
+# Disabled by default. Set true only on an operator-controlled inbox host.
+recipe_inbox_auto_materialize: false

@@ -7,7 +7,17 @@ from typing import TypeVar
 import yaml
 from pydantic import BaseModel, ValidationError
 
-from gpucall.domain import EngineSpec, ModelSpec, ObjectStoreConfig, Policy, ExecutionTupleSpec, Recipe, TenantSpec, recipe_requirements
+from gpucall.domain import (
+    EngineSpec,
+    ExecutionTupleSpec,
+    ModelSpec,
+    ObjectStoreConfig,
+    Policy,
+    Recipe,
+    RecipeAdminAutomationConfig,
+    TenantSpec,
+    recipe_requirements,
+)
 from gpucall.execution.registry import adapter_descriptor
 from gpucall.routing import tuple_route_rejection_reason
 
@@ -26,6 +36,7 @@ class GpucallConfig(BaseModel):
     engines: dict[str, EngineSpec] = {}
     object_store: ObjectStoreConfig | None = None
     tenants: dict[str, TenantSpec] = {}
+    admin_automation: RecipeAdminAutomationConfig = RecipeAdminAutomationConfig()
 
 
 def default_config_dir() -> Path:
@@ -225,6 +236,7 @@ def load_config(config_dir: Path | None = None) -> GpucallConfig:
         engines=load_engines(root),
         object_store=load_object_store(root),
         tenants=load_tenants(root),
+        admin_automation=load_admin_automation(root),
     )
     validate_config(config)
     return config
@@ -236,6 +248,14 @@ def load_object_store(config_dir: Path | None = None) -> ObjectStoreConfig | Non
     if not path.exists():
         return None
     return load_model(path, ObjectStoreConfig)
+
+
+def load_admin_automation(config_dir: Path | None = None) -> RecipeAdminAutomationConfig:
+    root = config_dir or default_config_dir()
+    path = root / "admin.yml"
+    if not path.exists():
+        return RecipeAdminAutomationConfig()
+    return load_model(path, RecipeAdminAutomationConfig)
 
 
 def load_tenants(config_dir: Path | None = None) -> dict[str, TenantSpec]:

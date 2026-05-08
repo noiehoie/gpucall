@@ -286,6 +286,20 @@ gpucall-recipe-admin process-inbox \
 
 Processed submissions are moved to `inbox/processed`, failed submissions to `inbox/failed`, and materialization reports to `inbox/reports`.
 
+`--accept-all` is a one-shot operator decision. For a persistent operator host,
+the same route can be opened explicitly in config:
+
+```yaml
+# config/admin.yml
+recipe_inbox_auto_materialize: true
+```
+
+When this flag is absent or false, `process-inbox` and `watch` fail closed unless
+`--accept-all` is present. When it is true, sanitized caller submissions can be
+automatically reviewed and materialized into draft recipe YAML. This still does
+not create execution-surface credentials, run billable validation, or activate
+production routing.
+
 To poll continuously:
 
 ```bash

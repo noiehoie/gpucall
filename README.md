@@ -145,6 +145,19 @@ For fully file-based automation without adding a gateway API, administrators can
 gpucall-recipe-admin watch --inbox-dir /path/to/inbox --output-dir config/recipes --accept-all
 ```
 
+For a persistent operator host, the same route can be opened by config instead
+of a per-command flag. This remains disabled by default:
+
+```yaml
+# config/admin.yml
+recipe_inbox_auto_materialize: true
+```
+
+With that file present, `gpucall-recipe-admin watch` and `process-inbox` can
+materialize sanitized caller submissions without `--accept-all`. This only
+writes draft recipe YAML after admin review; it does not create provider
+capacity, run billable validation, or promote a tuple into production routing.
+
 ## Routing
 
 gpucall is a deterministic governance router, not a Modal-only proxy. Recipe and provider selection rules are documented in [docs/ROUTING_POLICY.md](docs/ROUTING_POLICY.md).

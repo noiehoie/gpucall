@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import shutil
 
 import pytest
 import yaml
@@ -114,7 +115,7 @@ def test_admin_process_inbox_materializes_submission(tmp_path) -> None:
     }
     (inbox / "rr-test.json").write_text(json.dumps(submission), encoding="utf-8")
 
-    results = process_inbox(inbox_dir=inbox, output_dir=output_dir)
+    results = process_inbox(inbox_dir=inbox, output_dir=output_dir, accept_all=True)
 
     assert results[0]["ok"] is True
     assert (output_dir / "infer-summarize-text-draft.yml").exists()
@@ -129,6 +130,45 @@ def test_admin_process_inbox_materializes_submission(tmp_path) -> None:
 def test_admin_cli_process_inbox_requires_accept_all(tmp_path) -> None:
     with pytest.raises(SystemExit, match="refusing to process inbox without --accept-all"):
         main(["process-inbox", "--inbox-dir", str(tmp_path / "inbox"), "--output-dir", str(tmp_path / "recipes")])
+
+
+def test_admin_cli_process_inbox_allows_configured_auto_materialize(tmp_path) -> None:
+    config_dir = tmp_path / "config"
+    shutil.copytree("gpucall/config_templates", config_dir)
+    (config_dir / "admin.yml").write_text("recipe_inbox_auto_materialize: true\n", encoding="utf-8")
+    inbox = tmp_path / "inbox"
+    output_dir = tmp_path / "recipes"
+    inbox.mkdir()
+    (inbox / "rr-test.json").write_text(
+        json.dumps(
+            {
+                "kind": "gpucall.recipe_request_submission",
+                "request_id": "rr-test",
+                "intake": {
+                    "sanitized_request": {"task": "infer", "intent": "summarize_text"},
+                    "redaction_report": {"prompt_body_forwarded": False, "data_ref_uri_forwarded": False, "presigned_url_forwarded": False},
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    assert (
+        main(
+            [
+                "process-inbox",
+                "--inbox-dir",
+                str(inbox),
+                "--output-dir",
+                str(output_dir),
+                "--config-dir",
+                str(config_dir),
+            ]
+        )
+        == 0
+    )
+
+    assert (output_dir / "infer-summarize-text-draft.yml").exists()
 
 
 def test_admin_cli_watch_one_iteration(tmp_path, capsys) -> None:

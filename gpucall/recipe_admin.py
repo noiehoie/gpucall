@@ -12,7 +12,7 @@ from pathlib import Path
 from typing import Any
 
 from gpucall.candidate_sources import load_tuple_candidate_payloads
-from gpucall.config import ConfigError, default_state_dir, load_config
+from gpucall.config import ConfigError, default_config_dir, default_state_dir, load_admin_automation, load_config
 from gpucall.domain import ExecutionMode, ExecutionTupleSpec, Recipe, recipe_requirements
 from gpucall.execution.contracts import artifact_tuple_evidence_key, tuple_evidence_key
 from gpucall.execution.registry import adapter_descriptor
@@ -116,8 +116,8 @@ def main(argv: list[str] | None = None) -> int:
         _write_json(report, args.output)
         return 0
     if args.command == "process-inbox":
-        if not args.accept_all:
-            raise SystemExit("refusing to process inbox without --accept-all")
+        if not _accept_all_allowed(args.accept_all, args.config_dir):
+            raise SystemExit("refusing to process inbox without --accept-all or admin.yml recipe_inbox_auto_materialize: true")
         results = process_inbox(
             inbox_dir=args.inbox_dir,
             output_dir=args.output_dir,
@@ -127,6 +127,7 @@ def main(argv: list[str] | None = None) -> int:
             force=args.force,
             config_dir=args.config_dir,
             validation_dir=args.validation_dir,
+            accept_all=args.accept_all,
         )
         sys.stdout.write(json.dumps({"processed": results}, ensure_ascii=False, indent=2, sort_keys=True) + "\n")
         return 0
@@ -134,8 +135,8 @@ def main(argv: list[str] | None = None) -> int:
         sys.stdout.write(json.dumps(recipe_request_status(args.request_id, args.inbox_dir), ensure_ascii=False, indent=2, sort_keys=True) + "\n")
         return 0
     if args.command == "watch":
-        if not args.accept_all:
-            raise SystemExit("refusing to watch inbox without --accept-all")
+        if not _accept_all_allowed(args.accept_all, args.config_dir):
+            raise SystemExit("refusing to watch inbox without --accept-all or admin.yml recipe_inbox_auto_materialize: true")
         iterations = 0
         while True:
             results = process_inbox(
@@ -147,6 +148,7 @@ def main(argv: list[str] | None = None) -> int:
                 force=args.force,
                 config_dir=args.config_dir,
                 validation_dir=args.validation_dir,
+                accept_all=args.accept_all,
             )
             if results:
                 sys.stdout.write(json.dumps({"processed": results}, ensure_ascii=False, indent=2, sort_keys=True) + "\n")
@@ -213,7 +215,10 @@ def process_inbox(
     force: bool = False,
     config_dir: str | Path | None = None,
     validation_dir: str | Path | None = None,
+    accept_all: bool = False,
 ) -> list[dict[str, Any]]:
+    if not _accept_all_allowed(accept_all, config_dir):
+        raise PermissionError("recipe inbox auto-materialize is disabled")
     inbox = Path(inbox_dir)
     processed = Path(processed_dir) if processed_dir else inbox / "processed"
     failed = Path(failed_dir) if failed_dir else inbox / "failed"
@@ -249,6 +254,13 @@ def process_inbox(
             _move_submission(path, destination)
             results.append({"submission": str(destination), "ok": False, "error": str(exc)})
     return results
+
+
+def _accept_all_allowed(accept_all: bool, config_dir: str | Path | None) -> bool:
+    if accept_all:
+        return True
+    root = Path(config_dir) if config_dir is not None else default_config_dir()
+    return bool(load_admin_automation(root).recipe_inbox_auto_materialize)
 
 
 def recipe_request_status(request_id: str, inbox_dir: str | Path) -> dict[str, Any]:

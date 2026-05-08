@@ -70,6 +70,12 @@ class PriceFreshness(StrEnum):
     UNKNOWN = "unknown"
 
 
+class RecipeAdminAutomationConfig(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    recipe_inbox_auto_materialize: bool = False
+
+
 class RecipeLatencyClass(StrEnum):
     INTERACTIVE = "interactive"
     STANDARD = "standard"
