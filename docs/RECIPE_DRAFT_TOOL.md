@@ -80,7 +80,7 @@ Submit this intake before the first production run:
 gpucall-recipe-draft submit \
   --intake preflight-intake.json \
   --inbox-dir /path/to/gpucall-recipe-requests/inbox \
-  --source news-system
+  --source example-caller-app
 ```
 
 If the gpucall administrator exposes an SSH-only operator inbox, submit directly to it:
@@ -88,8 +88,8 @@ If the gpucall administrator exposes an SSH-only operator inbox, submit directly
 ```bash
 gpucall-recipe-draft submit \
   --intake preflight-intake.json \
-  --remote-inbox admin@gpucall.example.internal:/srv/gpucall/state/recipe_requests/inbox \
-  --source news-system
+  --remote-inbox admin@gateway.example.internal:/opt/gpucall/state/recipe_requests/inbox \
+  --source example-caller-app
 ```
 
 ### Phase 1: Post-Failure Intake
@@ -106,8 +106,8 @@ gpucall-recipe-draft intake \
   --business-need "画像の内容に関する質問に答えたい" \
   --classification confidential \
   --output intake.json \
-  --remote-inbox admin@gpucall.example.internal:/srv/gpucall/state/recipe_requests/inbox \
-  --source news-system
+  --remote-inbox admin@gateway.example.internal:/opt/gpucall/state/recipe_requests/inbox \
+  --source example-caller-app
 ```
 
 The output contains:
@@ -152,8 +152,8 @@ gpucall-recipe-draft quality \
   --reported-tuple-model Salesforce/blip-vqa-base \
   --quality-failure-kind insufficient_ocr \
   --quality-failure-reason "short answer only; expected top headlines" \
-  --remote-inbox admin@gpucall.example.internal:/srv/gpucall/state/recipe_requests/inbox \
-  --source news-system
+  --remote-inbox admin@gateway.example.internal:/opt/gpucall/state/recipe_requests/inbox \
+  --source example-caller-app
 ```
 
 This creates a `deterministic-quality-feedback-intake` submission. It is a request to review recipe intent and production tuple capability, not proof that gpucall routed incorrectly.
@@ -179,7 +179,7 @@ gpucall-recipe-draft submit \
   --intake intake.json \
   --draft recipe-draft.json \
   --inbox-dir /path/to/gpucall-recipe-requests/inbox \
-  --source news-system
+  --source example-caller-app
 ```
 
 For remote submission:
@@ -188,8 +188,8 @@ For remote submission:
 gpucall-recipe-draft submit \
   --intake intake.json \
   --draft recipe-draft.json \
-  --remote-inbox admin@gpucall.example.internal:/srv/gpucall/state/recipe_requests/inbox \
-  --source news-system
+  --remote-inbox admin@gateway.example.internal:/opt/gpucall/state/recipe_requests/inbox \
+  --source example-caller-app
 ```
 
 Remote submission uses SSH, creates the target directory if needed, writes a temporary file, and atomically renames it to `<request_id>.json`. The submitted bundle contains only the sanitized intake and optional draft. It does not contain raw prompt bodies, DataRef URIs, presigned URLs, or secrets.

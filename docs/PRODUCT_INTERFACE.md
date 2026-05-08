@@ -19,7 +19,7 @@ from openai import OpenAI
 
 client = OpenAI(
     api_key=os.environ["GPUCALL_API_KEY"],
-    base_url="http://gpucall.example.internal:18088/v1",
+    base_url="https://gpucall-gateway.example.internal/v1",
 )
 
 response = client.chat.completions.create(
@@ -61,7 +61,7 @@ Example:
 from gpucall_sdk import GPUCallClient
 
 client = GPUCallClient(
-    "http://gpucall.example.internal:18088",
+    "https://gpucall-gateway.example.internal",
     api_key=os.environ["GPUCALL_API_KEY"],
 )
 

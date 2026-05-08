@@ -9,18 +9,18 @@ Use this prompt when asking another code agent to migrate an existing system to 
 
 # 1. 前提
 
-gpucall v2.0 Gateway は netcup 上で稼働しています。
+gpucall v2.0 Gateway は gateway.example.internal 上で稼働しています。
 
 Gateway URL:
 
-  http://gpucall.example.internal:18088
+  https://gpucall-gateway.example.internal
 
 この URL は Tailscale Tailnet 内からのみ到達可能です。
 public internet には公開されていません。
 
 環境変数:
 
-  GPUCALL_BASE_URL=http://gpucall.example.internal:18088
+  GPUCALL_BASE_URL=https://gpucall-gateway.example.internal
   GPUCALL_API_KEY=<実トークン>
 
 注意:
@@ -284,7 +284,7 @@ CI やローカルで `GPUCALL_API_KEY` が無い場合、実 gateway integratio
 
 環境変数:
 
-  export GPUCALL_BASE_URL=http://gpucall.example.internal:18088
+  export GPUCALL_BASE_URL=https://gpucall-gateway.example.internal
   export GPUCALL_API_KEY=<実トークン>
 
 A. healthz:

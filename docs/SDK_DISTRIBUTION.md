@@ -42,14 +42,14 @@ uv add "gpucall-sdk @ file:///opt/gpucall/artifacts/sdk/python/gpucall_sdk-2.0.0
 For another host, copy the wheel first:
 
 ```bash
-scp netcup:/opt/gpucall/artifacts/sdk/python/gpucall_sdk-2.0.0a2-py3-none-any.whl ./vendor/
+scp gateway.example.internal:/opt/gpucall/artifacts/sdk/python/gpucall_sdk-2.0.0a2-py3-none-any.whl ./vendor/
 uv add "gpucall-sdk @ file://${PWD}/vendor/gpucall_sdk-2.0.0a2-py3-none-any.whl"
 ```
 
 ## Configure
 
 ```bash
-export GPUCALL_BASE_URL="http://gpucall.example.internal:18088"
+export GPUCALL_BASE_URL="https://gpucall-gateway.example.internal"
 export GPUCALL_API_KEY="<gateway token>"
 ```
 

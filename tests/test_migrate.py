@@ -14,7 +14,7 @@ def test_migrate_assess_detects_direct_provider_and_gpucall_paths(tmp_path) -> N
     )
     (project / "client.py").write_text("from gpucall_sdk import GPUCallClient\nGPUCallClient('http://x')\n", encoding="utf-8")
 
-    report = assess_project(project, source="news-system")
+    report = assess_project(project, source="example-caller-app")
 
     assert report["summary"]["anthropic_direct"] >= 1
     assert report["summary"]["gpucall_path"] >= 1
@@ -26,8 +26,8 @@ def test_migrate_preflight_generates_translate_request(tmp_path) -> None:
     project.mkdir()
     (project / "translate.py").write_text("call_claude_p(model='claude-haiku')\n", encoding="utf-8")
 
-    report = assess_project(project, source="news-system")
-    requests = build_preflight_requests(report, source="news-system")
+    report = assess_project(project, source="example-caller-app")
+    requests = build_preflight_requests(report, source="example-caller-app")
 
     assert requests[0]["task"] == "infer"
     assert requests[0]["intent"] == "translate_text"
@@ -40,7 +40,7 @@ def test_migrate_cli_writes_reports(tmp_path) -> None:
     project.mkdir()
     (project / "topic_engine.py").write_text("call_llm('summarize topic')\n", encoding="utf-8")
 
-    assert main(["report", str(project), "--source", "news-system", "--output-dir", str(out)]) == 0
+    assert main(["report", str(project), "--source", "example-caller-app", "--output-dir", str(out)]) == 0
 
     data = json.loads((out / "migration-report.json").read_text(encoding="utf-8"))
     assert data["phase"] == "migration-assessment"
@@ -62,7 +62,7 @@ def test_migrate_patch_apply_writes_helper_and_annotations(tmp_path) -> None:
     source = project / "translate.py"
     source.write_text("from anthropic import Anthropic\nmodel='claude-haiku'\n", encoding="utf-8")
 
-    report = patch_suggestions(project, source="news-system", apply=True)
+    report = patch_suggestions(project, source="example-caller-app", apply=True)
 
     assert report["applied"] is True
     assert "gpucall_migration.py" in report["changed_files"]

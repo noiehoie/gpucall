@@ -120,11 +120,11 @@ When adapting another product or service to gpucall, use the one-shot migration 
 For productized migration, use the deterministic migration kit:
 
 ```bash
-gpucall-migrate assess /path/to/project --source news-system
-gpucall-migrate preflight /path/to/project --source news-system
+gpucall-migrate assess /path/to/project --source example-caller-app
+gpucall-migrate preflight /path/to/project --source example-caller-app
 gpucall-migrate canary /path/to/project --command "uv run python -m src.pipeline.main"
 gpucall-migrate patch /path/to/project
-gpucall-migrate onboard /path/to/project --source news-system
+gpucall-migrate onboard /path/to/project --source example-caller-app
 ```
 
 The migration kit scans source files, classifies direct OpenAI/Anthropic paths,
@@ -145,11 +145,11 @@ When this happens, run the independent helper:
 
 ```bash
 gpucall-recipe-draft preflight --task vision --intent understand_document_image --content-type image/png --bytes 2000000 --output preflight-intake.json
-gpucall-recipe-draft intake --error gpucall-error.json --intent <caller-intent> --output intake.json --remote-inbox admin@gpucall.example.internal:/srv/gpucall/state/recipe_requests/inbox
-gpucall-recipe-draft quality --task vision --intent understand_document_image --quality-failure-kind insufficient_ocr --remote-inbox admin@gpucall.example.internal:/srv/gpucall/state/recipe_requests/inbox
+gpucall-recipe-draft intake --error gpucall-error.json --intent <caller-intent> --output intake.json --remote-inbox admin@gateway.example.internal:/opt/gpucall/state/recipe_requests/inbox
+gpucall-recipe-draft quality --task vision --intent understand_document_image --quality-failure-kind insufficient_ocr --remote-inbox admin@gateway.example.internal:/opt/gpucall/state/recipe_requests/inbox
 gpucall-recipe-draft compare --preflight preflight-intake.json --failure intake.json --output drift-report.json
 gpucall-recipe-draft draft --input intake.json --output recipe-draft.json
-gpucall-recipe-draft submit --intake intake.json --draft recipe-draft.json --remote-inbox admin@gpucall.example.internal:/srv/gpucall/state/recipe_requests/inbox
+gpucall-recipe-draft submit --intake intake.json --draft recipe-draft.json --remote-inbox admin@gateway.example.internal:/opt/gpucall/state/recipe_requests/inbox
 ```
 
 The caller-side helper is deterministic and does not call an LLM. It prepares sanitized intake and an optional local draft summary so gpucall administrators can decide whether the workload class should become a supported recipe. With `--inbox-dir` or `--remote-inbox`, the helper submits sanitized intake directly to the approved operator inbox. Remote submission uses SSH and does not call the gateway API. If the administrator adopts an accept-all policy, the gateway-side `gpucall-recipe-admin materialize --accept-all` helper can turn sanitized intake into canonical recipe YAML. Any draft or materialized recipe still requires `validate-config`, tests, launch checks, and deployment before subsequent requests can use it.
