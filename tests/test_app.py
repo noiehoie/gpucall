@@ -13,6 +13,7 @@ from gpucall.app import (
     idempotency_execution_lock,
     plan_with_worker_refs,
     recover_interrupted_jobs,
+    safe_tenant_object_prefix,
     warning_headers,
     worker_readable_request,
 )
@@ -377,6 +378,13 @@ def test_anonymous_object_store_access_is_rejected(tmp_path, monkeypatch) -> Non
     assert response.status_code == 401
 
 
+def test_tenant_object_prefix_rejects_path_traversal() -> None:
+    with pytest.raises(Exception):
+        safe_tenant_object_prefix("../tenant-b")
+    with pytest.raises(Exception):
+        safe_tenant_object_prefix("tenants/tenant-b")
+
+
 def test_production_auth_fails_closed_without_configured_key(tmp_path, monkeypatch) -> None:
     monkeypatch.setenv("GPUCALL_ENV", "production")
     with TestClient(create_app(copy_config(tmp_path))) as client:
@@ -486,6 +494,37 @@ async def test_idempotency_execution_lock_serializes_same_key() -> None:
     await asyncio.gather(first(), second())
 
     assert events == ["first-start", "first-end", "second"]
+    assert locks == {}
+
+
+@pytest.mark.asyncio
+async def test_idempotency_execution_lock_keeps_waited_lock_until_waiters_finish() -> None:
+    import asyncio
+
+    locks: dict[str, asyncio.Lock] = {}
+    guard = asyncio.Lock()
+    events: list[str] = []
+
+    async def first() -> None:
+        async with idempotency_execution_lock(locks, guard, "same"):
+            events.append("first-start")
+            await asyncio.sleep(0.01)
+            events.append("first-end")
+
+    async def second() -> None:
+        await asyncio.sleep(0)
+        async with idempotency_execution_lock(locks, guard, "same"):
+            events.append("second")
+
+    async def third() -> None:
+        await asyncio.sleep(0.001)
+        async with idempotency_execution_lock(locks, guard, "same"):
+            events.append("third")
+
+    await asyncio.gather(first(), second(), third())
+
+    assert events == ["first-start", "first-end", "second", "third"]
+    assert locks == {}
 
 
 def test_idempotency_key_is_scoped_to_authenticated_caller(tmp_path, monkeypatch) -> None:

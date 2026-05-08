@@ -64,6 +64,15 @@ def test_execution_catalog_normalizes_hardware_surface_pricing_and_network() -> 
     with pytest.raises(TypeError):
         offerings["active_tuple:hyperstack-a100:resource"].network_topology["ssh_remote_cidr"] = "0.0.0.0/0"
     assert isinstance(claims["active_tuple:hyperstack-a100:resource"].required_input_contracts, tuple)
+    worker = next(item for item in snapshot.workers if item.tuple_name == "hyperstack-a100")
+    candidate = next(item for item in generate_tuple_candidates(snapshot, recipe=config.recipes["text-infer-standard"]) if item.tuple_name == "hyperstack-a100")
+    assert isinstance(worker.modes, tuple)
+    assert isinstance(worker.input_contracts, tuple)
+    assert isinstance(candidate.modes, tuple)
+    with pytest.raises(AttributeError):
+        worker.modes.append("stream")
+    with pytest.raises(TypeError):
+        candidate.recipe_fit["fits"] = False
 
 
 def test_execution_catalog_generates_snapshot_pinned_tuple_candidates() -> None:
@@ -124,6 +133,12 @@ def test_execution_catalog_uses_live_price_and_stock_evidence() -> None:
     assert modal.price_per_second == 0.00031
     assert modal.live_price_per_second == 0.00031
     assert modal.live_stock_state == "available"
+    resource = next(item for item in snapshot.resources if item.tuple_name == "modal-a10g")
+    overlay = next(item for item in snapshot.live_status_overlay if item.resource_ref == resource.resource_ref)
+    assert isinstance(overlay.dimensions, tuple)
+    assert isinstance(resource.live_catalog_findings, tuple)
+    with pytest.raises(TypeError):
+        resource.live_catalog_findings[0]["severity"] = "critical"
 
 
 def test_execution_catalog_cli_outputs_candidates() -> None:

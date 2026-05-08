@@ -60,3 +60,13 @@ def test_lease_reaper_preserves_provision_fields_after_destroy_pending(tmp_path)
     report = lease_reaper_report(manifest_path=manifest)
     assert report["actions"][0]["remote_id"] == "vm-1"
     assert report["actions"][0]["resource_kind"] == "vm"
+
+
+def test_lease_reaper_warns_on_orphaned_destroy_event(tmp_path, caplog) -> None:
+    manifest = tmp_path / "leases.jsonl"
+    manifest.write_text(json.dumps({"event": "destroy.pending", "vm_id": "vm-orphan"}) + "\n", encoding="utf-8")
+
+    active = active_manifest_leases(manifest)
+
+    assert active == [{"event": "destroy.pending", "vm_id": "vm-orphan"}]
+    assert "orphaned lease destroy event" in caplog.text

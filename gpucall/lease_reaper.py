@@ -1,9 +1,12 @@
 from __future__ import annotations
 
 import json
+import logging
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
+
+LOGGER = logging.getLogger(__name__)
 
 
 def lease_reaper_report(*, manifest_path: Path, apply: bool = False) -> dict[str, Any]:
@@ -50,5 +53,7 @@ def active_manifest_leases(path: Path) -> list[dict[str, Any]]:
         elif event in {"provision.created", "lease.started"}:
             active[remote_id] = row
         elif event in {"destroy.requested", "destroy.pending"}:
+            if remote_id not in active:
+                LOGGER.warning("orphaned lease destroy event without prior provision record: remote_id=%s", remote_id)
             active[remote_id] = {**active.get(remote_id, {}), **row}
     return list(active.values())

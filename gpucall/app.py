@@ -8,7 +8,7 @@ import hmac
 import json
 import re
 from contextlib import asynccontextmanager
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any, Literal
 from uuid import uuid4
 
@@ -613,11 +613,19 @@ def object_tenant_prefix(runtime: Runtime, request: Request) -> str | None:
         raise HTTPException(status_code=401, detail="object store access requires authenticated tenant")
     tenant = runtime.tenants.get(tenant_name) or runtime.tenants.get("default")
     if tenant is not None and tenant.object_prefix:
-        return tenant.object_prefix
+        return safe_tenant_object_prefix(tenant.object_prefix)
     return tenant_name
 
 
+def safe_tenant_object_prefix(prefix: str) -> str:
+    path = PurePosixPath(prefix)
+    if path.is_absolute() or path.name != prefix or prefix in {"", ".", ".."}:
+        raise HTTPException(status_code=500, detail="invalid tenant object prefix")
+    return prefix
+
+
 def request_needs_worker_object_access(request: TaskRequest) -> bool:
+    """Only inbound DataRefs require gateway object-store tenant checks; artifact export is worker-owned."""
     return bool(request.input_refs) or (
         request.split_learning is not None and request.split_learning.activation_ref is not None
     )
@@ -928,6 +936,11 @@ async def idempotency_execution_lock(
         yield
     finally:
         lock.release()
+        waiters = getattr(lock, "_waiters", None)
+        has_waiters = bool(waiters)
+        async with guard:
+            if locks.get(key) is lock and not lock.locked() and not has_waiters:
+                locks.pop(key, None)
 
 
 def idempotency_lookup(

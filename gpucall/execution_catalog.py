@@ -7,8 +7,8 @@ import re
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from statistics import median
-from typing import Any, Literal, Mapping
 from types import MappingProxyType
+from typing import Any, Literal, Mapping
 
 from pydantic import BaseModel, ConfigDict, Field, field_serializer, field_validator
 
@@ -16,6 +16,16 @@ from gpucall.candidate_sources import load_tuple_candidate_payloads
 from gpucall.config import GpucallConfig, default_state_dir
 from gpucall.domain import ExecutionMode, Recipe, recipe_requirements
 from gpucall.execution.registry import adapter_descriptor, vendor_family_for_adapter
+
+NetworkTopologyValue = str | bool | None
+
+
+def _freeze_mapping(value: Mapping[str, Any] | None) -> Mapping[str, Any]:
+    return MappingProxyType(dict(value or {}))
+
+
+def _freeze_mapping_tuple(values: Any) -> tuple[Mapping[str, Any], ...]:
+    return tuple(MappingProxyType(dict(item)) for item in (values or []))
 
 
 class ProviderAccountSpec(BaseModel):
@@ -66,15 +76,15 @@ class ProviderOfferingSpec(BaseModel):
     provider_sku: str
     region: str | None = None
     zone: str | None = None
-    network_topology: Mapping[str, Any] = Field(default_factory=lambda: MappingProxyType({}))
+    network_topology: Mapping[str, NetworkTopologyValue] = Field(default_factory=lambda: MappingProxyType({}))
 
     @field_validator("network_topology")
     @classmethod
-    def freeze_network_topology(cls, value: Mapping[str, Any]) -> Mapping[str, Any]:
+    def freeze_network_topology(cls, value: Mapping[str, NetworkTopologyValue]) -> Mapping[str, NetworkTopologyValue]:
         return MappingProxyType(dict(value))
 
     @field_serializer("network_topology")
-    def serialize_network_topology(self, value: Mapping[str, Any]) -> dict[str, Any]:
+    def serialize_network_topology(self, value: Mapping[str, NetworkTopologyValue]) -> dict[str, NetworkTopologyValue]:
         return dict(value)
 
 
@@ -125,7 +135,7 @@ class LiveStatusOverlaySpec(BaseModel):
     stock_state: Literal["available", "unavailable", "unknown"] = "unknown"
     price_per_second: float | None = None
     price_source: str | None = None
-    dimensions: list[str] = Field(default_factory=list)
+    dimensions: tuple[str, ...] = Field(default_factory=tuple)
     observed_at: str | None = None
     next_revalidate_after: str | None = None
     ttl_seconds: int
@@ -178,8 +188,26 @@ class ResourceCatalogEntry(BaseModel):
     live_stock_state: Literal["available", "unavailable", "unknown"] = "unknown"
     live_catalog_status: Literal["not_checked", "unknown", "live_revalidated", "blocked"] = "not_checked"
     live_catalog_checked: bool = False
-    live_catalog_findings: list[dict[str, Any]] = Field(default_factory=list)
-    validation_evidence: dict[str, Any] = Field(default_factory=dict)
+    live_catalog_findings: tuple[Mapping[str, Any], ...] = Field(default_factory=tuple)
+    validation_evidence: Mapping[str, Any] = Field(default_factory=lambda: MappingProxyType({}))
+
+    @field_validator("live_catalog_findings")
+    @classmethod
+    def freeze_live_catalog_findings(cls, value: Any) -> tuple[Mapping[str, Any], ...]:
+        return _freeze_mapping_tuple(value)
+
+    @field_serializer("live_catalog_findings")
+    def serialize_live_catalog_findings(self, value: tuple[Mapping[str, Any], ...]) -> list[dict[str, Any]]:
+        return [dict(item) for item in value]
+
+    @field_validator("validation_evidence")
+    @classmethod
+    def freeze_validation_evidence(cls, value: Mapping[str, Any]) -> Mapping[str, Any]:
+        return _freeze_mapping(value)
+
+    @field_serializer("validation_evidence")
+    def serialize_validation_evidence(self, value: Mapping[str, Any]) -> dict[str, Any]:
+        return dict(value)
 
 
 class WorkerContractSpec(BaseModel):
@@ -193,8 +221,8 @@ class WorkerContractSpec(BaseModel):
     execution_surface: str
     model_ref: str | None = None
     engine_ref: str | None = None
-    modes: list[str] = Field(default_factory=list)
-    input_contracts: list[str] = Field(default_factory=list)
+    modes: tuple[str, ...] = Field(default_factory=tuple)
+    input_contracts: tuple[str, ...] = Field(default_factory=tuple)
     output_contract: str | None = None
     stream_contract: str | None = None
     target_configured: bool = False
@@ -242,11 +270,24 @@ class TupleCandidate(BaseModel):
     live_stock_state: Literal["available", "unavailable", "unknown"] = "unknown"
     model_ref: str | None = None
     engine_ref: str | None = None
-    modes: list[str] = Field(default_factory=list)
+    modes: tuple[str, ...] = Field(default_factory=tuple)
     production_state: Literal["production_configured", "candidate_draft"] = "candidate_draft"
     live_catalog_status: Literal["not_checked", "unknown", "live_revalidated", "blocked"] = "not_checked"
     snapshot_pinned: bool = True
-    recipe_fit: dict[str, Any] | None = None
+    recipe_fit: Mapping[str, Any] | None = None
+
+    @field_validator("recipe_fit")
+    @classmethod
+    def freeze_recipe_fit(cls, value: Mapping[str, Any] | None) -> Mapping[str, Any] | None:
+        if value is None:
+            return None
+        return _freeze_mapping(value)
+
+    @field_serializer("recipe_fit")
+    def serialize_recipe_fit(self, value: Mapping[str, Any] | None) -> dict[str, Any] | None:
+        if value is None:
+            return None
+        return dict(value)
 
 
 def build_resource_catalog_snapshot(
@@ -530,9 +571,9 @@ def _provider_offering(row: Mapping[str, Any]) -> ProviderOfferingSpec:
     )
 
 
-def _network_topology(row: Mapping[str, Any]) -> dict[str, Any]:
+def _network_topology(row: Mapping[str, Any]) -> dict[str, NetworkTopologyValue]:
     surface = str(row.get("execution_surface") or _surface_for_adapter(str(row.get("adapter") or "")) or "unknown")
-    topology: dict[str, Any] = {
+    topology: dict[str, NetworkTopologyValue] = {
         "surface": surface,
         "public_network_required": bool(row.get("endpoint") or row.get("target") or row.get("ssh_remote_cidr")),
     }
@@ -548,7 +589,7 @@ def _network_topology(row: Mapping[str, Any]) -> dict[str, Any]:
     ):
         value = row.get(key)
         if value not in (None, ""):
-            topology[key] = value
+            topology[key] = str(value)
     if row.get("endpoint") or row.get("target"):
         topology["endpoint_configured"] = True
     return topology
@@ -600,7 +641,7 @@ def _pricing_rule(row: Mapping[str, Any]) -> PricingRuleSpec:
 
 def _live_status_overlay(resource: ResourceCatalogEntry) -> LiveStatusOverlaySpec:
     findings = resource.live_catalog_findings
-    dimensions = sorted({str(item.get("dimension")) for item in findings if item.get("dimension")})
+    dimensions = tuple(sorted({str(item.get("dimension")) for item in findings if item.get("dimension")}))
     observed_at = datetime.now(timezone.utc).isoformat() if resource.live_catalog_checked else None
     ttl_seconds = _overlay_ttl_seconds(dimensions)
     return LiveStatusOverlaySpec(
@@ -616,7 +657,7 @@ def _live_status_overlay(resource: ResourceCatalogEntry) -> LiveStatusOverlaySpe
         next_revalidate_after=_next_revalidate_after(observed_at, ttl_seconds),
         ttl_seconds=ttl_seconds,
         finding_count=len(findings),
-        finding_hash=_stable_hash(findings) if findings else None,
+        finding_hash=_stable_hash([dict(item) for item in findings]) if findings else None,
     )
 
 
@@ -650,7 +691,7 @@ def _optional_float(value: Any) -> float | None:
         return None
 
 
-def _overlay_ttl_seconds(dimensions: list[str]) -> int:
+def _overlay_ttl_seconds(dimensions: tuple[str, ...]) -> int:
     if not dimensions:
         return 0
     ttl_by_dimension = {
