@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from math import ceil
 
 from gpucall.domain import (
@@ -23,6 +23,7 @@ from gpucall.domain import (
 )
 from gpucall.domain import ChatMessage, ResponseFormatType
 from gpucall.execution.contracts import account_ref_for_spec
+from gpucall.price_freshness import tuple_configured_price_freshness
 from gpucall.registry import ObservedRegistry
 from gpucall.routing import classification_rank, is_production_route_candidate, tuple_route_rejection_reason, required_model_len, token_budget
 
@@ -470,7 +471,7 @@ class GovernanceCompiler:
             granularity = float(tuple.billing_granularity_seconds)
             billable_seconds = ceil(billable_seconds / granularity) * granularity
         cost_per_second = float(tuple.cost_per_second)
-        price_freshness = self._price_freshness(tuple)
+        price_freshness = tuple_configured_price_freshness(tuple)
         execution_cost_usd = cost_per_second * billable_seconds
         standing_cost_per_second = float(tuple.standing_cost_per_second or 0)
         endpoint_cost_per_second = float(tuple.endpoint_cost_per_second or 0)
@@ -483,7 +484,7 @@ class GovernanceCompiler:
             "configured_price_source": tuple.configured_price_source or "",
             "configured_price_observed_at": tuple.configured_price_observed_at or "",
             "configured_price_ttl_seconds": float(tuple.configured_price_ttl_seconds or 0),
-            "price_freshness": price_freshness,
+            "price_freshness": price_freshness.value,
             "cold_start_seconds": cold_start_seconds,
             "runtime_seconds": runtime_seconds,
             "idle_seconds": idle_seconds,
@@ -499,29 +500,6 @@ class GovernanceCompiler:
             "execution_cost_usd": execution_cost_usd,
             "estimated_cost_usd": execution_cost_usd + standing_cost_usd + endpoint_cost_usd,
         }
-
-    @staticmethod
-    def _price_freshness(tuple: ExecutionTupleSpec) -> str:
-        surface = tuple.execution_surface.value if tuple.execution_surface is not None else ""
-        is_local_free = (
-            tuple.configured_price_source == "local-free"
-            or surface == "local_runtime"
-            or str(tuple.adapter) in {"echo", "local", "local-echo"}
-        )
-        if float(tuple.cost_per_second) == 0.0 and is_local_free:
-            return "fresh"
-        if float(tuple.cost_per_second) <= 0.0:
-            return "unknown"
-        if not tuple.configured_price_source or not tuple.configured_price_observed_at or not tuple.configured_price_ttl_seconds:
-            return "unknown"
-        try:
-            observed = datetime.fromisoformat(str(tuple.configured_price_observed_at).replace("Z", "+00:00"))
-        except ValueError:
-            return "unknown"
-        if observed.tzinfo is None:
-            observed = observed.replace(tzinfo=timezone.utc)
-        expires_at = observed + timedelta(seconds=float(tuple.configured_price_ttl_seconds))
-        return "fresh" if expires_at > datetime.now(timezone.utc) else "stale"
 
     def _effective_cost_policy(self, recipe: Recipe) -> CostPolicy:
         base = self.policy.cost_policy

@@ -64,6 +64,12 @@ class ExecutionSurface(StrEnum):
     LIFECYCLE_ONLY = "lifecycle_only"
 
 
+class PriceFreshness(StrEnum):
+    FRESH = "fresh"
+    STALE = "stale"
+    UNKNOWN = "unknown"
+
+
 class RecipeLatencyClass(StrEnum):
     INTERACTIVE = "interactive"
     STANDARD = "standard"

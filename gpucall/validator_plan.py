@@ -2,12 +2,14 @@ from __future__ import annotations
 
 import hashlib
 import json
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from gpucall.domain import PriceFreshness
 from gpucall.execution_catalog import ResourceCatalogSnapshot
+from gpucall.price_freshness import parse_time, validator_price_freshness
 
 
 class ValidatorQueueItem(BaseModel):
@@ -23,7 +25,7 @@ class ValidatorQueueItem(BaseModel):
     priority: int
     estimated_validation_cost_usd: float
     validation_budget_usd: float
-    price_freshness: Literal["fresh", "stale", "unknown"]
+    price_freshness: PriceFreshness
     next_revalidate_after: str | None = None
     selected: bool = False
     skip_reason: str | None = None
@@ -73,7 +75,7 @@ def build_validator_plan(
             continue
         price = prices.get(claim.resource_ref)
         cost = _estimated_validation_cost(price)
-        price_freshness = _price_freshness(price, overlay, now)
+        price_freshness = validator_price_freshness(price, overlay, now)
         worker = workers.get(claim.worker_ref)
         raw_items.append(
             ValidatorQueueItem(
@@ -176,12 +178,12 @@ def _structural_skip_reason(
     worker: Any,
     overlay: Any,
     *,
-    price_freshness: str,
+    price_freshness: PriceFreshness,
     strict_price: bool,
 ) -> str | None:
     if worker is None:
         return "missing_worker_contract"
-    if strict_price and price_freshness != "fresh":
+    if strict_price and price_freshness != PriceFreshness.FRESH:
         return "price_not_fresh"
     if overlay is not None and overlay.status == "blocked":
         return "live_status_blocked"
@@ -190,28 +192,5 @@ def _structural_skip_reason(
     return None
 
 
-def _price_freshness(price: Any, overlay: Any, now: datetime) -> Literal["fresh", "stale", "unknown"]:
-    if price is None:
-        return "unknown"
-    if float(price.price_per_second or 0.0) == 0.0 and price.configured_price_source == "local-free":
-        return "fresh"
-    next_revalidate = _parse_time(getattr(overlay, "next_revalidate_after", None)) if overlay is not None else None
-    if getattr(overlay, "price_per_second", None) is not None and next_revalidate is not None:
-        return "fresh" if next_revalidate > now else "stale"
-    observed = _parse_time(getattr(price, "configured_price_observed_at", None))
-    ttl = getattr(price, "configured_price_ttl_seconds", None)
-    if observed is None or ttl is None or float(price.price_per_second or 0.0) <= 0.0:
-        return "unknown"
-    return "fresh" if observed + timedelta(seconds=float(ttl)) > now else "stale"
-
-
 def _parse_time(value: str | None) -> datetime | None:
-    if not value:
-        return None
-    try:
-        parsed = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
-    except ValueError:
-        return None
-    if parsed.tzinfo is None:
-        return parsed.replace(tzinfo=timezone.utc)
-    return parsed
+    return parse_time(value)
