@@ -10,6 +10,7 @@ recipe_inbox_auto_run_validation: false
 
 # auto_activate writes the validated recipe/tuple into the active config.
 recipe_inbox_auto_activate: false
+recipe_inbox_validation_parallelism: 1
 
 # Optional overrides. Defaults to $XDG_STATE_HOME/gpucall/recipe-promotions
 # and $XDG_STATE_HOME/gpucall/tuple-validation.

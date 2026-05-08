@@ -182,6 +182,7 @@ def test_admin_process_inbox_can_auto_promote_from_config(tmp_path, monkeypatch)
                 "recipe_inbox_auto_promote: true",
                 "recipe_inbox_auto_run_validation: true",
                 "recipe_inbox_auto_activate: true",
+                "recipe_inbox_validation_parallelism: 2",
                 f"recipe_inbox_promotion_work_dir: {tmp_path / 'promotions'}",
                 f"recipe_inbox_validation_dir: {tmp_path / 'validation'}",
             ]
@@ -225,6 +226,27 @@ def test_admin_process_inbox_can_auto_promote_from_config(tmp_path, monkeypatch)
     assert report["promotion"]["decision"] == "ACTIVATED"
     assert report["promotion"]["validation"] == {"returncode": 0, "passed": True}
     assert report["promotion"]["validation_attempts"][0]["passed"] is True
+
+
+def test_existing_tuple_validation_parallelism_stops_after_successful_batch(monkeypatch, tmp_path) -> None:
+    calls: list[str] = []
+
+    def fake_validation(tuple_name, recipe_name, config_dir, *, validation_dir):
+        calls.append(tuple_name)
+        return {"returncode": 0 if tuple_name == "b" else 1, "passed": tuple_name == "b"}
+
+    monkeypatch.setattr(recipe_admin, "_run_existing_tuple_validation", fake_validation)
+
+    results = recipe_admin._run_existing_tuple_validations(
+        ["a", "b", "c"],
+        "recipe",
+        tmp_path,
+        validation_dir=None,
+        parallelism=2,
+    )
+
+    assert [item[0] for item in results] == ["a", "b"]
+    assert calls == ["a", "b"]
 
 
 def test_admin_cli_watch_one_iteration(tmp_path, capsys) -> None:

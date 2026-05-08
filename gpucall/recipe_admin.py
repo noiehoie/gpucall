@@ -8,6 +8,7 @@ import shutil
 import subprocess
 import sys
 import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from collections.abc import Mapping
 from datetime import datetime, timezone
 from pathlib import Path
@@ -333,8 +334,13 @@ def _auto_validate_existing_tuple(
         report["decision"] = "READY_FOR_BILLABLE_VALIDATION"
         return report
     validation = None
-    for tuple_name in tuple_chain:
-        validation = _run_existing_tuple_validation(tuple_name, recipe_name, config_dir, validation_dir=validation_dir)
+    for tuple_name, validation in _run_existing_tuple_validations(
+        tuple_chain,
+        recipe_name,
+        config_dir,
+        validation_dir=validation_dir,
+        parallelism=int(automation.recipe_inbox_validation_parallelism),
+    ):
         report["validation_attempts"].append(
             {
                 "tuple": tuple_name,
@@ -356,6 +362,45 @@ def _auto_validate_existing_tuple(
     else:
         report["decision"] = "VALIDATED_READY_TO_ACTIVATE"
     return report
+
+
+def _run_existing_tuple_validations(
+    tuple_chain: list[str],
+    recipe_name: str,
+    config_dir: Path,
+    *,
+    validation_dir: str | Path | None,
+    parallelism: int,
+) -> list[tuple[str, dict[str, Any]]]:
+    parallelism = max(1, parallelism)
+    if parallelism == 1:
+        return [
+            (tuple_name, _run_existing_tuple_validation(tuple_name, recipe_name, config_dir, validation_dir=validation_dir))
+            for tuple_name in tuple_chain
+        ]
+    results: list[tuple[str, dict[str, Any]]] = []
+    for index in range(0, len(tuple_chain), parallelism):
+        batch = tuple_chain[index : index + parallelism]
+        with ThreadPoolExecutor(max_workers=len(batch)) as executor:
+            futures = {
+                executor.submit(
+                    _run_existing_tuple_validation,
+                    tuple_name,
+                    recipe_name,
+                    config_dir,
+                    validation_dir=validation_dir,
+                ): tuple_name
+                for tuple_name in batch
+            }
+            batch_results: list[tuple[str, dict[str, Any]]] = []
+            for future in as_completed(futures):
+                tuple_name = futures[future]
+                batch_results.append((tuple_name, future.result()))
+        ordered = sorted(batch_results, key=lambda item: batch.index(item[0]))
+        results.extend(ordered)
+        if any(result.get("returncode") == 0 and result.get("passed") is True for _, result in ordered):
+            break
+    return results
 
 
 def _run_existing_tuple_validation(

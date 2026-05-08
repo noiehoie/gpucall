@@ -295,14 +295,16 @@ recipe_inbox_auto_materialize: true
 recipe_inbox_auto_promote: true
 recipe_inbox_auto_run_validation: true  # may spend provider money
 recipe_inbox_auto_activate: true
+recipe_inbox_validation_parallelism: 2
 ```
 
 When this flag is absent or false, `process-inbox` and `watch` fail closed unless
 `--accept-all` is present. When it is true, sanitized caller submissions can be
 automatically reviewed and materialized into draft recipe YAML. Promotion,
 billable validation, and activation are controlled by their own flags. The
-validation flag can spend provider money; keep it false unless the inbox host is
-the approved operator automation environment.
+validation flag can spend provider money, and validation parallelism can spend
+that money concurrently; keep both closed or at `1` unless the inbox host is the
+approved operator automation environment.
 
 To poll continuously:
 

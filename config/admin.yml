@@ -3,5 +3,6 @@ recipe_inbox_auto_materialize: true
 recipe_inbox_auto_promote: true
 recipe_inbox_auto_run_validation: true
 recipe_inbox_auto_activate: true
+recipe_inbox_validation_parallelism: 2
 recipe_inbox_promotion_work_dir: .gpucall-admin/promotions
 recipe_inbox_validation_dir: .gpucall-admin/tuple-validation
