@@ -74,6 +74,12 @@ gpucall security scan-secrets
 
 Provider YAML should contain resource shape and routing metadata only.
 
+## License
+
+Copyright (c) 2026 Sugano Tamotsu. All rights reserved.
+
+This repository is public for evaluation, integration review, and security discussion. It is not open source unless a separate written license says otherwise.
+
 ## SaaS v1 Operations
 
 External SaaS operation uses tenant quota YAML plus credentials-managed tenant API keys. See [docs/SAAS_V1_OPERATIONS.md](docs/SAAS_V1_OPERATIONS.md).
