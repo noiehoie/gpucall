@@ -3,10 +3,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
-import os
-import re
 import shutil
-import subprocess
 import sys
 import time
 from collections.abc import Mapping
@@ -14,18 +11,15 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-import yaml
-
 from gpucall.candidate_sources import load_tuple_candidate_payloads
 from gpucall.config import ConfigError, default_state_dir, load_config
 from gpucall.domain import ExecutionMode, ExecutionTupleSpec, Recipe, recipe_requirements
 from gpucall.execution.contracts import artifact_tuple_evidence_key, tuple_evidence_key
-from gpucall.execution.registry import adapter_descriptor, vendor_family_for_adapter
-from gpucall.recipe_intents import TASK_DEFAULT_CAPABILITIES, capabilities_for
+from gpucall.execution.registry import adapter_descriptor
+from gpucall.recipe_intents import capabilities_for
+from gpucall.recipe_materialize import canonical_recipe_from_artifact, materialization_report, to_yaml, write_recipe_yaml
+from gpucall.tuple_promotion import promote_candidate, promote_production_tuple
 from gpucall.routing import tuple_route_rejection_reason
-
-
-TEXT_STOP_TOKENS = ["<|im_end|>", "<|endoftext|>"]
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -164,64 +158,6 @@ def main(argv: list[str] | None = None) -> int:
     raise AssertionError(args.command)
 
 
-def canonical_recipe_from_artifact(artifact: Mapping[str, Any]) -> dict[str, Any]:
-    proposed = _proposed_recipe_from_artifact(artifact)
-    task = str(proposed.get("task") or "infer")
-    name = _canonical_name(str(proposed.get("name") or f"{task}-draft"))
-    context_budget_tokens = _positive_int(proposed.get("context_budget_tokens") or proposed.get("max_model_len"), default=32768)
-    recipe: dict[str, Any] = {
-        "name": name,
-        "recipe_schema_version": 3,
-        "task": task,
-        "intent": str(proposed.get("intent") or f"{task}_draft"),
-        "auto_select": bool(proposed.get("auto_select", True)),
-        "data_classification": str(proposed.get("data_classification") or "confidential"),
-        "allowed_modes": _allowed_modes(proposed),
-        "context_budget_tokens": context_budget_tokens,
-        "resource_class": str(proposed.get("resource_class") or _resource_class_for(task, context_budget_tokens)),
-        "latency_class": str(
-            proposed.get("latency_class")
-            or ("long_running" if context_budget_tokens >= 524288 else ("batch" if context_budget_tokens >= 65536 else "standard"))
-        ),
-        "quality_floor": "draft",
-        "timeout_seconds": _timeout_for(task, context_budget_tokens),
-        "lease_ttl_seconds": _lease_for(task, context_budget_tokens),
-        "token_estimation_profile": str(proposed.get("token_estimation_profile") or "generic_utf8"),
-        "max_input_bytes": _max_input_bytes(task, context_budget_tokens),
-        "allowed_mime_prefixes": _allowed_mime_prefixes(task, proposed),
-        "default_temperature": 0.2 if task == "vision" else 0.7,
-        "structured_temperature": 0.0,
-        "structured_system_prompt": "Return only valid JSON when response_format requests JSON. Do not include markdown fences or prose.",
-        "system_prompt": _system_prompt_for(task),
-        "stop_tokens": TEXT_STOP_TOKENS,
-        "repetition_penalty": 1.05,
-        "guided_decoding": True,
-        "output_validation_attempts": 1,
-        "required_model_capabilities": [str(item) for item in proposed.get("required_model_capabilities") or []],
-        "output_contract": _route_output_contract(proposed),
-    }
-    if task == "vision":
-        recipe["allowed_inline_mime_prefixes"] = ["text/"]
-    return recipe
-
-
-def materialization_report(artifact: Mapping[str, Any], recipe: Mapping[str, Any]) -> dict[str, Any]:
-    proposed = _proposed_recipe_from_artifact(artifact)
-    return {
-        "schema_version": 1,
-        "phase": "admin-materialization",
-        "policy": "accept-all",
-        "human_review_bypassed": True,
-        "canonical_recipe": dict(recipe),
-        "discarded_draft_fields": sorted(set(proposed) - set(recipe)),
-        "warnings": [
-            "accept-all materialization writes a recipe candidate; it does not create a capable tuple.",
-            "run gpucall validate-config after copying the recipe into a real config directory.",
-            "if validate-config reports no satisfying tuple, add or enable a tuple before production use.",
-        ],
-    }
-
-
 def review_artifact(
     artifact_or_submission: Mapping[str, Any],
     *,
@@ -265,131 +201,6 @@ def review_artifact(
         report["blockers"].append({"check": "review_exception", "reason": str(exc)})
     _finalize_review_decision(report)
     return report
-
-
-def promote_production_tuple(
-    *,
-    review: Mapping[str, Any],
-    candidate_name: str | None,
-    config_dir: str | Path,
-    work_dir: str | Path,
-    validation_dir: str | Path | None = None,
-    run_validation: bool = False,
-    activate: bool = False,
-    force: bool = False,
-) -> dict[str, Any]:
-    config_root = Path(config_dir).expanduser()
-    workspace = Path(work_dir).expanduser()
-    if not config_root.exists():
-        raise FileNotFoundError(f"config_dir does not exist: {config_root}")
-    candidate = _select_review_candidate(review, candidate_name)
-    recipe = _mapping(review.get("canonical_recipe"))
-    if not recipe:
-        raise ValueError("review does not contain canonical_recipe")
-    active_config = load_config(config_root)
-    candidate_path = candidate.get("path")
-    if not candidate_path:
-        raise ValueError("candidate match does not include source path")
-    candidate_payload = _load_yaml_file(Path(str(candidate_path)))
-    tuple = _tuple_from_candidate(candidate_payload, active_config=active_config)
-    started = datetime.now(timezone.utc).isoformat()
-    promotion_config = workspace / "config"
-    reports = workspace / "reports"
-    reports.mkdir(parents=True, exist_ok=True)
-    _copy_config_tree(config_root, promotion_config, force=force)
-    recipe_path = _write_yaml_guarded(promotion_config / "recipes" / f"{recipe['name']}.yml", recipe, force=force)
-    tuple_path = _write_yaml_guarded(promotion_config / "tuples" / f"{tuple['name']}.yml", tuple, force=force)
-    surface_path, worker_path = _write_split_tuple(promotion_config, tuple, force=force)
-    promotion_report: dict[str, Any] = {
-        "schema_version": 1,
-        "phase": "tuple-candidate-promotion",
-        "started_at": started,
-        "candidate": candidate,
-        "recipe": recipe["name"],
-        "tuple": tuple["name"],
-        "promotion_config_dir": str(promotion_config),
-        "generated_recipe_path": str(recipe_path),
-        "generated_tuple_path": str(tuple_path),
-        "generated_surface_path": str(surface_path),
-        "generated_worker_path": str(worker_path),
-        "validation": None,
-        "activated": False,
-        "activation_paths": {},
-        "next_actions": [
-            f"run gpucall validate-config --config-dir {promotion_config}",
-            f"run gpucall tuple-smoke {tuple['name']} --config-dir {promotion_config} --recipe {recipe['name']} --mode sync --write-artifact",
-            "rerun gpucall-recipe-admin review with the validation artifact directory",
-            "activate only after validation passes for the exact recipe/tuple/model/engine tuple",
-        ],
-    }
-    try:
-        _validate_config_dir(promotion_config)
-        promotion_report["config_valid"] = True
-    except ConfigError as exc:
-        promotion_report["config_valid"] = False
-        promotion_report["config_error"] = str(exc)
-        promotion_report["decision"] = "READY_FOR_ENDPOINT_CONFIGURATION"
-        promotion_report["next_actions"].insert(
-            0,
-            "fill execution-surface required fields in the generated tuple YAML, then rerun promote with --run-validation",
-        )
-        if run_validation or activate:
-            raise ValueError("refusing validation/activation because generated promotion config is not valid: " + str(exc)) from exc
-        return promotion_report
-    if run_validation:
-        validation = _run_tuple_validation(tuple["name"], recipe["name"], promotion_config, validation_dir=validation_dir)
-        promotion_report["validation"] = validation
-        if validation.get("returncode") != 0 or validation.get("passed") is not True:
-            promotion_report["decision"] = "VALIDATION_FAILED"
-            return promotion_report
-    else:
-        existing_validation = _find_validation_for_promotion(
-            tuple=tuple["name"],
-            recipe=recipe["name"],
-            model_ref=tuple.get("model_ref"),
-            engine_ref=tuple.get("engine_ref"),
-            config_dir=promotion_config,
-            validation_dir=Path(validation_dir).expanduser() if validation_dir else None,
-        )
-        promotion_report["validation"] = existing_validation
-        if not existing_validation.get("matched"):
-            promotion_report["decision"] = "READY_FOR_BILLABLE_VALIDATION"
-            if activate:
-                raise ValueError("refusing to activate without matching live validation artifact")
-            return promotion_report
-    if activate:
-        active_recipe = _write_yaml_guarded(config_root / "recipes" / f"{recipe['name']}.yml", recipe, force=force)
-        active_tuple = _write_yaml_guarded(config_root / "tuples" / f"{tuple['name']}.yml", tuple, force=force)
-        _validate_config_dir(config_root)
-        promotion_report["activated"] = True
-        promotion_report["activation_paths"] = {"recipe": str(active_recipe), "tuple": str(active_tuple)}
-        promotion_report["decision"] = "ACTIVATED"
-    else:
-        promotion_report["decision"] = "VALIDATED_READY_TO_ACTIVATE"
-    return promotion_report
-
-
-def promote_candidate(
-    *,
-    review: Mapping[str, Any],
-    candidate_name: str | None,
-    config_dir: str | Path,
-    work_dir: str | Path,
-    validation_dir: str | Path | None = None,
-    run_validation: bool = False,
-    activate: bool = False,
-    force: bool = False,
-) -> dict[str, Any]:
-    return promote_production_tuple(
-        review=review,
-        candidate_name=candidate_name,
-        config_dir=config_dir,
-        work_dir=work_dir,
-        validation_dir=validation_dir,
-        run_validation=run_validation,
-        activate=activate,
-        force=force,
-    )
 
 
 def process_inbox(
@@ -641,246 +452,6 @@ def _candidate_match(candidate: Mapping[str, Any], *, config: Any, contract: Map
     }
 
 
-def _select_review_candidate(review: Mapping[str, Any], candidate_name: str | None) -> Mapping[str, Any]:
-    matches = review.get("tuple_candidate_matches")
-    if not isinstance(matches, list) or not matches:
-        raise ValueError("review does not contain tuple_candidate_matches")
-    if candidate_name is None:
-        selected = matches[0]
-        if not isinstance(selected, Mapping):
-            raise ValueError("invalid tuple_candidate_matches entry")
-        return selected
-    for match in matches:
-        if isinstance(match, Mapping) and match.get("name") == candidate_name:
-            return match
-    raise ValueError(f"candidate {candidate_name!r} is not present in review tuple_candidate_matches")
-
-
-def _tuple_from_candidate(candidate: Mapping[str, Any], *, active_config: Any) -> dict[str, Any]:
-    name = str(candidate.get("name") or "")
-    model_ref = str(candidate.get("model_ref") or "")
-    engine_ref = str(candidate.get("engine_ref") or "")
-    if not name or not model_ref or not engine_ref:
-        raise ValueError("candidate must define name, model_ref, and engine_ref")
-    model = active_config.models.get(model_ref)
-    if model is None:
-        raise ValueError(f"candidate references unknown model_ref {model_ref!r}")
-    source: dict[str, Any] = {
-        "name": name,
-        "adapter": str(candidate.get("adapter") or ""),
-        "execution_surface": candidate.get("execution_surface") or _surface_for_adapter(str(candidate.get("adapter") or "")),
-        "max_data_classification": str(candidate.get("max_data_classification") or "confidential"),
-        "trust_profile": {
-            "security_tier": str(candidate.get("security_tier") or "encrypted_capsule"),
-            "sovereign_jurisdiction": candidate.get("sovereign_jurisdiction") or "unknown",
-            "dedicated_gpu": bool(candidate.get("dedicated_gpu", False)),
-            "requires_attestation": bool(candidate.get("requires_attestation", False)),
-            "supports_key_release": bool(candidate.get("supports_key_release", False)),
-            "allows_worker_s3_credentials": bool(candidate.get("allows_worker_s3_credentials", False)),
-        },
-        "gpu": str(candidate.get("gpu") or "unknown"),
-        "vram_gb": _positive_int(candidate.get("vram_gb"), default=1),
-        "max_model_len": _positive_int(candidate.get("max_model_len"), default=model.max_model_len),
-        "cost_per_second": float(candidate.get("cost_per_second") or 0.0),
-        "modes": _strings(candidate.get("modes") or ["sync", "async"]),
-        "endpoint": candidate.get("endpoint"),
-        "endpoint_contract": candidate.get("endpoint_contract"),
-        "input_contracts": _strings(candidate.get("input_contracts")),
-        "output_contract": candidate.get("output_contract"),
-        "stream_contract": candidate.get("stream_contract") or "none",
-        "supports_vision": bool(model.supports_vision),
-        "target": candidate.get("target") or "",
-        "stream_target": candidate.get("stream_target"),
-        "model": model.provider_model_id,
-        "declared_model_max_len": model.max_model_len,
-        "model_ref": model_ref,
-        "engine_ref": engine_ref,
-        "provider_params": dict(candidate.get("provider_params") or {}),
-    }
-    for key in ("project_id", "region", "zone", "resource_group", "network", "subnet", "service_account", "instance", "image", "key_name", "ssh_remote_cidr", "lease_manifest_path"):
-        if key in candidate:
-            source[key] = candidate.get(key)
-    ExecutionTupleSpec.model_validate(source)
-    return source
-
-
-def _copy_config_tree(source: Path, destination: Path, *, force: bool) -> None:
-    if destination.exists():
-        if not force:
-            raise FileExistsError(f"promotion config already exists: {destination}")
-        shutil.rmtree(destination)
-    ignore = shutil.ignore_patterns("*.db", "*.db-shm", "*.db-wal", "__pycache__")
-    shutil.copytree(source, destination, ignore=ignore)
-
-
-def _write_yaml_guarded(path: Path, payload: Mapping[str, Any], *, force: bool) -> Path:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    if path.exists() and not force:
-        raise FileExistsError(f"refusing to overwrite existing file: {path}")
-    path.write_text(to_yaml(payload), encoding="utf-8")
-    return path
-
-
-def _write_split_tuple(config_root: Path, tuple: Mapping[str, Any], *, force: bool) -> tuple[Path, Path]:
-    name = str(tuple["name"])
-    account_ref = _account_ref(str(tuple.get("adapter") or ""))
-    surface = _drop_none(
-        {
-            "surface_ref": name,
-            "worker_ref": name,
-            "account_ref": account_ref,
-            "adapter": tuple.get("adapter"),
-            "execution_surface": tuple.get("execution_surface"),
-            "max_data_classification": tuple.get("max_data_classification"),
-            "trust_profile": tuple.get("trust_profile"),
-            "gpu": tuple.get("gpu"),
-            "vram_gb": tuple.get("vram_gb"),
-            "max_model_len": tuple.get("max_model_len"),
-            "cost_per_second": tuple.get("cost_per_second"),
-            "expected_cold_start_seconds": tuple.get("expected_cold_start_seconds"),
-            "scaledown_window_seconds": tuple.get("scaledown_window_seconds"),
-            "min_billable_seconds": tuple.get("min_billable_seconds"),
-            "billing_granularity_seconds": tuple.get("billing_granularity_seconds"),
-            "endpoint": tuple.get("endpoint"),
-            "region": tuple.get("region"),
-            "zone": tuple.get("zone"),
-            "instance": tuple.get("instance"),
-            "image": tuple.get("image"),
-            "key_name": tuple.get("key_name"),
-            "ssh_remote_cidr": tuple.get("ssh_remote_cidr"),
-            "lease_manifest_path": tuple.get("lease_manifest_path"),
-            "supports_vision": tuple.get("supports_vision"),
-            "stock_state": "configured",
-        }
-    )
-    worker = _drop_none(
-        {
-            "worker_ref": name,
-            "account_ref": account_ref,
-            "adapter": tuple.get("adapter"),
-            "execution_surface": tuple.get("execution_surface"),
-            "model_ref": tuple.get("model_ref"),
-            "engine_ref": tuple.get("engine_ref"),
-            "modes": tuple.get("modes"),
-            "input_contracts": tuple.get("input_contracts"),
-            "output_contract": tuple.get("output_contract"),
-            "stream_contract": tuple.get("stream_contract"),
-            "target": tuple.get("target"),
-            "stream_target": tuple.get("stream_target"),
-            "endpoint_contract": tuple.get("endpoint_contract"),
-            "model": tuple.get("model"),
-            "declared_model_max_len": tuple.get("declared_model_max_len"),
-            "provider_params": tuple.get("provider_params") or {},
-        }
-    )
-    surface_path = _write_yaml_guarded(config_root / "surfaces" / f"{name}.yml", surface, force=force)
-    worker_path = _write_yaml_guarded(config_root / "workers" / f"{name}.yml", worker, force=force)
-    return surface_path, worker_path
-
-
-def _drop_none(payload: Mapping[str, Any]) -> dict[str, Any]:
-    return {key: value for key, value in payload.items() if value is not None}
-
-
-def _account_ref(adapter: str) -> str:
-    return vendor_family_for_adapter(adapter)
-
-
-def _validate_config_dir(config_dir: Path) -> None:
-    load_config(config_dir)
-
-
-def _run_tuple_validation(tuple: str, recipe: str, config_dir: Path, *, validation_dir: str | Path | None) -> dict[str, Any]:
-    command = [
-        sys.executable,
-        "-m",
-        "gpucall.cli",
-        "tuple-smoke",
-        tuple,
-        "--config-dir",
-        str(config_dir),
-        "--recipe",
-        recipe,
-        "--mode",
-        "sync",
-        "--write-artifact",
-    ]
-    env = dict(os.environ)
-    credentials = config_dir / "credentials.yml"
-    if credentials.exists() and not env.get("GPUCALL_CREDENTIALS"):
-        env["GPUCALL_CREDENTIALS"] = str(credentials)
-    modal_config = config_dir / ".modal.toml"
-    if not env.get("MODAL_CONFIG_PATH"):
-        explicit_modal = env.get("GPUCALL_MODAL_CONFIG_FILE")
-        if explicit_modal:
-            env["MODAL_CONFIG_PATH"] = explicit_modal
-        elif modal_config.exists() and modal_config.stat().st_size > 0:
-            env["MODAL_CONFIG_PATH"] = str(modal_config)
-    if validation_dir is not None:
-        state_dir = Path(validation_dir).expanduser().parent
-        env["GPUCALL_STATE_DIR"] = str(state_dir)
-    completed = subprocess.run(command, capture_output=True, text=True, env=env, check=False)
-    result: dict[str, Any] = {
-        "command": command,
-        "returncode": completed.returncode,
-        "stdout": completed.stdout,
-        "stderr": completed.stderr,
-        "passed": False,
-    }
-    if completed.stdout.strip():
-        try:
-            payload = json.loads(completed.stdout)
-            result["artifact"] = payload
-            result["passed"] = payload.get("passed") is True
-        except json.JSONDecodeError:
-            result["parse_error"] = "tuple-smoke stdout was not JSON"
-    return result
-
-
-def _find_validation_for_promotion(
-    *,
-    tuple: str,
-    recipe: str,
-    model_ref: str | None,
-    engine_ref: str | None,
-    config_dir: Path,
-    validation_dir: Path | None,
-) -> dict[str, Any]:
-    root = validation_dir or (default_state_dir() / "tuple-validation")
-    result = {"dir": str(root), "matched": []}
-    if not root.exists():
-        result["reason"] = "validation artifact directory does not exist"
-        return result
-    expected_hash = _config_hash(config_dir)
-    expected_commit = _git_commit(Path.cwd())
-    matched: list[dict[str, Any]] = []
-    for path in sorted(root.glob("*.json"), key=lambda item: item.stat().st_mtime, reverse=True):
-        try:
-            data = json.loads(path.read_text(encoding="utf-8"))
-        except Exception:
-            continue
-        if data.get("validation_schema_version") != 1 or data.get("passed") is not True:
-            continue
-        if data.get("tuple") != tuple or data.get("recipe") != recipe:
-            continue
-        if data.get("model_ref") != model_ref or data.get("engine_ref") != engine_ref:
-            continue
-        if data.get("config_hash") != expected_hash:
-            continue
-        if expected_commit and data.get("commit") != expected_commit:
-            continue
-        matched.append({"path": str(path), "tuple": tuple, "recipe": recipe})
-    result["matched"] = matched
-    return result
-
-
-def _load_yaml_file(path: Path) -> dict[str, Any]:
-    payload = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
-    if not isinstance(payload, dict):
-        raise ValueError(f"YAML root must be a mapping: {path}")
-    return payload
-
-
 def _candidate_rank(candidate: Mapping[str, Any], *, contract: Mapping[str, Any]) -> int:
     vram_overhead = _positive_int(candidate.get("vram_gb"), default=0) - _positive_int(contract.get("min_vram_gb"), default=0)
     len_overhead = _positive_int(candidate.get("max_model_len"), default=0) - _positive_int(contract.get("min_model_len"), default=0)
@@ -1115,20 +686,6 @@ def _finding_reasons(value: Any) -> list[str]:
     return reasons
 
 
-def write_recipe_yaml(recipe: Mapping[str, Any], output_dir: str | Path, *, force: bool = False) -> Path:
-    root = Path(output_dir)
-    root.mkdir(parents=True, exist_ok=True)
-    path = root / f"{recipe['name']}.yml"
-    if path.exists() and not force:
-        raise FileExistsError(f"recipe already exists: {path}")
-    path.write_text(to_yaml(recipe), encoding="utf-8")
-    return path
-
-
-def to_yaml(value: Mapping[str, Any]) -> str:
-    return yaml.safe_dump(dict(value), allow_unicode=True, sort_keys=False)
-
-
 def _write_json(data: Mapping[str, Any], output: str | None) -> None:
     text = json.dumps(data, ensure_ascii=False, indent=2, sort_keys=True) + "\n"
     if output:
@@ -1163,15 +720,6 @@ def _git_commit(root: Path) -> str | None:
         return None
 
 
-def _proposed_recipe_from_artifact(artifact: Mapping[str, Any]) -> Mapping[str, Any]:
-    if "proposed_recipe" in artifact:
-        return _mapping(artifact.get("proposed_recipe"))
-    sanitized = _mapping(artifact.get("sanitized_request"))
-    if sanitized:
-        return _proposed_recipe_from_sanitized(sanitized)
-    raise ValueError("artifact must be a gpucall-recipe-draft intake or draft JSON object")
-
-
 def _artifact_from_submission(data: Mapping[str, Any]) -> Mapping[str, Any]:
     if data.get("kind") == "gpucall.recipe_request_submission":
         draft = data.get("draft")
@@ -1191,40 +739,6 @@ def _move_submission(source: Path, destination: Path) -> None:
     shutil.move(str(source), str(destination))
 
 
-def _proposed_recipe_from_sanitized(sanitized: Mapping[str, Any]) -> dict[str, Any]:
-    task = str(sanitized.get("task") or "infer")
-    intent = str(sanitized.get("intent") or task)
-    capabilities = sanitized.get("desired_capabilities")
-    if not isinstance(capabilities, list) or not capabilities:
-        capabilities = capabilities_for(task=task, intent=intent)
-    context_budget_tokens = _round_context_budget(_context_budget_from_context(_mapping(_mapping(sanitized.get("error")).get("context"))))
-    return {
-        "name": _recipe_name(task, intent),
-        "recipe_schema_version": 3,
-        "task": task,
-        "intent": intent,
-        "auto_select": True,
-        "data_classification": str(sanitized.get("classification") or "confidential"),
-        "allowed_modes": [str(sanitized.get("mode") or "sync")],
-        "required_model_capabilities": [str(item) for item in capabilities],
-        "context_budget_tokens": context_budget_tokens,
-        "resource_class": _resource_class_for(task, context_budget_tokens),
-        "latency_class": "long_running" if context_budget_tokens >= 524288 else ("batch" if context_budget_tokens >= 65536 else "standard"),
-        "token_estimation_profile": "generic_utf8",
-        "allowed_mime_prefixes": _mime_prefixes_for(task),
-        "output_contract": sanitized.get("expected_output") or "plain_text",
-    }
-
-
-def _route_output_contract(proposed: Mapping[str, Any]) -> str:
-    raw = str(proposed.get("output_contract") or "").strip().lower().replace("_", "-")
-    if raw in {"json_object", "json-schema"}:
-        return raw.replace("-", "_")
-    if raw in {"plain-text", "text", "plain"}:
-        return "plain-text"
-    return "plain-text"
-
-
 def _load_json(path: str) -> dict[str, Any]:
     raw = sys.stdin.read() if path == "-" else Path(path).read_text(encoding="utf-8")
     data = json.loads(raw)
@@ -1237,108 +751,9 @@ def _mapping(value: Any) -> Mapping[str, Any]:
     return value if isinstance(value, Mapping) else {}
 
 
-def _canonical_name(value: str) -> str:
-    cleaned = re.sub(r"[^a-z0-9-]+", "-", value.lower()).strip("-")
-    return cleaned or "recipe-draft"
-
-
-def _recipe_name(task: str, intent: str) -> str:
-    cleaned = re.sub(r"[^a-z0-9]+", "-", intent.lower()).strip("-")
-    return f"{task}-{cleaned or 'standard'}-draft"
-
-
 def _positive_int(value: Any, *, default: int) -> int:
     try:
         number = int(value)
     except (TypeError, ValueError):
         return default
     return max(1, number)
-
-
-def _round_context_budget(value: Any) -> int:
-    try:
-        required = int(value)
-    except (TypeError, ValueError):
-        required = 8192
-    for candidate in (8192, 32768, 65536, 131072, 262144, 524288, 1010000):
-        if required <= candidate:
-            return candidate
-    return required
-
-
-def _context_budget_from_context(context: Mapping[str, Any]) -> int | None:
-    for key in ("context_budget_tokens", "required_model_len"):
-        value = context.get(key)
-        if value is None:
-            continue
-        try:
-            return int(value)
-        except (TypeError, ValueError):
-            continue
-    return None
-
-
-def _allowed_modes(proposed: Mapping[str, Any]) -> list[str]:
-    raw = proposed.get("allowed_modes")
-    if isinstance(raw, list) and raw:
-        return [str(item) for item in raw if str(item)]
-    return ["sync", "async"]
-
-
-def _resource_class_for(task: str, context_budget_tokens: int) -> str:
-    if task == "vision":
-        return "document_vision" if context_budget_tokens >= 8192 else "standard"
-    if context_budget_tokens <= 8192:
-        return "light"
-    if context_budget_tokens <= 32768:
-        return "standard"
-    if context_budget_tokens <= 65536:
-        return "large"
-    if context_budget_tokens <= 131072:
-        return "exlarge"
-    return "ultralong"
-
-
-def _timeout_for(task: str, max_model_len: int) -> int:
-    if task == "vision":
-        return 1800
-    if max_model_len >= 131072:
-        return 600
-    return 180
-
-
-def _lease_for(task: str, max_model_len: int) -> int:
-    if task == "vision":
-        return 2100
-    if max_model_len >= 131072:
-        return 900
-    return 240
-
-
-def _max_input_bytes(task: str, max_model_len: int) -> int:
-    if task == "vision":
-        return 16 * 1024 * 1024
-    return max(16 * 1024 * 1024, min(1024 * 1024 * 1024, max_model_len * 1024))
-
-
-def _allowed_mime_prefixes(task: str, proposed: Mapping[str, Any]) -> list[str]:
-    raw = proposed.get("allowed_mime_prefixes")
-    if isinstance(raw, list) and raw:
-        return [str(item) for item in raw]
-    return _mime_prefixes_for(task)
-
-
-def _mime_prefixes_for(task: str) -> list[str]:
-    if task == "vision":
-        return ["image/"]
-    if task == "transcribe":
-        return ["audio/"]
-    if task == "video":
-        return ["video/"]
-    return ["text/"]
-
-
-def _system_prompt_for(task: str) -> str:
-    if task == "vision":
-        return "Answer the user's vision request directly from the supplied image and prompt."
-    return "Answer the user's request directly."
