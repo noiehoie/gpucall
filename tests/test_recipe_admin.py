@@ -7,6 +7,7 @@ import pytest
 import yaml
 
 from gpucall.recipe_admin import canonical_recipe_from_artifact, main, process_inbox, promote_production_tuple, recipe_request_status, review_artifact
+from gpucall.recipe_request_index import RecipeRequestIndex
 
 
 def test_admin_materializes_intake_to_canonical_recipe() -> None:
@@ -125,6 +126,15 @@ def test_admin_process_inbox_materializes_submission(tmp_path) -> None:
     assert status["state"] == "processed"
     assert status["report"]["policy"] == "accept-all"
     assert status["report"]["admin_review"]["decision"] in {"CANDIDATE_ONLY", "READY_FOR_VALIDATION", "READY_FOR_PRODUCTION", "AUTO_SELECT_SAFE"}
+    record = RecipeRequestIndex(inbox / "recipe_requests.db").get("rr-test")
+    assert record is not None
+    assert record["status"] == "processed"
+    assert record["task"] == "infer"
+    assert record["intent"] == "summarize_text"
+    assert record["original_path"] == str(inbox / "processed" / "rr-test.json")
+    assert record["report_path"] == str(inbox / "reports" / "rr-test.report.json")
+    assert len(record["original_sha256"]) == 64
+    assert status["index_record"]["status"] == "processed"
 
 
 def test_admin_cli_process_inbox_requires_accept_all(tmp_path) -> None:
@@ -200,6 +210,36 @@ def test_admin_process_inbox_reports_catalog_readiness_without_smoke(tmp_path) -
     assert report["catalog_readiness"]["phase"] == "recipe-catalog-readiness"
     assert report["catalog_readiness"]["static_config_valid"] is True
     assert report["catalog_readiness"]["eligible_tuples"]
+
+
+def test_admin_process_inbox_indexes_failed_submission(tmp_path) -> None:
+    inbox = tmp_path / "inbox"
+    output_dir = tmp_path / "recipes"
+    inbox.mkdir()
+    (inbox / "rr-bad.json").write_text(
+        json.dumps(
+            {
+                "kind": "gpucall.recipe_request_submission",
+                "request_id": "rr-bad",
+                "intake": {
+                    "sanitized_request": {"task": "infer", "intent": "summarize_text"},
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    results = process_inbox(inbox_dir=inbox, output_dir=output_dir, accept_all=True)
+
+    assert results[0]["ok"] is False
+    assert (inbox / "failed" / "rr-bad.json").exists()
+    record = RecipeRequestIndex(inbox / "recipe_requests.db").get("rr-bad")
+    assert record is not None
+    assert record["status"] == "failed"
+    assert record["task"] == "infer"
+    assert record["intent"] == "summarize_text"
+    assert record["original_path"] == str(inbox / "failed" / "rr-bad.json")
+    assert "admin review rejected submission" in record["error"]
 
 
 def test_admin_cli_watch_one_iteration(tmp_path, capsys) -> None:

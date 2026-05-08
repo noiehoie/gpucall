@@ -159,6 +159,12 @@ writes reviewed recipe YAML and a static catalog-readiness report. Billable
 smoke validation and production activation are separate explicit promotion
 steps, because they can spend provider money or mutate active routing.
 
+Inbox processing preserves the original submitted JSON as the audit source of
+truth under `inbox/processed` or `inbox/failed`. It also maintains a SQLite WAL
+index at `inbox/recipe_requests.db` with request id, source, task, intent,
+status, file paths, SHA-256, and timestamps so operators can query request
+history without treating the database as the canonical payload store.
+
 ## Routing
 
 gpucall is a deterministic governance router, not a Modal-only proxy. Recipe and provider selection rules are documented in [docs/ROUTING_POLICY.md](docs/ROUTING_POLICY.md).

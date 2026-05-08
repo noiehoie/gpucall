@@ -18,6 +18,7 @@ from gpucall.execution.contracts import artifact_tuple_evidence_key, tuple_evide
 from gpucall.execution.registry import adapter_descriptor
 from gpucall.recipe_intents import capabilities_for
 from gpucall.recipe_materialize import canonical_recipe_from_artifact, materialization_report, to_yaml, write_recipe_yaml
+from gpucall.recipe_request_index import RecipeRequestIndex, default_recipe_request_index_path
 from gpucall.tuple_promotion import promote_candidate, promote_production_tuple
 from gpucall.routing import tuple_route_rejection_reason
 
@@ -57,6 +58,7 @@ def main(argv: list[str] | None = None) -> int:
     process.add_argument("--processed-dir")
     process.add_argument("--failed-dir")
     process.add_argument("--report-dir")
+    process.add_argument("--index-db", help="SQLite index path for submitted recipe requests; defaults to inbox/recipe_requests.db")
     process.add_argument("--accept-all", action="store_true")
     process.add_argument("--force", action="store_true")
     process.add_argument("--config-dir", help="gpucall config directory to review against")
@@ -65,6 +67,7 @@ def main(argv: list[str] | None = None) -> int:
     status = subcommands.add_parser("status", help="show status for a submitted recipe request id")
     status.add_argument("--request-id", required=True)
     status.add_argument("--inbox-dir", required=True)
+    status.add_argument("--index-db", help="SQLite index path for submitted recipe requests; defaults to inbox/recipe_requests.db")
 
     watch = subcommands.add_parser("watch", help="poll a file-based recipe request inbox and materialize submissions")
     watch.add_argument("--inbox-dir", required=True)
@@ -72,6 +75,7 @@ def main(argv: list[str] | None = None) -> int:
     watch.add_argument("--processed-dir")
     watch.add_argument("--failed-dir")
     watch.add_argument("--report-dir")
+    watch.add_argument("--index-db", help="SQLite index path for submitted recipe requests; defaults to inbox/recipe_requests.db")
     watch.add_argument("--accept-all", action="store_true")
     watch.add_argument("--force", action="store_true")
     watch.add_argument("--config-dir", help="gpucall config directory to review against")
@@ -124,6 +128,7 @@ def main(argv: list[str] | None = None) -> int:
             processed_dir=args.processed_dir,
             failed_dir=args.failed_dir,
             report_dir=args.report_dir,
+            index_db=args.index_db,
             force=args.force,
             config_dir=args.config_dir,
             validation_dir=args.validation_dir,
@@ -132,7 +137,7 @@ def main(argv: list[str] | None = None) -> int:
         sys.stdout.write(json.dumps({"processed": results}, ensure_ascii=False, indent=2, sort_keys=True) + "\n")
         return 0
     if args.command == "status":
-        sys.stdout.write(json.dumps(recipe_request_status(args.request_id, args.inbox_dir), ensure_ascii=False, indent=2, sort_keys=True) + "\n")
+        sys.stdout.write(json.dumps(recipe_request_status(args.request_id, args.inbox_dir, index_db=args.index_db), ensure_ascii=False, indent=2, sort_keys=True) + "\n")
         return 0
     if args.command == "watch":
         if not _accept_all_allowed(args.accept_all, args.config_dir):
@@ -145,6 +150,7 @@ def main(argv: list[str] | None = None) -> int:
                 processed_dir=args.processed_dir,
                 failed_dir=args.failed_dir,
                 report_dir=args.report_dir,
+                index_db=args.index_db,
                 force=args.force,
                 config_dir=args.config_dir,
                 validation_dir=args.validation_dir,
@@ -212,6 +218,7 @@ def process_inbox(
     processed_dir: str | Path | None = None,
     failed_dir: str | Path | None = None,
     report_dir: str | Path | None = None,
+    index_db: str | Path | None = None,
     force: bool = False,
     config_dir: str | Path | None = None,
     validation_dir: str | Path | None = None,
@@ -227,14 +234,17 @@ def process_inbox(
     processed.mkdir(parents=True, exist_ok=True)
     failed.mkdir(parents=True, exist_ok=True)
     reports.mkdir(parents=True, exist_ok=True)
+    index = RecipeRequestIndex(index_db or default_recipe_request_index_path(inbox))
     output = Path(output_dir)
     output.mkdir(parents=True, exist_ok=True)
     results: list[dict[str, Any]] = []
     for path in sorted(inbox.glob("*.json")):
         if path.parent != inbox:
             continue
+        request_id = path.stem
         try:
             submission = _load_json(str(path))
+            request_id = index.upsert_pending(path, submission)["request_id"]
             review = review_artifact(submission, config_dir=config_dir, validation_dir=validation_dir)
             if review.get("decision") == "REJECT":
                 raise ValueError("admin review rejected submission: " + "; ".join(_finding_reasons(review.get("blockers"))))
@@ -249,11 +259,13 @@ def process_inbox(
             report_path = reports / f"{path.stem}.report.json"
             report_path.write_text(json.dumps(report, ensure_ascii=False, indent=2, sort_keys=True) + "\n", encoding="utf-8")
             destination = processed / path.name
-            _move_submission(path, destination)
+            destination = _move_submission(path, destination)
+            index.mark_processed(request_id, original_path=destination, report_path=report_path, recipe_path=recipe_path)
             results.append({"submission": str(destination), "recipe": str(recipe_path), "report": str(report_path), "ok": True})
         except Exception as exc:
             destination = failed / path.name
-            _move_submission(path, destination)
+            destination = _move_submission(path, destination)
+            index.mark_failed(request_id, original_path=destination, error=str(exc))
             results.append({"submission": str(destination), "ok": False, "error": str(exc)})
     return results
 
@@ -305,8 +317,12 @@ def _accept_all_allowed(
     return bool(automation.recipe_inbox_auto_materialize)
 
 
-def recipe_request_status(request_id: str, inbox_dir: str | Path) -> dict[str, Any]:
+def recipe_request_status(request_id: str, inbox_dir: str | Path, *, index_db: str | Path | None = None) -> dict[str, Any]:
     inbox = Path(inbox_dir)
+    db_path = Path(index_db) if index_db is not None else default_recipe_request_index_path(inbox)
+    index_record: dict[str, Any] | None = None
+    if db_path.exists():
+        index_record = RecipeRequestIndex(db_path).get(request_id)
     candidates = [
         ("pending", inbox / f"{request_id}.json"),
         ("processed", inbox / "processed" / f"{request_id}.json"),
@@ -315,6 +331,8 @@ def recipe_request_status(request_id: str, inbox_dir: str | Path) -> dict[str, A
     for state, path in candidates:
         if path.exists():
             result: dict[str, Any] = {"request_id": request_id, "state": state, "path": str(path)}
+            if index_record is not None:
+                result["index_record"] = index_record
             report_path = inbox / "reports" / f"{request_id}.report.json"
             if report_path.exists():
                 result["report_path"] = str(report_path)
@@ -323,6 +341,16 @@ def recipe_request_status(request_id: str, inbox_dir: str | Path) -> dict[str, A
                 except json.JSONDecodeError:
                     result["report_error"] = "invalid report JSON"
             return result
+    if index_record is not None:
+        result = {"request_id": request_id, "state": index_record.get("status") or "indexed", "path": index_record.get("original_path"), "index_record": index_record}
+        report_path = index_record.get("report_path")
+        if report_path and Path(str(report_path)).exists():
+            result["report_path"] = str(report_path)
+            try:
+                result["report"] = json.loads(Path(str(report_path)).read_text(encoding="utf-8"))
+            except json.JSONDecodeError:
+                result["report_error"] = "invalid report JSON"
+        return result
     return {"request_id": request_id, "state": "missing"}
 
 
@@ -786,11 +814,12 @@ def _artifact_from_submission(data: Mapping[str, Any]) -> Mapping[str, Any]:
     return data
 
 
-def _move_submission(source: Path, destination: Path) -> None:
+def _move_submission(source: Path, destination: Path) -> Path:
     destination.parent.mkdir(parents=True, exist_ok=True)
     if destination.exists():
         destination = destination.with_name(destination.stem + "-" + str(int(time.time())) + destination.suffix)
     shutil.move(str(source), str(destination))
+    return destination
 
 
 def _load_json(path: str) -> dict[str, Any]:

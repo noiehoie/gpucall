@@ -284,7 +284,7 @@ gpucall-recipe-admin process-inbox \
   --accept-all
 ```
 
-Processed submissions are moved to `inbox/processed`, failed submissions to `inbox/failed`, and materialization reports to `inbox/reports`.
+Processed submissions are moved to `inbox/processed`, failed submissions to `inbox/failed`, and materialization reports to `inbox/reports`. The original JSON file remains the canonical submission record; it is not deleted after materialization. `process-inbox` and `watch` also maintain `inbox/recipe_requests.db`, a SQLite WAL index containing request id, source, task, intent, status, original/report/recipe paths, original SHA-256, and timestamps.
 
 `--accept-all` is a one-shot operator decision. For a persistent operator host,
 the same route can be opened explicitly in config:
@@ -320,3 +320,5 @@ gpucall-recipe-admin status \
   --request-id rr-20260506T010203Z-abcdef123456 \
   --inbox-dir /path/to/gpucall-recipe-requests/inbox
 ```
+
+Use `--index-db` with `process-inbox`, `watch`, or `status` only when the operator wants that index somewhere other than `inbox/recipe_requests.db`.
