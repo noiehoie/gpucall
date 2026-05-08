@@ -8,8 +8,9 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from statistics import median
 from typing import Any, Literal, Mapping
+from types import MappingProxyType
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_serializer, field_validator
 
 from gpucall.candidate_sources import load_tuple_candidate_payloads
 from gpucall.config import GpucallConfig, default_state_dir
@@ -65,7 +66,16 @@ class ProviderOfferingSpec(BaseModel):
     provider_sku: str
     region: str | None = None
     zone: str | None = None
-    network_topology: dict[str, Any] = Field(default_factory=dict)
+    network_topology: Mapping[str, Any] = Field(default_factory=lambda: MappingProxyType({}))
+
+    @field_validator("network_topology")
+    @classmethod
+    def freeze_network_topology(cls, value: Mapping[str, Any]) -> Mapping[str, Any]:
+        return MappingProxyType(dict(value))
+
+    @field_serializer("network_topology")
+    def serialize_network_topology(self, value: Mapping[str, Any]) -> dict[str, Any]:
+        return dict(value)
 
 
 class CapabilityClaimSpec(BaseModel):
@@ -77,7 +87,7 @@ class CapabilityClaimSpec(BaseModel):
     model_ref: str | None = None
     engine_ref: str | None = None
     claim_source: Literal["configured_binding", "candidate_matrix"] = "configured_binding"
-    required_input_contracts: list[str] = Field(default_factory=list)
+    required_input_contracts: tuple[str, ...] = Field(default_factory=tuple)
     output_contract: str | None = None
     max_model_len: int
     vram_gb: int

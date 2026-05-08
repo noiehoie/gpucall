@@ -5,6 +5,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
+
 from gpucall.config import load_config
 from gpucall.execution_catalog import build_resource_catalog_snapshot, generate_tuple_candidates
 
@@ -59,6 +61,9 @@ def test_execution_catalog_normalizes_hardware_surface_pricing_and_network() -> 
     assert claims["active_tuple:hyperstack-a100:resource"].dedicated_gpu is True
     assert claims["active_tuple:hyperstack-a100:resource"].requires_attestation is False
     assert prices["active_tuple:hyperstack-a100:resource"].billing_granularity_seconds == 60
+    with pytest.raises(TypeError):
+        offerings["active_tuple:hyperstack-a100:resource"].network_topology["ssh_remote_cidr"] = "0.0.0.0/0"
+    assert isinstance(claims["active_tuple:hyperstack-a100:resource"].required_input_contracts, tuple)
 
 
 def test_execution_catalog_generates_snapshot_pinned_tuple_candidates() -> None:

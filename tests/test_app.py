@@ -10,6 +10,7 @@ from gpucall.app import (
     compiled_plan_hash,
     create_app,
     governance_status_code,
+    idempotency_execution_lock,
     plan_with_worker_refs,
     recover_interrupted_jobs,
     warning_headers,
@@ -363,6 +364,19 @@ def test_tenant_object_prefix_is_applied_to_presign_put(tmp_path, monkeypatch) -
     assert store.tenant_prefix == "tenant-a"
 
 
+def test_anonymous_object_store_access_is_rejected(tmp_path, monkeypatch) -> None:
+    monkeypatch.delenv("GPUCALL_ALLOW_ANONYMOUS_OBJECTS", raising=False)
+    store = TenantPrefixObjectStore()
+    with TestClient(create_app(copy_config(tmp_path))) as client:
+        client.app.state.runtime.object_store = store
+        response = client.post(
+            "/v2/objects/presign-put",
+            json={"name": "input.txt", "bytes": 1, "sha256": "a" * 64},
+        )
+
+    assert response.status_code == 401
+
+
 def test_production_auth_fails_closed_without_configured_key(tmp_path, monkeypatch) -> None:
     monkeypatch.setenv("GPUCALL_ENV", "production")
     with TestClient(create_app(copy_config(tmp_path))) as client:
@@ -450,6 +464,30 @@ def test_idempotency_key_reuse_with_different_body_returns_conflict(tmp_path) ->
     assert second.status_code == 409
 
 
+@pytest.mark.asyncio
+async def test_idempotency_execution_lock_serializes_same_key() -> None:
+    import asyncio
+
+    locks: dict[str, asyncio.Lock] = {}
+    guard = asyncio.Lock()
+    events: list[str] = []
+
+    async def first() -> None:
+        async with idempotency_execution_lock(locks, guard, "same"):
+            events.append("first-start")
+            await asyncio.sleep(0.01)
+            events.append("first-end")
+
+    async def second() -> None:
+        await asyncio.sleep(0)
+        async with idempotency_execution_lock(locks, guard, "same"):
+            events.append("second")
+
+    await asyncio.gather(first(), second())
+
+    assert events == ["first-start", "first-end", "second"]
+
+
 def test_idempotency_key_is_scoped_to_authenticated_caller(tmp_path, monkeypatch) -> None:
     monkeypatch.setenv("GPUCALL_API_KEYS", "k1,k2")
     with TestClient(create_app(copy_config(tmp_path))) as client:
@@ -469,13 +507,14 @@ def test_idempotency_key_is_scoped_to_authenticated_caller(tmp_path, monkeypatch
     assert first.json()["plan_id"] != second.json()["plan_id"]
 
 
-def test_idempotency_replay_with_data_ref_uses_caller_body_hash(tmp_path) -> None:
+def test_idempotency_replay_with_data_ref_uses_caller_body_hash(tmp_path, monkeypatch) -> None:
     data_ref = {
         "uri": "s3://bucket/prompt.txt",
         "sha256": "a" * 64,
         "bytes": 100,
         "content_type": "text/plain",
     }
+    monkeypatch.setenv("GPUCALL_ALLOW_ANONYMOUS_OBJECTS", "1")
     with TestClient(create_app(copy_config(tmp_path))) as client:
         store = ChangingPresignObjectStore()
         client.app.state.runtime.object_store = store

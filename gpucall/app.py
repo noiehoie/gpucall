@@ -144,6 +144,8 @@ def create_app(config_dir: Path | None = None) -> FastAPI:
     max_request_bytes = int(os.getenv("GPUCALL_MAX_REQUEST_BYTES", "1048576"))
     configured_api_keys = load_credentials().get("auth", {}).get("api_keys", "")
     idempotency_cache = SQLiteIdempotencyStore(default_state_dir() / "idempotency.db")
+    idempotency_locks: dict[str, asyncio.Lock] = {}
+    idempotency_locks_guard = asyncio.Lock()
     rate_limit: dict[str, list[float]] = {}
     requests_per_minute = int(os.getenv("GPUCALL_RATE_LIMIT_PER_MINUTE", "120"))
     idempotency_ttl_seconds = float(os.getenv("GPUCALL_IDEMPOTENCY_TTL_SECONDS", "3600"))
@@ -308,37 +310,44 @@ def create_app(config_dir: Path | None = None) -> FastAPI:
         try:
             enforce_gateway_owned_routing(request)
             plan = runtime.compiler.compile(request)
+            caller_identity = idempotency_identity(http_request)
             caller_request_hash = idempotency_request_hash(request)
-            cached = idempotency_lookup(
-                request,
-                idempotency_cache,
-                request_hash=caller_request_hash,
-                identity=idempotency_identity(http_request),
-                ttl_seconds=idempotency_ttl_seconds,
-                max_entries=idempotency_cache_max,
-            )
-            if cached is not None:
-                return JSONResponse(status_code=cached[0], content=cached[1], headers=cached[2])
-            await enforce_request_budget(runtime, http_request, plan)
-            request = worker_readable_request(request, runtime, tenant_prefix=object_tenant_prefix(runtime, http_request))
-            plan = plan_with_worker_refs(plan, request.input_refs, split_learning=request.split_learning)
-            result = await runtime.dispatcher.execute_sync(plan)
-            headers = warning_headers(plan, runtime.compiler.tuples)
-            content = {
-                "plan_id": plan.plan_id,
-                "plan": public_plan_summary(plan, runtime.compiler.tuples),
-                "result": result.model_dump(mode="json"),
-            }
-            idempotency_store(
-                request,
-                idempotency_cache,
-                200,
-                content,
-                headers,
-                request_hash=caller_request_hash,
-                identity=idempotency_identity(http_request),
-                max_entries=idempotency_cache_max,
-            )
+            async with idempotency_execution_lock(
+                idempotency_locks,
+                idempotency_locks_guard,
+                idempotency_cache_key(request, caller_identity) if request.idempotency_key else None,
+            ):
+                cached = idempotency_lookup(
+                    request,
+                    idempotency_cache,
+                    request_hash=caller_request_hash,
+                    identity=caller_identity,
+                    ttl_seconds=idempotency_ttl_seconds,
+                    max_entries=idempotency_cache_max,
+                )
+                if cached is not None:
+                    return JSONResponse(status_code=cached[0], content=cached[1], headers=cached[2])
+                await enforce_request_budget(runtime, http_request, plan)
+                tenant_prefix = object_tenant_prefix(runtime, http_request) if request_needs_worker_object_access(request) else None
+                request = worker_readable_request(request, runtime, tenant_prefix=tenant_prefix)
+                plan = plan_with_worker_refs(plan, request.input_refs, split_learning=request.split_learning)
+                result = await runtime.dispatcher.execute_sync(plan)
+                headers = warning_headers(plan, runtime.compiler.tuples)
+                content = {
+                    "plan_id": plan.plan_id,
+                    "plan": public_plan_summary(plan, runtime.compiler.tuples),
+                    "result": result.model_dump(mode="json"),
+                }
+                idempotency_store(
+                    request,
+                    idempotency_cache,
+                    200,
+                    content,
+                    headers,
+                    request_hash=caller_request_hash,
+                    identity=caller_identity,
+                    max_entries=idempotency_cache_max,
+                )
             return JSONResponse(status_code=200, content=content, headers=tenant_headers(headers, http_request))
         except GovernanceError as exc:
             return governance_error_response(exc, request=request)
@@ -431,39 +440,45 @@ def create_app(config_dir: Path | None = None) -> FastAPI:
         try:
             enforce_gateway_owned_routing(request)
             plan = runtime.compiler.compile(request)
-            caller_request_hash = idempotency_request_hash(request)
-            cached = idempotency_lookup(
-                request,
-                idempotency_cache,
-                request_hash=caller_request_hash,
-                identity=idempotency_identity(http_request),
-                ttl_seconds=idempotency_ttl_seconds,
-                max_entries=idempotency_cache_max,
-            )
-            if cached is not None:
-                return JSONResponse(status_code=cached[0], content=cached[1], headers=cached[2])
-            await enforce_request_budget(runtime, http_request, plan)
-            request = worker_readable_request(request, runtime, tenant_prefix=object_tenant_prefix(runtime, http_request))
-            plan = plan_with_worker_refs(plan, request.input_refs, split_learning=request.split_learning)
             owner_identity = idempotency_identity(http_request)
-            job = await runtime.dispatcher.submit_async(plan, owner_identity=owner_identity)
-            headers = warning_headers(plan, runtime.compiler.tuples)
-            content = {
-                "job_id": job.job_id,
-                "state": job.state,
-                "status_url": f"/v2/jobs/{job.job_id}",
-                "plan": public_plan_summary(plan, runtime.compiler.tuples),
-            }
-            idempotency_store(
-                request,
-                idempotency_cache,
-                202,
-                content,
-                headers,
-                request_hash=caller_request_hash,
-                identity=owner_identity,
-                max_entries=idempotency_cache_max,
-            )
+            caller_request_hash = idempotency_request_hash(request)
+            async with idempotency_execution_lock(
+                idempotency_locks,
+                idempotency_locks_guard,
+                idempotency_cache_key(request, owner_identity) if request.idempotency_key else None,
+            ):
+                cached = idempotency_lookup(
+                    request,
+                    idempotency_cache,
+                    request_hash=caller_request_hash,
+                    identity=owner_identity,
+                    ttl_seconds=idempotency_ttl_seconds,
+                    max_entries=idempotency_cache_max,
+                )
+                if cached is not None:
+                    return JSONResponse(status_code=cached[0], content=cached[1], headers=cached[2])
+                await enforce_request_budget(runtime, http_request, plan)
+                tenant_prefix = object_tenant_prefix(runtime, http_request) if request_needs_worker_object_access(request) else None
+                request = worker_readable_request(request, runtime, tenant_prefix=tenant_prefix)
+                plan = plan_with_worker_refs(plan, request.input_refs, split_learning=request.split_learning)
+                job = await runtime.dispatcher.submit_async(plan, owner_identity=owner_identity)
+                headers = warning_headers(plan, runtime.compiler.tuples)
+                content = {
+                    "job_id": job.job_id,
+                    "state": job.state,
+                    "status_url": f"/v2/jobs/{job.job_id}",
+                    "plan": public_plan_summary(plan, runtime.compiler.tuples),
+                }
+                idempotency_store(
+                    request,
+                    idempotency_cache,
+                    202,
+                    content,
+                    headers,
+                    request_hash=caller_request_hash,
+                    identity=owner_identity,
+                    max_entries=idempotency_cache_max,
+                )
             return JSONResponse(
                 status_code=202,
                 content=content,
@@ -484,7 +499,8 @@ def create_app(config_dir: Path | None = None) -> FastAPI:
             enforce_gateway_owned_routing(request)
             plan = runtime.compiler.compile(request)
             await enforce_request_budget(runtime, http_request, plan)
-            request = worker_readable_request(request, runtime, tenant_prefix=object_tenant_prefix(runtime, http_request))
+            tenant_prefix = object_tenant_prefix(runtime, http_request) if request_needs_worker_object_access(request) else None
+            request = worker_readable_request(request, runtime, tenant_prefix=tenant_prefix)
             plan = plan_with_worker_refs(plan, request.input_refs, split_learning=request.split_learning)
         except GovernanceError as exc:
             return governance_error_response(exc, request=request)
@@ -591,10 +607,20 @@ def object_tenant_prefix(runtime: Runtime, request: Request) -> str | None:
     api_key = getattr(request.state, "api_key", None)
     tenant_id = getattr(request.state, "tenant_id", None)
     tenant_name = tenant_identity(tenant_id, api_key)
+    if tenant_name == "anonymous":
+        if os.getenv("GPUCALL_ALLOW_ANONYMOUS_OBJECTS", "").strip().lower() in {"1", "true", "yes", "on"}:
+            return None
+        raise HTTPException(status_code=401, detail="object store access requires authenticated tenant")
     tenant = runtime.tenants.get(tenant_name) or runtime.tenants.get("default")
     if tenant is not None and tenant.object_prefix:
         return tenant.object_prefix
-    return tenant_name if tenant_name != "anonymous" else None
+    return tenant_name
+
+
+def request_needs_worker_object_access(request: TaskRequest) -> bool:
+    return bool(request.input_refs) or (
+        request.split_learning is not None and request.split_learning.activation_ref is not None
+    )
 
 
 def tenant_budget_error_response(exc: TenantBudgetError, *, request: TaskRequest | None = None) -> JSONResponse:
@@ -884,6 +910,24 @@ def compiled_plan_hash(plan: Any) -> str:
     material = plan.model_dump(mode="json", exclude={"attestations", "plan_id"})
     encoded = json.dumps(material, sort_keys=True, separators=(",", ":")).encode("utf-8")
     return hashlib.sha256(encoded).hexdigest()
+
+
+@asynccontextmanager
+async def idempotency_execution_lock(
+    locks: dict[str, asyncio.Lock],
+    guard: asyncio.Lock,
+    key: str | None,
+):
+    if key is None:
+        yield
+        return
+    async with guard:
+        lock = locks.setdefault(key, asyncio.Lock())
+    await lock.acquire()
+    try:
+        yield
+    finally:
+        lock.release()
 
 
 def idempotency_lookup(

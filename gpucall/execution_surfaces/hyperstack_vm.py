@@ -968,6 +968,8 @@ def artifact_dek_bytes():
         if len(data) != 32:
             raise RuntimeError("GPUCALL_WORKER_ARTIFACT_DEK_FILE must contain a 32-byte AES-256 key")
         return data
+    if os.environ.get("GPUCALL_ALLOW_ARTIFACT_DEK_ENV", "").strip().lower() not in {"1", "true", "yes", "on"}:
+        raise RuntimeError("GPUCALL_WORKER_ARTIFACT_DEK_HEX requires GPUCALL_ALLOW_ARTIFACT_DEK_ENV=1")
     raw = os.environ.get("GPUCALL_WORKER_ARTIFACT_DEK_HEX", "")
     if not raw:
         raise RuntimeError("GPUCALL_WORKER_ARTIFACT_DEK_FILE or GPUCALL_WORKER_ARTIFACT_DEK_HEX is required for artifact export")

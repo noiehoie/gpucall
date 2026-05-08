@@ -112,7 +112,8 @@ exact tuple smoke artifact stops satisfying production readiness.
 
 Workers support governed artifact execution only when the worker environment has explicit artifact export capabilities:
 
-- `GPUCALL_WORKER_ARTIFACT_DEK_FILE`: path to a chmod 600 32-byte AES-256 key file, or `GPUCALL_WORKER_ARTIFACT_DEK_HEX`: 32-byte AES-256 key encoded as hex. This must be released to the worker by tenant KMS/HYOK/BYOK or an attestation-bound mechanism; the gateway must not generate it.
+- `GPUCALL_WORKER_ARTIFACT_DEK_FILE`: path to a chmod 600 32-byte AES-256 key file. This must be released to the worker by tenant KMS/HYOK/BYOK or an attestation-bound mechanism; the gateway must not generate it.
+- `GPUCALL_WORKER_ARTIFACT_DEK_HEX`: development fallback only. Workers reject this environment-variable key path unless `GPUCALL_ALLOW_ARTIFACT_DEK_ENV=1` is set.
 - `GPUCALL_WORKER_ARTIFACT_BUCKET` plus optional `GPUCALL_WORKER_ARTIFACT_PREFIX`, or an explicit `GPUCALL_WORKER_ARTIFACT_URI`.
 
 For `train` and `fine-tune`, the worker fetches DataRefs, derives a per-artifact
