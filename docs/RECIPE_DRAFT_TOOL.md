@@ -292,19 +292,14 @@ the same route can be opened explicitly in config:
 ```yaml
 # config/admin.yml
 recipe_inbox_auto_materialize: true
-recipe_inbox_auto_promote: true
-recipe_inbox_auto_run_validation: true  # may spend provider money
-recipe_inbox_auto_activate: true
-recipe_inbox_validation_parallelism: 2
 ```
 
 When this flag is absent or false, `process-inbox` and `watch` fail closed unless
 `--accept-all` is present. When it is true, sanitized caller submissions can be
-automatically reviewed and materialized into draft recipe YAML. Promotion,
-billable validation, and activation are controlled by their own flags. The
-validation flag can spend provider money, and validation parallelism can spend
-that money concurrently; keep both closed or at `1` unless the inbox host is the
-approved operator automation environment.
+automatically reviewed and materialized into draft recipe YAML with a static
+catalog-readiness report. This route does not run billable validation and does
+not activate production routing. Use `gpucall-recipe-admin promote` explicitly
+when a recipe should be elevated to production.
 
 To poll continuously:
 

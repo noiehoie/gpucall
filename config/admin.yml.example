@@ -1,18 +1,4 @@
 # Disabled by default. Set true only on an operator-controlled inbox host.
+# This only materializes reviewed recipe YAML and static catalog readiness.
+# It never runs billable smoke tests or activates production routing.
 recipe_inbox_auto_materialize: false
-
-# Optional production pipeline gates. Each gate must be opened explicitly.
-# auto_promote writes an isolated promotion config from the selected candidate.
-recipe_inbox_auto_promote: false
-
-# auto_run_validation may execute billable provider smoke tests.
-recipe_inbox_auto_run_validation: false
-
-# auto_activate writes the validated recipe/tuple into the active config.
-recipe_inbox_auto_activate: false
-recipe_inbox_validation_parallelism: 1
-
-# Optional overrides. Defaults to $XDG_STATE_HOME/gpucall/recipe-promotions
-# and $XDG_STATE_HOME/gpucall/tuple-validation.
-recipe_inbox_promotion_work_dir: null
-recipe_inbox_validation_dir: null

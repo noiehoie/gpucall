@@ -3,24 +3,19 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
-import os
 import shutil
-import subprocess
 import sys
 import time
-from concurrent.futures import ThreadPoolExecutor, as_completed
 from collections.abc import Mapping
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
 from gpucall.candidate_sources import load_tuple_candidate_payloads
-from gpucall.compiler import GovernanceCompiler
 from gpucall.config import ConfigError, default_config_dir, default_state_dir, load_admin_automation, load_config
-from gpucall.domain import ExecutionMode, ExecutionTupleSpec, Recipe, RecipeAdminAutomationConfig, TaskRequest, recipe_requirements
+from gpucall.domain import ExecutionMode, ExecutionTupleSpec, Recipe, RecipeAdminAutomationConfig, recipe_requirements
 from gpucall.execution.contracts import artifact_tuple_evidence_key, tuple_evidence_key
 from gpucall.execution.registry import adapter_descriptor
-from gpucall.registry import ObservedRegistry
 from gpucall.recipe_intents import capabilities_for
 from gpucall.recipe_materialize import canonical_recipe_from_artifact, materialization_report, to_yaml, write_recipe_yaml
 from gpucall.tuple_promotion import promote_candidate, promote_production_tuple
@@ -250,16 +245,7 @@ def process_inbox(
             recipe_path = write_recipe_yaml(recipe, output, force=force)
             report["recipe_path"] = str(recipe_path)
             report["submission_path"] = str(path)
-            promotion = _auto_promote_from_inbox(
-                review=review,
-                submission_stem=path.stem,
-                config_dir=config_dir,
-                validation_dir=validation_dir,
-                automation=automation,
-                force=force,
-            )
-            if promotion is not None:
-                report["promotion"] = promotion
+            report["catalog_readiness"] = _recipe_readiness_from_review(review, config_dir=config_dir)
             report_path = reports / f"{path.stem}.report.json"
             report_path.write_text(json.dumps(report, ensure_ascii=False, indent=2, sort_keys=True) + "\n", encoding="utf-8")
             destination = processed / path.name
@@ -272,200 +258,34 @@ def process_inbox(
     return results
 
 
-def _auto_promote_from_inbox(
-    *,
-    review: Mapping[str, Any],
-    submission_stem: str,
-    config_dir: str | Path | None,
-    validation_dir: str | Path | None,
-    automation: RecipeAdminAutomationConfig,
-    force: bool,
-) -> dict[str, Any] | None:
-    if not automation.recipe_inbox_auto_promote:
-        return None
+def _recipe_readiness_from_review(review: Mapping[str, Any], *, config_dir: str | Path | None) -> dict[str, Any]:
     root = Path(config_dir) if config_dir is not None else default_config_dir()
-    if not review.get("tuple_candidate_matches") and review.get("eligible_tuples"):
-        return _auto_validate_existing_tuple(
-            review=review,
-            config_dir=root,
-            validation_dir=validation_dir or automation.recipe_inbox_validation_dir,
-            automation=automation,
-        )
-    work_root = (
-        Path(automation.recipe_inbox_promotion_work_dir).expanduser()
-        if automation.recipe_inbox_promotion_work_dir
-        else default_state_dir() / "recipe-promotions"
-    )
-    validation_root = validation_dir or automation.recipe_inbox_validation_dir
-    return promote_production_tuple(
-        review=review,
-        candidate_name=None,
-        config_dir=root,
-        work_dir=work_root / submission_stem,
-        validation_dir=validation_root,
-        run_validation=automation.recipe_inbox_auto_run_validation,
-        activate=automation.recipe_inbox_auto_activate,
-        force=force,
-    )
-
-
-def _auto_validate_existing_tuple(
-    *,
-    review: Mapping[str, Any],
-    config_dir: Path,
-    validation_dir: str | Path | None,
-    automation: RecipeAdminAutomationConfig,
-) -> dict[str, Any]:
     recipe = _mapping(review.get("canonical_recipe"))
     recipe_name = str(recipe.get("name") or "")
-    tuple_chain = _existing_tuple_chain_for_review(review, config_dir=config_dir)
-    if not recipe_name or not tuple_chain:
-        raise ValueError("review does not contain an eligible active tuple")
-    report: dict[str, Any] = {
-        "phase": "active-tuple-validation",
+    eligible_tuples = [str(item) for item in review.get("eligible_tuples", [])] if isinstance(review.get("eligible_tuples"), list) else []
+    return {
+        "phase": "recipe-catalog-readiness",
         "recipe": recipe_name,
-        "tuple": tuple_chain[0],
-        "tuple_chain": tuple_chain,
-        "activated": False,
-        "validation": None,
-        "validation_attempts": [],
+        "config_dir": str(root),
+        "static_config_valid": _config_accepts_recipe(root, recipe_name),
+        "eligible_tuples": eligible_tuples,
+        "tuple_candidate_matches": [str(item.get("name")) for item in review.get("tuple_candidate_matches", []) if isinstance(item, Mapping)],
+        "next_actions": [
+            "run gpucall validate-config --config-dir <config>",
+            "run gpucall-recipe-admin review against validation artifacts",
+            "run gpucall-recipe-admin promote --run-validation --activate only when production routing is desired",
+        ],
     }
-    if not automation.recipe_inbox_auto_run_validation:
-        report["decision"] = "READY_FOR_BILLABLE_VALIDATION"
-        return report
-    validation = None
-    for tuple_name, validation in _run_existing_tuple_validations(
-        tuple_chain,
-        recipe_name,
-        config_dir,
-        validation_dir=validation_dir,
-        parallelism=int(automation.recipe_inbox_validation_parallelism),
-    ):
-        report["validation_attempts"].append(
-            {
-                "tuple": tuple_name,
-                "returncode": validation.get("returncode"),
-                "passed": validation.get("passed") is True,
-            }
-        )
-        if validation.get("returncode") == 0 and validation.get("passed") is True:
-            report["tuple"] = tuple_name
-            report["validation"] = validation
-            break
-    if validation is None or validation.get("returncode") != 0 or validation.get("passed") is not True:
-        report["validation"] = validation
-        report["decision"] = "VALIDATION_FAILED"
-        return report
-    if automation.recipe_inbox_auto_activate:
-        report["activated"] = True
-        report["decision"] = "ACTIVATED"
-    else:
-        report["decision"] = "VALIDATED_READY_TO_ACTIVATE"
-    return report
 
 
-def _run_existing_tuple_validations(
-    tuple_chain: list[str],
-    recipe_name: str,
-    config_dir: Path,
-    *,
-    validation_dir: str | Path | None,
-    parallelism: int,
-) -> list[tuple[str, dict[str, Any]]]:
-    parallelism = max(1, parallelism)
-    if parallelism == 1:
-        return [
-            (tuple_name, _run_existing_tuple_validation(tuple_name, recipe_name, config_dir, validation_dir=validation_dir))
-            for tuple_name in tuple_chain
-        ]
-    results: list[tuple[str, dict[str, Any]]] = []
-    for index in range(0, len(tuple_chain), parallelism):
-        batch = tuple_chain[index : index + parallelism]
-        with ThreadPoolExecutor(max_workers=len(batch)) as executor:
-            futures = {
-                executor.submit(
-                    _run_existing_tuple_validation,
-                    tuple_name,
-                    recipe_name,
-                    config_dir,
-                    validation_dir=validation_dir,
-                ): tuple_name
-                for tuple_name in batch
-            }
-            batch_results: list[tuple[str, dict[str, Any]]] = []
-            for future in as_completed(futures):
-                tuple_name = futures[future]
-                batch_results.append((tuple_name, future.result()))
-        ordered = sorted(batch_results, key=lambda item: batch.index(item[0]))
-        results.extend(ordered)
-        if any(result.get("returncode") == 0 and result.get("passed") is True for _, result in ordered):
-            break
-    return results
-
-
-def _run_existing_tuple_validation(
-    tuple_name: str,
-    recipe_name: str,
-    config_dir: Path,
-    *,
-    validation_dir: str | Path | None,
-) -> dict[str, Any]:
-    command = [
-        sys.executable,
-        "-m",
-        "gpucall.cli",
-        "tuple-smoke",
-        tuple_name,
-        "--config-dir",
-        str(config_dir),
-        "--recipe",
-        recipe_name,
-        "--mode",
-        "sync",
-        "--write-artifact",
-    ]
-    env = dict(os.environ)
-    if validation_dir is not None:
-        env["GPUCALL_STATE_DIR"] = str(Path(validation_dir).expanduser().parent)
-    completed = subprocess.run(command, capture_output=True, text=True, env=env, check=False)
-    result: dict[str, Any] = {
-        "command": command,
-        "returncode": completed.returncode,
-        "stdout": completed.stdout,
-        "stderr": completed.stderr,
-        "passed": False,
-    }
-    if completed.stdout.strip():
-        try:
-            payload = json.loads(completed.stdout)
-            result["artifact"] = payload
-            result["passed"] = payload.get("passed") is True
-        except json.JSONDecodeError:
-            result["parse_error"] = "tuple-smoke stdout was not JSON"
-    return result
-
-
-def _existing_tuple_chain_for_review(review: Mapping[str, Any], *, config_dir: Path) -> list[str]:
-    recipe = _mapping(review.get("canonical_recipe"))
-    recipe_name = str(recipe.get("name") or "")
-    task = str(recipe.get("task") or "")
-    modes = recipe.get("allowed_modes")
-    mode = str(modes[0]) if isinstance(modes, list) and modes else "sync"
-    if recipe_name and task:
+def _config_accepts_recipe(config_dir: Path, recipe_name: str) -> bool:
+    if not recipe_name:
+        return False
+    try:
         config = load_config(config_dir)
-        compiler = GovernanceCompiler(
-            policy=config.policy,
-            recipes=config.recipes,
-            tuples=config.tuples,
-            models=config.models,
-            engines=config.engines,
-            registry=ObservedRegistry(path=default_state_dir() / "registry.db"),
-        )
-        plan = compiler.compile(TaskRequest(task=task, mode=ExecutionMode(mode), recipe=recipe_name))
-        if plan.tuple_chain:
-            return [str(item) for item in plan.tuple_chain]
-    eligible = review.get("eligible_tuples")
-    return [str(item) for item in eligible] if isinstance(eligible, list) else []
+    except ConfigError:
+        return False
+    return recipe_name in config.recipes
 
 
 def _admin_automation(config_dir: str | Path | None) -> RecipeAdminAutomationConfig:

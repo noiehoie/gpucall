@@ -74,12 +74,6 @@ class RecipeAdminAutomationConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     recipe_inbox_auto_materialize: bool = False
-    recipe_inbox_auto_promote: bool = False
-    recipe_inbox_auto_run_validation: bool = False
-    recipe_inbox_auto_activate: bool = False
-    recipe_inbox_validation_parallelism: PositiveInt = 1
-    recipe_inbox_promotion_work_dir: str | None = None
-    recipe_inbox_validation_dir: str | None = None
 
 
 class RecipeLatencyClass(StrEnum):
