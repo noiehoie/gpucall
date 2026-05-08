@@ -151,12 +151,18 @@ of a per-command flag. This remains disabled by default:
 ```yaml
 # config/admin.yml
 recipe_inbox_auto_materialize: true
+recipe_inbox_auto_promote: true
+recipe_inbox_auto_run_validation: true  # may spend provider money
+recipe_inbox_auto_activate: true
 ```
 
 With that file present, `gpucall-recipe-admin watch` and `process-inbox` can
-materialize sanitized caller submissions without `--accept-all`. This only
-writes draft recipe YAML after admin review; it does not create provider
-capacity, run billable validation, or promote a tuple into production routing.
+materialize sanitized caller submissions without `--accept-all`. The promotion,
+billable validation, and activation stages remain separately gated because they
+can mutate active config or spend provider money. Even when all gates are open,
+the helper only promotes a candidate that passes admin review and exact
+validation; external caller code such as `translator.py` must still be changed
+by that external system after gpucall reports the workload production-ready.
 
 ## Routing
 

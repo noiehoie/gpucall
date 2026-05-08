@@ -6,6 +6,7 @@ import shutil
 import pytest
 import yaml
 
+import gpucall.recipe_admin as recipe_admin
 from gpucall.recipe_admin import canonical_recipe_from_artifact, main, process_inbox, promote_production_tuple, recipe_request_status, review_artifact
 
 
@@ -169,6 +170,58 @@ def test_admin_cli_process_inbox_allows_configured_auto_materialize(tmp_path) ->
     )
 
     assert (output_dir / "infer-summarize-text-draft.yml").exists()
+
+
+def test_admin_process_inbox_can_auto_promote_from_config(tmp_path, monkeypatch) -> None:
+    config_dir = tmp_path / "config"
+    shutil.copytree("gpucall/config_templates", config_dir)
+    (config_dir / "admin.yml").write_text(
+        "\n".join(
+            [
+                "recipe_inbox_auto_materialize: true",
+                "recipe_inbox_auto_promote: true",
+                "recipe_inbox_auto_run_validation: true",
+                "recipe_inbox_auto_activate: true",
+                f"recipe_inbox_promotion_work_dir: {tmp_path / 'promotions'}",
+                f"recipe_inbox_validation_dir: {tmp_path / 'validation'}",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    inbox = tmp_path / "inbox"
+    output_dir = tmp_path / "recipes"
+    inbox.mkdir()
+    (inbox / "rr-test.json").write_text(
+        json.dumps(
+            {
+                "kind": "gpucall.recipe_request_submission",
+                "request_id": "rr-test",
+                "intake": {
+                    "sanitized_request": {"task": "infer", "intent": "summarize_text"},
+                    "redaction_report": {"prompt_body_forwarded": False, "data_ref_uri_forwarded": False, "presigned_url_forwarded": False},
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    calls: list[dict[str, object]] = []
+
+    def fake_promote_production_tuple(**kwargs):
+        calls.append(kwargs)
+        return {"decision": "ACTIVATED", "activated": True}
+
+    monkeypatch.setattr(recipe_admin, "promote_production_tuple", fake_promote_production_tuple)
+
+    results = process_inbox(inbox_dir=inbox, output_dir=output_dir, config_dir=config_dir)
+
+    assert results[0]["ok"] is True
+    report = json.loads((inbox / "reports" / "rr-test.report.json").read_text(encoding="utf-8"))
+    assert report["promotion"]["decision"] == "ACTIVATED"
+    assert calls[0]["run_validation"] is True
+    assert calls[0]["activate"] is True
+    assert calls[0]["config_dir"] == config_dir
+    assert calls[0]["validation_dir"] == str(tmp_path / "validation")
 
 
 def test_admin_cli_watch_one_iteration(tmp_path, capsys) -> None:

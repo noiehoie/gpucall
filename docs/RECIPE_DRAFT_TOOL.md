@@ -292,13 +292,17 @@ the same route can be opened explicitly in config:
 ```yaml
 # config/admin.yml
 recipe_inbox_auto_materialize: true
+recipe_inbox_auto_promote: true
+recipe_inbox_auto_run_validation: true  # may spend provider money
+recipe_inbox_auto_activate: true
 ```
 
 When this flag is absent or false, `process-inbox` and `watch` fail closed unless
 `--accept-all` is present. When it is true, sanitized caller submissions can be
-automatically reviewed and materialized into draft recipe YAML. This still does
-not create execution-surface credentials, run billable validation, or activate
-production routing.
+automatically reviewed and materialized into draft recipe YAML. Promotion,
+billable validation, and activation are controlled by their own flags. The
+validation flag can spend provider money; keep it false unless the inbox host is
+the approved operator automation environment.
 
 To poll continuously:
 

@@ -13,7 +13,7 @@ from typing import Any
 
 from gpucall.candidate_sources import load_tuple_candidate_payloads
 from gpucall.config import ConfigError, default_config_dir, default_state_dir, load_admin_automation, load_config
-from gpucall.domain import ExecutionMode, ExecutionTupleSpec, Recipe, recipe_requirements
+from gpucall.domain import ExecutionMode, ExecutionTupleSpec, Recipe, RecipeAdminAutomationConfig, recipe_requirements
 from gpucall.execution.contracts import artifact_tuple_evidence_key, tuple_evidence_key
 from gpucall.execution.registry import adapter_descriptor
 from gpucall.recipe_intents import capabilities_for
@@ -217,7 +217,8 @@ def process_inbox(
     validation_dir: str | Path | None = None,
     accept_all: bool = False,
 ) -> list[dict[str, Any]]:
-    if not _accept_all_allowed(accept_all, config_dir):
+    automation = _admin_automation(config_dir)
+    if not _accept_all_allowed(accept_all, config_dir, automation=automation):
         raise PermissionError("recipe inbox auto-materialize is disabled")
     inbox = Path(inbox_dir)
     processed = Path(processed_dir) if processed_dir else inbox / "processed"
@@ -244,6 +245,16 @@ def process_inbox(
             recipe_path = write_recipe_yaml(recipe, output, force=force)
             report["recipe_path"] = str(recipe_path)
             report["submission_path"] = str(path)
+            promotion = _auto_promote_from_inbox(
+                review=review,
+                submission_stem=path.stem,
+                config_dir=config_dir,
+                validation_dir=validation_dir,
+                automation=automation,
+                force=force,
+            )
+            if promotion is not None:
+                report["promotion"] = promotion
             report_path = reports / f"{path.stem}.report.json"
             report_path.write_text(json.dumps(report, ensure_ascii=False, indent=2, sort_keys=True) + "\n", encoding="utf-8")
             destination = processed / path.name
@@ -256,11 +267,51 @@ def process_inbox(
     return results
 
 
-def _accept_all_allowed(accept_all: bool, config_dir: str | Path | None) -> bool:
+def _auto_promote_from_inbox(
+    *,
+    review: Mapping[str, Any],
+    submission_stem: str,
+    config_dir: str | Path | None,
+    validation_dir: str | Path | None,
+    automation: RecipeAdminAutomationConfig,
+    force: bool,
+) -> dict[str, Any] | None:
+    if not automation.recipe_inbox_auto_promote:
+        return None
+    root = Path(config_dir) if config_dir is not None else default_config_dir()
+    work_root = (
+        Path(automation.recipe_inbox_promotion_work_dir).expanduser()
+        if automation.recipe_inbox_promotion_work_dir
+        else default_state_dir() / "recipe-promotions"
+    )
+    validation_root = validation_dir or automation.recipe_inbox_validation_dir
+    return promote_production_tuple(
+        review=review,
+        candidate_name=None,
+        config_dir=root,
+        work_dir=work_root / submission_stem,
+        validation_dir=validation_root,
+        run_validation=automation.recipe_inbox_auto_run_validation,
+        activate=automation.recipe_inbox_auto_activate,
+        force=force,
+    )
+
+
+def _admin_automation(config_dir: str | Path | None) -> RecipeAdminAutomationConfig:
+    root = Path(config_dir) if config_dir is not None else default_config_dir()
+    return load_admin_automation(root)
+
+
+def _accept_all_allowed(
+    accept_all: bool,
+    config_dir: str | Path | None,
+    *,
+    automation: RecipeAdminAutomationConfig | None = None,
+) -> bool:
     if accept_all:
         return True
-    root = Path(config_dir) if config_dir is not None else default_config_dir()
-    return bool(load_admin_automation(root).recipe_inbox_auto_materialize)
+    automation = automation or _admin_automation(config_dir)
+    return bool(automation.recipe_inbox_auto_materialize)
 
 
 def recipe_request_status(request_id: str, inbox_dir: str | Path) -> dict[str, Any]:
