@@ -67,6 +67,7 @@ def test_execution_catalog_normalizes_hardware_surface_pricing_and_network() -> 
     assert claims["active_tuple:hyperstack-a100:resource"].dedicated_gpu is True
     assert claims["active_tuple:hyperstack-a100:resource"].requires_attestation is False
     assert prices["active_tuple:hyperstack-a100:resource"].billing_granularity_seconds == 60
+    assert prices["active_tuple:hyperstack-a100:resource"].configured_price_source == "operator-configured"
     with pytest.raises(TypeError):
         offerings["active_tuple:hyperstack-a100:resource"].network_topology["ssh_remote_cidr"] = "0.0.0.0/0"
     assert isinstance(claims["active_tuple:hyperstack-a100:resource"].required_input_contracts, tuple)
@@ -103,6 +104,11 @@ def test_execution_catalog_generates_snapshot_pinned_tuple_candidates() -> None:
     assert all(candidate.snapshot_id == snapshot.snapshot_id for candidate in candidates)
     assert all(candidate.snapshot_pinned is True for candidate in candidates)
     assert all(candidate.recipe_fit is not None for candidate in candidates)
+    runpod_candidates = [candidate for candidate in candidates if candidate.tuple_name.startswith("runpod-")]
+    assert runpod_candidates
+    assert all(candidate.configured_price_per_second > 0 for candidate in runpod_candidates)
+    runpod_prices = {candidate.gpu: candidate.configured_price_per_second for candidate in runpod_candidates}
+    assert runpod_prices["AMPERE_16"] == 0.00016
 
 
 def test_execution_catalog_recipe_fit_respects_worker_contracts() -> None:
@@ -195,7 +201,7 @@ def test_execution_catalog_uses_live_price_and_stock_evidence() -> None:
     candidates = generate_tuple_candidates(snapshot, recipe=config.recipes["text-infer-standard"])
     modal = next(item for item in candidates if item.tuple_name == "modal-a10g")
 
-    assert modal.configured_price_per_second == 0.00035
+    assert modal.configured_price_per_second == 0.000306
     assert modal.price_per_second == 0.00031
     assert modal.live_price_per_second == 0.00031
     assert modal.live_stock_state == "available"

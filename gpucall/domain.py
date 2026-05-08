@@ -295,6 +295,7 @@ class CostPolicy(BaseModel):
     max_idle_cost_usd: NonNegativeFloat | None = None
     require_budget_for_high_cost_tuple: bool | None = None
     high_cost_threshold_usd: NonNegativeFloat | None = None
+    require_fresh_price_for_budget: bool | None = None
 
 
 class Policy(BaseModel):
@@ -454,6 +455,9 @@ class ExecutionTupleSpec(BaseModel):
     vram_gb: PositiveInt
     max_model_len: PositiveInt
     cost_per_second: NonNegativeFloat
+    configured_price_source: str | None = None
+    configured_price_observed_at: str | None = None
+    configured_price_ttl_seconds: NonNegativeFloat | None = None
     expected_cold_start_seconds: PositiveInt | None = None
     scaledown_window_seconds: NonNegativeFloat | None = None
     min_billable_seconds: NonNegativeFloat | None = None

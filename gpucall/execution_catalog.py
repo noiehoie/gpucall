@@ -118,6 +118,9 @@ class PricingRuleSpec(BaseModel):
     account_ref: str
     resource_ref: str
     price_per_second: float
+    configured_price_source: str | None = None
+    configured_price_observed_at: str | None = None
+    configured_price_ttl_seconds: float | None = None
     billing_granularity_seconds: float | None = None
     min_billable_seconds: float | None = None
     scaledown_window_seconds: float | None = None
@@ -631,6 +634,9 @@ def _pricing_rule(row: Mapping[str, Any]) -> PricingRuleSpec:
         account_ref=_account_ref(row),
         resource_ref=f"{source}:{name}:resource",
         price_per_second=float(row.get("cost_per_second") or 0.0),
+        configured_price_source=str(row.get("configured_price_source") or row.get("pricing_source") or "") or None,
+        configured_price_observed_at=str(row.get("configured_price_observed_at") or "") or None,
+        configured_price_ttl_seconds=_optional_float(row.get("configured_price_ttl_seconds")),
         billing_granularity_seconds=_optional_float(row.get("billing_granularity_seconds")),
         min_billable_seconds=_optional_float(row.get("min_billable_seconds")),
         scaledown_window_seconds=_optional_float(row.get("scaledown_window_seconds")),

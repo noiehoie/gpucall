@@ -4,7 +4,10 @@ adapter: modal
 gpu: H100
 vram_gb: 80
 max_model_len: 32768
-cost_per_second: 0.00213
+cost_per_second: 0.001097
+configured_price_source: https://modal.com/pricing
+configured_price_observed_at: '2026-05-08T00:00:00+00:00'
+configured_price_ttl_seconds: 604800
 scaledown_window_seconds: 60
 min_billable_seconds: 0
 billing_granularity_seconds: 0

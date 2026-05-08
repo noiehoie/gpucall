@@ -117,7 +117,8 @@ runtime observations, and derived decisions:
 - Capability claim: the compatibility assertion joining a resource and worker contract.
   It also carries the tuple's security tier, sovereignty boundary, dedicated GPU
   claim, TEE boot capability, attestation requirement, and key-release support.
-- Pricing rule: account + resource billing terms such as price, granularity, and minimum billable seconds.
+- Pricing rule: account + resource billing terms such as fallback price,
+  source, observation time, TTL, granularity, and minimum billable seconds.
 - Live status overlay: TTL-scoped stock, price, endpoint, credential, health, and contract observations.
 - Validation evidence: redacted billable artifact summary, artifact hash,
   pass/fail counts, observed latency, and optional attestation evidence hash.
@@ -151,6 +152,11 @@ observations into `live_stock_state`, `configured_price_per_second`,
 `live_price_per_second`, and the effective `price_per_second`. If live price is
 unavailable, gpucall keeps the configured price and marks the live field null
 instead of guessing.
+Configured prices are fallback values, not live truth. They carry
+`configured_price_source`, `configured_price_observed_at`, and
+`configured_price_ttl_seconds`. Fresh live price observations are cached under
+the gpucall state directory as TTL-scoped overlay evidence; strict budget policy
+fails closed when the effective price is stale or unknown.
 
 Runtime observations are deliberately split by freshness. Static hardware and
 surface definitions are config/catalog facts. Slow-changing price and regional

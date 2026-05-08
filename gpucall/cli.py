@@ -36,6 +36,7 @@ from gpucall.execution.contracts import (
     tuple_evidence_label,
 )
 from gpucall.lease_reaper import active_manifest_leases, lease_reaper_report
+from gpucall.price_cache import load_cached_price_evidence, merge_price_evidence, store_live_price_evidence
 from gpucall.tuple_audit import _tuple_from_candidate, tuple_audit_report
 from gpucall.tuple_catalog import live_tuple_catalog_evidence, live_tuple_catalog_findings
 from gpucall.execution.registry import adapter_descriptor, vendor_family_for_adapter
@@ -927,7 +928,7 @@ def catalog_command(action: str, config_dir: Path, db: Path | None) -> None:
 
 def execution_catalog_command(action: str, config_dir: Path, *, recipe: str | None = None, live: bool = False) -> None:
     config = load_config(config_dir)
-    evidence = live_tuple_catalog_evidence(_live_catalog_scope(config, config_dir), load_credentials()) if live else None
+    evidence = _catalog_live_evidence(config, config_dir, live=live)
     snapshot = build_resource_catalog_snapshot(config, config_dir=config_dir, live_catalog_evidence=evidence)
     if action == "snapshot":
         print(dumps_execution_snapshot(snapshot), end="")
@@ -949,7 +950,7 @@ def validator_plan_command(
     live: bool = False,
 ) -> None:
     config = load_config(config_dir)
-    evidence = live_tuple_catalog_evidence(_live_catalog_scope(config, config_dir), load_credentials()) if live else None
+    evidence = _catalog_live_evidence(config, config_dir, live=live)
     snapshot = build_resource_catalog_snapshot(config, config_dir=config_dir, live_catalog_evidence=evidence)
     plan = build_validator_plan(
         snapshot,
@@ -958,6 +959,15 @@ def validator_plan_command(
         include_candidates=include_candidates,
     )
     print(dumps_validator_plan(plan), end="")
+
+
+def _catalog_live_evidence(config, config_dir: Path, *, live: bool) -> dict[str, dict[str, object]] | None:
+    cached = load_cached_price_evidence()
+    if not live:
+        return cached or None
+    observed = live_tuple_catalog_evidence(_live_catalog_scope(config, config_dir), load_credentials())
+    store_live_price_evidence(observed)
+    return merge_price_evidence(observed, cached)
 
 
 def _live_catalog_scope(config, config_dir: Path) -> dict[str, object]:

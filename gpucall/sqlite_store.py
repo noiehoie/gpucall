@@ -75,6 +75,9 @@ class SQLiteJobStore(JobStore):
         )
         self._conn.commit()
 
+    def close(self) -> None:
+        self._conn.close()
+
 
 class SQLiteIdempotencyStore:
     def __init__(self, path: Path) -> None:
@@ -166,3 +169,7 @@ class SQLiteIdempotencyStore:
             if rows:
                 self._conn.executemany("DELETE FROM idempotency_entries WHERE key = ?", rows)
             self._conn.commit()
+
+    def close(self) -> None:
+        with self._lock:
+            self._conn.close()

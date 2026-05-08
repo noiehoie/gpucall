@@ -38,7 +38,10 @@ max_data_classification: confidential
 gpu: AMPERE_16
 vram_gb: 16
 max_model_len: 8192
-cost_per_second: 0.00045
+cost_per_second: 0.00016
+configured_price_source: https://docs.runpod.io/serverless/pricing
+configured_price_observed_at: '2026-05-08T00:00:00+00:00'
+configured_price_ttl_seconds: 604800
 modes: [sync, async]
 endpoint: null
 target: "<runpod endpoint id>"
@@ -62,7 +65,10 @@ max_data_classification: confidential
 gpu: AMPERE_16
 vram_gb: 16
 max_model_len: 8192
-cost_per_second: 0.00045
+cost_per_second: 0.00016
+configured_price_source: https://docs.runpod.io/serverless/pricing
+configured_price_observed_at: '2026-05-08T00:00:00+00:00'
+configured_price_ttl_seconds: 604800
 modes: [sync, async]
 endpoint: null
 target: ""

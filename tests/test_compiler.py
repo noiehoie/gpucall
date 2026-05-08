@@ -507,6 +507,37 @@ def test_recipe_budget_rejects_tuple_when_estimate_exceeds_limit() -> None:
     assert "max_estimated_cost_usd" in exc.value.context["tuple_rejections"]["p1"]
 
 
+def test_strict_budget_rejects_unknown_price_freshness() -> None:
+    compiler = build_compiler()
+    compiler.policy = compiler.policy.model_copy(
+        update={"cost_policy": CostPolicy(max_estimated_cost_usd=1.0, require_fresh_price_for_budget=True)}
+    )
+    request = TaskRequest(task="infer", mode="sync", recipe="r1")
+
+    with pytest.raises(GovernanceError) as exc:
+        compiler.compile(request)
+
+    assert "tuple price is unknown" in exc.value.context["tuple_rejections"]["p1"]
+
+
+def test_strict_budget_accepts_fresh_configured_price() -> None:
+    compiler = build_compiler()
+    compiler.policy = compiler.policy.model_copy(
+        update={"cost_policy": CostPolicy(max_estimated_cost_usd=1.0, require_fresh_price_for_budget=True)}
+    )
+    fresh = {
+        "configured_price_source": "test-price-sheet",
+        "configured_price_observed_at": datetime.now(timezone.utc).isoformat(),
+        "configured_price_ttl_seconds": 3600,
+    }
+    compiler.tuples = {name: tuple.model_copy(update=fresh) for name, tuple in compiler.tuples.items()}
+    request = TaskRequest(task="infer", mode="sync", recipe="r1")
+
+    plan = compiler.compile(request)
+
+    assert plan.attestations["cost_estimate"]["price_freshness"] == "fresh"
+
+
 def test_standing_tuple_cost_counts_toward_budget_guard() -> None:
     compiler = build_compiler()
     compiler.tuples = {

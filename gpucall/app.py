@@ -139,6 +139,10 @@ def create_app(config_dir: Path | None = None) -> FastAPI:
         finally:
             await runtime.reconciler.stop()
             await runtime.reaper.stop()
+            close_jobs = getattr(runtime.jobs, "close", None)
+            if callable(close_jobs):
+                close_jobs()
+            idempotency_cache.close()
 
     app = FastAPI(title="gpucall v2.0", version="2.0.1", lifespan=lifespan)
     max_request_bytes = int(os.getenv("GPUCALL_MAX_REQUEST_BYTES", "1048576"))

@@ -4,6 +4,13 @@ adapter: modal
 gpu: H100
 vram_gb: 80
 max_model_len: 32768
+cost_per_second: 0.001097
+configured_price_source: https://modal.com/pricing
+configured_price_observed_at: '2026-05-08T00:00:00+00:00'
+configured_price_ttl_seconds: 604800
+scaledown_window_seconds: 60
+min_billable_seconds: 0
+billing_granularity_seconds: 0
 model_ref: qwen2.5-32b-instruct
 engine_ref: modal-vllm
 endpoint_contract: modal-function
@@ -12,6 +19,7 @@ output_contract: plain-text
 stream_contract: none
 official_doc_refs:
   - https://modal.com/docs/guide/gpu
+  - https://modal.com/pricing
   - https://huggingface.co/Qwen/Qwen2.5-32B-Instruct
 live_validation_required: true
 notes: Candidate only; conservative 32K context based on model card config.

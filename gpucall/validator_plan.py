@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -23,6 +23,7 @@ class ValidatorQueueItem(BaseModel):
     priority: int
     estimated_validation_cost_usd: float
     validation_budget_usd: float
+    price_freshness: Literal["fresh", "stale", "unknown"]
     next_revalidate_after: str | None = None
     selected: bool = False
     skip_reason: str | None = None
@@ -48,6 +49,7 @@ def build_validator_plan(
     budget_usd: float,
     max_items: int | None = None,
     include_candidates: bool = False,
+    strict_price: bool = True,
     now: datetime | None = None,
 ) -> ValidatorPlan:
     now = now or datetime.now(timezone.utc)
@@ -71,6 +73,7 @@ def build_validator_plan(
             continue
         price = prices.get(claim.resource_ref)
         cost = _estimated_validation_cost(price)
+        price_freshness = _price_freshness(price, overlay, now)
         worker = workers.get(claim.worker_ref)
         raw_items.append(
             ValidatorQueueItem(
@@ -84,8 +87,9 @@ def build_validator_plan(
                 priority=_priority(reason, source),
                 estimated_validation_cost_usd=cost,
                 validation_budget_usd=budget_usd,
+                price_freshness=price_freshness,
                 next_revalidate_after=overlay.next_revalidate_after if overlay is not None else None,
-                skip_reason=_structural_skip_reason(resource, worker, overlay),
+                skip_reason=_structural_skip_reason(resource, worker, overlay, price_freshness=price_freshness, strict_price=strict_price),
             )
         )
 
@@ -167,14 +171,38 @@ def _priority(reason: str, source: str) -> int:
     return base + (100 if source == "tuple_candidate" else 0)
 
 
-def _structural_skip_reason(resource: Any, worker: Any, overlay: Any) -> str | None:
+def _structural_skip_reason(
+    resource: Any,
+    worker: Any,
+    overlay: Any,
+    *,
+    price_freshness: str,
+    strict_price: bool,
+) -> str | None:
     if worker is None:
         return "missing_worker_contract"
+    if strict_price and price_freshness != "fresh":
+        return "price_not_fresh"
     if overlay is not None and overlay.status == "blocked":
         return "live_status_blocked"
     if resource.source == "tuple_candidate" and not worker.endpoint_configured:
         return "candidate_missing_endpoint_or_target"
     return None
+
+
+def _price_freshness(price: Any, overlay: Any, now: datetime) -> Literal["fresh", "stale", "unknown"]:
+    if price is None:
+        return "unknown"
+    if float(price.price_per_second or 0.0) == 0.0 and price.configured_price_source == "local-free":
+        return "fresh"
+    next_revalidate = _parse_time(getattr(overlay, "next_revalidate_after", None)) if overlay is not None else None
+    if getattr(overlay, "price_per_second", None) is not None and next_revalidate is not None:
+        return "fresh" if next_revalidate > now else "stale"
+    observed = _parse_time(getattr(price, "configured_price_observed_at", None))
+    ttl = getattr(price, "configured_price_ttl_seconds", None)
+    if observed is None or ttl is None or float(price.price_per_second or 0.0) <= 0.0:
+        return "unknown"
+    return "fresh" if observed + timedelta(seconds=float(ttl)) > now else "stale"
 
 
 def _parse_time(value: str | None) -> datetime | None:

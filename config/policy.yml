@@ -11,6 +11,7 @@ cost_policy:
   max_idle_cost_usd: null
   require_budget_for_high_cost_tuple: true
   high_cost_threshold_usd: 5.0
+  require_fresh_price_for_budget: true
 security:
   restricted_requires:
     - confidential_tee
