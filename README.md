@@ -1,5 +1,7 @@
 # gpucall v2.0
 
+[日本語版 README](README.ja.md)
+
 L7 governance gateway for leased GPU task execution. The v2.0 MVP is scoped to `infer` and `vision` only.
 
 ## Product Shape
