@@ -1,0 +1,22 @@
+name: transcribe-audio-draft
+recipe_schema_version: 3
+task: transcribe
+intent: transcribe_audio
+auto_select: false
+data_classification: confidential
+allowed_modes:
+- async
+- sync
+context_budget_tokens: 32768
+resource_class: standard
+latency_class: batch
+quality_floor: standard
+allowed_mime_prefixes:
+- audio/
+default_temperature: 0.0
+system_prompt: Transcribe the supplied audio exactly and return plain text.
+guided_decoding: false
+output_validation_attempts: 1
+required_model_capabilities:
+- speech_to_text
+output_contract: plain-text

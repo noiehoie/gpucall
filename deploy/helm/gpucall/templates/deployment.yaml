@@ -1,0 +1,74 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "gpucall.fullname" . }}
+spec:
+  replicas: {{ .Values.replicaCount }}
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: {{ include "gpucall.fullname" . }}
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: {{ include "gpucall.fullname" . }}
+    spec:
+      containers:
+        - name: gpucall
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          command: ["gpucall"]
+          args: ["serve", "--config-dir", "{{ .Values.config.mountPath }}", "--host", "0.0.0.0", "--port", "{{ .Values.service.port }}"]
+          envFrom:
+            - configMapRef:
+                name: {{ include "gpucall.fullname" . }}-env
+{{- if .Values.secrets.existingSecret }}
+            - secretRef:
+                name: {{ .Values.secrets.existingSecret }}
+{{- end }}
+          ports:
+            - name: http
+              containerPort: {{ .Values.service.port }}
+          volumeMounts:
+            - name: config
+              mountPath: {{ .Values.config.mountPath }}
+              readOnly: true
+            - name: state
+              mountPath: {{ .Values.state.mountPath }}
+            - name: tmp
+              mountPath: /tmp
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            initialDelaySeconds: 10
+            periodSeconds: 30
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          resources:
+{{ toYaml .Values.resources | indent 12 }}
+      volumes:
+        - name: config
+{{- if .Values.config.existingClaim }}
+          persistentVolumeClaim:
+            claimName: {{ .Values.config.existingClaim }}
+{{- else }}
+          emptyDir: {}
+{{- end }}
+        - name: state
+{{- if .Values.state.persistent }}
+          persistentVolumeClaim:
+            claimName: {{ include "gpucall.fullname" . }}-state
+{{- else }}
+          emptyDir: {}
+{{- end }}
+        - name: tmp
+          emptyDir: {}

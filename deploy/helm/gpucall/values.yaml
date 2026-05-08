@@ -1,0 +1,28 @@
+image:
+  repository: gpucall
+  tag: latest
+  pullPolicy: IfNotPresent
+
+replicaCount: 1
+
+service:
+  type: ClusterIP
+  port: 18088
+
+env:
+  GPUCALL_PUBLIC_METRICS: "0"
+
+config:
+  mountPath: /etc/gpucall/config
+  existingClaim: ""
+
+state:
+  mountPath: /var/lib/gpucall
+  size: 10Gi
+  persistent: true
+  storageClassName: ""
+
+secrets:
+  existingSecret: ""
+
+resources: {}

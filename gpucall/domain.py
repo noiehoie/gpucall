@@ -411,7 +411,7 @@ def recipe_requirements(recipe: Recipe) -> DerivedRecipeRequirements:
     )
 
 
-InputContract = Literal["text", "chat_messages", "data_refs", "image", "activation_refs", "artifact_refs"]
+InputContract = Literal["text", "chat_messages", "data_refs", "image", "audio", "document", "activation_refs", "artifact_refs"]
 
 
 class ModelSpec(BaseModel):
@@ -491,7 +491,7 @@ class ExecutionTupleSpec(BaseModel):
     target: str | None = None
     stream_target: str | None = None
     endpoint_contract: str | None = None
-    input_contracts: list[Literal["text", "chat_messages", "data_refs", "image", "activation_refs", "artifact_refs"]] = Field(
+    input_contracts: list[Literal["text", "chat_messages", "data_refs", "image", "audio", "document", "activation_refs", "artifact_refs"]] = Field(
         default_factory=list
     )
     output_contract: str | None = None

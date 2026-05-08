@@ -100,6 +100,25 @@ def test_sync_endpoint_returns_200(tmp_path) -> None:
     assert response.json()["result"]["kind"] == "inline"
 
 
+def test_database_url_selects_postgres_stores(monkeypatch, tmp_path) -> None:
+    from gpucall import app as app_module
+
+    class FakePostgresJobStore:
+        def __init__(self, dsn):
+            self.dsn = dsn
+
+    class FakePostgresIdempotencyStore:
+        def __init__(self, dsn):
+            self.dsn = dsn
+
+    monkeypatch.setattr(app_module, "PostgresJobStore", FakePostgresJobStore)
+    monkeypatch.setattr(app_module, "PostgresIdempotencyStore", FakePostgresIdempotencyStore)
+    monkeypatch.setenv("GPUCALL_DATABASE_URL", "postgresql://user:pass@db/gpucall")
+
+    assert app_module._job_store(tmp_path).dsn == "postgresql://user:pass@db/gpucall"
+    assert app_module._idempotency_store(tmp_path).dsn == "postgresql://user:pass@db/gpucall"
+
+
 def test_sync_endpoint_auto_selects_recipe(tmp_path) -> None:
     with TestClient(create_app(copy_config(tmp_path))) as client:
         response = client.post(
@@ -113,6 +132,24 @@ def test_sync_endpoint_auto_selects_recipe(tmp_path) -> None:
 
     assert response.status_code == 200
     assert response.json()["result"]["kind"] == "inline"
+
+
+def test_batch_endpoint_executes_sync_requests(tmp_path) -> None:
+    with TestClient(create_app(copy_config(tmp_path))) as client:
+        response = client.post(
+            "/v2/tasks/batch",
+            json={
+                "requests": [
+                    {"task": "infer", "mode": "sync", "inline_inputs": {"prompt": {"value": "one", "content_type": "text/plain"}}},
+                    {"task": "infer", "mode": "sync", "inline_inputs": {"prompt": {"value": "two", "content_type": "text/plain"}}},
+                ]
+            },
+        )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["ok"] is True
+    assert [item["result"]["kind"] for item in payload["results"]] == ["inline", "inline"]
 
 
 def test_sync_endpoint_returns_structured_context_overflow(tmp_path) -> None:
@@ -687,6 +724,20 @@ def test_metrics_endpoint_reports_requests(tmp_path, monkeypatch) -> None:
     assert metrics.json()["latency_samples"] >= 1
 
 
+def test_prometheus_metrics_endpoint_reports_requests(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("GPUCALL_PUBLIC_METRICS", "1")
+    with TestClient(create_app(copy_config(tmp_path))) as client:
+        client.post("/v2/tasks/sync", json={"task": "infer", "mode": "sync"})
+        metrics = client.get("/metrics/prometheus")
+
+    assert metrics.status_code == 200
+    assert "text/plain" in metrics.headers["content-type"]
+    assert 'gpucall_request_total{method="POST",route="/v2/tasks/sync",status="200"}' in metrics.text
+    assert "gpucall_latency_samples" in metrics.text
+    assert "gpucall_tuple_success_rate" in metrics.text
+    assert "gpucall_governance_error_total" in metrics.text
+
+
 def test_public_task_endpoint_rejects_caller_recipe(tmp_path) -> None:
     with TestClient(create_app(copy_config(tmp_path))) as client:
         response = client.post("/v2/tasks/sync", json={"task": "infer", "mode": "sync", "recipe": "text-infer-standard"})
@@ -1008,7 +1059,7 @@ def test_plan_with_worker_refs_rehashes_executable_plan() -> None:
     assert updated.attestations["governance_hash"] != "caller-hash"
 
 
-def test_openai_chat_completions_rejects_stream_in_mvp(tmp_path) -> None:
+def test_openai_chat_completions_streams_sse(tmp_path) -> None:
     with TestClient(create_app(copy_config(tmp_path))) as client:
         response = client.post(
             "/v1/chat/completions",
@@ -1019,8 +1070,11 @@ def test_openai_chat_completions_rejects_stream_in_mvp(tmp_path) -> None:
             },
         )
 
-    assert response.status_code == 400
-    assert response.json()["error"]["message"].startswith("stream is not supported")
+    assert response.status_code == 200
+    assert "text/event-stream" in response.headers["content-type"]
+    assert '"object":"chat.completion.chunk"' in response.text
+    assert "ok:infer:local-echo" in response.text
+    assert "data: [DONE]" in response.text
 
 
 def test_openai_chat_completions_rejects_large_prompt_without_500(tmp_path) -> None:

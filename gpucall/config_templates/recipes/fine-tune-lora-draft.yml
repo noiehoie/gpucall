@@ -1,0 +1,22 @@
+name: fine-tune-lora-draft
+recipe_schema_version: 3
+task: fine-tune
+intent: fine_tune_lora
+auto_select: false
+data_classification: confidential
+allowed_modes:
+- async
+context_budget_tokens: 32768
+resource_class: large
+latency_class: batch
+quality_floor: high
+allowed_mime_prefixes:
+- application/json
+- application/jsonl
+- text/
+default_temperature: 0.0
+artifact_export: true
+requires_key_release: true
+required_model_capabilities:
+- lora_training
+output_contract: artifact-manifest

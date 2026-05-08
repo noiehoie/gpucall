@@ -1,0 +1,20 @@
+name: split-infer-activation-draft
+recipe_schema_version: 3
+task: split-infer
+intent: split_infer_activation
+auto_select: false
+data_classification: confidential
+allowed_modes:
+- async
+- sync
+context_budget_tokens: 32768
+resource_class: standard
+latency_class: standard
+quality_floor: high
+allowed_mime_prefixes:
+- application/octet-stream
+default_temperature: 0.0
+requires_key_release: true
+required_model_capabilities:
+- split_inference
+output_contract: gpucall-tuple-result

@@ -1,0 +1,6 @@
+apiVersion: v2
+name: gpucall
+description: Deterministic governance gateway for GPU task execution
+type: application
+version: 0.1.0
+appVersion: "2.0"

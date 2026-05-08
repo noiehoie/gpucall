@@ -83,7 +83,7 @@ the gateway is explicitly started with a debug override.
 
 ## Level 3: Low-Level Control API
 
-Use `/v2/tasks/sync`, `/v2/tasks/async`, `/v2/tasks/stream`, and object-store
+Use `/v2/tasks/sync`, `/v2/tasks/async`, `/v2/tasks/stream`, `/v2/tasks/batch`, and object-store
 presign endpoints for internal systems and advanced integrations.
 
 This level exposes `TaskRequest`, `DataRef`, `response_format`, and job polling

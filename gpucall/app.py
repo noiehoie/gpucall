@@ -14,7 +14,7 @@ from uuid import uuid4
 
 from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.exceptions import RequestValidationError
-from fastapi.responses import JSONResponse, StreamingResponse
+from fastapi.responses import JSONResponse, PlainTextResponse, StreamingResponse
 from pydantic import BaseModel, Field
 
 from gpucall.app_helpers import (
@@ -60,6 +60,7 @@ from gpucall.domain import ChatMessage, DataRef, ExecutionMode, InlineValue, Job
 from gpucall.domain import PresignGetRequest, PresignGetResponse, PresignPutRequest, PresignPutResponse
 from gpucall.object_store import ObjectStore
 from gpucall.execution.factory import build_adapters
+from gpucall.postgres_store import PostgresIdempotencyStore, PostgresJobStore
 from gpucall.registry import ObservedRegistry
 from gpucall.routing import route_warning_tags
 from gpucall.tuple_catalog import live_tuple_catalog_evidence
@@ -105,6 +106,30 @@ class OpenAIChatCompletionRequest(BaseModel):
     metadata: dict[str, str] = Field(default_factory=dict)
 
 
+class BatchTaskRequest(BaseModel):
+    requests: list[TaskRequest] = Field(min_length=1, max_length=64)
+    continue_on_error: bool = True
+
+
+def _database_url() -> str | None:
+    value = os.getenv("GPUCALL_DATABASE_URL") or os.getenv("DATABASE_URL")
+    return value.strip() if value and value.strip() else None
+
+
+def _job_store(state_dir: Path):
+    database_url = _database_url()
+    if database_url and database_url.startswith(("postgres://", "postgresql://")):
+        return PostgresJobStore(database_url)
+    return SQLiteJobStore(state_dir / "state.db")
+
+
+def _idempotency_store(state_dir: Path):
+    database_url = _database_url()
+    if database_url and database_url.startswith(("postgres://", "postgresql://")):
+        return PostgresIdempotencyStore(database_url)
+    return SQLiteIdempotencyStore(state_dir / "idempotency.db")
+
+
 def build_runtime(config_dir: Path) -> Runtime:
     config = load_config(config_dir)
     state_dir = default_state_dir()
@@ -120,7 +145,7 @@ def build_runtime(config_dir: Path) -> Runtime:
     audit = AuditTrail(state_dir / "audit" / "trail.jsonl")
     artifact_registry = SQLiteArtifactRegistry(state_dir / "artifacts.db")
     object_store = ObjectStore(config.object_store) if config.object_store is not None else None
-    jobs = SQLiteJobStore(state_dir / "state.db")
+    jobs = _job_store(state_dir)
     adapters = build_adapters(tuples)
     compiler = GovernanceCompiler(
         policy=policy,
@@ -180,7 +205,7 @@ def create_app(config_dir: Path | None = None) -> FastAPI:
     app = FastAPI(title="gpucall v2.0", version="2.0.1", lifespan=lifespan)
     max_request_bytes = int(os.getenv("GPUCALL_MAX_REQUEST_BYTES", "1048576"))
     configured_api_keys = load_credentials().get("auth", {}).get("api_keys", "")
-    idempotency_cache = SQLiteIdempotencyStore(default_state_dir() / "idempotency.db")
+    idempotency_cache = _idempotency_store(default_state_dir())
     idempotency_locks: dict[str, asyncio.Lock] = {}
     idempotency_locks_guard = asyncio.Lock()
     rate_limit: dict[str, list[float]] = {}
@@ -235,11 +260,13 @@ def create_app(config_dir: Path | None = None) -> FastAPI:
                     content={"detail": "request body too large; use the gpucall SDK DataRef upload path for large inputs"},
                 )
             delivered = False
+            body_replayed = asyncio.Event()
 
             async def replay_body():
                 nonlocal delivered
                 if delivered:
-                    return {"type": "http.request", "body": b"", "more_body": False}
+                    await body_replayed.wait()
+                    return {"type": "http.disconnect"}
                 delivered = True
                 return {"type": "http.request", "body": body, "more_body": False}
 
@@ -294,6 +321,10 @@ def create_app(config_dir: Path | None = None) -> FastAPI:
     def runtime_dep() -> Runtime:
         return app.state.runtime
 
+    def record_error_code(runtime: Runtime, code: str) -> None:
+        codes = runtime.metrics.setdefault("error_codes", {})
+        codes[code] = codes.get(code, 0) + 1
+
     @app.get("/healthz")
     async def healthz() -> dict[str, str]:
         return {"status": "ok"}
@@ -325,18 +356,30 @@ def create_app(config_dir: Path | None = None) -> FastAPI:
             },
         }
 
-    @app.get("/metrics")
-    async def metrics(runtime: Runtime = Depends(runtime_dep)) -> dict[str, object]:
-        if not (os.getenv("GPUCALL_API_KEYS") or configured_api_keys or os.getenv("GPUCALL_TENANT_API_KEYS") or tenant_key_map()) and not _public_metrics_enabled():
-            raise HTTPException(status_code=403, detail="metrics require authentication or GPUCALL_PUBLIC_METRICS=1")
+    def _metrics_payload(runtime: Runtime) -> dict[str, object]:
         latencies = runtime.metrics.get("latency_ms", [])
         avg = sum(latencies) / len(latencies) if latencies else 0.0
         return {
             "requests": runtime.metrics.get("requests", {}),
+            "error_codes": runtime.metrics.get("error_codes", {}),
             "latency_ms_avg": avg,
             "latency_samples": len(latencies),
             "registry": runtime.dispatcher.registry.snapshot(),
         }
+
+    def _enforce_metrics_access() -> None:
+        if not (os.getenv("GPUCALL_API_KEYS") or configured_api_keys or os.getenv("GPUCALL_TENANT_API_KEYS") or tenant_key_map()) and not _public_metrics_enabled():
+            raise HTTPException(status_code=403, detail="metrics require authentication or GPUCALL_PUBLIC_METRICS=1")
+
+    @app.get("/metrics")
+    async def metrics(runtime: Runtime = Depends(runtime_dep)) -> dict[str, object]:
+        _enforce_metrics_access()
+        return _metrics_payload(runtime)
+
+    @app.get("/metrics/prometheus")
+    async def prometheus_metrics(runtime: Runtime = Depends(runtime_dep)) -> PlainTextResponse:
+        _enforce_metrics_access()
+        return PlainTextResponse(_prometheus_metrics_text(_metrics_payload(runtime)), media_type="text/plain; version=0.0.4")
 
     @app.post("/v2/tasks/sync")
     async def task_sync(
@@ -387,22 +430,23 @@ def create_app(config_dir: Path | None = None) -> FastAPI:
                 )
             return JSONResponse(status_code=200, content=content, headers=tenant_headers(headers, http_request))
         except GovernanceError as exc:
+            record_error_code(runtime, exc.code)
             return governance_error_response(exc, request=request)
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         except TupleError as exc:
+            record_error_code(runtime, exc.code or "TUPLE_ERROR")
             return tuple_error_response(exc, request=request)
         except TenantBudgetError as exc:
+            record_error_code(runtime, exc.code)
             return tenant_budget_error_response(exc, request=request)
 
-    @app.post("/v1/chat/completions")
+    @app.post("/v1/chat/completions", response_model=None)
     async def openai_chat_completions(
         request: OpenAIChatCompletionRequest,
         http_request: Request,
         runtime: Runtime = Depends(runtime_dep),
-    ) -> JSONResponse:
-        if request.stream:
-            return openai_error_response(400, "stream is not supported by the gpucall OpenAI facade in v2.0 MVP")
+    ) -> Any:
         allowed_models = {"gpucall:auto", "gpucall:chat"}
         if request.model not in allowed_models:
             return openai_error_response(
@@ -420,16 +464,36 @@ def create_app(config_dir: Path | None = None) -> FastAPI:
             )
         task_request = TaskRequest(
             task="infer",
-            mode=ExecutionMode.SYNC,
+            mode=ExecutionMode.STREAM if request.stream else ExecutionMode.SYNC,
             messages=messages,
             max_tokens=request.max_tokens,
             temperature=request.temperature,
             response_format=request.response_format,
             metadata=request.metadata,
-            )
+        )
         try:
             plan = runtime.compiler.compile(task_request)
             await enforce_request_budget(runtime, http_request, plan)
+            if request.stream:
+                async def events():
+                    yielded = False
+                    try:
+                        async for event in runtime.dispatcher.execute_stream(plan):
+                            for chunk in _openai_stream_chunks(request.model, event, yielded):
+                                yielded = True
+                                yield chunk
+                    except TupleError as exc:
+                        record_error_code(runtime, exc.code or "TUPLE_ERROR")
+                        yield "data: " + json.dumps({"error": {"message": public_tuple_error(exc), "code": exc.code or "tuple_error"}}, separators=(",", ":")) + "\n\n"
+                    yield "data: " + json.dumps(_openai_stream_chunk(request.model, "", finish_reason="stop"), separators=(",", ":")) + "\n\n"
+                    yield "data: [DONE]\n\n"
+
+                return StreamingResponse(
+                    events(),
+                    status_code=200,
+                    media_type="text/event-stream",
+                    headers=tenant_headers(warning_headers(plan, runtime.compiler.tuples), http_request),
+                )
             result = await runtime.dispatcher.execute_sync(plan)
             headers = warning_headers(plan, runtime.compiler.tuples)
             if result.output_validated is not None:
@@ -446,6 +510,7 @@ def create_app(config_dir: Path | None = None) -> FastAPI:
                 ),
             )
         except GovernanceError as exc:
+            record_error_code(runtime, exc.code)
             status_code = governance_status_code(exc)
             code = "tuple_unavailable" if status_code == 503 else exc.code.lower()
             return openai_error_response(
@@ -455,6 +520,7 @@ def create_app(config_dir: Path | None = None) -> FastAPI:
                 gpucall_failure_artifact=build_governance_failure_artifact(exc, task_request),
             )
         except TupleError as exc:
+            record_error_code(runtime, exc.code or "TUPLE_ERROR")
             headers: dict[str, str] = {}
             if exc.raw_output is not None:
                 headers["X-GPUCall-Output-Validated"] = "false"
@@ -466,6 +532,7 @@ def create_app(config_dir: Path | None = None) -> FastAPI:
                 gpucall_failure_artifact=build_provider_failure_artifact(exc, task_request),
             )
         except TenantBudgetError as exc:
+            record_error_code(runtime, exc.code)
             return openai_error_response(exc.status_code, str(exc), code=exc.code.lower())
 
     @app.post("/v2/tasks/async")
@@ -522,10 +589,12 @@ def create_app(config_dir: Path | None = None) -> FastAPI:
                 headers=tenant_headers(headers, http_request),
             )
         except GovernanceError as exc:
+            record_error_code(runtime, exc.code)
             return governance_error_response(exc, request=request)
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         except TenantBudgetError as exc:
+            record_error_code(runtime, exc.code)
             return tenant_budget_error_response(exc, request=request)
 
     @app.post("/v2/tasks/stream")
@@ -540,13 +609,19 @@ def create_app(config_dir: Path | None = None) -> FastAPI:
             request = worker_readable_request(request, runtime, tenant_prefix=tenant_prefix)
             plan = plan_with_worker_refs(plan, request.input_refs, split_learning=request.split_learning)
         except GovernanceError as exc:
+            record_error_code(runtime, exc.code)
             return governance_error_response(exc, request=request)
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
 
         async def events():
-            async for event in runtime.dispatcher.execute_stream(plan):
-                yield event
+            try:
+                async for event in runtime.dispatcher.execute_stream(plan):
+                    yield event
+            except TupleError as exc:
+                record_error_code(runtime, exc.code or "TUPLE_ERROR")
+                yield "event: error\n"
+                yield "data: " + json.dumps({"code": exc.code or "TUPLE_ERROR", "message": public_tuple_error(exc)}, separators=(",", ":")) + "\n\n"
 
         return StreamingResponse(
             events(),
@@ -554,6 +629,55 @@ def create_app(config_dir: Path | None = None) -> FastAPI:
             status_code=200,
             headers=tenant_headers(warning_headers(plan, runtime.compiler.tuples), http_request),
         )
+
+    @app.post("/v2/tasks/batch")
+    async def task_batch(request: BatchTaskRequest, http_request: Request, runtime: Runtime = Depends(runtime_dep)) -> JSONResponse:
+        results: list[dict[str, Any]] = []
+        status_code = 200
+        for index, item in enumerate(request.requests):
+            if item.mode is not ExecutionMode.SYNC:
+                results.append({"index": index, "ok": False, "status_code": 400, "error": "batch currently executes sync task requests"})
+                status_code = 207
+                if not request.continue_on_error:
+                    break
+                continue
+            try:
+                enforce_gateway_owned_routing(item)
+                plan = runtime.compiler.compile(item)
+                await enforce_request_budget(runtime, http_request, plan)
+                tenant_prefix = object_tenant_prefix(runtime, http_request) if request_needs_worker_object_access(item) else None
+                worker_request = worker_readable_request(item, runtime, tenant_prefix=tenant_prefix)
+                plan = plan_with_worker_refs(plan, worker_request.input_refs, split_learning=worker_request.split_learning)
+                result = await runtime.dispatcher.execute_sync(plan)
+                results.append(
+                    {
+                        "index": index,
+                        "ok": True,
+                        "status_code": 200,
+                        "plan_id": plan.plan_id,
+                        "plan": public_plan_summary(plan, runtime.compiler.tuples),
+                        "result": result.model_dump(mode="json"),
+                    }
+                )
+            except GovernanceError as exc:
+                record_error_code(runtime, exc.code)
+                status_code = 207
+                results.append({"index": index, "ok": False, "status_code": governance_status_code(exc), "code": exc.code, "error": str(exc)})
+                if not request.continue_on_error:
+                    break
+            except TupleError as exc:
+                record_error_code(runtime, exc.code or "TUPLE_ERROR")
+                status_code = 207
+                results.append({"index": index, "ok": False, "status_code": exc.status_code, "code": exc.code or "TUPLE_ERROR", "error": public_tuple_error(exc)})
+                if not request.continue_on_error:
+                    break
+            except TenantBudgetError as exc:
+                record_error_code(runtime, exc.code)
+                status_code = 207
+                results.append({"index": index, "ok": False, "status_code": exc.status_code, "code": exc.code, "error": str(exc)})
+                if not request.continue_on_error:
+                    break
+        return JSONResponse(status_code=status_code, content={"results": results, "ok": all(item.get("ok") for item in results)})
 
     @app.get("/v2/jobs/{job_id}")
     async def get_job(job_id: str, http_request: Request, runtime: Runtime = Depends(runtime_dep)) -> JobRecord:
@@ -611,6 +735,102 @@ def _message_content_to_text(content: str | list[dict[str, Any]]) -> str:
         status_code=400,
         detail="OpenAI facade accepts string message content only; use gpucall DataRef APIs for structured or multimodal inputs",
     )
+
+
+def _openai_stream_chunks(model: str, event: str, already_started: bool):
+    for line in event.splitlines():
+        if not line.startswith("data:"):
+            continue
+        content = line.removeprefix("data:").strip()
+        if not content or content == "[DONE]":
+            continue
+        if not already_started:
+            yield "data: " + json.dumps(_openai_stream_chunk(model, "", role="assistant"), separators=(",", ":")) + "\n\n"
+        yield "data: " + json.dumps(_openai_stream_chunk(model, content), separators=(",", ":")) + "\n\n"
+
+
+def _openai_stream_chunk(model: str, content: str, *, role: str | None = None, finish_reason: str | None = None) -> dict[str, Any]:
+    delta: dict[str, str] = {}
+    if role is not None:
+        delta["role"] = role
+    if content:
+        delta["content"] = content
+    return {
+        "id": f"chatcmpl-{uuid4().hex}",
+        "object": "chat.completion.chunk",
+        "created": int(time.time()),
+        "model": model,
+        "choices": [{"index": 0, "delta": delta, "finish_reason": finish_reason}],
+    }
+
+
+def _prometheus_metrics_text(payload: dict[str, object]) -> str:
+    lines = [
+        "# HELP gpucall_request_total Gateway requests by route and status.",
+        "# TYPE gpucall_request_total counter",
+    ]
+    requests = payload.get("requests") if isinstance(payload, dict) else {}
+    if isinstance(requests, dict):
+        for key, value in sorted(requests.items()):
+            method, route, status = _split_metric_key(str(key))
+            lines.append(f'gpucall_request_total{{method="{method}",route="{route}",status="{status}"}} {int(value)}')
+    error_codes = payload.get("error_codes") if isinstance(payload, dict) else {}
+    lines.extend(
+        [
+            "# HELP gpucall_governance_error_total Gateway governance and tuple errors by code.",
+            "# TYPE gpucall_governance_error_total counter",
+        ]
+    )
+    if isinstance(error_codes, dict):
+        for code, value in sorted(error_codes.items()):
+            lines.append(f'gpucall_governance_error_total{{code="{_prom_label(str(code))}"}} {int(value)}')
+    registry = payload.get("registry") if isinstance(payload, dict) else {}
+    lines.extend(
+        [
+            "# HELP gpucall_tuple_success_rate Observed tuple success rate.",
+            "# TYPE gpucall_tuple_success_rate gauge",
+            "# HELP gpucall_tuple_samples Observed tuple sample count.",
+            "# TYPE gpucall_tuple_samples gauge",
+            "# HELP gpucall_tuple_p50_latency_ms Observed tuple p50 latency in milliseconds.",
+            "# TYPE gpucall_tuple_p50_latency_ms gauge",
+            "# HELP gpucall_tuple_cost_per_success_usd Observed tuple cost per success in USD.",
+            "# TYPE gpucall_tuple_cost_per_success_usd gauge",
+        ]
+    )
+    if isinstance(registry, dict):
+        for tuple_name, item in sorted(registry.items()):
+            if not isinstance(item, dict):
+                continue
+            label = _prom_label(str(tuple_name))
+            lines.append(f'gpucall_tuple_success_rate{{tuple="{label}"}} {float(item.get("success_rate") or 0.0)}')
+            lines.append(f'gpucall_tuple_samples{{tuple="{label}"}} {int(item.get("samples") or 0)}')
+            lines.append(f'gpucall_tuple_p50_latency_ms{{tuple="{label}"}} {float(item.get("p50_latency_ms") or 0.0)}')
+            lines.append(f'gpucall_tuple_cost_per_success_usd{{tuple="{label}"}} {float(item.get("cost_per_success") or 0.0)}')
+    lines.extend(
+        [
+            "# HELP gpucall_latency_ms_avg Recent average gateway latency in milliseconds.",
+            "# TYPE gpucall_latency_ms_avg gauge",
+            f"gpucall_latency_ms_avg {float(payload.get('latency_ms_avg') or 0.0)}",
+            "# HELP gpucall_latency_samples Recent latency sample count.",
+            "# TYPE gpucall_latency_samples gauge",
+            f"gpucall_latency_samples {int(payload.get('latency_samples') or 0)}",
+        ]
+    )
+    return "\n".join(lines) + "\n"
+
+
+def _split_metric_key(key: str) -> tuple[str, str, str]:
+    parts = key.rsplit(" ", 1)
+    status = parts[1] if len(parts) == 2 else "unknown"
+    left = parts[0] if parts else key
+    method_route = left.split(" ", 1)
+    method = method_route[0] if method_route else "unknown"
+    route = method_route[1] if len(method_route) == 2 else "unknown"
+    return method, route.replace('"', '\\"'), status
+
+
+def _prom_label(value: str) -> str:
+    return value.replace("\\", "\\\\").replace("\n", "\\n").replace('"', '\\"')
 
 
 app = create_app()

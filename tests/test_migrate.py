@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 
-from gpucall.migrate import assess_project, build_preflight_requests, canary_project, main
+from gpucall.migrate import assess_project, build_preflight_requests, canary_project, main, patch_suggestions
 
 
 def test_migrate_assess_detects_direct_provider_and_gpucall_paths(tmp_path) -> None:
@@ -54,3 +54,33 @@ def test_migrate_canary_runs_command(tmp_path) -> None:
     assert report["ran"] is True
     assert report["returncode"] == 0
     assert report["error_codes"]["NO_ELIGIBLE_TUPLE"] == 1
+
+
+def test_migrate_patch_apply_writes_helper_and_annotations(tmp_path) -> None:
+    project = tmp_path / "project"
+    project.mkdir()
+    source = project / "translate.py"
+    source.write_text("from anthropic import Anthropic\nmodel='claude-haiku'\n", encoding="utf-8")
+
+    report = patch_suggestions(project, source="news-system", apply=True)
+
+    assert report["applied"] is True
+    assert "gpucall_migration.py" in report["changed_files"]
+    assert "translate.py" in report["changed_files"]
+    assert "from gpucall_migration import AnthropicCompat as Anthropic" in source.read_text(encoding="utf-8")
+    assert "direct provider path migrated" in source.read_text(encoding="utf-8")
+    assert (project / ".gpucall-migration" / "applied-patch.json").exists()
+
+
+def test_migrate_patch_apply_rewrites_openai_client_constructor(tmp_path) -> None:
+    project = tmp_path / "project"
+    project.mkdir()
+    source = project / "client.py"
+    source.write_text("from openai import OpenAI\nclient = OpenAI()\n", encoding="utf-8")
+
+    report = patch_suggestions(project, source="openai-app", apply=True)
+
+    assert report["applied"] is True
+    text = source.read_text(encoding="utf-8")
+    assert "from gpucall_migration import gpucall_openai_client" in text
+    assert "client = gpucall_openai_client()" in text

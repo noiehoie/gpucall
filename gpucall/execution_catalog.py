@@ -841,6 +841,10 @@ def _recipe_fit(resource: ResourceCatalogEntry, worker: WorkerContractSpec, reci
         reasons.append("worker input_contracts do not declare image support")
     if recipe.task == "infer" and input_contracts and not {"text", "chat_messages"}.intersection(input_contracts):
         reasons.append("worker input_contracts do not declare text or chat support")
+    if recipe.task == "transcribe" and input_contracts and "audio" not in input_contracts:
+        reasons.append("worker input_contracts do not declare audio support")
+    if recipe.task == "convert" and input_contracts and "document" not in input_contracts:
+        reasons.append("worker input_contracts do not declare document support")
     if recipe.output_contract and worker.output_contract and recipe.output_contract != worker.output_contract:
         reasons.append("worker output_contract does not match recipe output_contract")
     return {"eligible": not reasons, "reasons": reasons}

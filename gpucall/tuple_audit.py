@@ -328,6 +328,10 @@ def _load_tuple_candidates(config_dir: Path) -> list[dict[str, Any]]:
 def _required_input_contracts(recipe: Recipe) -> set[str]:
     if recipe.task == "vision":
         return {"image", "text", "data_refs"}
+    if recipe.task == "transcribe":
+        return {"audio", "data_refs"}
+    if recipe.task == "convert":
+        return {"document", "data_refs"}
     if recipe.task in {"train", "fine-tune"}:
         return {"data_refs", "artifact_refs"}
     if recipe.task == "split-infer":

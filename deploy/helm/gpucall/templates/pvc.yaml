@@ -1,0 +1,15 @@
+{{- if .Values.state.persistent }}
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ include "gpucall.fullname" . }}-state
+spec:
+  accessModes:
+    - ReadWriteOnce
+{{- if .Values.state.storageClassName }}
+  storageClassName: {{ .Values.state.storageClassName }}
+{{- end }}
+  resources:
+    requests:
+      storage: {{ .Values.state.size }}
+{{- end }}

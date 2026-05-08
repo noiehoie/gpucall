@@ -22,6 +22,7 @@ if __package__ in (None, ""):
 
 from gpucall.app import build_runtime, create_app, plan_with_worker_refs, worker_readable_request
 from gpucall.catalog import SQLiteCapabilityCatalog, dumps_snapshot
+from gpucall.cli_commands.readiness import add_readiness_parser, run_readiness_command
 from gpucall.compiler import GovernanceCompiler
 from gpucall.config import ConfigError, default_config_dir, default_state_dir, load_config
 from gpucall.configure import configure_command
@@ -37,7 +38,6 @@ from gpucall.execution.contracts import (
 )
 from gpucall.lease_reaper import active_manifest_leases, lease_reaper_report
 from gpucall.price_cache import load_cached_price_evidence, merge_price_evidence, store_live_price_evidence
-from gpucall.readiness import build_readiness_report, dumps_readiness
 from gpucall.tuple_audit import _tuple_from_candidate, tuple_audit_report
 from gpucall.tuple_catalog import live_tuple_catalog_evidence, live_tuple_catalog_findings
 from gpucall.execution.registry import adapter_descriptor, vendor_family_for_adapter
@@ -142,12 +142,7 @@ def main() -> None:
     release_check = sub.add_parser("release-check")
     release_check.add_argument("--config-dir", type=Path, default=default_config_dir())
     release_check.add_argument("--output-dir", type=Path, default=default_state_dir() / "release")
-    readiness = sub.add_parser("readiness")
-    readiness.add_argument("--config-dir", type=Path, default=default_config_dir())
-    readiness.add_argument("--source", default=None)
-    readiness.add_argument("--intent", default=None)
-    readiness.add_argument("--recipe", default=None)
-    readiness.add_argument("--validation-dir", type=Path, default=None)
+    add_readiness_parser(sub)
     configure = sub.add_parser("configure")
     configure.add_argument("--config-dir", type=Path, default=default_config_dir())
     admin = sub.add_parser("admin")
@@ -275,18 +270,7 @@ def main() -> None:
     elif args.command == "release-check":
         release_check_command(args.config_dir, args.output_dir)
     elif args.command == "readiness":
-        print(
-            dumps_readiness(
-                build_readiness_report(
-                    config_dir=args.config_dir,
-                    source=args.source,
-                    intent=args.intent,
-                    recipe=args.recipe,
-                    validation_dir=args.validation_dir,
-                )
-            ),
-            end="",
-        )
+        run_readiness_command(args)
     elif args.command == "configure":
         configure_command(args.config_dir)
     elif args.command == "admin":
@@ -478,12 +462,17 @@ def build_launch_report(config_dir: Path, *, url: str | None = None, api_key: st
         "openapi_paths": sorted(openapi_schema.get("paths", {}).keys()),
         "mvp_scope": {
             "tasks": ["infer", "vision"],
-            "deferred": ["transcribe", "train", "convert", "fine-tune", "multi-file batch", "postgres", "helm", "systemd"],
-            "control_plane_only": ["train", "fine-tune", "split-infer"],
+            "draft_control_plane_tasks": ["transcribe", "convert", "train", "fine-tune", "split-infer"],
+            "deferred": ["high-confidential provider live connections"],
+            "control_plane_only": ["transcribe", "convert", "train", "fine-tune", "split-infer"],
         },
         "packaging": {
             "dockerfile": (PROJECT_ROOT / "Dockerfile").exists(),
             "docker_compose": (PROJECT_ROOT / "docker-compose.yml").exists(),
+            "helm": (PROJECT_ROOT / "deploy" / "helm" / "gpucall" / "Chart.yaml").exists(),
+            "systemd": (PROJECT_ROOT / "deploy" / "systemd" / "gpucall.service").exists(),
+            "postgres_schema": (PROJECT_ROOT / "deploy" / "postgres" / "001_init.sql").exists(),
+            "prometheus_alerts": (PROJECT_ROOT / "deploy" / "prometheus" / "gpucall-alerts.yml").exists(),
             "python_package": (PROJECT_ROOT / "pyproject.toml").exists(),
             "typescript_sdk": (PROJECT_ROOT / "sdk" / "typescript" / "package.json").exists(),
         },

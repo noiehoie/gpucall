@@ -1,0 +1,17 @@
+{
+  "title": "gpucall Gateway",
+  "schemaVersion": 39,
+  "version": 1,
+  "panels": [
+    {
+      "type": "timeseries",
+      "title": "Requests",
+      "targets": [{"expr": "sum by (route, status) (rate(gpucall_request_total[5m]))"}]
+    },
+    {
+      "type": "stat",
+      "title": "Average Latency ms",
+      "targets": [{"expr": "gpucall_latency_ms_avg"}]
+    }
+  ]
+}

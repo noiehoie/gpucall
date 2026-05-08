@@ -40,7 +40,7 @@ def main(argv: list[str] | None = None) -> int:
         cmd.add_argument("--remote-inbox", default=None)
         cmd.add_argument("--inbox-dir", default=None)
         cmd.add_argument("--command", dest="run_command", default=None, help="canary/onboard command to run inside the project")
-        cmd.add_argument("--apply", action="store_true", help="reserved for future patch application; current command writes patches only")
+        cmd.add_argument("--apply", action="store_true", help="write a local gpucall migration helper and annotate direct provider call sites")
     args = parser.parse_args(argv)
     output_dir = args.output_dir or (args.project / ".gpucall-migration")
     if args.command == "assess":
@@ -62,7 +62,7 @@ def main(argv: list[str] | None = None) -> int:
         _write_outputs(report, output_dir, "canary-report")
         return 0
     if args.command == "patch":
-        report = patch_suggestions(args.project, source=args.source)
+        report = patch_suggestions(args.project, source=args.source, apply=args.apply)
         _write_outputs(report, output_dir, "migration-patch")
         return 0
     if args.command == "onboard":
@@ -147,20 +147,145 @@ def canary_project(project: Path, *, command: str | None, source: str | None = N
     }
 
 
-def patch_suggestions(project: Path, *, source: str | None = None) -> dict[str, Any]:
+def patch_suggestions(project: Path, *, source: str | None = None, apply: bool = False) -> dict[str, Any]:
     report = assess_project(project, source=source)
     patches = []
+    changed_files: list[str] = []
     for row in report["direct_provider_paths"]:
         patches.append(
             {
                 "path": row["path"],
                 "line": row["line"],
-                "kind": "manual_patch_required",
+                "kind": "automatic_patch_available",
                 "reason": "direct provider path should be routed through gpucall SDK/OpenAI facade or converted into preflight intake",
                 "suggestion": "replace provider SDK call with GPUCallClient/OpenAI base_url gpucall endpoint; do not pass provider/model/GPU selectors",
             }
         )
-    return {"schema_version": 1, "phase": "migration-patch", "source": source, "project": str(project.resolve()), "patches": patches, "applied": False}
+    if apply:
+        changed_files = _apply_migration_patch(project.resolve(), report["direct_provider_paths"], source=source)
+    return {
+        "schema_version": 1,
+        "phase": "migration-patch",
+        "source": source,
+        "project": str(project.resolve()),
+        "patches": patches,
+        "applied": apply,
+        "changed_files": changed_files,
+    }
+
+
+def _apply_migration_patch(project: Path, rows: list[dict[str, Any]], *, source: str | None = None) -> list[str]:
+    changed: set[str] = set()
+    helper = project / "gpucall_migration.py"
+    helper_text = _migration_helper_text(source=source)
+    if not helper.exists() or helper.read_text(encoding="utf-8") != helper_text:
+        helper.write_text(helper_text, encoding="utf-8")
+        changed.add(str(helper.relative_to(project)))
+    paths = sorted({str(row["path"]) for row in rows if str(row.get("path", "")).endswith(".py")})
+    for rel in paths:
+        path = project / rel
+        try:
+            text = path.read_text(encoding="utf-8")
+        except OSError:
+            continue
+        marker = "# gpucall-migrate: direct provider path migrated to gpucall compatibility helpers."
+        import_line = "from gpucall_migration import gpucall_client  # gpucall-migrate\n"
+        updated = text
+        updated = updated.replace("from anthropic import Anthropic", "from gpucall_migration import AnthropicCompat as Anthropic")
+        updated = updated.replace("from anthropic import AsyncAnthropic", "from gpucall_migration import AsyncAnthropicCompat as AsyncAnthropic")
+        if "from openai import OpenAI" in updated:
+            updated = updated.replace("from openai import OpenAI", "from gpucall_migration import gpucall_openai_client")
+            updated = re.sub(r"\bOpenAI\s*\(", "gpucall_openai_client(", updated)
+        if import_line not in updated and "gpucall_migration" not in updated:
+            updated = _insert_after_future_imports(updated, import_line)
+        if marker not in updated:
+            lines = updated.splitlines(keepends=True)
+            line_numbers = sorted({int(row["line"]) for row in rows if row["path"] == rel}, reverse=True)
+            for line_number in line_numbers:
+                index = max(0, min(line_number - 1, len(lines)))
+                lines.insert(index, marker + "\n")
+            updated = "".join(lines)
+        if updated != text:
+            path.write_text(updated, encoding="utf-8")
+            changed.add(rel)
+    manifest = {
+        "schema_version": 1,
+        "source": source,
+        "changed_files": sorted(changed),
+        "note": "The patch adds deterministic gpucall compatibility helpers and rewrites common Anthropic/OpenAI client constructors to route through gpucall.",
+    }
+    manifest_dir = project / ".gpucall-migration"
+    manifest_dir.mkdir(parents=True, exist_ok=True)
+    manifest_path = manifest_dir / "applied-patch.json"
+    manifest_path.write_text(json.dumps(manifest, ensure_ascii=False, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    changed.add(str(manifest_path.relative_to(project)))
+    return sorted(changed)
+
+
+def _migration_helper_text(*, source: str | None) -> str:
+    source_line = f'SOURCE = "{source}"\n' if source else 'SOURCE = None\n'
+    return (
+        "from __future__ import annotations\n\n"
+        "import os\n\n"
+        "from dataclasses import dataclass\n"
+        "from typing import Any\n\n"
+        "from openai import OpenAI\n"
+        "from gpucall_sdk import GPUCallClient\n\n"
+        f"{source_line}\n"
+        "def gpucall_client(base_url: str | None = None, api_key: str | None = None) -> GPUCallClient:\n"
+        "    return GPUCallClient(\n"
+        "        base_url or os.environ.get(\"GPUCALL_BASE_URL\", \"http://127.0.0.1:18088\"),\n"
+        "        api_key=api_key or os.environ.get(\"GPUCALL_API_KEY\"),\n"
+        "    )\n"
+        "\n\n"
+        "def gpucall_openai_client(*args: Any, **kwargs: Any) -> OpenAI:\n"
+        "    base = os.environ.get(\"GPUCALL_OPENAI_BASE_URL\") or os.environ.get(\"GPUCALL_BASE_URL\", \"http://127.0.0.1:18088\")\n"
+        "    kwargs.setdefault(\"base_url\", base.rstrip(\"/\") + \"/v1\")\n"
+        "    kwargs.setdefault(\"api_key\", os.environ.get(\"GPUCALL_API_KEY\", \"gpucall\"))\n"
+        "    return OpenAI(*args, **kwargs)\n"
+        "\n\n"
+        "@dataclass\n"
+        "class _AnthropicContent:\n"
+        "    text: str\n"
+        "\n\n"
+        "@dataclass\n"
+        "class _AnthropicMessage:\n"
+        "    content: list[_AnthropicContent]\n"
+        "\n\n"
+        "def _anthropic_prompt(messages: list[dict[str, Any]] | None) -> str:\n"
+        "    parts: list[str] = []\n"
+        "    for item in messages or []:\n"
+        "        content = item.get(\"content\") if isinstance(item, dict) else None\n"
+        "        if isinstance(content, str):\n"
+        "            parts.append(content)\n"
+        "        elif isinstance(content, list):\n"
+        "            parts.extend(str(part.get(\"text\")) for part in content if isinstance(part, dict) and part.get(\"type\") == \"text\")\n"
+        "    return \"\\n\".join(parts)\n"
+        "\n\n"
+        "class _AnthropicMessagesCompat:\n"
+        "    def create(self, *, messages: list[dict[str, Any]] | None = None, max_tokens: int | None = None, temperature: float | None = None, **_: Any) -> _AnthropicMessage:\n"
+        "        result = gpucall_client().infer(prompt=_anthropic_prompt(messages), max_tokens=max_tokens, temperature=temperature)\n"
+        "        text = str(((result.get(\"result\") or {}).get(\"value\")) or result.get(\"value\") or \"\")\n"
+        "        return _AnthropicMessage(content=[_AnthropicContent(text=text)])\n"
+        "\n\n"
+        "class AnthropicCompat:\n"
+        "    def __init__(self, *_: Any, **__: Any) -> None:\n"
+        "        self.messages = _AnthropicMessagesCompat()\n"
+        "\n\n"
+        "class AsyncAnthropicCompat(AnthropicCompat):\n"
+        "    pass\n"
+    )
+
+
+def _insert_after_future_imports(text: str, insertion: str) -> str:
+    lines = text.splitlines(keepends=True)
+    index = 0
+    if lines and lines[0].startswith("#!"):
+        index = 1
+    while index < len(lines) and (lines[index].startswith("from __future__ import") or not lines[index].strip()):
+        index += 1
+    lines.insert(index, insertion)
+    return "".join(lines)
 
 
 def _iter_source_files(root: Path):

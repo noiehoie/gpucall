@@ -1,0 +1,29 @@
+[Unit]
+Description=gpucall gateway
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=gpucall
+Group=gpucall
+EnvironmentFile=/etc/gpucall/gpucall.env
+WorkingDirectory=/opt/gpucall
+ExecStart=/usr/local/bin/gpucall serve --config-dir ${GPUCALL_CONFIG_DIR} --host ${GPUCALL_HOST} --port ${GPUCALL_PORT}
+Restart=on-failure
+RestartSec=5
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectHome=true
+ProtectSystem=strict
+ReadWritePaths=/var/lib/gpucall /var/log/gpucall /etc/gpucall
+CapabilityBoundingSet=
+LockPersonality=true
+MemoryDenyWriteExecute=true
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+RestrictNamespaces=true
+RestrictRealtime=true
+SystemCallArchitectures=native
+
+[Install]
+WantedBy=multi-user.target

@@ -53,22 +53,16 @@ Production-like runtime layout follows XDG:
 Production-supported v2.0 tasks:
 
 - Tasks: `infer`, `vision`
+- Draft control-plane recipe contracts: `transcribe`, `convert`, `train`, `fine-tune`, `split-infer`
 - Modes: `sync`, `async`, `stream`
 - Object store: S3-compatible API, including Cloudflare R2 via endpoint override
 - Deployment: Docker Compose
-- State: SQLite WAL for jobs, JSONL audit hash chain
+- State: SQLite WAL by default; Postgres job/idempotency backend with `GPUCALL_DATABASE_URL`
+- Optional deployment manifests: Helm, systemd, Postgres DDL, Prometheus alerts, Grafana dashboard
 
 Not production-supported in v2.0:
 
-- `transcribe`
-- `train` (control-plane contract exists; production provider execution is v2.1 work)
-- `convert`
-- fine-tune (control-plane contract exists; production provider execution is v2.1 work)
-- split-infer (control-plane contract exists; production split-learning execution is v2.1 work)
-- multi-file batch orchestration
-- Postgres
-- Helm/systemd packaging
-- chaos and penetration-style test suites
+- high-confidential provider live connections for TEE/sovereign execution
 
 ## Secrets
 

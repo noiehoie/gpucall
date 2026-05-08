@@ -145,6 +145,10 @@ def _next_actions(recipe: Recipe, eligible: list[Mapping[str, Any]]) -> list[str
 def _required_input_contracts(recipe: Recipe) -> set[str]:
     if recipe.task == "vision":
         return {"image", "text", "data_refs"}
+    if recipe.task == "transcribe":
+        return {"audio", "data_refs"}
+    if recipe.task == "convert":
+        return {"document", "data_refs"}
     if recipe.task in {"train", "fine-tune"}:
         return {"data_refs", "artifact_refs"}
     if recipe.task == "split-infer":

@@ -36,7 +36,7 @@ class GovernanceError(ValueError):
 
 
 class GovernanceCompiler:
-    SUPPORTED_TASKS = {"infer", "vision", "train", "fine-tune", "split-infer"}
+    SUPPORTED_TASKS = {"infer", "vision", "transcribe", "convert", "train", "fine-tune", "split-infer"}
     def __init__(
         self,
         *,
@@ -231,6 +231,16 @@ class GovernanceCompiler:
             raise GovernanceError("messages cannot be combined with inline_inputs or input_refs in v2.0")
         if recipe.task == "vision" and not _has_image_ref(request):
             raise GovernanceError("vision requires an image data_ref")
+        if recipe.task == "transcribe":
+            if not request.input_refs:
+                raise GovernanceError("transcribe requires audio data_ref inputs")
+            if request.inline_inputs or request.messages:
+                raise GovernanceError("transcribe accepts DataRef inputs only")
+        if recipe.task == "convert":
+            if not request.input_refs:
+                raise GovernanceError("convert requires document data_ref inputs")
+            if request.inline_inputs or request.messages:
+                raise GovernanceError("convert accepts DataRef inputs only")
         if recipe.task in {"train", "fine-tune"}:
             if not request.input_refs:
                 raise GovernanceError(f"{recipe.task} requires data_ref training inputs")
@@ -563,6 +573,10 @@ class GovernanceCompiler:
     @staticmethod
     def _required_input_contracts(request: TaskRequest) -> set[str]:
         required: set[str] = set()
+        if request.task == "transcribe":
+            required.update({"data_refs", "audio"})
+        if request.task == "convert":
+            required.update({"data_refs", "document"})
         if request.messages:
             required.add("chat_messages")
         if request.inline_inputs:

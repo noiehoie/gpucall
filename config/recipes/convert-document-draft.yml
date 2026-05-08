@@ -1,0 +1,23 @@
+name: convert-document-draft
+recipe_schema_version: 3
+task: convert
+intent: convert_document
+auto_select: false
+data_classification: confidential
+allowed_modes:
+- async
+- sync
+context_budget_tokens: 32768
+resource_class: standard
+latency_class: batch
+quality_floor: standard
+allowed_mime_prefixes:
+- application/
+- text/
+default_temperature: 0.0
+system_prompt: Convert the supplied document to the requested structured text representation.
+guided_decoding: true
+output_validation_attempts: 1
+required_model_capabilities:
+- document_conversion
+output_contract: plain-text
