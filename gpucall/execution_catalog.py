@@ -822,9 +822,9 @@ def _recipe_fit(resource: ResourceCatalogEntry, worker: WorkerContractSpec, reci
         return {"eligible": True, "reasons": []}
     reasons: list[str] = []
     requirements = recipe_requirements(recipe)
-    if resource.vram_gb < int(requirements.minimum_vram_gb):
+    if resource.vram_gb < requirements.minimum_vram_gb:
         reasons.append("resource vram_gb is below derived recipe requirement")
-    if resource.max_model_len < int(requirements.context_budget_tokens):
+    if resource.max_model_len < requirements.context_budget_tokens:
         reasons.append("resource max_model_len is below recipe requirement")
     recipe_modes = {mode.value if isinstance(mode, ExecutionMode) else str(mode) for mode in recipe.allowed_modes}
     worker_modes = set(worker.modes)

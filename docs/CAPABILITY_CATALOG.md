@@ -122,6 +122,7 @@ runtime observations, and derived decisions:
 - Validation evidence: redacted billable artifact summary, artifact hash,
   pass/fail counts, observed latency, and optional attestation evidence hash.
 - Tuple candidate: a derived account + surface + resource + worker + model + engine plan pinned to a snapshot id.
+  Its `tuple_ref` includes the recipe-specific `recipe_fit` view when a recipe is supplied, so it is a candidate-view id, not a stable physical resource id.
 
 Generate the current snapshot and deterministic tuple drafts:
 

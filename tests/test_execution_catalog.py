@@ -8,7 +8,13 @@ from pathlib import Path
 import pytest
 
 from gpucall.config import load_config
-from gpucall.execution_catalog import build_resource_catalog_snapshot, generate_tuple_candidates
+from gpucall.execution_catalog import (
+    ResourceCatalogEntry,
+    WorkerContractSpec,
+    _recipe_fit,
+    build_resource_catalog_snapshot,
+    generate_tuple_candidates,
+)
 
 
 def test_execution_catalog_separates_accounts_surfaces_and_workers() -> None:
@@ -111,6 +117,52 @@ def test_execution_catalog_recipe_fit_respects_worker_contracts() -> None:
     assert "worker input_contracts do not declare image support" in hyperstack.recipe_fit["reasons"]
     assert modal_vision.recipe_fit is not None
     assert modal_vision.recipe_fit["eligible"] is True
+
+
+def test_execution_catalog_recipe_fit_reports_each_rejection_dimension() -> None:
+    recipe = load_config(Path("config")).recipes["text-infer-standard"]
+    resource = ResourceCatalogEntry(
+        resource_ref="test:resource",
+        source="tuple_candidate",
+        account_ref="test",
+        tuple_name="test",
+        surface_ref="test",
+        worker_binding_ref="test",
+        adapter="local",
+        execution_surface="local_runtime",
+        gpu="T4",
+        vram_gb=24,
+        max_model_len=32768,
+        configured_price_per_second=0.0,
+        price_per_second=0.0,
+    )
+    worker = WorkerContractSpec(
+        worker_ref="test:worker",
+        source="tuple_candidate",
+        tuple_name="test",
+        worker_binding_ref="test",
+        adapter="local",
+        execution_surface="local_runtime",
+        modes=("sync",),
+        input_contracts=("text",),
+        output_contract="plain-text",
+    )
+
+    assert _recipe_fit(resource.model_copy(update={"vram_gb": 1}), worker, recipe)["reasons"] == [
+        "resource vram_gb is below derived recipe requirement"
+    ]
+    assert _recipe_fit(resource.model_copy(update={"max_model_len": 1}), worker, recipe)["reasons"] == [
+        "resource max_model_len is below recipe requirement"
+    ]
+    assert _recipe_fit(resource, worker.model_copy(update={"modes": ("batch",)}), recipe)["reasons"] == [
+        "worker modes do not intersect recipe allowed_modes"
+    ]
+    assert _recipe_fit(resource, worker.model_copy(update={"input_contracts": ("image",)}), recipe)["reasons"] == [
+        "worker input_contracts do not declare text or chat support"
+    ]
+    assert _recipe_fit(resource, worker.model_copy(update={"output_contract": "json_object"}), recipe)["reasons"] == [
+        "worker output_contract does not match recipe output_contract"
+    ]
 
 
 def test_execution_catalog_uses_live_price_and_stock_evidence() -> None:
