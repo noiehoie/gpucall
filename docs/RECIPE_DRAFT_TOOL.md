@@ -148,8 +148,8 @@ gpucall-recipe-draft quality \
   --bytes 1136521 \
   --dimension 1200x2287 \
   --observed-recipe vision-image-standard \
-  --observed-tuple modal-vision-a10g \
-  --observed-tuple-model Salesforce/blip-vqa-base \
+  --reported-tuple modal-vision-a10g \
+  --reported-tuple-model Salesforce/blip-vqa-base \
   --quality-failure-kind insufficient_ocr \
   --quality-failure-reason "short answer only; expected top headlines" \
   --remote-inbox admin@gpucall.example.internal:/srv/gpucall/state/recipe_requests/inbox \

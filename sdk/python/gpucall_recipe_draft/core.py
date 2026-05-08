@@ -6,6 +6,8 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any
 
+from gpucall_recipe_draft.recipe_intents import TASK_DEFAULT_CAPABILITIES, capabilities_for
+
 
 SENSITIVE_KEYS = {
     "api_key",
@@ -18,25 +20,6 @@ SENSITIVE_KEYS = {
     "uri",
     "url",
     "value",
-}
-
-CAPABILITY_BY_INTENT = {
-    "answer_question_about_image": ["visual_question_answering", "instruction_following"],
-    "caption_image": ["image_captioning"],
-    "understand_document_image": ["document_understanding", "visual_question_answering", "instruction_following"],
-    "transcribe_audio": ["speech_to_text"],
-    "summarize_audio": ["speech_to_text", "summarization"],
-    "summarize_video": ["video_understanding", "summarization"],
-    "translate_text": ["translation"],
-    "summarize_text": ["summarization"],
-    "extract_json": ["structured_output"],
-}
-
-TASK_DEFAULT_CAPABILITIES = {
-    "infer": ["instruction_following"],
-    "vision": ["visual_question_answering", "instruction_following"],
-    "transcribe": ["speech_to_text"],
-    "video": ["video_understanding"],
 }
 
 @dataclass(frozen=True)
@@ -333,9 +316,7 @@ def draft_from_intake(intake: Mapping[str, Any]) -> dict[str, Any]:
 
 
 def _capabilities_for(*, task: str, intent: str | None) -> list[str]:
-    if intent and intent in CAPABILITY_BY_INTENT:
-        return CAPABILITY_BY_INTENT[intent]
-    return TASK_DEFAULT_CAPABILITIES.get(task, ["instruction_following"])
+    return capabilities_for(task=task, intent=intent)
 
 
 def _quality_capability_gap(kind: str) -> str:

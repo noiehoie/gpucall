@@ -21,29 +21,11 @@ from gpucall.config import ConfigError, default_state_dir, load_config
 from gpucall.domain import ExecutionMode, ExecutionTupleSpec, Recipe, recipe_requirements
 from gpucall.execution.contracts import artifact_tuple_evidence_key, tuple_evidence_key
 from gpucall.execution.registry import adapter_descriptor, vendor_family_for_adapter
+from gpucall.recipe_intents import TASK_DEFAULT_CAPABILITIES, capabilities_for
 from gpucall.routing import tuple_route_rejection_reason
 
 
 TEXT_STOP_TOKENS = ["<|im_end|>", "<|endoftext|>"]
-
-CAPABILITY_BY_INTENT = {
-    "answer_question_about_image": ["visual_question_answering", "instruction_following"],
-    "caption_image": ["image_captioning"],
-    "understand_document_image": ["document_understanding", "visual_question_answering", "instruction_following"],
-    "transcribe_audio": ["speech_to_text"],
-    "summarize_audio": ["speech_to_text", "summarization"],
-    "summarize_video": ["video_understanding", "summarization"],
-    "translate_text": ["translation"],
-    "summarize_text": ["summarization"],
-    "extract_json": ["structured_output"],
-}
-
-TASK_DEFAULT_CAPABILITIES = {
-    "infer": ["instruction_following"],
-    "vision": ["visual_question_answering", "instruction_following"],
-    "transcribe": ["speech_to_text"],
-    "video": ["video_understanding"],
-}
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -952,7 +934,7 @@ def tuple_contract_requirements(artifact: Mapping[str, Any], recipe: Recipe) -> 
     sanitized = _mapping(artifact.get("sanitized_request"))
     desired_capabilities = sanitized.get("desired_capabilities")
     if not isinstance(desired_capabilities, list) or not desired_capabilities:
-        desired_capabilities = CAPABILITY_BY_INTENT.get(str(sanitized.get("intent") or ""), TASK_DEFAULT_CAPABILITIES.get(recipe.task, []))
+        desired_capabilities = capabilities_for(task=recipe.task, intent=str(sanitized.get("intent") or "") or None)
     quality_feedback = _mapping(sanitized.get("quality_feedback"))
     requirements: dict[str, Any] = {
         "task": recipe.task,
@@ -990,7 +972,7 @@ def tuple_contract_requirements(artifact: Mapping[str, Any], recipe: Recipe) -> 
 
 def _endpoint_contract_for(recipe: Recipe) -> str:
     if recipe.task == "vision":
-        return "modal-function-or-official-vlm-endpoint"
+        return "serverless-function-or-official-vlm-endpoint"
     return "official-chat-completions-or-gpucall-tuple-result"
 
 
@@ -1214,7 +1196,7 @@ def _proposed_recipe_from_sanitized(sanitized: Mapping[str, Any]) -> dict[str, A
     intent = str(sanitized.get("intent") or task)
     capabilities = sanitized.get("desired_capabilities")
     if not isinstance(capabilities, list) or not capabilities:
-        capabilities = CAPABILITY_BY_INTENT.get(intent) or TASK_DEFAULT_CAPABILITIES.get(task, ["instruction_following"])
+        capabilities = capabilities_for(task=task, intent=intent)
     context_budget_tokens = _round_context_budget(_context_budget_from_context(_mapping(_mapping(sanitized.get("error")).get("context"))))
     return {
         "name": _recipe_name(task, intent),

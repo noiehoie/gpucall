@@ -108,6 +108,7 @@ def merge_price_evidence(*items: Mapping[str, Mapping[str, Any]] | None) -> dict
                 }
                 continue
             current["checked"] = bool(current.get("checked")) or bool(row.get("checked"))
+            # A blocked live observation wins over cached price success; budget and routing gates fail closed.
             if row.get("status") == "blocked" or current.get("status") == "blocked":
                 current["status"] = "blocked"
             elif row.get("status") == "live_revalidated":

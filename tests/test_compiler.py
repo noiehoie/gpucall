@@ -1,13 +1,13 @@
 from __future__ import annotations
 
+from datetime import datetime, timedelta, timezone
+
 import pytest
 
 from gpucall.compiler import GovernanceCompiler, GovernanceError
-from datetime import datetime, timedelta, timezone
-
 from gpucall.domain import CostPolicy, DataRef, ExecutionMode, Policy, TuplePolicy, ExecutionTupleSpec, Recipe, TaskRequest
-from gpucall.registry import ObservedRegistry
 from gpucall.domain import TupleObservation
+from gpucall.registry import ObservedRegistry
 
 
 def build_compiler() -> GovernanceCompiler:
@@ -536,6 +536,74 @@ def test_strict_budget_accepts_fresh_configured_price() -> None:
     plan = compiler.compile(request)
 
     assert plan.attestations["cost_estimate"]["price_freshness"] == "fresh"
+
+
+def test_strict_budget_rejects_stale_configured_price() -> None:
+    compiler = build_compiler()
+    compiler.policy = compiler.policy.model_copy(
+        update={"cost_policy": CostPolicy(max_estimated_cost_usd=1.0, require_fresh_price_for_budget=True)}
+    )
+    stale = {
+        "configured_price_source": "test-price-sheet",
+        "configured_price_observed_at": (datetime.now(timezone.utc) - timedelta(days=2)).isoformat(),
+        "configured_price_ttl_seconds": 3600,
+    }
+    compiler.tuples = {name: tuple.model_copy(update=stale) for name, tuple in compiler.tuples.items()}
+    request = TaskRequest(task="infer", mode="sync", recipe="r1")
+
+    with pytest.raises(GovernanceError) as exc:
+        compiler.compile(request)
+
+    assert "tuple price is stale" in exc.value.context["tuple_rejections"]["p1"]
+
+
+def test_compiler_routes_with_v3_recipe_resource_class_requirements() -> None:
+    policy = Policy(
+        version="test",
+        inline_bytes_limit=10,
+        default_lease_ttl_seconds=30,
+        max_lease_ttl_seconds=120,
+        max_timeout_seconds=120,
+        tuples=TuplePolicy(allow=["small", "large"], deny=[]),
+    )
+    recipe = Recipe(
+        name="large-v3",
+        task="infer",
+        recipe_schema_version=3,
+        resource_class="large",
+        context_budget_tokens=65536,
+        allowed_modes=[ExecutionMode.SYNC],
+        token_estimation_profile="qwen",
+    )
+    tuples = {
+        "small": ExecutionTupleSpec(
+            name="small",
+            adapter="modal",
+            gpu="A10G",
+            vram_gb=24,
+            max_model_len=65536,
+            cost_per_second=0.001,
+            modes=[ExecutionMode.SYNC],
+            target="app:small",
+            model="small-model",
+        ),
+        "large": ExecutionTupleSpec(
+            name="large",
+            adapter="modal",
+            gpu="H100",
+            vram_gb=80,
+            max_model_len=65536,
+            cost_per_second=0.002,
+            modes=[ExecutionMode.SYNC],
+            target="app:large",
+            model="large-model",
+        ),
+    }
+    compiler = GovernanceCompiler(policy=policy, recipes={"large-v3": recipe}, tuples=tuples, registry=ObservedRegistry())
+
+    plan = compiler.compile(TaskRequest(task="infer", mode="sync", recipe="large-v3"))
+
+    assert plan.tuple_chain == ["large"]
 
 
 def test_standing_tuple_cost_counts_toward_budget_guard() -> None:
