@@ -6,6 +6,7 @@ data_classification: confidential
 allowed_modes:
 - sync
 - async
+- stream
 context_budget_tokens: 8192
 resource_class: light
 latency_class: interactive

@@ -4,6 +4,7 @@ from __future__ import annotations
 from typing import Any
 
 from gpucall.domain import TupleError
+from gpucall.live_catalog import live_error, live_info, price_per_second_from_mapping
 
 RUNPOD_API_BASE = "https://api.runpod.ai/v2"
 
@@ -30,6 +31,95 @@ def json_or_error(response: Any, message: str) -> dict[str, Any]:
         retryable=retryable,
         status_code=502 if response.status_code >= 500 else response.status_code,
     )
+
+
+def runpod_endpoint_catalog_findings(tuples: list[Any], credentials: dict[str, dict[str, str]]) -> list[dict[str, Any]]:
+    api_key = credentials.get("runpod", {}).get("api_key")
+    findings: list[dict[str, Any]] = []
+    for tuple in tuples:
+        if not api_key:
+            findings.append(live_error(tuple, dimension="credential", reason="missing RunPod API key; cannot verify endpoint health"))
+            continue
+        if not tuple.target:
+            findings.append(live_error(tuple, dimension="endpoint", field="target", reason="RunPod endpoint target is not configured"))
+            continue
+        base_url = str(tuple.endpoint or RUNPOD_API_BASE).rstrip("/")
+        try:
+            response = requests_session().get(
+                f"{base_url}/{tuple.target}/health",
+                headers={"authorization": f"Bearer {api_key}", "accept": "application/json"},
+                timeout=10,
+            )
+            if response.status_code not in {200, 201, 202}:
+                findings.append(
+                    live_error(
+                        tuple,
+                        dimension="endpoint",
+                        field="target",
+                        reason=f"RunPod endpoint health check did not return success: {response.status_code}",
+                    )
+                )
+            else:
+                health = response.json() if hasattr(response, "json") else {}
+                stock_state = "unavailable" if runpod_vllm_health_rejection_reason(health) else "available"
+                findings.append(
+                    live_info(
+                        tuple,
+                        dimension="stock",
+                        source=f"{base_url}/{tuple.target}/health",
+                        live_stock_state=stock_state,
+                        raw={"workers": health.get("workers")} if isinstance(health, dict) else {},
+                    )
+                )
+        except Exception as exc:
+            findings.append(
+                live_error(tuple, dimension="endpoint", field="target", reason=f"RunPod endpoint health lookup failed: {exc}")
+            )
+            continue
+        price = _runpod_endpoint_live_price(tuple, api_key, base_url)
+        if price is not None:
+            findings.append(
+                live_info(
+                    tuple,
+                    dimension="price",
+                    source=price["source"],
+                    live_price_per_second=price["price_per_second"],
+                    raw=price["raw"],
+                )
+            )
+    return findings
+
+
+def _runpod_endpoint_live_price(tuple: Any, api_key: str, base_url: str) -> dict[str, Any] | None:
+    try:
+        response = requests_session().get(
+            f"{base_url}/endpoints",
+            params={"includeWorkers": "true", "includeTemplate": "true"},
+            headers={"authorization": f"Bearer {api_key}", "accept": "application/json"},
+            timeout=10,
+        )
+        if response.status_code not in {200, 201, 202}:
+            return None
+        payload = response.json()
+        rows = payload.get("endpoints") or payload.get("data") or payload
+        if not isinstance(rows, list):
+            return None
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            if str(row.get("id") or row.get("endpointId") or row.get("name") or "") != str(tuple.target):
+                continue
+            price, field = price_per_second_from_mapping(row)
+            if price is None:
+                return None
+            return {
+                "price_per_second": price,
+                "source": f"{base_url}/endpoints:{field}",
+                "raw": {"field": field, "gpuTypeIds": row.get("gpuTypeIds"), "computeType": row.get("computeType")},
+            }
+    except Exception:
+        return None
+    return None
 
 
 import asyncio
@@ -222,6 +312,7 @@ def runpod_vllm_config_findings(tuple: Any) -> list[str]:
         output_contract="openai-chat-completions",
         required_auto_fields={"target": "RunPod endpoint target is not configured"},
         config_validator=runpod_vllm_config_findings,
+        catalog_validator=runpod_endpoint_catalog_findings,
         official_sources=(
             "https://docs.runpod.io/serverless/vllm/openai-compatibility",
             "https://docs.runpod.io/serverless/endpoints/send-requests",
@@ -399,6 +490,7 @@ class RunpodServerlessAdapter(TupleAdapter):
             "contract is custom and must not be treated as the official worker-vLLM production route"
         ),
         required_auto_fields={"target": "RunPod endpoint target is not configured"},
+        catalog_validator=runpod_endpoint_catalog_findings,
         official_sources=(
             "https://docs.runpod.io/serverless/endpoints/send-requests",
             "https://docs.runpod.io/serverless/references/operations",

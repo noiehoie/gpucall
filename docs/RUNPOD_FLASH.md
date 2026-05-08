@@ -72,7 +72,7 @@ output_contract: gpucall-tuple-result
 model: Qwen/Qwen2.5-1.5B-Instruct
 ```
 
-`model:` is the production-readiness declaration for the stable worker-vLLM path. `runpod-vllm-flashboot` remains explicitly non-production-eligible until billable Flash SDK validation artifacts are present, because its contract is `runpod-flash-sdk`, not RunPod's OpenAI-compatible worker-vLLM route.
+`runpod-vllm-flashboot` is production-capable only through the normal tuple evidence gate. It must declare a configured Flash endpoint target, pass billable Flash SDK validation, and produce a current validation artifact for the exact tuple evidence key before launch checks treat it as production-ready.
 
 ## FlashBoot Promotion Gate
 

@@ -101,6 +101,19 @@ The static report lists configured billing metadata and missing fields. The live
 report queries Modal billing/app state, RunPod endpoint health, and Hyperstack
 VM inventory when credentials and provider tools are available.
 
+For startup-time live catalog gating, set `GPUCALL_LIVE_CATALOG_ON_STARTUP=1`.
+Tuples blocked by live catalog evidence are opened in the observed registry
+before routing, so a workload that normally used an unavailable VM tuple can
+deterministically fall through to another eligible production tuple such as a
+managed endpoint.
+
+Live catalog evidence is not free-form text. It is reduced to deterministic
+observations: price, stock, endpoint, credential, and contract. Unavailable stock
+blocks the tuple for routing. A live price overrides configured
+`cost_per_second` only when the provider observation contains a parseable
+per-second or hourly price; otherwise the configured price remains the routing
+price.
+
 ## Caller Notification
 
 When a request routes to a remote worker, the API returns:

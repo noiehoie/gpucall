@@ -47,8 +47,9 @@ Implications for gpucall:
 - `runpod-vllm-serverless` can be production-eligible only for the exact endpoint,
   model, worker image/env, input contracts, and recipe tuple that passed billable
   validation.
-- `runpod-vllm-flashboot` remains non-production unless its official SDK contract,
-  resource lifecycle, cleanup, timeout, and cost behavior pass billable validation.
+- `runpod-vllm-flashboot` is eligible for production promotion only when its
+  official SDK contract, resource lifecycle, cleanup, timeout, and cost behavior
+  pass billable validation for the exact tuple evidence key.
 - `doctor` and `launch-check` should surface endpoint health and worker-vLLM
   deployment-contract gaps separately from router/compiler gaps.
 

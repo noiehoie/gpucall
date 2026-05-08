@@ -97,7 +97,8 @@ def test_provider_contract_modules_are_separated_and_sourced() -> None:
     assert flashboot is not None
     assert flashboot.endpoint_contract == "runpod-flash-sdk"
     assert flashboot.output_contract == "gpucall-tuple-result"
-    assert flashboot.production_eligible is False
+    assert flashboot.production_eligible is True
+    assert flashboot.required_auto_fields["target"] == "RunPod endpoint target is not configured"
 
     for adapter in ("azure-compute-vm", "gcp-confidential-space-vm", "scaleway-instance", "ovhcloud-public-cloud-instance"):
         descriptor = adapter_descriptor(adapter)
@@ -456,7 +457,8 @@ def test_runpod_flashboot_declares_non_openai_contract() -> None:
     assert descriptor is not None
     assert descriptor.endpoint_contract == "runpod-flash-sdk"
     assert descriptor.output_contract == "gpucall-tuple-result"
-    assert descriptor.production_eligible is False
+    assert descriptor.production_eligible is True
+    assert descriptor.required_auto_fields["target"] == "RunPod endpoint target is not configured"
 
 
 async def test_runpod_vllm_official_route_uses_openai_chat_route(monkeypatch) -> None:

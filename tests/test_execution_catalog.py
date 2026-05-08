@@ -50,6 +50,42 @@ def test_execution_catalog_generates_snapshot_pinned_tuple_candidates() -> None:
     assert all(candidate.recipe_fit is not None for candidate in candidates)
 
 
+def test_execution_catalog_uses_live_price_and_stock_evidence() -> None:
+    config = load_config(Path("config"))
+    snapshot = build_resource_catalog_snapshot(
+        config,
+        config_dir=Path("config"),
+        live_catalog_evidence={
+            "modal-a10g": {
+                "status": "live_revalidated",
+                "checked": True,
+                "findings": [
+                    {
+                        "tuple": "modal-a10g",
+                        "severity": "info",
+                        "dimension": "price",
+                        "live_price_per_second": 0.00031,
+                        "live_price_source": "test-live-price",
+                    },
+                    {
+                        "tuple": "modal-a10g",
+                        "severity": "info",
+                        "dimension": "stock",
+                        "live_stock_state": "available",
+                    },
+                ],
+            }
+        },
+    )
+    candidates = generate_tuple_candidates(snapshot, recipe=config.recipes["text-infer-standard"])
+    modal = next(item for item in candidates if item.tuple_name == "modal-a10g")
+
+    assert modal.configured_price_per_second == 0.00035
+    assert modal.price_per_second == 0.00031
+    assert modal.live_price_per_second == 0.00031
+    assert modal.live_stock_state == "available"
+
+
 def test_execution_catalog_cli_outputs_candidates() -> None:
     result = subprocess.run(
         [

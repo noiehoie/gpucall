@@ -5,6 +5,7 @@ import hashlib
 import io
 import json
 import sys
+import threading
 import types
 from typing import Any, Iterator
 from urllib.parse import urlparse
@@ -295,6 +296,7 @@ if modal is not None:
     _TOP_LEVEL_LLM: Any = None
     _TOP_LEVEL_LOADED_ID: str | None = None
     _TOP_LEVEL_VISION: tuple[Any, Any, str] | None = None
+    _STREAMING_MODELS: dict[str, tuple[Any, Any]] = {}
 
     def _load_top_level_llm(
         model_id: str,
@@ -370,6 +372,94 @@ if modal is not None:
         if guided is not None:
             kwargs["guided_decoding"] = guided
         return SamplingParams(**kwargs)
+
+    def _streaming_generate_kwargs(payload: dict[str, Any]) -> dict[str, Any]:
+        kwargs: dict[str, Any] = {
+            "max_new_tokens": int(payload.get("max_tokens") or os.getenv("GPUCALL_MODAL_MAX_TOKENS", "128")),
+            "do_sample": bool(float(payload["temperature"])) if payload.get("temperature") is not None else False,
+        }
+        if payload.get("temperature") is not None:
+            kwargs["temperature"] = float(payload["temperature"])
+        if payload.get("repetition_penalty") is not None:
+            kwargs["repetition_penalty"] = float(payload["repetition_penalty"])
+        if payload.get("stop_tokens"):
+            # TextIteratorStreamer emits token text; stop handling is kept at
+            # the generator boundary so callers receive only contract text.
+            kwargs["_gpucall_stop_tokens"] = [str(item) for item in payload.get("stop_tokens") or []]
+        return kwargs
+
+    def _load_streaming_model(model_id: str) -> tuple[Any, Any]:
+        global _STREAMING_MODELS
+        if model_id not in _ALLOWED_MODELS:
+            raise ValueError(f"model {model_id} is not allowed")
+        cached = _STREAMING_MODELS.get(model_id)
+        if cached is not None:
+            return cached
+        import torch
+        from transformers import AutoModelForCausalLM, AutoTokenizer
+
+        tokenizer = AutoTokenizer.from_pretrained(model_id, trust_remote_code=True)
+        model = AutoModelForCausalLM.from_pretrained(
+            model_id,
+            torch_dtype=torch.float16 if torch.cuda.is_available() else torch.float32,
+            device_map="auto",
+            trust_remote_code=True,
+        )
+        _STREAMING_MODELS = {model_id: (tokenizer, model)}
+        return tokenizer, model
+
+    def _stream_text(payload: dict[str, Any], model: str | None, max_model_len: int) -> Iterator[str]:
+        artifact_result = _execute_artifact_workload(payload)
+        if artifact_result is not None:
+            yield json.dumps(artifact_result.get("artifact_manifest") or artifact_result, sort_keys=True, separators=(",", ":"))
+            return
+        if payload.get("task") == "vision":
+            yield _generate_vision_text(payload, model)
+            return
+        requested_model = model or os.getenv("GPUCALL_MODAL_VLLM_MODEL", "facebook/opt-125m")
+        tokenizer, model_obj = _load_streaming_model(requested_model)
+        prompt = _format_prompt_for_model(types.SimpleNamespace(tokenizer=tokenizer), requested_model, payload)
+        inputs = tokenizer(prompt, return_tensors="pt", truncation=True, max_length=_bounded_model_len(requested_model, max_model_len))
+        try:
+            device = next(model_obj.parameters()).device
+            inputs = {key: value.to(device) for key, value in inputs.items()}
+        except Exception:
+            pass
+        from transformers import TextIteratorStreamer
+
+        streamer = TextIteratorStreamer(tokenizer, skip_prompt=True, skip_special_tokens=True, timeout=1.0)
+        kwargs = _streaming_generate_kwargs(payload)
+        stop_tokens = kwargs.pop("_gpucall_stop_tokens", [])
+        errors: list[BaseException] = []
+
+        def _generate() -> None:
+            try:
+                model_obj.generate(**inputs, **kwargs, streamer=streamer)
+            except BaseException as exc:
+                errors.append(exc)
+                end = getattr(streamer, "end", None)
+                if callable(end):
+                    end()
+
+        thread = threading.Thread(target=_generate, daemon=True)
+        thread.start()
+        buffer = ""
+        for chunk in streamer:
+            if errors:
+                raise errors[0]
+            if not chunk:
+                continue
+            buffer += str(chunk)
+            stop_at = min((buffer.find(token) for token in stop_tokens if token in buffer), default=-1)
+            if stop_at >= 0:
+                tail = buffer[:stop_at]
+                if tail:
+                    yield tail
+                break
+            yield str(chunk)
+        thread.join(timeout=1.0)
+        if errors:
+            raise errors[0]
 
     def _is_structured_response(response_format: dict[str, Any]) -> bool:
         return response_format.get("type") in {"json_object", "json_schema"}
@@ -592,7 +682,8 @@ if modal is not None:
         min_containers=_env_int("GPUCALL_MODAL_A10G_MIN_CONTAINERS", 0),
     )
     def stream_inference_on_modal(payload: dict[str, Any], workload: str = "infer", **kwargs) -> Iterator[str]:
-        raise RuntimeError("Modal true streaming is not implemented in gpucall v2.0")
+        payload = {**payload, "task": workload or payload.get("task")}
+        yield from _stream_text(payload, kwargs.get("model"), kwargs.get("max_model_len") or 32768)
 
     class VllmWorkerBase:
         _llm: Any = None
@@ -665,7 +756,7 @@ if modal is not None:
             return outputs[0].outputs[0].text.strip()
 
         def _stream(self, payload: dict[str, Any], model: str | None, max_model_len: int) -> Iterator[str]:
-            raise RuntimeError("Modal true streaming is not implemented in gpucall v2.0")
+            yield from _stream_text(payload, model, max_model_len)
 
     @app.cls(image=_VLLM_IMAGE, gpu="T4", timeout=1800, scaledown_window=60)
     class VllmWorkerT4(VllmWorkerBase):

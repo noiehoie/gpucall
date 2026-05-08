@@ -37,7 +37,7 @@ from gpucall.execution.contracts import (
 )
 from gpucall.lease_reaper import active_manifest_leases, lease_reaper_report
 from gpucall.tuple_audit import tuple_audit_report
-from gpucall.tuple_catalog import live_tuple_catalog_findings
+from gpucall.tuple_catalog import live_tuple_catalog_evidence, live_tuple_catalog_findings
 from gpucall.execution.registry import adapter_descriptor, vendor_family_for_adapter
 from gpucall.registry import ObservedRegistry
 from gpucall.audit import AuditTrail
@@ -99,6 +99,7 @@ def main() -> None:
     execution_catalog.add_argument("action", choices=["snapshot", "candidates"])
     execution_catalog.add_argument("--config-dir", type=Path, default=default_config_dir())
     execution_catalog.add_argument("--recipe", default=None)
+    execution_catalog.add_argument("--live", action="store_true", help="revalidate active tuple catalog metadata with live provider catalogs")
     audit = sub.add_parser("audit")
     audit.add_argument("action", choices=["verify", "tail", "rotate"])
     audit.add_argument("--limit", type=int, default=20)
@@ -228,7 +229,7 @@ def main() -> None:
     elif args.command == "catalog":
         catalog_command(args.action, args.config_dir, args.db)
     elif args.command == "execution-catalog":
-        execution_catalog_command(args.action, args.config_dir, recipe=args.recipe)
+        execution_catalog_command(args.action, args.config_dir, recipe=args.recipe, live=args.live)
     elif args.command == "security":
         security_command(args.action, args.config_dir)
     elif args.command == "openapi":
@@ -877,9 +878,10 @@ def catalog_command(action: str, config_dir: Path, db: Path | None) -> None:
     print(dumps_snapshot(catalog.snapshot()), end="")
 
 
-def execution_catalog_command(action: str, config_dir: Path, *, recipe: str | None = None) -> None:
+def execution_catalog_command(action: str, config_dir: Path, *, recipe: str | None = None, live: bool = False) -> None:
     config = load_config(config_dir)
-    snapshot = build_resource_catalog_snapshot(config, config_dir=config_dir)
+    evidence = live_tuple_catalog_evidence(config.tuples, load_credentials()) if live else None
+    snapshot = build_resource_catalog_snapshot(config, config_dir=config_dir, live_catalog_evidence=evidence)
     if action == "snapshot":
         print(dumps_execution_snapshot(snapshot), end="")
         return

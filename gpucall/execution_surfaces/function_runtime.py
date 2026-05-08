@@ -17,6 +17,7 @@ from gpucall.execution_surfaces.managed_endpoint import RUNPOD_API_BASE, json_or
 from gpucall.execution.base import TupleAdapter, RemoteHandle
 from gpucall.execution.payloads import plan_payload, plain_text_result
 from gpucall.execution.registry import TupleAdapterDescriptor, register_adapter
+from gpucall.live_catalog import live_error, live_info, price_per_second_from_hourly_text
 
 _ephemeral_run_lock = threading.Lock()
 
@@ -306,14 +307,76 @@ def modal_config_findings(tuple: Any) -> list[str]:
     return findings
 
 
+def modal_catalog_findings(tuples: list[Any], credentials: dict[str, dict[str, str]]) -> list[dict[str, Any]]:
+    del credentials
+    findings: list[dict[str, Any]] = []
+    try:
+        modal = _import_modal()
+    except TupleError as exc:
+        return [live_error(tuple, dimension="credential", reason=str(exc)) for tuple in tuples]
+    for tuple in tuples:
+        tuple_errors = 0
+        for field, target in (("target", tuple.target), ("stream_target", tuple.stream_target)):
+            if field == "stream_target" and str(tuple.stream_contract or "none") == "none":
+                continue
+            app_name, function_name = _split_modal_target(target)
+            if not app_name or not function_name:
+                findings.append(live_error(tuple, dimension="endpoint", field=field, reason="Modal function target is not configured"))
+                tuple_errors += 1
+                continue
+            try:
+                fn = modal.Function.from_name(app_name, function_name)
+                hydrate = getattr(fn, "hydrate", None)
+                if callable(hydrate):
+                    hydrate()
+            except Exception as exc:
+                findings.append(live_error(tuple, dimension="endpoint", field=field, reason=f"Modal deployed function lookup failed: {exc}"))
+                tuple_errors += 1
+        price = _modal_live_price(tuple)
+        if price is not None:
+            findings.append(live_info(tuple, dimension="price", source=price["source"], live_price_per_second=price["price_per_second"]))
+        if tuple.target and tuple_errors == 0:
+            findings.append(live_info(tuple, dimension="stock", source="modal.Function.from_name", live_stock_state="available"))
+    return findings
+
+
+def _modal_live_price(tuple: Any) -> dict[str, Any] | None:
+    try:
+        import requests
+
+        text = requests.get("https://modal.com/pricing", timeout=10).text
+    except Exception:
+        return None
+    gpu = str(getattr(tuple, "gpu", "") or "")
+    patterns = [re_escape for re_escape in _modal_gpu_label_patterns(gpu)]
+    price = price_per_second_from_hourly_text(text, patterns)
+    if price is None:
+        return None
+    return {"price_per_second": price, "source": "https://modal.com/pricing"}
+
+
+def _modal_gpu_label_patterns(gpu: str) -> list[str]:
+    compact = gpu.upper().replace(":", " ").replace("-", " ")
+    labels = [compact]
+    if "A10G" in compact:
+        labels.extend(["A10G", "NVIDIA A10G"])
+    if "H100" in compact:
+        labels.extend(["H100", "NVIDIA H100"])
+    if "H200" in compact:
+        labels.extend(["H200", "NVIDIA H200"])
+    return [label.replace(" ", r"\s+") for label in labels]
+
+
 @register_adapter(
     "modal",
     descriptor=TupleAdapterDescriptor(
         endpoint_contract="modal-function",
         output_contract="plain-text",
+        stream_contract=None,
         required_auto_fields={"target": "Modal function target is not configured"},
         stream_required_fields={"stream_target": "modal stream mode requires explicit stream_target"},
         config_validator=modal_config_findings,
+        catalog_validator=modal_catalog_findings,
         official_sources=(
             "https://modal.com/docs/reference/modal.Function#from_name",
             "https://modal.com/docs/reference/modal.Function#remote",
@@ -525,10 +588,11 @@ def runpod_flash_cleanup_resource_sync(resource_id: str, resource_name: str | No
     descriptor=TupleAdapterDescriptor(
         endpoint_contract="runpod-flash-sdk",
         output_contract="gpucall-tuple-result",
-        production_eligible=False,
-        production_rejection_reason="RunPod FlashBoot uses the runpod-flash SDK path and is not the official worker-vLLM OpenAI endpoint",
         required_auto_fields={"target": "RunPod endpoint target is not configured"},
-        official_sources=("https://docs.runpod.io/serverless/endpoints/send-requests",),
+        official_sources=(
+            "https://docs.runpod.io/serverless/endpoints/send-requests",
+            "https://github.com/runpod/runpod-python",
+        ),
     ),
 )
 def build_runpod_vllm_flashboot_adapter(spec, credentials):

@@ -118,11 +118,26 @@ Generate the current snapshot and deterministic tuple drafts:
 ```bash
 gpucall execution-catalog snapshot --config-dir config
 gpucall execution-catalog candidates --config-dir config --recipe text-infer-standard
+gpucall execution-catalog snapshot --config-dir config --live
+gpucall execution-catalog candidates --config-dir config --recipe text-infer-standard --live
 ```
 
 The snapshot is a candidate-selection cache, not live truth. Production execution
 still requires endpoint/lifecycle configuration, policy checks, billable live
 validation for the exact tuple, and cleanup guarantees.
+
+With `--live`, active tuples are revalidated against provider catalog APIs where
+gpucall has an official validator. Snapshot rows and generated candidates carry
+`live_catalog_status` so routing governance can distinguish a merely configured
+tuple from a tuple blocked by today's catalog or stock evidence.
+
+Live catalog processing is deterministic. Provider probes may fetch official
+API/page data, but they only emit typed observations: `contract`, `endpoint`,
+`credential`, `stock`, and `price`. The execution catalog then normalizes those
+observations into `live_stock_state`, `configured_price_per_second`,
+`live_price_per_second`, and the effective `price_per_second`. If live price is
+unavailable, gpucall keeps the configured price and marks the live field null
+instead of guessing.
 
 ## Execution Tuple Audit
 

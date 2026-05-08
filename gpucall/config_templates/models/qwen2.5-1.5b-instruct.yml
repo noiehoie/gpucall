@@ -15,7 +15,7 @@ input_contracts: [text, chat_messages, data_refs]
 output_contracts: [plain-text, json_object]
 supports_vision: false
 supports_guided_decoding: true
-supports_streaming: false
+supports_streaming: true
 source: configured
 evidence: []
-production_ready: false
+production_ready: true

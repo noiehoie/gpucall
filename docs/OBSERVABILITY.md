@@ -23,6 +23,6 @@ Dashboard panels:
 - Job state counts from `gpucall jobs`.
 - Object store ready status.
 
-Cost values in the registry are estimates derived from configured `cost_per_second` and observed runtime. They are routing signals, not provider invoices. Reconcile them with provider billing dashboards during live validation and post-launch review.
+Cost values in the registry are estimates derived from configured `cost_per_second`, live catalog price observations when available, and observed runtime. They are routing signals, not provider invoices. Reconcile them with provider billing dashboards during live validation and post-launch review.
 
 Async jobs are durable for status/result storage, but in-flight execution is process-bound in v2.0. On gateway restart, pending/running jobs are expired rather than replayed with persisted input payloads.

@@ -40,8 +40,15 @@ class ResourceCatalogEntry(BaseModel):
     max_model_len: int
     region: str | None = None
     zone: str | None = None
+    configured_price_per_second: float
     price_per_second: float
+    live_price_per_second: float | None = None
+    live_price_source: str | None = None
     stock_state: Literal["configured", "candidate", "unknown"] = "unknown"
+    live_stock_state: Literal["available", "unavailable", "unknown"] = "unknown"
+    live_catalog_status: Literal["not_checked", "unknown", "live_revalidated", "blocked"] = "not_checked"
+    live_catalog_checked: bool = False
+    live_catalog_findings: list[dict[str, Any]] = Field(default_factory=list)
 
 
 class WorkerContractSpec(BaseModel):
@@ -91,21 +98,30 @@ class TupleCandidate(BaseModel):
     gpu: str
     vram_gb: int
     max_model_len: int
+    configured_price_per_second: float
     price_per_second: float
+    live_price_per_second: float | None = None
+    live_stock_state: Literal["available", "unavailable", "unknown"] = "unknown"
     model_ref: str | None = None
     engine_ref: str | None = None
     modes: list[str] = Field(default_factory=list)
     production_state: Literal["production_configured", "candidate_draft"] = "candidate_draft"
+    live_catalog_status: Literal["not_checked", "unknown", "live_revalidated", "blocked"] = "not_checked"
     snapshot_pinned: bool = True
     recipe_fit: dict[str, Any] | None = None
 
 
-def build_resource_catalog_snapshot(config: GpucallConfig, *, config_dir: Path | None = None) -> ResourceCatalogSnapshot:
+def build_resource_catalog_snapshot(
+    config: GpucallConfig,
+    *,
+    config_dir: Path | None = None,
+    live_catalog_evidence: Mapping[str, Mapping[str, Any]] | None = None,
+) -> ResourceCatalogSnapshot:
     rows = [_active_tuple_payload(tuple) for tuple in sorted(config.tuples.values(), key=lambda item: item.name)]
     if config_dir is not None:
         rows.extend(_candidate_payloads(config_dir))
     accounts = _accounts_for(rows)
-    resources = [_resource_entry(row) for row in rows]
+    resources = [_resource_entry(row, live_catalog_evidence=live_catalog_evidence) for row in rows]
     workers = [_worker_contract(row) for row in rows]
     config_hash = _config_hash(config=config, candidate_rows=rows)
     content = {
@@ -147,7 +163,11 @@ def generate_tuple_candidates(snapshot: ResourceCatalogSnapshot, *, recipe: Reci
             "gpu": resource.gpu,
             "vram_gb": resource.vram_gb,
             "max_model_len": resource.max_model_len,
+            "configured_price_per_second": resource.configured_price_per_second,
             "price_per_second": resource.price_per_second,
+            "live_price_per_second": resource.live_price_per_second,
+            "live_stock_state": resource.live_stock_state,
+            "live_catalog_status": resource.live_catalog_status,
             "model_ref": worker.model_ref,
             "engine_ref": worker.engine_ref,
             "modes": worker.modes,
@@ -195,10 +215,18 @@ def _accounts_for(rows: list[Mapping[str, Any]]) -> list[ProviderAccountSpec]:
     return [accounts[key] for key in sorted(accounts)]
 
 
-def _resource_entry(row: Mapping[str, Any]) -> ResourceCatalogEntry:
+def _resource_entry(row: Mapping[str, Any], *, live_catalog_evidence: Mapping[str, Mapping[str, Any]] | None = None) -> ResourceCatalogEntry:
     source = "tuple_candidate" if row.get("source") == "tuple_candidate" else "active_tuple"
     name = str(row.get("name") or "")
     adapter = str(row.get("adapter") or "")
+    evidence = dict((live_catalog_evidence or {}).get(name) or {})
+    status = str(evidence.get("status") or ("not_checked" if live_catalog_evidence is None else "unknown"))
+    if status not in {"not_checked", "unknown", "live_revalidated", "blocked"}:
+        status = "unknown"
+    findings = [dict(item) for item in evidence.get("findings") or [] if isinstance(item, Mapping)]
+    configured_price = float(row.get("cost_per_second") or 0.0)
+    live_price, live_price_source = _live_price(findings)
+    live_stock = _live_stock(findings)
     return ResourceCatalogEntry(
         resource_ref=f"{source}:{name}:resource",
         source=source,
@@ -213,8 +241,15 @@ def _resource_entry(row: Mapping[str, Any]) -> ResourceCatalogEntry:
         max_model_len=_positive_int(row.get("max_model_len"), default=1),
         region=str(row.get("region") or "") or None,
         zone=str(row.get("zone") or "") or None,
-        price_per_second=float(row.get("cost_per_second") or 0.0),
+        configured_price_per_second=configured_price,
+        price_per_second=live_price if live_price is not None else configured_price,
+        live_price_per_second=live_price,
+        live_price_source=live_price_source,
         stock_state="candidate" if source == "tuple_candidate" else "configured",
+        live_stock_state=live_stock,
+        live_catalog_status=status,
+        live_catalog_checked=bool(evidence.get("checked")),
+        live_catalog_findings=findings,
     )
 
 
@@ -285,6 +320,26 @@ def _account_ref(row: Mapping[str, Any]) -> str:
 
 def _provider_family(adapter: str) -> str:
     return vendor_family_for_adapter(adapter)
+
+
+def _live_price(findings: list[dict[str, Any]]) -> tuple[float | None, str | None]:
+    for finding in findings:
+        value = finding.get("live_price_per_second")
+        try:
+            price = float(value)
+        except (TypeError, ValueError):
+            continue
+        if price >= 0:
+            return price, str(finding.get("live_price_source") or finding.get("source") or "live_catalog")
+    return None, None
+
+
+def _live_stock(findings: list[dict[str, Any]]) -> Literal["available", "unavailable", "unknown"]:
+    for finding in findings:
+        state = str(finding.get("live_stock_state") or "").strip().lower()
+        if state in {"available", "unavailable"}:
+            return state  # type: ignore[return-value]
+    return "unknown"
 
 
 def _positive_int(value: Any, *, default: int) -> int:

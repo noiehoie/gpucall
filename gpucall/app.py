@@ -28,6 +28,7 @@ from gpucall.object_store import ObjectStore
 from gpucall.execution.factory import build_adapters
 from gpucall.registry import ObservedRegistry
 from gpucall.routing import route_warning_tags
+from gpucall.tuple_catalog import live_tuple_catalog_evidence
 from gpucall.sqlite_store import SQLiteIdempotencyStore, SQLiteJobStore
 from gpucall.tenant import (
     TenantBudgetError,
@@ -78,6 +79,10 @@ def build_runtime(config_dir: Path) -> Runtime:
     recipes = config.recipes
     tuples = config.tuples
     registry = ObservedRegistry(path=state_dir / "registry.db")
+    if os.getenv("GPUCALL_LIVE_CATALOG_ON_STARTUP", "").strip().lower() in {"1", "true", "yes", "on"}:
+        for tuple_name, evidence in live_tuple_catalog_evidence(tuples, load_credentials()).items():
+            if evidence.get("status") == "blocked":
+                registry.mark_unavailable(tuple_name)
     audit = AuditTrail(state_dir / "audit" / "trail.jsonl")
     artifact_registry = SQLiteArtifactRegistry(state_dir / "artifacts.db")
     object_store = ObjectStore(config.object_store) if config.object_store is not None else None

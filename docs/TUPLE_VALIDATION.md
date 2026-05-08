@@ -20,7 +20,7 @@ Use `runpod-vllm-serverless` for the stable Serverless endpoint and `runpod-vllm
 
 Do not declare `stream` for RunPod worker-vLLM tuples in v2.0. Token streaming is intentionally unsupported until the RunPod worker path has a real incremental generation contract.
 
-Do not declare `stream` for Modal unless the deployed function provides true incremental generation. Post-hoc chunking of a completed response is not a stream contract.
+Modal stream tuples must call a deployed generator function through `Function.remote_gen(...)`. Post-hoc chunking of a completed response is not a stream contract.
 
 RunPod Serverless native queue validation uses `/runsync`, `/run`, `/status/{job_id}`, and `/cancel/{job_id}`. That path is distinct from worker-vLLM's OpenAI-compatible route.
 

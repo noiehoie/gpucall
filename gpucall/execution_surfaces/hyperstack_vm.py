@@ -17,6 +17,7 @@ from gpucall.config import default_state_dir
 from gpucall.execution.base import TupleAdapter, RemoteHandle
 from gpucall.execution.payloads import plan_payload
 from gpucall.execution.registry import TupleAdapterDescriptor, register_adapter
+from gpucall.live_catalog import live_error, live_info, price_per_second_from_hourly_text, price_per_second_from_mapping
 
 HYPERSTACK_API_BASE = "https://infrahub-api.nexgencloud.com/v1"
 DEFAULT_HYPERSTACK_IMAGE = "Ubuntu Server 22.04 LTS R570 CUDA 12.8 with Docker"
@@ -501,15 +502,7 @@ def _hyperstack_catalog_findings(providers: list[Any], api_key: str) -> list[dic
     try:
         import requests
     except ImportError as exc:
-        return [
-            {
-                "tuple": tuple.name,
-                "adapter": tuple.adapter,
-                "severity": "error",
-                "reason": f"requests is unavailable; cannot verify official tuple catalog: {exc}",
-            }
-            for tuple in providers
-        ]
+        return [live_error(tuple, dimension="credential", reason=f"requests is unavailable; cannot verify official tuple catalog: {exc}") for tuple in providers]
 
     headers = {"api_key": api_key, "Accept": "application/json", "Content-Type": "application/json"}
     try:
@@ -518,59 +511,35 @@ def _hyperstack_catalog_findings(providers: list[Any], api_key: str) -> list[dic
             raise ValueError("all Hyperstack providers must use the same official endpoint during catalog validation")
         base_url = next(iter(base_urls))
         images = _hyperstack_region_images(requests.get(f"{base_url}/core/images", headers=headers, timeout=20).json())
-        flavors = _hyperstack_region_flavors(requests.get(f"{base_url}/core/flavors", headers=headers, timeout=20).json())
+        flavors_payload = requests.get(f"{base_url}/core/flavors", headers=headers, timeout=20).json()
+        flavors = _hyperstack_region_flavors(flavors_payload)
+        flavor_rows = _hyperstack_region_flavor_rows(flavors_payload)
         environments = _hyperstack_environment_names(
             requests.get(f"{base_url}/core/environments", headers=headers, timeout=20).json()
         )
     except Exception as exc:
-        return [
-            {
-                "tuple": tuple.name,
-                "adapter": tuple.adapter,
-                "severity": "error",
-                "reason": f"official Hyperstack catalog lookup failed: {exc}",
-            }
-            for tuple in providers
-        ]
+        return [live_error(tuple, dimension="contract", reason=f"official Hyperstack catalog lookup failed: {exc}") for tuple in providers]
 
     findings: list[dict[str, Any]] = []
     for tuple in providers:
         region = region_from_hyperstack_environment(tuple.target or "")
         if tuple.target not in environments:
             findings.append(
-                {
-                    "tuple": tuple.name,
-                    "adapter": tuple.adapter,
-                    "severity": "error",
-                    "field": "target",
-                    "configured": tuple.target,
-                    "reason": "environment_name is not present in official Hyperstack /core/environments catalog",
-                }
+                live_error(tuple, dimension="contract", field="target", reason="environment_name is not present in official Hyperstack /core/environments catalog")
             )
         if tuple.image not in images.get(region, set()):
             findings.append(
-                {
-                    "tuple": tuple.name,
-                    "adapter": tuple.adapter,
-                    "severity": "error",
-                    "field": "image",
-                    "configured": tuple.image,
-                    "region": region,
-                    "reason": "image_name is not present in official Hyperstack /core/images catalog for tuple region",
-                }
+                live_error(tuple, dimension="contract", field="image", reason="image_name is not present in official Hyperstack /core/images catalog for tuple region")
             )
         if tuple.instance not in flavors.get(region, set()):
             findings.append(
-                {
-                    "tuple": tuple.name,
-                    "adapter": tuple.adapter,
-                    "severity": "error",
-                    "field": "instance",
-                    "configured": tuple.instance,
-                    "region": region,
-                    "reason": "flavor_name is not present in official Hyperstack /core/flavors catalog for tuple region",
-                }
+                live_error(tuple, dimension="contract", field="instance", reason="flavor_name is not present in official Hyperstack /core/flavors catalog for tuple region")
             )
+        else:
+            findings.append(live_info(tuple, dimension="stock", source=f"{base_url}/core/flavors", live_stock_state="available"))
+        price = _hyperstack_live_price(tuple, region, flavor_rows)
+        if price is not None:
+            findings.append(live_info(tuple, dimension="price", source=price["source"], live_price_per_second=price["price_per_second"]))
     return findings
 
 
@@ -602,6 +571,46 @@ def _hyperstack_region_flavors(payload: dict[str, Any]) -> dict[str, set[str]]:
             if isinstance(flavor, dict) and flavor.get("name"):
                 rows[region].add(str(flavor["name"]))
     return rows
+
+
+def _hyperstack_region_flavor_rows(payload: dict[str, Any]) -> dict[tuple[str, str], dict[str, Any]]:
+    rows: dict[tuple[str, str], dict[str, Any]] = {}
+    for group in payload.get("data") or []:
+        if not isinstance(group, dict):
+            continue
+        region = str(group.get("region_name") or "")
+        for flavor in group.get("flavors") or []:
+            if isinstance(flavor, dict) and flavor.get("name"):
+                rows[(region, str(flavor["name"]))] = flavor
+    return rows
+
+
+def _hyperstack_live_price(tuple: Any, region: str, flavor_rows: dict[tuple[str, str], dict[str, Any]]) -> dict[str, Any] | None:
+    flavor = flavor_rows.get((region, str(tuple.instance or "")))
+    if flavor is not None:
+        price, source_field = price_per_second_from_mapping(flavor)
+        if price is not None:
+            return {"price_per_second": price, "source": f"Hyperstack /core/flavors:{source_field}"}
+    try:
+        import requests
+
+        text = requests.get("https://www.hyperstack.cloud/gpu-pricing", timeout=10).text
+    except Exception:
+        return None
+    price = price_per_second_from_hourly_text(text, _hyperstack_gpu_label_patterns(str(tuple.gpu or "")))
+    if price is None:
+        return None
+    return {"price_per_second": price, "source": "https://www.hyperstack.cloud/gpu-pricing"}
+
+
+def _hyperstack_gpu_label_patterns(gpu: str) -> list[str]:
+    compact = gpu.upper().replace("-", " ")
+    labels = [compact, "NVIDIA " + compact]
+    if "RTX A6000" in compact:
+        labels.append("NVIDIA A6000")
+    if "RTX A4000" in compact:
+        labels.append("NVIDIA A4000")
+    return [label.replace(" ", r"\s+") for label in labels]
 
 
 def _hyperstack_environment_names(payload: dict[str, Any]) -> set[str]:

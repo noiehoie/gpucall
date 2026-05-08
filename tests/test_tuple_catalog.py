@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from gpucall.config import ConfigError, GpucallConfig, validate_config
 from gpucall.domain import Policy, ExecutionTupleSpec, Recipe
-from gpucall.tuple_catalog import live_tuple_catalog_findings
+from gpucall.tuple_catalog import live_tuple_catalog_evidence, live_tuple_catalog_findings
 
 
 def test_hyperstack_live_catalog_check_rejects_unknown_image(monkeypatch) -> None:
@@ -55,6 +55,60 @@ def test_hyperstack_live_catalog_check_rejects_unknown_image(monkeypatch) -> Non
 
     assert findings
     assert findings[0]["field"] == "image"
+
+
+def test_runpod_live_catalog_records_price_and_blocks_unavailable_stock(monkeypatch) -> None:
+    class FakeResponse:
+        status_code = 200
+
+        def __init__(self, payload: dict) -> None:
+            self._payload = payload
+
+        def json(self) -> dict:
+            return self._payload
+
+    class FakeSession:
+        def mount(self, *_args, **_kwargs) -> None:
+            return None
+
+        def get(self, url: str, **kwargs):
+            if url.endswith("/endpoint-1/health"):
+                return FakeResponse({"workers": {"ready": 0, "running": 0, "initializing": 0, "throttled": 1, "unhealthy": 0}})
+            if url.endswith("/endpoints"):
+                return FakeResponse({"endpoints": [{"id": "endpoint-1", "currentPricePerSecond": 0.00042}]})
+            raise AssertionError(url)
+
+    fake_requests = __import__("types").SimpleNamespace(Session=lambda: FakeSession())
+    fake_adapters = __import__("types").SimpleNamespace(HTTPAdapter=lambda **_kwargs: object())
+    fake_retry = __import__("types").SimpleNamespace(Retry=lambda **_kwargs: object())
+    modules = __import__("sys").modules
+    monkeypatch.setitem(modules, "requests", fake_requests)
+    monkeypatch.setitem(modules, "requests.adapters", fake_adapters)
+    monkeypatch.setitem(modules, "urllib3.util.retry", fake_retry)
+    tuple = ExecutionTupleSpec(
+        name="runpod-vllm-serverless",
+        adapter="runpod-vllm-serverless",
+        gpu="AMPERE_16",
+        vram_gb=16,
+        max_model_len=8192,
+        cost_per_second=0.00045,
+        modes=["sync"],
+        target="endpoint-1",
+        image="runpod/worker-v1-vllm:v2.18.1",
+        endpoint_contract="openai-chat-completions",
+        input_contracts=["chat_messages"],
+        output_contract="openai-chat-completions",
+        stream_contract="none",
+        model="Qwen/Qwen2.5-1.5B-Instruct",
+        provider_params={"worker_env": {"MODEL_NAME": "Qwen/Qwen2.5-1.5B-Instruct", "MAX_MODEL_LEN": "8192", "GPU_MEMORY_UTILIZATION": "0.9", "MAX_CONCURRENCY": "1"}},
+    )
+
+    evidence = live_tuple_catalog_evidence({tuple.name: tuple}, {"runpod": {"api_key": "rk_test"}})
+
+    assert evidence[tuple.name]["status"] == "blocked"
+    findings = evidence[tuple.name]["findings"]
+    assert any(item.get("live_stock_state") == "unavailable" for item in findings)
+    assert any(item.get("live_price_per_second") == 0.00042 for item in findings)
 
 
 def test_runpod_vllm_provider_requires_official_worker_contract() -> None:

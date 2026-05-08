@@ -81,6 +81,13 @@ class ObservedRegistry:
     def is_available(self, tuple: str) -> bool:
         return self.breakers[tuple].allow_request()
 
+    def mark_unavailable(self, tuple: str) -> None:
+        breaker = self.breakers[tuple]
+        breaker.open = True
+        breaker.opened_at = time()
+        breaker.consecutive_failures = max(breaker.consecutive_failures, breaker.failure_threshold)
+        breaker.consecutive_successes = 0
+
     def score(self, tuple: str) -> TupleScore:
         rows = self.observations.get(tuple, [])
         if not rows:
