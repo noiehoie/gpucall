@@ -223,6 +223,8 @@ def _env_int(name: str, default: int) -> int:
 
 if modal is not None:
     app = modal.App(os.getenv("GPUCALL_MODAL_WORKER_APP_NAME", "gpucall-worker-json"))
+    _VLLM_PACKAGE = os.getenv("GPUCALL_MODAL_VLLM_PACKAGE", "vllm>=0.6.3,<0.8")
+    _TRANSFORMERS_PACKAGE = os.getenv("GPUCALL_MODAL_TRANSFORMERS_PACKAGE", "transformers>=4.45.2,<4.52")
     _VLLM_IMAGE = (
         modal.Image.from_registry("nvidia/cuda:12.1.1-devel-ubuntu22.04", add_python="3.11")
         .apt_install("git", "ffmpeg")
@@ -231,8 +233,8 @@ if modal is not None:
             "cryptography",
             "pydantic>=2.7",
             "pillow",
-            "vllm==0.6.3",
-            "transformers==4.45.2",
+            _VLLM_PACKAGE,
+            _TRANSFORMERS_PACKAGE,
             "huggingface-hub[hf_transfer]",
             "hf_transfer",
             "pyairports",
@@ -304,6 +306,7 @@ if modal is not None:
         *,
         tensor_parallel_size: int = 1,
         long_context: bool = False,
+        trust_remote_code: bool = False,
     ) -> Any:
         global _TOP_LEVEL_LLM, _TOP_LEVEL_LOADED_ID
         if model_id not in _ALLOWED_MODELS:
@@ -328,7 +331,7 @@ if modal is not None:
             "model": model_id,
             "max_model_len": max_model_len,
             "gpu_memory_utilization": float(os.getenv("GPUCALL_MODAL_GPU_MEMORY_UTILIZATION", "0.85" if long_context else "0.90")),
-            "trust_remote_code": True,
+            "trust_remote_code": trust_remote_code,
             "tensor_parallel_size": tensor_parallel_size,
             "disable_log_stats": True,
         }
@@ -388,7 +391,7 @@ if modal is not None:
             kwargs["_gpucall_stop_tokens"] = [str(item) for item in payload.get("stop_tokens") or []]
         return kwargs
 
-    def _load_streaming_model(model_id: str) -> tuple[Any, Any]:
+    def _load_streaming_model(model_id: str, *, trust_remote_code: bool = False) -> tuple[Any, Any]:
         global _STREAMING_MODELS
         if model_id not in _ALLOWED_MODELS:
             raise ValueError(f"model {model_id} is not allowed")
@@ -398,12 +401,12 @@ if modal is not None:
         import torch
         from transformers import AutoModelForCausalLM, AutoTokenizer
 
-        tokenizer = AutoTokenizer.from_pretrained(model_id, trust_remote_code=True)
+        tokenizer = AutoTokenizer.from_pretrained(model_id, trust_remote_code=trust_remote_code)
         model = AutoModelForCausalLM.from_pretrained(
             model_id,
             torch_dtype=torch.float16 if torch.cuda.is_available() else torch.float32,
             device_map="auto",
-            trust_remote_code=True,
+            trust_remote_code=trust_remote_code,
         )
         _STREAMING_MODELS = {model_id: (tokenizer, model)}
         return tokenizer, model
@@ -417,7 +420,7 @@ if modal is not None:
             yield _generate_vision_text(payload, model)
             return
         requested_model = model or os.getenv("GPUCALL_MODAL_VLLM_MODEL", "facebook/opt-125m")
-        tokenizer, model_obj = _load_streaming_model(requested_model)
+        tokenizer, model_obj = _load_streaming_model(requested_model, trust_remote_code=bool(payload.get("trust_remote_code")))
         prompt = _format_prompt_for_model(types.SimpleNamespace(tokenizer=tokenizer), requested_model, payload)
         inputs = tokenizer(prompt, return_tensors="pt", truncation=True, max_length=_bounded_model_len(requested_model, max_model_len))
         try:
@@ -507,12 +510,13 @@ if modal is not None:
             max_model_len,
             tensor_parallel_size=tensor_parallel_size,
             long_context=long_context,
+            trust_remote_code=bool(payload.get("trust_remote_code")),
         )
         prompt = _format_prompt_for_model(llm, requested_model, payload)
         outputs = llm.generate([prompt], _sampling_params(payload), use_tqdm=False)
         return outputs[0].outputs[0].text.strip()
 
-    def _load_vision_model(model_id: str) -> tuple[Any, Any, str]:
+    def _load_vision_model(model_id: str, *, trust_remote_code: bool = False) -> tuple[Any, Any, str]:
         global _TOP_LEVEL_VISION
         allowed = {
             "Salesforce/blip-image-captioning-base",
@@ -539,8 +543,8 @@ if modal is not None:
 
             device = "cuda:0" if torch.cuda.is_available() else "cpu"
             torch_dtype = torch.float16 if torch.cuda.is_available() else torch.float32
-            processor = AutoProcessor.from_pretrained(model_id, trust_remote_code=True)
-            model = AutoModelForCausalLM.from_pretrained(model_id, torch_dtype=torch_dtype, trust_remote_code=True).to(device)
+            processor = AutoProcessor.from_pretrained(model_id, trust_remote_code=trust_remote_code)
+            model = AutoModelForCausalLM.from_pretrained(model_id, torch_dtype=torch_dtype, trust_remote_code=trust_remote_code).to(device)
             model.eval()
             _TOP_LEVEL_VISION = (processor, model, model_id)
             return _TOP_LEVEL_VISION
@@ -568,7 +572,7 @@ if modal is not None:
 
         image = Image.open(io.BytesIO(image_body)).convert("RGB")
         model_id = model or os.getenv("GPUCALL_MODAL_VISION_MODEL", "Salesforce/blip-image-captioning-base")
-        processor, vision_model, _ = _load_vision_model(model_id)
+        processor, vision_model, _ = _load_vision_model(model_id, trust_remote_code=bool(payload.get("trust_remote_code")))
         prompt = vision_prompt_from_payload(payload).strip()
         if model_id == "microsoft/Florence-2-large-ft":
             import torch
@@ -696,6 +700,7 @@ if modal is not None:
             *,
             tensor_parallel_size: int = 1,
             long_context: bool = False,
+            trust_remote_code: bool = False,
         ) -> None:
             if model_id not in _ALLOWED_MODELS:
                 raise ValueError(f"model {model_id} is not allowed")
@@ -719,7 +724,7 @@ if modal is not None:
                 "model": model_id,
                 "max_model_len": max_model_len,
                 "gpu_memory_utilization": float(os.getenv("GPUCALL_MODAL_GPU_MEMORY_UTILIZATION", "0.85" if long_context else "0.90")),
-                "trust_remote_code": True,
+                "trust_remote_code": trust_remote_code,
                 "tensor_parallel_size": tensor_parallel_size,
                 "disable_log_stats": True,
             }
@@ -751,6 +756,7 @@ if modal is not None:
                 max_model_len,
                 tensor_parallel_size=int(kwargs.get("tensor_parallel_size") or 1),
                 long_context=bool(kwargs.get("long_context")),
+                trust_remote_code=bool(payload.get("trust_remote_code")),
             )
             outputs = self._llm.generate([self._to_prompt(payload)], _sampling_params(payload), use_tqdm=False)
             return outputs[0].outputs[0].text.strip()

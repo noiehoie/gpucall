@@ -106,12 +106,22 @@ cannot enter production auto-routing.
 ## Execution Catalog
 
 The execution catalog is the provider-independent view used for tuple generation.
-It separates provider accounts, execution surfaces, and workers:
+It separates source facts by lifecycle so routing does not confuse primary data,
+runtime observations, and derived decisions:
 
-- Provider account: credential and billing scope such as `runpod`, `modal`, or `hyperstack`.
-- Resource snapshot: GPU, region, VRAM, price, and configured/candidate stock state.
+- Account: provider family, credential reference, billing scope, and API base. It never stores resolved secret values.
+- Hardware catalog: normalized GPU SKU facts such as VRAM, architecture, and memory bandwidth.
+- Execution surface: lifecycle, isolation, cleanup, network exposure, and cold-start class.
+- Provider offering: account + execution surface + GPU SKU + region/network topology.
 - Worker contract: input/output/stream contracts, model, engine, modes, and endpoint/function configuration.
-- Tuple candidate: account + surface + resource + worker + model + engine, pinned to a snapshot id.
+- Capability claim: the compatibility assertion joining a resource and worker contract.
+  It also carries the tuple's security tier, sovereignty boundary, dedicated GPU
+  claim, TEE boot capability, attestation requirement, and key-release support.
+- Pricing rule: account + resource billing terms such as price, granularity, and minimum billable seconds.
+- Live status overlay: TTL-scoped stock, price, endpoint, credential, health, and contract observations.
+- Validation evidence: redacted billable artifact summary, artifact hash,
+  pass/fail counts, observed latency, and optional attestation evidence hash.
+- Tuple candidate: a derived account + surface + resource + worker + model + engine plan pinned to a snapshot id.
 
 Generate the current snapshot and deterministic tuple drafts:
 
@@ -122,8 +132,10 @@ gpucall execution-catalog snapshot --config-dir config --live
 gpucall execution-catalog candidates --config-dir config --recipe text-infer-standard --live
 ```
 
-The snapshot is a candidate-selection cache, not live truth. Production execution
-still requires endpoint/lifecycle configuration, policy checks, billable live
+The snapshot is a candidate-selection cache, not live truth. `routing_decision`
+and `ExecutionPlan` are derived views calculated from the catalog and runtime
+signals; they are not primary catalog entities. Production execution still
+requires endpoint/lifecycle configuration, policy checks, billable live
 validation for the exact tuple, and cleanup guarantees.
 
 With `--live`, active tuples are revalidated against provider catalog APIs where
@@ -138,6 +150,30 @@ observations into `live_stock_state`, `configured_price_per_second`,
 `live_price_per_second`, and the effective `price_per_second`. If live price is
 unavailable, gpucall keeps the configured price and marks the live field null
 instead of guessing.
+
+Runtime observations are deliberately split by freshness. Static hardware and
+surface definitions are config/catalog facts. Slow-changing price and regional
+terms enter pricing rules or TTL overlays. Hot capacity, endpoint, credential,
+and health observations stay in live overlays and expire quickly. Raw provider
+responses and raw validation logs are not embedded in the catalog; only redacted
+findings, hashes, counts, timestamps, and latency summaries are exposed.
+Each live overlay carries `next_revalidate_after` when it was observed with a
+positive TTL. Exact tuple validation evidence carries `expires_at`. The
+background validator planner uses those timestamps plus pricing rules to decide
+which tuple smokes are due and which fit the operator's explicit validation
+budget.
+
+`cold_start_class` on an execution surface is a static lifecycle class, not a
+runtime promise. Actual startup behavior is evaluated from validation evidence
+latency summaries such as latest, p50, p99, and max observed wall seconds. A
+router may use the static class for first-pass filtering, but production
+eligibility must prefer fresh evidence when it exists.
+
+`resources` and `workers` in the execution catalog are compatibility views.
+They are emitted as immutable derived objects so older CLI paths and tests can
+continue to inspect the catalog while the primary schema moves to normalized
+accounts, hardware, surfaces, offerings, capability claims, pricing rules,
+overlays, and evidence.
 
 ## Execution Tuple Audit
 

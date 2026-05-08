@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import os
 import time
 import hashlib
@@ -214,7 +215,7 @@ def create_app(config_dir: Path | None = None) -> FastAPI:
         if request.url.path in {"/healthz", "/readyz"}:
             return await call_next(request)
         if not configured:
-            if _production_auth_required():
+            if not _allow_unauthenticated_gateway():
                 return error_response(401, "unauthorized")
             return await call_next(request)
         auth = request.headers.get("authorization", "")
@@ -318,8 +319,8 @@ def create_app(config_dir: Path | None = None) -> FastAPI:
             )
             if cached is not None:
                 return JSONResponse(status_code=cached[0], content=cached[1], headers=cached[2])
-            enforce_request_budget(runtime, http_request, plan)
-            request = worker_readable_request(request, runtime)
+            await enforce_request_budget(runtime, http_request, plan)
+            request = worker_readable_request(request, runtime, tenant_prefix=object_tenant_prefix(runtime, http_request))
             plan = plan_with_worker_refs(plan, request.input_refs, split_learning=request.split_learning)
             result = await runtime.dispatcher.execute_sync(plan)
             headers = warning_headers(plan, runtime.compiler.tuples)
@@ -382,7 +383,7 @@ def create_app(config_dir: Path | None = None) -> FastAPI:
             )
         try:
             plan = runtime.compiler.compile(task_request)
-            enforce_request_budget(runtime, http_request, plan)
+            await enforce_request_budget(runtime, http_request, plan)
             result = await runtime.dispatcher.execute_sync(plan)
             headers = warning_headers(plan, runtime.compiler.tuples)
             if result.output_validated is not None:
@@ -441,8 +442,8 @@ def create_app(config_dir: Path | None = None) -> FastAPI:
             )
             if cached is not None:
                 return JSONResponse(status_code=cached[0], content=cached[1], headers=cached[2])
-            enforce_request_budget(runtime, http_request, plan)
-            request = worker_readable_request(request, runtime)
+            await enforce_request_budget(runtime, http_request, plan)
+            request = worker_readable_request(request, runtime, tenant_prefix=object_tenant_prefix(runtime, http_request))
             plan = plan_with_worker_refs(plan, request.input_refs, split_learning=request.split_learning)
             owner_identity = idempotency_identity(http_request)
             job = await runtime.dispatcher.submit_async(plan, owner_identity=owner_identity)
@@ -482,8 +483,8 @@ def create_app(config_dir: Path | None = None) -> FastAPI:
         try:
             enforce_gateway_owned_routing(request)
             plan = runtime.compiler.compile(request)
-            enforce_request_budget(runtime, http_request, plan)
-            request = worker_readable_request(request, runtime)
+            await enforce_request_budget(runtime, http_request, plan)
+            request = worker_readable_request(request, runtime, tenant_prefix=object_tenant_prefix(runtime, http_request))
             plan = plan_with_worker_refs(plan, request.input_refs, split_learning=request.split_learning)
         except GovernanceError as exc:
             return governance_error_response(exc, request=request)
@@ -517,11 +518,15 @@ def create_app(config_dir: Path | None = None) -> FastAPI:
         return runtime.object_store.presign_put(request, tenant_prefix=object_tenant_prefix(runtime, http_request))
 
     @app.post("/v2/objects/presign-get")
-    async def presign_get(request: PresignGetRequest, runtime: Runtime = Depends(runtime_dep)) -> PresignGetResponse:
+    async def presign_get(
+        request: PresignGetRequest,
+        http_request: Request,
+        runtime: Runtime = Depends(runtime_dep),
+    ) -> PresignGetResponse:
         if runtime.object_store is None:
             raise HTTPException(status_code=503, detail="object store is not configured")
         try:
-            return runtime.object_store.presign_get(request)
+            return runtime.object_store.presign_get(request, tenant_prefix=object_tenant_prefix(runtime, http_request))
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -562,7 +567,7 @@ def tenant_headers(headers: dict[str, str], request: Request) -> dict[str, str]:
     return {**headers, "X-GPUCall-Tenant": str(tenant_id)}
 
 
-def enforce_request_budget(runtime: Runtime, request: Request, plan: Any) -> None:
+async def enforce_request_budget(runtime: Runtime, request: Request, plan: Any) -> None:
     api_key = getattr(request.state, "api_key", None)
     tenant_id = getattr(request.state, "tenant_id", None)
     tenant_name = tenant_identity(tenant_id, api_key)
@@ -570,7 +575,8 @@ def enforce_request_budget(runtime: Runtime, request: Request, plan: Any) -> Non
     cost = getattr(plan, "attestations", {}).get("cost_estimate", {}) if getattr(plan, "attestations", None) else {}
     estimated = float(cost.get("estimated_cost_usd") or 0)
     tuple_chain = list(getattr(plan, "tuple_chain", []) or [])
-    enforce_tenant_budget(
+    await asyncio.to_thread(
+        enforce_tenant_budget,
         tenant_id=tenant_name,
         tenant=tenant,
         ledger=runtime.tenant_usage,
@@ -634,6 +640,15 @@ def _production_auth_required() -> bool:
     return os.getenv("GPUCALL_ENV", "").strip().lower() in {"prod", "production"} or os.getenv(
         "GPUCALL_PRODUCTION", ""
     ).strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _allow_unauthenticated_gateway() -> bool:
+    return not _production_auth_required() and os.getenv("GPUCALL_ALLOW_UNAUTHENTICATED", "").strip().lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
 
 
 _HEX_ID_RE = re.compile(r"/[0-9a-fA-F]{16,}(?=/|$)")
@@ -816,7 +831,7 @@ def redaction_guarantee() -> dict[str, bool]:
     }
 
 
-def worker_readable_request(request: TaskRequest, runtime: Runtime) -> TaskRequest:
+def worker_readable_request(request: TaskRequest, runtime: Runtime, *, tenant_prefix: str | None = None) -> TaskRequest:
     split_ref = request.split_learning.activation_ref if request.split_learning is not None else None
     refs = list(request.input_refs)
     if split_ref is not None:
@@ -828,20 +843,26 @@ def worker_readable_request(request: TaskRequest, runtime: Runtime) -> TaskReque
             raise ValueError("input data_ref must be an object-store s3:// reference")
     if runtime.object_store is None:
         raise ValueError("object store is required for data_ref worker access")
-    converted = [_worker_readable_ref(ref, runtime) for ref in request.input_refs]
+    converted = [_worker_readable_ref(ref, runtime, tenant_prefix=tenant_prefix) for ref in request.input_refs]
     updates: dict[str, Any] = {"input_refs": converted}
     if request.split_learning is not None:
-        converted_activation = _worker_readable_ref(request.split_learning.activation_ref, runtime)
+        converted_activation = _worker_readable_ref(request.split_learning.activation_ref, runtime, tenant_prefix=tenant_prefix)
         updates["split_learning"] = request.split_learning.model_copy(update={"activation_ref": converted_activation})
     return request.model_copy(update=updates)
 
 
-def _worker_readable_ref(ref: DataRef, runtime: Runtime) -> DataRef:
+def _worker_readable_ref(ref: DataRef, runtime: Runtime, *, tenant_prefix: str | None = None) -> DataRef:
     if not str(ref.uri).startswith("s3://"):
         return ref
     if runtime.object_store is None:
         return ref
-    return runtime.object_store.presign_get(PresignGetRequest(data_ref=ref)).data_ref
+    request = PresignGetRequest(data_ref=ref)
+    try:
+        return runtime.object_store.presign_get(request, tenant_prefix=tenant_prefix).data_ref
+    except TypeError:
+        if type(runtime.object_store).__module__.startswith("gpucall."):
+            raise
+        return runtime.object_store.presign_get(request).data_ref
 
 
 def plan_with_worker_refs(plan: Any, refs: list[DataRef], *, split_learning: Any = None) -> Any:

@@ -8,6 +8,7 @@ from gpucall.domain import TupleError
 
 def plan_payload(plan: CompiledPlan) -> dict[str, Any]:
     """Build a tuple payload without dereferencing sensitive object data."""
+    trust_policy = plan.attestations.get("model_trust_policy") if isinstance(plan.attestations, dict) else None
     return {
         "plan_id": plan.plan_id,
         "task": plan.task,
@@ -28,6 +29,7 @@ def plan_payload(plan: CompiledPlan) -> dict[str, Any]:
         "stop_tokens": plan.stop_tokens,
         "repetition_penalty": plan.repetition_penalty,
         "guided_decoding": plan.guided_decoding,
+        "trust_remote_code": bool(trust_policy.get("trust_remote_code")) if isinstance(trust_policy, dict) else False,
         "attestations": plan.attestations,
     }
 

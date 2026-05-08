@@ -1,0 +1,305 @@
+  gpucall3 全面コード監査報告
+
+  1. 総合判定: Conditional Go
+
+  2. 点数: 68 / 100
+
+  思想設計は水準が高い。governance router としての core routing / compiler / dispatcher / fail-closed / recipe-first / validation evidence gate は正しく動作している。しかし P0
+  blocker が複数あり、このまま SaaS v1 として課金ユーザーに出すと、orphan リソースリーク・コスト事故・セキュリティ事故のリスクがある。
+
+  ---
+
+  3. P0 blocker（リリース前に必ず直すもの）
+
+  ┌───────┬─────────────────────────────────────────────────────────────────────────────────────────┬────────────────────────────────────────────────────────┬──────────────┐
+  │ #     │ 概要                                                                                    │ ファイル:行                                            │ 根拠         │
+  ├───────┼─────────────────────────────────────────────────────────────────────────────────────────┼────────────────────────────────────────────────────────┼──────────────┤
+  │ P0-1  │ RunPod Flash cancel_remote が orphan リソースをリークする — start() は resource_name を │ execution_surfaces/function_runtime.py:470-494         │ Agent2 C1    │
+  │       │ meta に書くが cancel_remote() は resource_id を読む。常に no-op になる                  │                                                        │              │
+  │ P0-2  │ RUNPOD_API_KEY を os.environ に書き込む — プロセス全体に API key                        │ execution_surfaces/function_runtime.py:497-500         │ Agent2 C2    │
+  │       │ が永続。同一プロセス内の他コードから visible                                            │                                                        │              │
+  │ P0-3  │ SQL injection 経路 — _ensure_column() が f-string で table/col を SQL に interpolation  │ catalog.py:139-141                                     │ Agent1 C1    │
+  │ P0-4  │ seed_liveness に budget guard がない — billable probe loop が無制限に課金可能           │ cli.py:seed_liveness command                           │ Agent1 C3    │
+  │ P0-5  │ lease reaper が実際に reap しない — "requires_manual_provider_reaper"                   │ lease_reaper.py:apply=True path                        │ Agent1 C6    │
+  │       │ マーク止まり。provider API を叩かない                                                   │                                                        │              │
+  │ P0-6  │ stream mode が output validation をスキップ — sync mode は governance validation        │ dispatcher.py:stream dispatch path                     │ Agent1 C4    │
+  │       │ を通すが stream は素通し                                                                │                                                        │              │
+  │ P0-7  │ docker-compose.yml に resource limit がない — mem_limit, cpus, pids_limit, read_only,   │ docker-compose.yml:1-38                                │ Agent3       │
+  │       │ no-new-privileges 全欠如                                                                │                                                        │ Critical 1-2 │
+  │ P0-8  │ json_object vs json-object 命名分裂 — engine/model 間で output_contracts                │ config engines/models 全体                             │ Agent6 2A    │
+  │       │ の名前が不一致、matcher が silent fail する                                             │                                                        │              │
+  │ P0-9  │ tuple candidate OOM 確定 — modal-h200-qwen25-14b-1m が 141GB VRAM で 320GB minimum      │ config/tuple_candidates/modal-h200-qwen25-14b-1m.yml:5 │ Agent6 5A    │
+  │       │ model を主張                                                                            │                                                        │              │
+  │ P0-10 │ routing.py に難読化文字列 — chr(109,111,100,97,108) で "supports_multimodal"            │ routing.py:206                                         │ Agent1 C2    │
+  │       │ を構築。理由不明。本番コードに不適切                                                    │                                                        │              │
+  └───────┴─────────────────────────────────────────────────────────────────────────────────────────┴────────────────────────────────────────────────────────┴──────────────┘
+  ---
+
+  4. P1 issues（MVP 完了前に直すもの）
+
+  ┌───────┬──────────────────────────────────────────────────────────────────────────────────────────────────┬────────────────────────────────────────────┬────────────┐
+  │ #     │ 概要                                                                                             │ ファイル                                   │ 根拠       │
+  ├───────┼──────────────────────────────────────────────────────────────────────────────────────────────────┼────────────────────────────────────────────┼────────────┤
+  │ P1-1  │ 巨大コード重複 — prompt formatting(6箇所), data ref fetching(5箇所), pyairports stub(4箇所),     │ modal.py, llm_engine.py, runpod_flash.py,  │ Agent2     │
+  │       │ bounded_model_len(4箇所・デフォルト値不一致), artifact workload(3箇所 + hyperstack embedded)     │ hyperstack_vm.py, io.py                    │ H1-H2      │
+  │ P1-2  │ hyperstack_vm.py に 300 行の worker script 埋め込み — worker_contracts/ と drift                 │ hyperstack_vm.py:819-1133                  │ Agent2 H2  │
+  │       │ あり（created_at 欠如、bounded_model_len 不一致）                                                │                                            │            │
+  │ P1-3  │ cancel_remote() に timeout がない — provider cancel endpoint が hang すると cleanup path が無限  │ dispatcher.py:cancel path                  │ Agent1 C5  │
+  │       │ block                                                                                            │                                            │            │
+  │ P1-4  │ async SDK client が Bearer token を object store に送信 — sync client は bare httpx.put()、async │ sdk/python/gpucall_sdk/client.py:354 vs 96 │ Agent3 H4  │
+  │       │ は self.client.put() で gpucall API key 漏出                                                     │                                            │            │
+  │ P1-5  │ テナント budget over-reservation — 実行失敗後の budget 解放パスがない                            │ tenant.py                                  │ Agent1 H7  │
+  │ P1-6  │ autoscaler env vars が contract hash に混入 — 環境依存で contract identity が変わる              │ execution/contracts.py:111-117             │ Agent2 H3  │
+  │ P1-7  │ Azure VM custom_data が str() で garble — json.dumps() でなく str() を使用                       │ iaas_clouds.py:95                          │ Agent2 C3  │
+  │ P1-8  │ provider 名 hardcoding が governance 境界外にリーク — cli.py (1465,1495,1524),                   │ 複数ファイル                               │ Agent1 H2, │
+  │       │ candidate_sources.py (37), registry.py (128-142)                                                 │                                            │ Agent2 M5  │
+  │ P1-9  │ SBOM が runtime deps 4 件を欠落 — hyperstack, modal, paramiko, requests                          │ SBOM.md:10-17                              │ Agent5     │
+  │ P1-10 │ max_output_tokens が全 recipe に不在 — 出力トークン無制限でコスト暴走リスク                      │ config/recipes/ 全体                       │ Agent6 3F  │
+  │ P1-11 │ stop_tokens が Qwen/ChatML 固有 — Mistral model で破綻                                           │ config/recipes/ 全体                       │ Agent6 5D  │
+  │ P1-12 │ TypeScript SDK テストゼロ、feature gap 大 — chat.completions なし、error taxonomy なし、log      │ sdk/typescript/                            │ Agent3     │
+  │       │ redaction なし、auto-upload なし                                                                 │                                            │ H5-H6      │
+  │ P1-13 │ config/template drift 9 ファイル — template から live config 再生成不能                          │ Agent6 Drift List                          │ Agent6 1   │
+  └───────┴──────────────────────────────────────────────────────────────────────────────────────────────────┴────────────────────────────────────────────┴────────────┘
+  ---
+
+  5. P2 improvements（v1 運用強化）
+
+  ┌───────┬───────────────────────────────────────────────────────────────────────────────────────────────┬───────────────────────────────────────────────────────────────┐
+  │ #     │ 概要                                                                                          │ ファイル                                                      │
+  ├───────┼───────────────────────────────────────────────────────────────────────────────────────────────┼───────────────────────────────────────────────────────────────┤
+  │ P2-1  │ app.py (1023行), cli.py (1670行), recipe_admin.py (1363行), execution_catalog.py (953行)      │ 各ファイル                                                    │
+  │       │ が肥大。分割すべき                                                                            │                                                               │
+  │ P2-2  │ _git_commit(), _config_hash(), _surface_for_adapter(), _positive_int(),                       │ cli.py, execution_catalog.py, tuple_audit.py, recipe_admin.py │
+  │       │ _tuple_from_candidate() の重複を shared utils に集約                                          │                                                               │
+  │ P2-3  │ SQLite provider カラム名を tuple/surface に統一                                               │ registry.py                                                   │
+  │ P2-4  │ assert を runtime validation に使用 — -O で strip される                                      │ registry.py:126                                               │
+  │ P2-5  │ api/__init__.py と api/main.py が完全重複 — 片方削除                                          │ gpucall/api/                                                  │
+  │ P2-6  │ _HEX_ID_RE 未使用 dead code                                                                   │ app.py:639                                                    │
+  │ P2-7  │ _provider_official_contract() 未到達 dead code                                                │ cli.py:~754                                                   │
+  │ P2-8  │ _messages_to_prompt() 未使用 dead code                                                        │ sdk/python/gpucall_sdk/client.py:518-519                      │
+  │ P2-9  │ hardware_catalog / provider_offerings / live_status_overlay / capability_claims               │ config 全体                                                   │
+  │       │ テーブル未実装                                                                                │                                                               │
+  │ P2-10 │ テスト不足: lease reaper destroy, graceful shutdown, concurrent handling, tenant isolation    │ tests/                                                        │
+  │       │ fuzz, OpenAPI schema stability                                                                │                                                               │
+  │ P2-11 │ max_model_len 1,048,576 vs 1,010,000 の qwen2.5-14b-instruct-1m 数値齟齬                      │ config/models/ vs config/surfaces/                            │
+  │ P2-12 │ qwen2.5-vl-72b-instruct の source URL が 7B を指す                                            │ config/models/qwen2.5-vl-72b-instruct.yml:12                  │
+  │ P2-13 │ RunPod candidate_sources の `cost_per_second: 0.0` が placeholder 止まり                      │ config/candidate_sources/runpod_serverless.yml:5              │
+  │ P2-14 │ billing_scope: null が全 account                                                              │ config/accounts/*.yml                                         │
+  │ P2-15 │ version 三重不一致: gateway 2.0.8, Python SDK 2.0.0a2, TS SDK 2.0.0                           │ pyproject.toml, sdk/python/pyproject.toml,                    │
+  │       │                                                                                               │ sdk/typescript/package.json                                   │
+  │ P2-16 │ CHANGELOG が v2.0.0 止まり（2.0.1-2.0.8 未記載）                                              │ CHANGELOG.md                                                  │
+  │ P2-17 │ TLS/reverse proxy, backup/restore, incident response, tenant lifecycle の運用ドキュメント欠如 │ docs/                                                         │
+  └───────┴───────────────────────────────────────────────────────────────────────────────────────────────┴───────────────────────────────────────────────────────────────┘
+  ---
+
+  6. 思想的不純物一覧
+
+  ┌────────────────────────────┬─────────────────────────────────────────────────────────────────────────────────────────────────┬──────┐
+  │ 箇所                       │ 内容                                                                                            │ 程度 │
+  ├────────────────────────────┼─────────────────────────────────────────────────────────────────────────────────────────────────┼──────┤
+  │ cli.py:1465,1495,1524      │ hardcoded "modal", "runpod", "hyperstack" in governance CLI path                                │ 高   │
+  │ candidate_sources.py:37    │ hardcoded "runpod_serverless_candidate_matrix" kind check                                       │ 高   │
+  │ registry.py:128-142        │ vendor_family_for_adapter() が provider→family mapping を hardcode                              │ 中   │
+  │ config.py:load_providers() │ 関数名が "providers" 表現を残す                                                                 │ 低   │
+  │ registry.py SQLite table   │ "provider" カラム名が legacy のまま                                                             │ 低   │
+  │ function_runtime.py:224    │ token_budget による GPU tier 選択が adapter 内にある（governance 判断の漏出）                   │ 中   │
+  │ PRODUCT_INTERFACE.md:60-77 │ OpenAI facade を co-equal interface として提示。migration convenience のはずが primary に見える │ 中   │
+  │ SDK_DISTRIBUTION.md:72     │ /v1/chat/completions を primary option として推奨                                               │ 中   │
+  │ config recipes 全体        │ stop_tokens が Qwen/ChatML 固有値。model-agnostic であるべき                                    │ 中   │
+  └────────────────────────────┴─────────────────────────────────────────────────────────────────────────────────────────────────┴──────┘
+  ---
+
+  7. provider 名依存が残る箇所一覧
+
+  ┌─────────────────────────┬───────────────────────────────────────────────────────────┬───────────────────────────────────────────────┐
+  │ ファイル:行             │ provider 名                                               │ 文脈                                          │
+  ├─────────────────────────┼───────────────────────────────────────────────────────────┼───────────────────────────────────────────────┤
+  │ cli.py:1465             │ "modal"                                                   │ CLI config branch                             │
+  │ cli.py:1495             │ "runpod"                                                  │ CLI config branch                             │
+  │ cli.py:1524             │ "hyperstack"                                              │ CLI config branch                             │
+  │ candidate_sources.py:37 │ "runpod_serverless"                                       │ kind check                                    │
+  │ registry.py:128-142     │ modal, hyperstack, runpod, azure, gcp, scaleway, ovhcloud │ vendor_family_for_adapter mapping             │
+  │ managed_endpoint.py:152 │ GPUCALL_RUNPOD_FLASH_ENDPOINT_ID                          │ env var 名が Flash なのに vLLM adapter で使用 │
+  │ credential_targets.py   │ modal, runpod, hyperstack, cloudflare                     │ credential env probe（boundary 内なので許容） │
+  │ configure_targets.py    │ modal, runpod, hyperstack, cloudflare                     │ configure wizard（boundary 内なので許容）     │
+  └─────────────────────────┴───────────────────────────────────────────────────────────┴───────────────────────────────────────────────┘
+  ---
+
+  8. billable/cost 事故リスク一覧
+
+  ┌───┬─────────────────────────────────────────────────────────────────────────────────────┬──────────────────────────────────────────────────┬────────┐
+  │ # │ リスク                                                                              │ ファイル                                         │ 影響度 │
+  ├───┼─────────────────────────────────────────────────────────────────────────────────────┼──────────────────────────────────────────────────┼────────┤
+  │ 1 │ seed_liveness が budget なしで billable probe を無制限実行                          │ cli.py                                           │ 高     │
+  │ 2 │ tenant budget reservation 後に実行失敗しても budget 解放なし                        │ tenant.py                                        │ 高     │
+  │ 3 │ RunPod Flash の minimum timeout 300s — plan が短くても 300s 分課金                  │ function_runtime.py:485                          │ 中     │
+  │ 4 │ recipe に max_output_tokens がない — 無限出力で per-second 課金暴走                 │ config/recipes/                                  │ 高     │
+  │ 5 │ RunPod candidate_sources で cost_per_second: 0.0 placeholder — cost estimation が 0 │ config/candidate_sources/runpod_serverless.yml:5 │ 中     │
+  │ 6 │ billing_scope: null で全 account のテナントコスト分離なし                           │ config/accounts/                                 │ 中     │
+  └───┴─────────────────────────────────────────────────────────────────────────────────────┴──────────────────────────────────────────────────┴────────┘
+  ---
+
+  9. cleanup/orphan リスク一覧
+
+  ┌───┬──────────────────────────────────────────────────────────────────────────────────────────┬─────────────────────────────┬──────────────┐
+  │ # │ リスク                                                                                   │ ファイル                    │ 影響度       │
+  ├───┼──────────────────────────────────────────────────────────────────────────────────────────┼─────────────────────────────┼──────────────┤
+  │ 1 │ RunPod Flash cancel_remote が resource_id/resource_name 不一致で常に no-op — orphan 確定 │ function_runtime.py:470-494 │ 致命的       │
+  │ 2 │ lease reaper が apply=True でも provider API を叩かない — human intervention 必須        │ lease_reaper.py             │ 高           │
+  │ 3 │ cancel_remote() に timeout なし — provider hang で cleanup block                         │ dispatcher.py               │ 高           │
+  │ 4 │ Azure _delete_sync() がデフォルトで削除完了を待たない                                    │ iaas_clouds.py:120-125      │ 中（非本番） │
+  │ 5 │ Hyperstack lease manifest に rotation/compaction がない — 長期運用で unbounded growth    │ hyperstack_vm.py:437-441    │ 低           │
+  └───┴──────────────────────────────────────────────────────────────────────────────────────────┴─────────────────────────────┴──────────────┘
+  ---
+
+  10. security/secrets/attestation リスク一覧
+
+  ┌────┬────────────────────────────────────────────────────────────────────────────────┬───────────────────────────────────────────────┬──────────────┐
+  │ #  │ リスク                                                                         │ ファイル:行                                   │ 影響度       │
+  ├────┼────────────────────────────────────────────────────────────────────────────────┼───────────────────────────────────────────────┼──────────────┤
+  │ 1  │ RUNPOD_API_KEY が os.environ に書き込まれプロセス全体に永続                    │ function_runtime.py:497-500                   │ 高           │
+  │ 2  │ SQL injection 経路 — identifier を f-string で SQL に interpolation            │ catalog.py:139-141                            │ 高           │
+  │ 3  │ async SDK client が Bearer token を object store に不要送信                    │ client.py:354                                 │ 中           │
+  │ 4  │ Starlette private API (request._receive) に依存 — upgrade で壊れうる           │ app.py:206                                    │ 中           │
+  │ 5  │ SSH key default が ~/.ssh/id_rsa — 運用者の SSH key が VM provision に使われる │ hyperstack_vm.py:46                           │ 中           │
+  │ 6  │ non-production で AutoAddPolicy — MITM リスク                                  │ hyperstack_vm.py:277-286                      │ 低（非本番） │
+  │ 7  │ trust_remote_code=True — HF model 実行。allowlist で mitigate 済み             │ llm_engine.py:147                             │ 低           │
+  │ 8  │ config templates に operator IP 203.0.113.10/32 hardcode                     │ config_templates/surfaces/hyperstack-*.yml:17 │ 中           │
+  │ 9  │ GPUCALL_ENV=production vs GPUCALL_PRODUCTION=1 の precedence が undocumented   │ SECURITY.md:42-52                             │ 低           │
+  │ 10 │ Docker Compose で secrets が env vars 直渡し（docker secrets 未使用）          │ docker-compose.yml:19-26                      │ 低           │
+  └────┴────────────────────────────────────────────────────────────────────────────────┴───────────────────────────────────────────────┴──────────────┘
+  ---
+
+  11. SDK/helper/docs/config のズレ一覧
+
+  ┌────┬────────────────────────────────────────────────────────────────────────────────────────────────┬─────────────────────────────────────────────────────────────────┐
+  │ #  │ ズレ                                                                                           │ ファイル A → ファイル B                                         │
+  ├────┼────────────────────────────────────────────────────────────────────────────────────────────────┼─────────────────────────────────────────────────────────────────┤
+  │ 1  │ in-tree __init__.py が GPUCallHTTPError を __all__ から欠落                                    │ gpucall_sdk/__init__.py → sdk/python/gpucall_sdk/__init__.py    │
+  │ 2  │ gateway 2.0.8 / Python SDK 2.0.0a2 / TS SDK 2.0.0 — version 三重不一致                         │ pyproject.toml / sdk/python/pyproject.toml /                    │
+  │    │                                                                                                │ sdk/typescript/package.json                                     │
+  │ 3  │ README client.infer() vs PRODUCT_INTERFACE client.chat.completions.create() —                  │ README.md:89 → PRODUCT_INTERFACE.md:68                          │
+  │    │ 両方存在するが関係未説明                                                                       │                                                                 │
+  │ 4  │ RUNPOD_FLASH.md の flat YAML vs CAPABILITY_CATALOG.md の split layout                          │ docs/RUNPOD_FLASH.md:37-75 → docs/CAPABILITY_CATALOG.md:65-79   │
+  │ 5  │ SBOM が runtime deps 4 件欠落 + pip freeze 使用                                                │ SBOM.md → pyproject.toml                                        │
+  │ 6  │ RELEASE_CHECKLIST に cost-audit / cleanup-audit / tenant validation がない                     │ RELEASE_CHECKLIST.md → LAUNCH_MVP.md:103-118                    │
+  │ 7  │ max_tokens default: Modal 128 vs llm_engine.py 256 vs runpod_flash.py 256                      │ modal.py:362 → llm_engine.py → runpod_flash.py                  │
+  │ 8  │ bounded_model_len の cap: llm_engine.py min(max,8192) / hyperstack embedded return max / modal │ 3 ファイル間                                                    │
+  │    │ min(max,8192)                                                                                  │                                                                 │
+  │ 9  │ artifact manifest の created_at: worker_contracts/artifacts.py にあり、hyperstack embedded     │ artifacts.py:71 → hyperstack_vm.py embedded                     │
+  │    │ script にない                                                                                  │                                                                 │
+  │ 10 │ TS SDK feature gap: chat.completions なし、error taxonomy なし、log redaction なし             │ sdk/typescript/src/index.ts vs sdk/python/gpucall_sdk/client.py │
+  └────┴────────────────────────────────────────────────────────────────────────────────────────────────┴─────────────────────────────────────────────────────────────────┘
+  ---
+
+  12. リファクタリング候補一覧
+
+  ┌────┬────────────────────────────────────────────────────────────────────┬────────────────────────────────────────────────────────────────────────┬──────┐
+  │ #  │ 対象                                                               │ 内容                                                                   │ 工数 │
+  ├────┼────────────────────────────────────────────────────────────────────┼────────────────────────────────────────────────────────────────────────┼──────┤
+  │ 1  │ prompt formatting 6 重複                                           │ shared gpucall/worker_contracts/_prompts.py に集約                     │ M    │
+  │ 2  │ data ref fetching 5 重複                                           │ worker_contracts/io.py を唯一の source of truth に                     │ M    │
+  │ 3  │ pyairports stub 4 重複                                             │ 1 箇所に集約                                                           │ S    │
+  │ 4  │ bounded_model_len 4 重複・値不一致                                 │ 1 関数に統一、default 値を揃える                                       │ S    │
+  │ 5  │ _git_commit() / _config_hash() / _positive_int() / _strings() 重複 │ gpucall/_utils.py に抽出                                               │ S    │
+  │ 6  │ _tuple_from_candidate() 2 重複                                     │ recipe_admin.py と tuple_audit.py で共有                               │ S    │
+  │ 7  │ hyperstack_vm.py embedded worker script (300 行)                   │ worker_contracts/ の実装をそのまま使うか、script template として外部化 │ L    │
+  │ 8  │ cli.py 1670 行                                                     │ subcommand group ごとに分割                                            │ M    │
+  │ 9  │ recipe_admin.py 1363 行                                            │ materialize / review / promote / inbox / watch を分割                  │ M    │
+  │ 10 │ app.py 1023 行                                                     │ middleware / runtime wiring / endpoints を分割                         │ M    │
+  │ 11 │ api/__init__.py と api/main.py 完全重複                            │ 片方削除                                                               │ S    │
+  └────┴────────────────────────────────────────────────────────────────────┴────────────────────────────────────────────────────────────────────────┴──────┘
+  ---
+
+  13. 可読性・コメント品質の問題一覧
+
+  ┌───┬────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┬────────────────────────────────────────┐
+  │ # │ 問題                                                                                                                       │ ファイル:行                            │
+  ├───┼────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┼────────────────────────────────────────┤
+  │ 1 │ routing.py:206 の chr() 難読化 — "supports_multi" + "".join(chr(code) for code in (109,111,100,97,108)) で                 │ routing.py:206                         │
+  │   │ "supports_multimodal" を構築。理由不明、コメント 皆無。本番コードとして不合格                                              │                                        │
+  │ 2 │ compiler.py 全体で local variable tuple が Python builtin tuple を shadow — 読者の混乱を招く                               │ compiler.py 全体                       │
+  │ 3 │ execution/lifecycle.py:23 — yield "" after raise が dead code だが # pragma: no cover のみでなぜ generator                 │ lifecycle.py:23                        │
+  │   │ にする必要があるかのコメントなし                                                                                           │                                        │
+  │ 4 │ execution/contracts.py:15 — getattr(spec, ..., None) の多用がバグを隠す。typed access が望ましいがコメントで意図説明もない │ contracts.py:15+                       │
+  │ 5 │ Hyperstack surface YAML の max_model_len が model の値より小さい理由にコメントなし                                         │ config/surfaces/hyperstack-qwen-1m.yml │
+  │ 6 │ tuple candidate の "lean" vs "rich" schema の使い分けにコメントなし                                                        │ config/tuple_candidates/               │
+  │ 7 │ domain.py の ObjectStoreConfig.tuple フィールドが execution tuple 概念と名前衝突                                           │ domain.py:492                          │
+  │ 8 │ payloads.py:41,47 — contract mismatch を retryable=True にする意図説明なし                                                 │ payloads.py:41,47                      │
+  └───┴────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┴────────────────────────────────────────┘
+  ---
+
+  14. 削除すべき古い資産
+
+  ┌───┬─────────────────────────────────────────────────────────────────┬───────────────────────────────────────────────────────┐
+  │ # │ 対象                                                            │ 理由                                                  │
+  ├───┼─────────────────────────────────────────────────────────────────┼───────────────────────────────────────────────────────┤
+  │ 1 │ app.py:639 _HEX_ID_RE                                           │ 未使用 dead code                                      │
+  │ 2 │ cli.py:~754 _provider_official_contract()                       │ 未到達 dead code                                      │
+  │ 3 │ sdk/python/gpucall_sdk/client.py:518-519 _messages_to_prompt()  │ 未使用 dead code                                      │
+  │ 4 │ api/__init__.py or api/main.py どちらか一方                     │ 完全重複                                              │
+  │ 5 │ modal.py の top-level function pattern (class-based が正規パス) │ 新旧重複                                              │
+  │ 6 │ runpod_flash.py:231-476 standalone fallback 実装                │ Flash SDK 未 install 時の fallback だが全ロジック重複 │
+  └───┴─────────────────────────────────────────────────────────────────┴───────────────────────────────────────────────────────┘
+  ---
+
+  15. 次に実装すべき順序
+
+   1. P0 修正（P0-1 〜 P0-10）— 特に orphan leak (P0-1), os.environ 漏出 (P0-2), json_object 命名分裂 (P0-8)
+   2. worker contract 重複解消 (P1-1, P1-2) — bugfix が 6 箇所同時修正になる現状は事故の温床
+   3. cost guard 強化 — seed_liveness budget (P0-4), max_output_tokens (P1-10), tenant budget reconciliation (P1-5)
+   4. docker-compose 本番 hardening (P0-7)
+   5. config schema 整合 — json_object/json-object 統一、OOM candidate 修正、stop_tokens model-agnostic 化
+   6. docs 整合 — SBOM 修正、RUNPOD_FLASH.md 更新、CHANGELOG 補完
+   7. テスト拡充 — lease reaper destroy, concurrent handling, tenant isolation
+   8. TS SDK 判断 — ship するなら feature parity + tests。ship しないなら明示的に defer
+   9. P2 リファクタリング — file 分割、shared utils 抽出
+   10. normalized catalog 残実装 — hardware_catalog, provider_offerings, live_status_overlay
+
+  ---
+
+  16. commit してよいか
+
+  No — P0 blocker が 10 件ある。特に P0-1（orphan leak）と P0-2（secret 漏出）は現在のコードで RunPod Flash を使うと実害が出る。P0 修正後に再監査が必要。
+
+  現状の main branch は開発・テスト環境としては問題ないが、SaaS v1 production release としての commit/tag/deploy は P0 全件修正まで待つべき。
+
+  ---
+
+  17. 監査で読んだファイル一覧
+
+  6 エージェントが以下を全行読了:
+
+  Core library (33 files): __init__.py, api/__init__.py, api/main.py, app.py, artifacts.py, attestation.py, audit.py, candidate_sources.py, catalog.py, cli.py, compiler.py,
+  config.py, configure.py, configure_registry.py, configure_targets.py, credential_registry.py, credential_targets.py, credentials.py, dispatcher.py, domain.py,
+  execution_catalog.py, lease_reaper.py, live_catalog.py, object_store.py, plugin_loader.py, recipe_admin.py, registry.py, routing.py, sqlite_store.py, tenant.py,
+  tuple_audit.py, tuple_catalog.py, validator_plan.py
+
+  Execution + Surfaces + Workers (21 files): execution/__init__.py, execution/base.py, execution/contracts.py, execution/factory.py, execution/lifecycle.py,
+  execution/payloads.py, execution/registry.py, execution_surfaces/__init__.py, execution_surfaces/function_runtime.py, execution_surfaces/hyperstack_vm.py,
+  execution_surfaces/iaas_clouds.py, execution_surfaces/iaas_vm.py, execution_surfaces/local_runtime.py, execution_surfaces/managed_endpoint.py, worker_contracts/__init__.py,
+  worker_contracts/artifacts.py, worker_contracts/io.py, worker_contracts/llm_engine.py, worker_contracts/modal.py, worker_contracts/runpod_flash.py,
+  worker_contracts/runpod_serverless.py
+
+  SDK + Scripts (19 files): gpucall_sdk/__init__.py, gpucall_sdk/client.py, sdk/python/README.md, sdk/python/pyproject.toml, sdk/python/gpucall_sdk/__init__.py,
+  sdk/python/gpucall_sdk/client.py, sdk/python/gpucall_recipe_draft/__init__.py, sdk/python/gpucall_recipe_draft/cli.py, sdk/python/gpucall_recipe_draft/core.py,
+  sdk/python/gpucall_recipe_draft/submit.py, sdk/python/tests/test_client.py, sdk/python/tests/test_recipe_draft.py, sdk/typescript/package.json,
+  sdk/typescript/package-lock.json, sdk/typescript/tsconfig.json, sdk/typescript/src/index.ts, pyproject.toml, docker-compose.yml, scripts/smoke_sdk.py
+
+  Tests (23 files): conftest.py, test_app.py, test_audit.py, test_catalog.py, test_compiler.py, test_config.py, test_credentials_configure.py, test_dispatcher.py,
+  test_execution_catalog.py, test_launch_reporting.py, test_lease_reaper.py, test_llm_engine.py, test_modal_worker.py, test_object_store.py, test_providers.py,
+  test_recipe_admin.py, test_sdk.py, test_tuple_audit.py, test_tuple_catalog.py, test_validator_plan.py, test_worker_artifacts.py, test_worker_io.py,
+  test_zero_trust_contracts.py
+
+  Docs + Top-level (23 files): CHANGELOG.md, LAUNCH_MVP.md, LAUNCH_STATUS.md, README.md, RELEASE_CHECKLIST.md, RESTART_HANDOFF.md, SBOM.md, SECURITY.md,
+  docs/CAPABILITY_CATALOG.md, docs/EXECUTION_SURFACE_CONFORMANCE.md, docs/EXTERNAL_SYSTEM_ADAPTATION_PROMPT.md, docs/MIGRATIONS.md, docs/OBSERVABILITY.md,
+  docs/OFFICIAL_CONTRACT_CONFORMANCE.md, docs/OFFICIAL_PROVIDER_STUDY.md, docs/PRODUCT_INTERFACE.md, docs/RECIPE_DRAFT_TOOL.md, docs/ROUTING_POLICY.md, docs/RUNPOD_FLASH.md,
+  docs/RUNPOD_SERVERLESS_CATALOG.md, docs/SAAS_V1_OPERATIONS.md, docs/SDK_DISTRIBUTION.md, docs/TUPLE_VALIDATION.md
+
+  Config YAML + Templates: config/accounts/ (4), config/candidate_sources/ (1), config/engines/ (7), config/models/ (15), config/policy.yml, config/recipes/ (9),
+  config/surfaces/ (11), config/tenants/ (1), config/tuple_candidates/ (9), config/workers/ (11), config_templates/__init__.py, config_templates/policy.yml,
+  config_templates/accounts/ (3), config_templates/candidate_sources/ (1), config_templates/engines/ (7), config_templates/models/ (15), config_templates/recipes/ (7),
+  config_templates/surfaces/ (8), config_templates/tenants/ (1), config_templates/tuple_candidates/ (9), config_templates/workers/ (8)
+
+  監査対象外としたファイル: build/, .venv/, node_modules/, dist/, .pytest_cache/, .flash/
+

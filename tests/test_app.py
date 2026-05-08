@@ -81,6 +81,7 @@ import pytest
 @pytest.fixture(autouse=True)
 def isolate_gateway_env(monkeypatch, tmp_path) -> None:
     monkeypatch.setenv("GPUCALL_ALLOW_FAKE_AUTO_TUPLES", "1")
+    monkeypatch.setenv("GPUCALL_ALLOW_UNAUTHENTICATED", "1")
     credentials = tmp_path / "credentials.yml"
     credentials.write_text("version: 1\nproviders: {}\n", encoding="utf-8")
     monkeypatch.setenv("GPUCALL_CREDENTIALS", str(credentials))
@@ -288,6 +289,14 @@ def test_api_key_auth_when_configured(tmp_path, monkeypatch) -> None:
 
     assert unauthorized.status_code == 401
     assert authorized.status_code == 200
+
+
+def test_api_key_auth_fails_closed_without_explicit_dev_override(tmp_path, monkeypatch) -> None:
+    monkeypatch.delenv("GPUCALL_ALLOW_UNAUTHENTICATED", raising=False)
+    with TestClient(create_app(copy_config(tmp_path))) as client:
+        response = client.post("/v2/tasks/sync", json={"task": "infer", "mode": "sync"})
+
+    assert response.status_code == 401
 
 
 def test_tenant_api_key_sets_tenant_header_and_usage(tmp_path, monkeypatch) -> None:

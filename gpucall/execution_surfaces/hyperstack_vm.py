@@ -149,8 +149,10 @@ class HyperstackAdapter(TupleAdapter):
                 "    subprocess.check_call(['sudo', 'env', 'DEBIAN_FRONTEND=noninteractive', 'apt-get', 'install', '-y', 'python3-pip'])\n"
                 "deps='/tmp/gpucall/deps'\n"
                 "os.makedirs(deps, exist_ok=True)\n"
+                "vllm_pkg=os.environ.get('GPUCALL_HYPERSTACK_VLLM_PACKAGE','vllm>=0.6.3,<0.8')\n"
+                "transformers_pkg=os.environ.get('GPUCALL_HYPERSTACK_TRANSFORMERS_PACKAGE','transformers>=4.45.2,<4.52')\n"
                 "subprocess.check_call([sys.executable, '-m', 'pip', 'install', '--quiet', '--target', deps, "
-                "'boto3>=1.34', 'cryptography>=42', 'vllm==0.6.3', 'transformers==4.45.2', 'huggingface-hub[hf_transfer]', 'hf_transfer'])\n"
+                "'boto3>=1.34', 'cryptography>=42', vllm_pkg, transformers_pkg, 'huggingface-hub[hf_transfer]', 'hf_transfer'])\n"
                 "env=os.environ.copy()\n"
                 "env['PYTHONPATH']=deps + (os.pathsep + env['PYTHONPATH'] if env.get('PYTHONPATH') else '')\n"
                 "subprocess.check_call([sys.executable, '/tmp/gpucall/worker.py'], env=env)\n"
@@ -278,12 +280,8 @@ class HyperstackAdapter(TupleAdapter):
         if known_hosts:
             ssh.load_host_keys(known_hosts)
             ssh.set_missing_host_key_policy(paramiko.RejectPolicy())
-        elif os.getenv("GPUCALL_ENV", "").strip().lower() in {"prod", "production"} or os.getenv(
-            "GPUCALL_PRODUCTION", ""
-        ).strip().lower() in {"1", "true", "yes", "on"}:
-            raise TupleError("Hyperstack production SSH requires GPUCALL_HYPERSTACK_KNOWN_HOSTS", retryable=False, status_code=500)
         else:
-            ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+            raise TupleError("Hyperstack SSH requires GPUCALL_HYPERSTACK_KNOWN_HOSTS", retryable=False, status_code=500)
         ssh.connect(ip_address, username="ubuntu", key_filename=self.ssh_key_path, timeout=10)
         return ssh
 
@@ -845,7 +843,7 @@ def generate_text(payload, *, model, max_model_len):
         model=model,
         max_model_len=bounded_model_len(model, max_model_len),
         gpu_memory_utilization=float(os.environ.get("GPUCALL_WORKER_GPU_MEMORY_UTILIZATION", "0.90")),
-        trust_remote_code=True,
+        trust_remote_code=bool(payload.get("trust_remote_code")),
         tensor_parallel_size=int(os.environ.get("GPUCALL_WORKER_TENSOR_PARALLEL_SIZE", "1")),
         disable_log_stats=True,
     )
@@ -888,9 +886,9 @@ def execute_artifact_workload(payload):
     if task not in {"train", "fine-tune"} or payload.get("artifact_export") is None:
         return None
     export = payload["artifact_export"]
-    key = artifact_dek()
+    key = artifact_dek(payload, export)
     plaintext = artifact_plaintext(payload, task=task)
-    nonce = secrets.token_bytes(12)
+    nonce = artifact_nonce(payload, export)
     try:
         from cryptography.hazmat.primitives.ciphers.aead import AESGCM
     except ImportError as exc:
@@ -934,14 +932,60 @@ def artifact_plaintext(payload, *, task):
     return json.dumps({"kind": "gpucall-chained-artifact", "task": task, "recipe": payload.get("recipe"), "plan_id": payload.get("plan_id"), "inputs": inputs}, sort_keys=True, separators=(",", ":")).encode("utf-8")
 
 
-def artifact_dek():
+def artifact_dek(payload, export):
+    raw = artifact_dek_bytes()
+    try:
+        from cryptography.hazmat.primitives import hashes
+        from cryptography.hazmat.primitives.kdf.hkdf import HKDF
+    except ImportError as exc:
+        raise RuntimeError("cryptography is required for worker artifact encryption") from exc
+    return HKDF(
+        algorithm=hashes.SHA256(),
+        length=32,
+        salt=str((payload.get("attestations") or {}).get("governance_hash") or payload.get("plan_id") or "").encode("utf-8") or None,
+        info=f"gpucall-artifact:{export.get('artifact_chain_id')}:{export.get('version')}".encode("utf-8"),
+    ).derive(raw)
+
+
+def artifact_dek_bytes():
+    path = os.environ.get("GPUCALL_WORKER_ARTIFACT_DEK_FILE", "").strip()
+    if path:
+        try:
+            data = open(path, "rb").read().strip()
+        finally:
+            try:
+                os.unlink(path)
+            except OSError:
+                pass
+        if len(data) == 64:
+            try:
+                data = bytes.fromhex(data.decode("ascii"))
+            except Exception:
+                pass
+        if len(data) != 32:
+            raise RuntimeError("GPUCALL_WORKER_ARTIFACT_DEK_FILE must contain a 32-byte AES-256 key")
+        return data
     raw = os.environ.get("GPUCALL_WORKER_ARTIFACT_DEK_HEX", "")
     if not raw:
-        raise RuntimeError("GPUCALL_WORKER_ARTIFACT_DEK_HEX is required for artifact export")
+        raise RuntimeError("GPUCALL_WORKER_ARTIFACT_DEK_FILE or GPUCALL_WORKER_ARTIFACT_DEK_HEX is required for artifact export")
     key = bytes.fromhex(raw)
     if len(key) != 32:
         raise RuntimeError("GPUCALL_WORKER_ARTIFACT_DEK_HEX must encode a 32-byte AES-256 key")
     return key
+
+
+def artifact_nonce(payload, export):
+    material = json.dumps(
+        {
+            "artifact_chain_id": export.get("artifact_chain_id"),
+            "version": export.get("version"),
+            "plan_hash": (payload.get("attestations") or {}).get("governance_hash"),
+            "plan_id": payload.get("plan_id"),
+        },
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    return hashlib.sha256(material).digest()[:12]
 
 
 def write_artifact_ciphertext(export, ciphertext):

@@ -494,42 +494,50 @@ class RunpodVllmFlashBootAdapter(TupleAdapter):
             await asyncio.to_thread(runpod_flash_cleanup_resource_sync, str(resource_id), str(resource_name or ""))
 
     async def _run_flash(self, plan: CompiledPlan) -> Any:
-        os.environ.setdefault("FLASH_SENTINEL_TIMEOUT", str(max(int(plan.timeout_seconds), 300)))
-        os.environ.setdefault("FLASH_IS_LIVE_PROVISIONING", "true")
+        previous_env = {key: os.environ.get(key) for key in ("FLASH_SENTINEL_TIMEOUT", "FLASH_IS_LIVE_PROVISIONING", "RUNPOD_API_KEY")}
+        os.environ["FLASH_SENTINEL_TIMEOUT"] = str(max(int(plan.timeout_seconds), 300))
+        os.environ["FLASH_IS_LIVE_PROVISIONING"] = "true"
         if self.api_key:
-            os.environ.setdefault("RUNPOD_API_KEY", self.api_key)
+            os.environ["RUNPOD_API_KEY"] = self.api_key
         payload = plan_payload(plan)
         payload["resource_name"] = f"gpucall-flash-worker-{plan.plan_id}"
         if self.model:
             payload["model"] = self.model
         if self.max_model_len:
             payload["max_model_len"] = self.max_model_len
-        if self.endpoint_id:
-            return await asyncio.to_thread(self._runsync_endpoint_sync, payload, plan)
         try:
-            from runpod_flash import Endpoint  # type: ignore
-            from runpod_flash.endpoint import EndpointJob  # type: ignore
-            from gpucall.worker_contracts.runpod_flash import run_inference_on_flash
-        except ImportError as exc:
-            raise TupleError("runpod-flash is not installed", retryable=False, status_code=501) from exc
-        value = run_inference_on_flash(payload)
-        if inspect.isawaitable(value):
-            value = await value
-        if isinstance(value, dict) and value.get("id") and value.get("status") not in {"COMPLETED", "FAILED", "CANCELLED", "TIMED_OUT"}:
-            endpoint = Endpoint(id=self.endpoint_id) if self.endpoint_id else Endpoint(name="gpucall-flash-worker")
-            job = EndpointJob(value, endpoint)
-            await job.wait(timeout=max(float(plan.timeout_seconds), 300.0))
-            if job.error:
-                raise TupleError("RunPod Flash job failed", retryable=True, status_code=502, code="PROVIDER_JOB_FAILED")
-            return job.output
-        if hasattr(value, "wait") and hasattr(value, "output"):
-            await value.wait(timeout=max(float(plan.timeout_seconds), 300.0))
-            if getattr(value, "error", None):
-                raise TupleError("RunPod Flash job failed", retryable=True, status_code=502, code="PROVIDER_JOB_FAILED")
-            return value.output
-        if isinstance(value, dict) and value.get("status") == "COMPLETED" and "output" in value:
-            return value["output"]
-        return value
+            if self.endpoint_id:
+                return await asyncio.to_thread(self._runsync_endpoint_sync, payload, plan)
+            try:
+                from runpod_flash import Endpoint  # type: ignore
+                from runpod_flash.endpoint import EndpointJob  # type: ignore
+                from gpucall.worker_contracts.runpod_flash import run_inference_on_flash
+            except ImportError as exc:
+                raise TupleError("runpod-flash is not installed", retryable=False, status_code=501) from exc
+            value = run_inference_on_flash(payload)
+            if inspect.isawaitable(value):
+                value = await value
+            if isinstance(value, dict) and value.get("id") and value.get("status") not in {"COMPLETED", "FAILED", "CANCELLED", "TIMED_OUT"}:
+                endpoint = Endpoint(id=self.endpoint_id) if self.endpoint_id else Endpoint(name="gpucall-flash-worker")
+                job = EndpointJob(value, endpoint)
+                await job.wait(timeout=max(float(plan.timeout_seconds), 300.0))
+                if job.error:
+                    raise TupleError("RunPod Flash job failed", retryable=True, status_code=502, code="PROVIDER_JOB_FAILED")
+                return job.output
+            if hasattr(value, "wait") and hasattr(value, "output"):
+                await value.wait(timeout=max(float(plan.timeout_seconds), 300.0))
+                if getattr(value, "error", None):
+                    raise TupleError("RunPod Flash job failed", retryable=True, status_code=502, code="PROVIDER_JOB_FAILED")
+                return value.output
+            if isinstance(value, dict) and value.get("status") == "COMPLETED" and "output" in value:
+                return value["output"]
+            return value
+        finally:
+            for key, old_value in previous_env.items():
+                if old_value is None:
+                    os.environ.pop(key, None)
+                else:
+                    os.environ[key] = old_value
 
     def _runsync_endpoint_sync(self, payload: dict[str, Any], plan: CompiledPlan) -> Any:
         response = requests_session().post(

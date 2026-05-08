@@ -3,7 +3,6 @@ from __future__ import annotations
 import hashlib
 import json
 import os
-import secrets
 from datetime import datetime, timezone
 from typing import Any
 
@@ -42,9 +41,9 @@ def _split_learning_result(payload: dict[str, Any]) -> dict[str, Any]:
 
 def _encrypted_artifact_export(payload: dict[str, Any], *, task: str) -> dict[str, Any]:
     export = payload["artifact_export"]
-    key = _artifact_dek()
+    key = _artifact_dek(payload, export)
     plaintext = _artifact_plaintext(payload, task=task)
-    nonce = secrets.token_bytes(12)
+    nonce = _artifact_nonce(payload, export)
     try:
         from cryptography.hazmat.primitives.ciphers.aead import AESGCM
     except ImportError as exc:
@@ -107,10 +106,46 @@ def _split_learning_summary(payload: dict[str, Any]) -> dict[str, Any] | None:
     }
 
 
-def _artifact_dek() -> bytes:
+def _artifact_dek(payload: dict[str, Any], export: dict[str, Any]) -> bytes:
+    raw = _artifact_dek_bytes()
+    chain_id = str(export.get("artifact_chain_id") or "")
+    version = str(export.get("version") or "")
+    plan_hash = str((payload.get("attestations") or {}).get("governance_hash") or payload.get("plan_id") or "")
+    try:
+        from cryptography.hazmat.primitives import hashes
+        from cryptography.hazmat.primitives.kdf.hkdf import HKDF
+    except ImportError as exc:
+        raise RuntimeError("cryptography is required for worker artifact encryption") from exc
+    return HKDF(
+        algorithm=hashes.SHA256(),
+        length=32,
+        salt=plan_hash.encode("utf-8") or None,
+        info=f"gpucall-artifact:{chain_id}:{version}".encode("utf-8"),
+    ).derive(raw)
+
+
+def _artifact_dek_bytes() -> bytes:
+    path = os.getenv("GPUCALL_WORKER_ARTIFACT_DEK_FILE", "").strip()
+    if path:
+        try:
+            raw_bytes = open(path, "rb").read()
+        finally:
+            try:
+                os.unlink(path)
+            except OSError:
+                pass
+        key = raw_bytes.strip()
+        if len(key) == 64:
+            try:
+                key = bytes.fromhex(key.decode("ascii"))
+            except Exception:
+                pass
+        if len(key) != 32:
+            raise RuntimeError("GPUCALL_WORKER_ARTIFACT_DEK_FILE must contain a 32-byte AES-256 key")
+        return key
     raw = os.getenv("GPUCALL_WORKER_ARTIFACT_DEK_HEX", "")
     if not raw:
-        raise RuntimeError("GPUCALL_WORKER_ARTIFACT_DEK_HEX is required for artifact export")
+        raise RuntimeError("GPUCALL_WORKER_ARTIFACT_DEK_FILE or GPUCALL_WORKER_ARTIFACT_DEK_HEX is required for artifact export")
     try:
         key = bytes.fromhex(raw)
     except ValueError as exc:
@@ -118,6 +153,20 @@ def _artifact_dek() -> bytes:
     if len(key) != 32:
         raise RuntimeError("GPUCALL_WORKER_ARTIFACT_DEK_HEX must encode a 32-byte AES-256 key")
     return key
+
+
+def _artifact_nonce(payload: dict[str, Any], export: dict[str, Any]) -> bytes:
+    material = json.dumps(
+        {
+            "artifact_chain_id": export.get("artifact_chain_id"),
+            "version": export.get("version"),
+            "plan_hash": (payload.get("attestations") or {}).get("governance_hash"),
+            "plan_id": payload.get("plan_id"),
+        },
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    return hashlib.sha256(material).digest()[:12]
 
 
 def _associated_data(payload: dict[str, Any], export: dict[str, Any]) -> bytes:

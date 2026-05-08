@@ -5,10 +5,11 @@ max_model_len: 32768
 min_vram_gb: 80
 supported_engines: [modal-vllm, hyperstack-vllm, runpod-vllm-openai]
 input_contracts: [text, chat_messages]
-output_contracts: [plain-text, json-object]
+output_contracts: [plain-text, json_object]
 supports_vision: false
 supports_guided_decoding: true
 supports_streaming: true
+trust_remote_code: true
 source: https://huggingface.co/Qwen/Qwen2.5-32B-Instruct
 evidence:
   - Hugging Face model card states current config is set for context length up to 32768 tokens.

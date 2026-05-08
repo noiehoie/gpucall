@@ -6,6 +6,14 @@ services:
         GPUCALL_GIT_COMMIT: ${GPUCALL_GIT_COMMIT:-}
     user: "${GPUCALL_UID:-1000}:${GPUCALL_GID:-1000}"
     restart: unless-stopped
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=256m
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    pids_limit: 512
     ports:
       - "${GPUCALL_BIND_ADDRESS:-127.0.0.1}:18088:8080"
     environment:

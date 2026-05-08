@@ -45,8 +45,8 @@ def active_manifest_leases(path: Path) -> list[dict[str, Any]]:
         if not remote_id:
             continue
         event = str(row.get("event") or "")
-        if event in {"destroyed", "destroy.requested"}:
+        if event == "destroyed":
             active.pop(remote_id, None)
-        elif event in {"provision.created", "lease.started"}:
+        elif event in {"provision.created", "lease.started", "destroy.requested", "destroy.pending"}:
             active[remote_id] = row
     return list(active.values())

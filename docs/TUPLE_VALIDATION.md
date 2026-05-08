@@ -81,11 +81,34 @@ The observed `endpoint_contract`, `output_contract`, and `stream_contract` must 
 
 During `launch-check --profile production`, a successful gateway smoke also satisfies live validation for the exact tuple it actually exercises. A retryable vendor capacity artifact, for example an `iaas_vm` lease attempt returning no stock before any VM is created, is reported as `capacity_unavailable_tuples` instead of being treated as a code or cleanup failure. It does not hide leaked resources; `cleanup-audit` must still return `ok: true`.
 
+## Validator Planning
+
+Billable validation is planned before it is executed. The planner reads the
+execution catalog, TTL overlays, pricing rules, and existing validation evidence
+and emits a deterministic queue:
+
+```bash
+gpucall validator-plan --config-dir config --budget-usd 0.10 --max-items 3
+gpucall validator-plan --config-dir config --budget-usd 0.10 --live
+gpucall validator-plan --config-dir config --budget-usd 0.10 --include-candidates
+```
+
+The command does not launch provider resources. It selects only work whose
+estimated minimum billable smoke cost fits the supplied budget, and records skip
+reasons such as `validation_budget_exhausted`,
+`candidate_missing_endpoint_or_target`, and `live_status_blocked`. This is the
+control surface a background validator daemon should consume before running
+`tuple-smoke --write-artifact`.
+
+`live_status_overlay.next_revalidate_after` marks when a TTL-scoped provider
+observation should be refreshed. `validation_evidence.expires_at` marks when an
+exact tuple smoke artifact stops satisfying production readiness.
+
 ## Artifact and Split-Learning Worker Paths
 
 Workers support governed artifact execution only when the worker environment has explicit artifact export capabilities:
 
-- `GPUCALL_WORKER_ARTIFACT_DEK_HEX`: 32-byte AES-256 key encoded as hex. This must be released to the worker by tenant KMS/HYOK/BYOK or an attestation-bound mechanism; the gateway must not generate it.
+- `GPUCALL_WORKER_ARTIFACT_DEK_FILE`: path to a chmod 600 32-byte AES-256 key file, or `GPUCALL_WORKER_ARTIFACT_DEK_HEX`: 32-byte AES-256 key encoded as hex. This must be released to the worker by tenant KMS/HYOK/BYOK or an attestation-bound mechanism; the gateway must not generate it.
 - `GPUCALL_WORKER_ARTIFACT_BUCKET` plus optional `GPUCALL_WORKER_ARTIFACT_PREFIX`, or an explicit `GPUCALL_WORKER_ARTIFACT_URI`.
 
 For `train` and `fine-tune`, the worker fetches DataRefs, encrypts a chained artifact bundle with AES-GCM, writes ciphertext directly to object storage, and returns an `artifact_manifest`. For `split-infer`, the worker fetches the activation ref, verifies the bytes through the DataRef path, and returns a deterministic split-learning acceptance result. Missing key material or object-store destination is a hard worker error, not a production success.

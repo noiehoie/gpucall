@@ -15,15 +15,50 @@ def test_execution_catalog_separates_accounts_surfaces_and_workers() -> None:
 
     account_refs = {account.account_ref for account in snapshot.accounts}
     surfaces = {resource.execution_surface for resource in snapshot.resources}
+    normalized_surfaces = {surface.execution_surface for surface in snapshot.execution_surfaces}
 
     assert {"hyperstack", "modal", "runpod"}.issubset(account_refs)
     assert {"iaas_vm", "function_runtime", "managed_endpoint"}.issubset(surfaces)
+    assert {"iaas_vm", "function_runtime", "managed_endpoint"}.issubset(normalized_surfaces)
     assert all(resource.account_ref for resource in snapshot.resources)
     assert all(resource.worker_binding_ref for resource in snapshot.resources)
     assert all(worker.execution_surface for worker in snapshot.workers)
     assert all(worker.worker_binding_ref for worker in snapshot.workers)
+    assert all(offering.account_ref for offering in snapshot.provider_offerings)
+    assert all(offering.gpu_sku_ref.startswith("gpu:") for offering in snapshot.provider_offerings)
+    assert all(claim.resource_ref and claim.worker_ref for claim in snapshot.capability_claims)
+    assert all(claim.security_tier for claim in snapshot.capability_claims)
+    assert all(rule.account_ref and rule.resource_ref for rule in snapshot.pricing_rules)
+    assert all(overlay.resource_ref for overlay in snapshot.live_status_overlay)
     assert len(snapshot.snapshot_id) == 64
     assert len(snapshot.config_hash) == 64
+    assert isinstance(snapshot.resources, tuple)
+    assert isinstance(snapshot.workers, tuple)
+
+
+def test_execution_catalog_normalizes_hardware_surface_pricing_and_network() -> None:
+    config = load_config(Path("config"))
+    snapshot = build_resource_catalog_snapshot(config, config_dir=Path("config"))
+
+    gpu_refs = {sku.sku_ref: sku for sku in snapshot.hardware_catalog}
+    surfaces = {surface.execution_surface: surface for surface in snapshot.execution_surfaces}
+    offerings = {offering.resource_ref: offering for offering in snapshot.provider_offerings}
+    claims = {claim.resource_ref: claim for claim in snapshot.capability_claims}
+    prices = {rule.resource_ref: rule for rule in snapshot.pricing_rules}
+
+    assert "gpu:a100" in gpu_refs
+    assert gpu_refs["gpu:a100"].architecture == "ampere"
+    assert "gpu:h200x4" in gpu_refs
+    assert gpu_refs["gpu:h200x4"].vram_gb == 564
+    assert surfaces["iaas_vm"].cleanup_contract == "resource_lease_destroy_required"
+    assert surfaces["function_runtime"].lifecycle_kind == "scale_to_zero_function"
+    assert surfaces["managed_endpoint"].network_exposure == "provider_public_endpoint"
+    assert offerings["active_tuple:hyperstack-a100:resource"].network_topology["ssh_remote_cidr"] == "203.0.113.10/32"
+    assert claims["active_tuple:hyperstack-a100:resource"].security_tier == "encrypted_capsule"
+    assert claims["active_tuple:hyperstack-a100:resource"].sovereign_jurisdiction == "CA"
+    assert claims["active_tuple:hyperstack-a100:resource"].dedicated_gpu is True
+    assert claims["active_tuple:hyperstack-a100:resource"].requires_attestation is False
+    assert prices["active_tuple:hyperstack-a100:resource"].billing_granularity_seconds == 60
 
 
 def test_execution_catalog_generates_snapshot_pinned_tuple_candidates() -> None:

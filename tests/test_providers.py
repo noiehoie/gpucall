@@ -1198,7 +1198,7 @@ def test_hyperstack_worker_script_invokes_vllm_not_smoke_output(monkeypatch, tmp
     adapter._provision_and_start(plan_payload_plan())
 
     assert commands
-    assert "vllm==0.6.3" in commands[0]
+    assert "GPUCALL_HYPERSTACK_VLLM_PACKAGE" in commands[0]
     assert "GPUCALL_WORKER_MODEL" in commands[0]
     assert "cat > /tmp/gpucall/input.json" not in commands[0]
     assert "cat > /tmp/gpucall/worker.py" not in commands[0]

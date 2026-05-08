@@ -16,6 +16,7 @@ output_contracts: [plain-text, json_object]
 supports_vision: false
 supports_guided_decoding: true
 supports_streaming: true
+trust_remote_code: true
 source: configured
 evidence: []
 production_ready: true

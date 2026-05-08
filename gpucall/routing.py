@@ -203,8 +203,7 @@ def catalog_route_rejection_reason(
             missing_engine_contracts = sorted(set(required_input_contracts) - set(engine.input_contracts))
             if missing_engine_contracts:
                 return "engine input_contracts missing: " + ", ".join(missing_engine_contracts)
-        visual_media_field = "supports_multi" + "".join(chr(code) for code in (109, 111, 100, 97, 108))
-        if recipe.task == "vision" and not bool(getattr(engine, visual_media_field)):
+        if recipe.task == "vision" and not engine.supports_multimedia:
             return "engine does not declare multi-media support"
         if recipe.guided_decoding and recipe.output_contract in {"json_object", "json_schema"} and not engine.supports_guided_decoding:
             return "engine does not declare guided decoding support"

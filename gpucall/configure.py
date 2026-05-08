@@ -142,6 +142,6 @@ def _print_next_steps(configured: list[str]) -> None:
     print("  Next steps:")
     print("    gpucall doctor")
     print("    gpucall explain-config text-infer-standard --mode async")
-    print("    gpucall seed-liveness text-infer-standard --count 100")
+    print("    gpucall seed-liveness text-infer-standard --count 100 --budget-usd 0.10")
     print()
     print("  Re-run setup any time with 'gpucall configure'.")

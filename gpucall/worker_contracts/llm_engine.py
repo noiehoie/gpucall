@@ -25,7 +25,7 @@ _LOADED_MODEL: str | None = None
 
 
 def generate_text(payload: dict[str, Any], *, model: str, max_model_len: int) -> str:
-    llm = _load_vllm(model, max_model_len)
+    llm = _load_vllm(model, max_model_len, trust_remote_code=bool(payload.get("trust_remote_code")))
     prompt = format_prompt_for_model(llm, model, payload)
     outputs = llm.generate([prompt], sampling_params(payload), use_tqdm=False)
     return outputs[0].outputs[0].text.strip()
@@ -122,7 +122,7 @@ def is_structured_payload(payload: dict[str, Any]) -> bool:
     return response_format.get("type") in {"json_object", "json_schema"}
 
 
-def _load_vllm(model_id: str, max_model_len: int) -> Any:
+def _load_vllm(model_id: str, max_model_len: int, *, trust_remote_code: bool = False) -> Any:
     global _LLM, _LOADED_MODEL
     _assert_model_allowed(model_id)
     if _LOADED_MODEL == model_id and _LLM is not None:
@@ -144,7 +144,7 @@ def _load_vllm(model_id: str, max_model_len: int) -> Any:
         model=model_id,
         max_model_len=bounded_model_len(model_id, max_model_len),
         gpu_memory_utilization=float(os.getenv("GPUCALL_WORKER_GPU_MEMORY_UTILIZATION", "0.90")),
-        trust_remote_code=True,
+        trust_remote_code=trust_remote_code,
         tensor_parallel_size=int(os.getenv("GPUCALL_WORKER_TENSOR_PARALLEL_SIZE", "1")),
         disable_log_stats=True,
     )

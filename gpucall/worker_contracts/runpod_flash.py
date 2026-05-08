@@ -36,7 +36,7 @@ if Endpoint is not None and GpuGroup is not None:
         idle_timeout=300,
         dependencies=[
             "boto3>=1.34",
-            "transformers==4.45.2",
+            os.getenv("GPUCALL_RUNPOD_FLASH_TRANSFORMERS_PACKAGE", "transformers>=4.45.2,<4.52"),
             "torch>=2.4",
             "accelerate>=0.34",
             "huggingface-hub==0.25.2",
@@ -171,6 +171,7 @@ if Endpoint is not None and GpuGroup is not None:
 
         model_id = str(data.get("model") or _os.getenv("GPUCALL_RUNPOD_FLASH_MODEL") or "Qwen/Qwen2.5-1.5B-Instruct")
         max_model_len = int(data.get("max_model_len") or _os.getenv("GPUCALL_RUNPOD_FLASH_MAX_MODEL_LEN", "16384"))
+        trust_remote_code = bool(data.get("trust_remote_code"))
         _assert_model_allowed(model_id)
 
         import torch
@@ -181,12 +182,12 @@ if Endpoint is not None and GpuGroup is not None:
             model_obj = cache["model"]
             tokenizer = cache["tokenizer"]
         else:
-            tokenizer = AutoTokenizer.from_pretrained(model_id, trust_remote_code=True)
+            tokenizer = AutoTokenizer.from_pretrained(model_id, trust_remote_code=trust_remote_code)
             model_obj = AutoModelForCausalLM.from_pretrained(
                 model_id,
                 torch_dtype=torch.float16 if torch.cuda.is_available() else torch.float32,
                 device_map="auto",
-                trust_remote_code=True,
+                trust_remote_code=trust_remote_code,
             )
             model_obj.eval()
             cache.clear()
@@ -249,7 +250,7 @@ def _execute_artifact_workload(payload: dict) -> dict | None:
 
 
 def _generate_text(payload: dict, *, model: str, max_model_len: int) -> str:
-    model_obj, tokenizer = _load_transformers(model)
+    model_obj, tokenizer = _load_transformers(model, trust_remote_code=bool(payload.get("trust_remote_code")))
     prompt = _format_prompt_for_model(tokenizer, model, payload)
     inputs = tokenizer(
         prompt,
@@ -421,7 +422,7 @@ def _is_structured_payload(payload: dict) -> bool:
     return response_format.get("type") in {"json_object", "json_schema"}
 
 
-def _load_transformers(model_id: str) -> tuple:
+def _load_transformers(model_id: str, *, trust_remote_code: bool = False) -> tuple:
     global _LLM, _LOADED_MODEL
     _assert_model_allowed(model_id)
     if _LOADED_MODEL == model_id and _LLM is not None:
@@ -431,12 +432,12 @@ def _load_transformers(model_id: str) -> tuple:
     import torch
     from transformers import AutoModelForCausalLM, AutoTokenizer
 
-    tokenizer = AutoTokenizer.from_pretrained(model_id, trust_remote_code=True)
+    tokenizer = AutoTokenizer.from_pretrained(model_id, trust_remote_code=trust_remote_code)
     model = AutoModelForCausalLM.from_pretrained(
         model_id,
         torch_dtype=torch.float16 if torch.cuda.is_available() else torch.float32,
         device_map="auto",
-        trust_remote_code=True,
+        trust_remote_code=trust_remote_code,
     )
     model.eval()
     _LLM = (model, tokenizer)

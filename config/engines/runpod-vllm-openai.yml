@@ -2,7 +2,7 @@ name: runpod-vllm-openai
 kind: vllm
 version: worker-vllm
 input_contracts: [chat_messages]
-output_contracts: [openai-chat-completions, plain-text, json-object]
+output_contracts: [openai-chat-completions, plain-text, json_object]
 supports_guided_decoding: true
 supports_streaming: true
 supports_multimodal: true

@@ -124,6 +124,11 @@ class GovernanceCompiler:
         selected_spec = self.tuples[tuple_chain[0]]
         selected_tuple = self._execution_tuple(recipe=recipe, tuple_spec=selected_spec)
         plan.attestations["selected_execution_tuple"] = selected_tuple
+        selected_model = self.models.get(selected_spec.model_ref) if selected_spec.model_ref else None
+        plan.attestations["model_trust_policy"] = {
+            "model_ref": selected_spec.model_ref,
+            "trust_remote_code": bool(selected_model.trust_remote_code) if selected_model is not None else False,
+        }
         plan.attestations["cost_estimate"] = self._cost_estimate(selected_spec, request, recipe, timeout)
         plan.attestations["security_gate"] = self._security_gate(recipe, selected_spec)
         if request.artifact_export is not None or recipe.requires_key_release:

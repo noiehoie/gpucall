@@ -938,7 +938,7 @@ def _candidate_output_satisfies(candidate_contract: str, required_contract: str)
         return True
     if required_contract == "plain-text" and candidate_contract in {"openai-chat-completions", "gpucall-tuple-result"}:
         return True
-    if required_contract in {"json-object", "json_schema"} and candidate_contract in {"openai-chat-completions", "gpucall-tuple-result"}:
+    if required_contract in {"json_object", "json_schema"} and candidate_contract in {"openai-chat-completions", "gpucall-tuple-result"}:
         return True
     return False
 
@@ -1236,7 +1236,7 @@ def _proposed_recipe_from_sanitized(sanitized: Mapping[str, Any]) -> dict[str, A
 
 def _route_output_contract(proposed: Mapping[str, Any]) -> str:
     raw = str(proposed.get("output_contract") or "").strip().lower().replace("_", "-")
-    if raw in {"json-object", "json-schema"}:
+    if raw in {"json_object", "json-schema"}:
         return raw.replace("-", "_")
     if raw in {"plain-text", "text", "plain"}:
         return "plain-text"

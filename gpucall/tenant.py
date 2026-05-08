@@ -40,7 +40,9 @@ class TenantUsageLedger:
             conn.execute("CREATE INDEX IF NOT EXISTS idx_tenant_usage_time ON tenant_usage(tenant_id, recorded_at)")
 
     def _connect(self) -> sqlite3.Connection:
-        return sqlite3.connect(self.path)
+        conn = sqlite3.connect(self.path, timeout=30)
+        conn.execute("PRAGMA journal_mode=WAL")
+        return conn
 
     def reserve(self, tenant_id: str, estimated_cost_usd: float, *, tuple: str | None, recipe: str | None, plan_id: str | None) -> None:
         with self._connect() as conn:

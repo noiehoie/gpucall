@@ -182,7 +182,7 @@ gpucall tuple-audit
 gpucall cost-audit
 gpucall cleanup-audit
 gpucall launch-check --profile static
-gpucall seed-liveness text-infer-standard --count 100
+gpucall seed-liveness text-infer-standard --count 100 --budget-usd 0.10
 gpucall registry show
 gpucall smoke
 gpucall cost-audit --live

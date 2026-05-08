@@ -5,10 +5,11 @@ max_model_len: 131072
 min_vram_gb: 80
 supported_engines: [runpod-vllm-openai]
 input_contracts: [text, chat_messages, image]
-output_contracts: [plain-text, json-object]
+output_contracts: [plain-text, json_object]
 supports_vision: true
 supports_guided_decoding: true
 supports_streaming: true
+trust_remote_code: true
 source: https://docs.mistral.ai/models/model-cards/mistral-small-3-2-25-06
 evidence:
   - Mistral model card lists 128k context and features including structured outputs, OCR, and Document QnA.

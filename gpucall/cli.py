@@ -44,6 +44,7 @@ from gpucall.audit import AuditTrail
 from gpucall.routing import tuple_route_rejection_reason
 from gpucall.sqlite_store import SQLiteJobStore
 from gpucall.tenant import TenantUsageLedger
+from gpucall.validator_plan import build_validator_plan, dumps_validator_plan
 
 
 def main() -> None:
@@ -74,6 +75,7 @@ def main() -> None:
     seed.add_argument("--config-dir", type=Path, default=default_config_dir())
     seed.add_argument("--count", type=int, default=3)
     seed.add_argument("--interval", type=float, default=0.0, help="seconds to sleep between seeds; with --count 0, run until interrupted")
+    seed.add_argument("--budget-usd", type=float, required=True, help="hard cost ceiling for all seed executions")
     smoke = sub.add_parser("smoke")
     smoke.add_argument("--url", default="http://127.0.0.1:18088")
     smoke.add_argument("--api-key", default=None)
@@ -100,6 +102,12 @@ def main() -> None:
     execution_catalog.add_argument("--config-dir", type=Path, default=default_config_dir())
     execution_catalog.add_argument("--recipe", default=None)
     execution_catalog.add_argument("--live", action="store_true", help="revalidate active tuple catalog metadata with live provider catalogs")
+    validator_plan = sub.add_parser("validator-plan")
+    validator_plan.add_argument("--config-dir", type=Path, default=default_config_dir())
+    validator_plan.add_argument("--budget-usd", type=float, required=True)
+    validator_plan.add_argument("--max-items", type=int, default=None)
+    validator_plan.add_argument("--include-candidates", action="store_true")
+    validator_plan.add_argument("--live", action="store_true", help="include live catalog overlay before planning validation work")
     audit = sub.add_parser("audit")
     audit.add_argument("action", choices=["verify", "tail", "rotate"])
     audit.add_argument("--limit", type=int, default=20)
@@ -199,7 +207,7 @@ def main() -> None:
     elif args.command == "validate-config":
         validate_config_command(args.config_dir)
     elif args.command == "seed-liveness":
-        asyncio.run(seed_liveness(args.config_dir, args.recipe_name, args.count, interval=args.interval))
+        asyncio.run(seed_liveness(args.config_dir, args.recipe_name, args.count, interval=args.interval, budget_usd=args.budget_usd))
     elif args.command == "smoke":
         smoke_gateway(args.url, api_key=args.api_key, recipe=args.recipe)
     elif args.command == "tuple-smoke":
@@ -230,6 +238,14 @@ def main() -> None:
         catalog_command(args.action, args.config_dir, args.db)
     elif args.command == "execution-catalog":
         execution_catalog_command(args.action, args.config_dir, recipe=args.recipe, live=args.live)
+    elif args.command == "validator-plan":
+        validator_plan_command(
+            args.config_dir,
+            budget_usd=args.budget_usd,
+            max_items=args.max_items,
+            include_candidates=args.include_candidates,
+            live=args.live,
+        )
     elif args.command == "security":
         security_command(args.action, args.config_dir)
     elif args.command == "openapi":
@@ -629,12 +645,15 @@ async def post_launch_report_command(config_dir: Path) -> None:
     print(json.dumps({**report, "report_path": str(path)}, indent=2, sort_keys=True, default=str))
 
 
-async def seed_liveness(config_dir: Path, recipe_name: str, count: int, *, interval: float = 0.0) -> None:
+async def seed_liveness(config_dir: Path, recipe_name: str, count: int, *, interval: float = 0.0, budget_usd: float) -> None:
+    if budget_usd < 0:
+        raise SystemExit("--budget-usd must be non-negative")
     runtime = build_runtime(config_dir)
     recipe = runtime.compiler.recipes.get(recipe_name)
     if recipe is None:
         raise SystemExit(f"unknown recipe: {recipe_name}")
     completed = 0
+    reserved_cost = 0.0
     while count <= 0 or completed < count:
         request = TaskRequest(
             task=recipe.task,
@@ -643,11 +662,17 @@ async def seed_liveness(config_dir: Path, recipe_name: str, count: int, *, inter
             inline_inputs={"prompt": {"value": "gpucall liveness seed"}},
         )
         plan = runtime.compiler.compile(request)
+        estimated = float((plan.attestations.get("cost_estimate") or {}).get("estimated_cost_usd") or 0.0)
+        if reserved_cost + estimated > budget_usd:
+            raise SystemExit(
+                f"seed-liveness budget exceeded before execution: reserved={reserved_cost:.6f}, next={estimated:.6f}, budget={budget_usd:.6f}"
+            )
+        reserved_cost += estimated
         await runtime.dispatcher.execute_sync(plan)
         completed += 1
         if interval > 0 and (count <= 0 or completed < count):
             await asyncio.sleep(interval)
-    print(json.dumps({"recipe": recipe_name, "seed_jobs": completed}, indent=2, sort_keys=True))
+    print(json.dumps({"recipe": recipe_name, "seed_jobs": completed, "reserved_cost_usd": reserved_cost}, indent=2, sort_keys=True))
 
 
 async def provider_smoke_command(
@@ -893,6 +918,26 @@ def execution_catalog_command(action: str, config_dir: Path, *, recipe: str | No
         if selected_recipe is None:
             raise SystemExit(f"unknown recipe: {recipe}")
     print(dumps_candidates(generate_tuple_candidates(snapshot, recipe=selected_recipe)), end="")
+
+
+def validator_plan_command(
+    config_dir: Path,
+    *,
+    budget_usd: float,
+    max_items: int | None = None,
+    include_candidates: bool = False,
+    live: bool = False,
+) -> None:
+    config = load_config(config_dir)
+    evidence = live_tuple_catalog_evidence(_live_catalog_scope(config, config_dir), load_credentials()) if live else None
+    snapshot = build_resource_catalog_snapshot(config, config_dir=config_dir, live_catalog_evidence=evidence)
+    plan = build_validator_plan(
+        snapshot,
+        budget_usd=max(0.0, budget_usd),
+        max_items=max_items,
+        include_candidates=include_candidates,
+    )
+    print(dumps_validator_plan(plan), end="")
 
 
 def _live_catalog_scope(config, config_dir: Path) -> dict[str, object]:

@@ -2,7 +2,7 @@ name: runpod-serverless-gpucall
 kind: runpod-serverless
 version: gpucall-tuple-result
 input_contracts: [text, chat_messages, data_refs]
-output_contracts: [gpucall-tuple-result, plain-text, json-object]
+output_contracts: [gpucall-tuple-result, plain-text, json_object]
 supports_guided_decoding: true
 supports_streaming: false
 supports_multimodal: false

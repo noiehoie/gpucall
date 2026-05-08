@@ -5,10 +5,11 @@ max_model_len: 1048576
 min_vram_gb: 320
 supported_engines: [hyperstack-vllm, modal-vllm, runpod-vllm-openai]
 input_contracts: [text, chat_messages]
-output_contracts: [plain-text, json-object]
+output_contracts: [plain-text, json_object]
 supports_vision: false
 supports_guided_decoding: true
 supports_streaming: true
+trust_remote_code: true
 source: https://arxiv.org/abs/2501.15383
 evidence:
   - Qwen2.5-1M model card says Qwen2.5-14B-Instruct-1M supports 1,010,000 token contexts.

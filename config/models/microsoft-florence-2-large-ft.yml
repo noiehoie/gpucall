@@ -5,10 +5,11 @@ max_model_len: 8192
 min_vram_gb: 16
 supported_engines: [modal-transformers-vision]
 input_contracts: [text, image, data_refs]
-output_contracts: [plain-text, json-object]
+output_contracts: [plain-text, json_object]
 supports_vision: true
 supports_guided_decoding: false
 supports_streaming: false
+trust_remote_code: true
 source: https://huggingface.co/microsoft/Florence-2-large-ft
 evidence:
   - Hugging Face model card documents Florence-2-large-ft as a 0.77B fine-tuned model for downstream vision tasks including captioning, VQA/TextVQA, and OCR.

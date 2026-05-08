@@ -3,7 +3,8 @@ from __future__ import annotations
 import hashlib
 import json
 import os
-from datetime import datetime, timezone
+import re
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from statistics import median
 from typing import Any, Literal, Mapping
@@ -17,7 +18,7 @@ from gpucall.execution.registry import adapter_descriptor, vendor_family_for_ada
 
 
 class ProviderAccountSpec(BaseModel):
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="forbid", frozen=True)
 
     account_ref: str
     provider_family: str
@@ -26,8 +27,125 @@ class ProviderAccountSpec(BaseModel):
     api_base: str | None = None
 
 
+class GpuSkuSpec(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    sku_ref: str
+    normalized_name: str
+    vendor: str = "nvidia"
+    vram_gb: int
+    architecture: str | None = None
+    memory_bandwidth_gbps: int | None = None
+    source: Literal["builtin", "configured", "candidate"] = "configured"
+
+
+class ExecutionSurfaceSpec(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    surface_ref: str
+    execution_surface: str
+    lifecycle_kind: str
+    isolation_model: str
+    cleanup_contract: str
+    network_exposure: str
+    cold_start_class: str
+
+
+class ProviderOfferingSpec(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    offering_ref: str
+    source: Literal["active_tuple", "tuple_candidate"]
+    account_ref: str
+    provider_family: str
+    resource_ref: str
+    surface_ref: str
+    gpu_sku_ref: str
+    execution_surface: str
+    provider_sku: str
+    region: str | None = None
+    zone: str | None = None
+    network_topology: dict[str, Any] = Field(default_factory=dict)
+
+
+class CapabilityClaimSpec(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    claim_ref: str
+    resource_ref: str
+    worker_ref: str
+    model_ref: str | None = None
+    engine_ref: str | None = None
+    claim_source: Literal["configured_binding", "candidate_matrix"] = "configured_binding"
+    required_input_contracts: list[str] = Field(default_factory=list)
+    output_contract: str | None = None
+    max_model_len: int
+    vram_gb: int
+    security_tier: str = "shared_gpu"
+    sovereign_jurisdiction: str | None = None
+    dedicated_gpu: bool = False
+    tee_boot_capable: bool = False
+    requires_attestation: bool = False
+    supports_key_release: bool = False
+    attestation_type: str | None = None
+
+
+class PricingRuleSpec(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    pricing_ref: str
+    source: Literal["configured", "candidate", "live_overlay"] = "configured"
+    account_ref: str
+    resource_ref: str
+    price_per_second: float
+    billing_granularity_seconds: float | None = None
+    min_billable_seconds: float | None = None
+    scaledown_window_seconds: float | None = None
+    standing_cost_per_second: float | None = None
+    endpoint_cost_per_second: float | None = None
+
+
+class LiveStatusOverlaySpec(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    overlay_ref: str
+    resource_ref: str
+    checked: bool
+    status: Literal["not_checked", "unknown", "live_revalidated", "blocked"]
+    stock_state: Literal["available", "unavailable", "unknown"] = "unknown"
+    price_per_second: float | None = None
+    price_source: str | None = None
+    dimensions: list[str] = Field(default_factory=list)
+    observed_at: str | None = None
+    next_revalidate_after: str | None = None
+    ttl_seconds: int
+    finding_count: int = 0
+    finding_hash: str | None = None
+
+
+class ValidationEvidenceSpec(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    evidence_ref: str
+    tuple_name: str
+    resource_ref: str | None = None
+    worker_ref: str | None = None
+    artifact_count: int = 0
+    passed_count: int = 0
+    failed_count: int = 0
+    latest_passed: bool = False
+    latest_artifact_hash: str | None = None
+    observed_wall_seconds_latest: float | None = None
+    observed_wall_seconds_p50: float | None = None
+    observed_wall_seconds_p99: float | None = None
+    observed_wall_seconds_max: float | None = None
+    attestation_evidence_hash: str | None = None
+    attestation_verified: bool = False
+    expires_at: str | None = None
+
+
 class ResourceCatalogEntry(BaseModel):
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="forbid", frozen=True)
 
     resource_ref: str
     source: Literal["active_tuple", "tuple_candidate"]
@@ -55,7 +173,7 @@ class ResourceCatalogEntry(BaseModel):
 
 
 class WorkerContractSpec(BaseModel):
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="forbid", frozen=True)
 
     worker_ref: str
     source: Literal["active_tuple", "tuple_candidate"]
@@ -75,19 +193,26 @@ class WorkerContractSpec(BaseModel):
 
 
 class ResourceCatalogSnapshot(BaseModel):
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="forbid", frozen=True)
 
     schema_version: int = 1
     snapshot_id: str
     generated_at: str
     config_hash: str
-    accounts: list[ProviderAccountSpec]
-    resources: list[ResourceCatalogEntry]
-    workers: list[WorkerContractSpec]
+    accounts: tuple[ProviderAccountSpec, ...]
+    hardware_catalog: tuple[GpuSkuSpec, ...] = Field(default_factory=tuple)
+    execution_surfaces: tuple[ExecutionSurfaceSpec, ...] = Field(default_factory=tuple)
+    provider_offerings: tuple[ProviderOfferingSpec, ...] = Field(default_factory=tuple)
+    capability_claims: tuple[CapabilityClaimSpec, ...] = Field(default_factory=tuple)
+    pricing_rules: tuple[PricingRuleSpec, ...] = Field(default_factory=tuple)
+    live_status_overlay: tuple[LiveStatusOverlaySpec, ...] = Field(default_factory=tuple)
+    validation_evidence: tuple[ValidationEvidenceSpec, ...] = Field(default_factory=tuple)
+    resources: tuple[ResourceCatalogEntry, ...]
+    workers: tuple[WorkerContractSpec, ...]
 
 
 class TupleCandidate(BaseModel):
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="forbid", frozen=True)
 
     tuple_ref: str
     snapshot_id: str
@@ -130,12 +255,23 @@ def build_resource_catalog_snapshot(
         for row in rows
     ]
     workers = [_worker_contract(row) for row in rows]
+    hardware_catalog = _hardware_catalog(rows)
+    execution_surfaces = _execution_surfaces(rows)
+    provider_offerings = [_provider_offering(row) for row in rows]
+    capability_claims = [_capability_claim(row) for row in rows]
+    pricing_rules = [_pricing_rule(row) for row in rows]
+    live_status_overlay = [_live_status_overlay(resource) for resource in resources]
+    validation_rows = [_validation_evidence_row(resource) for resource in resources if resource.validation_evidence]
     config_hash = _config_hash(config=config, candidate_rows=rows)
     content = {
         "schema_version": 1,
         "config_hash": config_hash,
         "accounts": [account.model_dump(mode="json") for account in accounts],
-        "resources": [resource.model_dump(mode="json") for resource in resources],
+        "hardware_catalog": [item.model_dump(mode="json") for item in hardware_catalog],
+        "execution_surfaces": [item.model_dump(mode="json") for item in execution_surfaces],
+        "provider_offerings": [item.model_dump(mode="json") for item in provider_offerings],
+        "capability_claims": [item.model_dump(mode="json") for item in capability_claims],
+        "pricing_rules": [item.model_dump(mode="json") for item in pricing_rules],
         "workers": [worker.model_dump(mode="json") for worker in workers],
     }
     snapshot_id = hashlib.sha256(json.dumps(content, sort_keys=True, separators=(",", ":")).encode("utf-8")).hexdigest()
@@ -144,6 +280,13 @@ def build_resource_catalog_snapshot(
         generated_at=datetime.now(timezone.utc).isoformat(),
         config_hash=config_hash,
         accounts=accounts,
+        hardware_catalog=hardware_catalog,
+        execution_surfaces=execution_surfaces,
+        provider_offerings=provider_offerings,
+        capability_claims=capability_claims,
+        pricing_rules=pricing_rules,
+        live_status_overlay=live_status_overlay,
+        validation_evidence=validation_rows,
         resources=resources,
         workers=workers,
     )
@@ -220,6 +363,340 @@ def _accounts_for(rows: list[Mapping[str, Any]]) -> list[ProviderAccountSpec]:
             api_base=str(row.get("endpoint") or "") or None,
         )
     return [accounts[key] for key in sorted(accounts)]
+
+
+_GPU_SKU_BUILTINS: dict[str, dict[str, Any]] = {
+    "a10g": {"normalized_name": "A10G", "vram_gb": 24, "architecture": "ampere", "memory_bandwidth_gbps": 600},
+    "a100": {"normalized_name": "A100", "vram_gb": 80, "architecture": "ampere", "memory_bandwidth_gbps": 2039},
+    "h100": {"normalized_name": "H100", "vram_gb": 80, "architecture": "hopper", "memory_bandwidth_gbps": 3350},
+    "h200": {"normalized_name": "H200", "vram_gb": 141, "architecture": "hopper", "memory_bandwidth_gbps": 4800},
+    "h200x4": {"normalized_name": "H200:4", "vram_gb": 564, "architecture": "hopper", "memory_bandwidth_gbps": 19200},
+    "l4": {"normalized_name": "L4", "vram_gb": 24, "architecture": "ada", "memory_bandwidth_gbps": 300},
+    "l40": {"normalized_name": "L40", "vram_gb": 48, "architecture": "ada", "memory_bandwidth_gbps": 864},
+    "l40s": {"normalized_name": "L40S", "vram_gb": 48, "architecture": "ada", "memory_bandwidth_gbps": 864},
+    "rtx_a4000": {"normalized_name": "RTX-A4000", "vram_gb": 16, "architecture": "ampere", "memory_bandwidth_gbps": 448},
+    "rtx_a6000": {"normalized_name": "RTX-A6000", "vram_gb": 48, "architecture": "ampere", "memory_bandwidth_gbps": 768},
+}
+
+
+def _gpu_sku_ref(gpu: str) -> str:
+    token = gpu.strip().lower().replace(":", "x")
+    token = re.sub(r"[^a-z0-9]+", "_", token).strip("_")
+    return f"gpu:{token or 'unknown'}"
+
+
+def _builtin_gpu_sku(gpu: str) -> dict[str, Any]:
+    token = _gpu_sku_ref(gpu).removeprefix("gpu:")
+    if token in _GPU_SKU_BUILTINS:
+        return dict(_GPU_SKU_BUILTINS[token])
+    family_match = re.fullmatch(r"(ampere|ada|hopper)_(\d+)", token)
+    if family_match:
+        architecture, vram = family_match.groups()
+        return {
+            "normalized_name": gpu,
+            "vram_gb": int(vram),
+            "architecture": architecture,
+            "memory_bandwidth_gbps": None,
+        }
+    return {}
+
+
+def _hardware_catalog(rows: list[Mapping[str, Any]]) -> list[GpuSkuSpec]:
+    specs: dict[str, GpuSkuSpec] = {}
+    for row in rows:
+        gpu = str(row.get("gpu") or "unknown")
+        sku_ref = _gpu_sku_ref(gpu)
+        builtin = _builtin_gpu_sku(gpu)
+        specs[sku_ref] = GpuSkuSpec(
+            sku_ref=sku_ref,
+            normalized_name=builtin.get("normalized_name") or gpu,
+            vram_gb=_positive_int(row.get("vram_gb") or builtin.get("vram_gb"), default=1),
+            architecture=builtin.get("architecture"),
+            memory_bandwidth_gbps=builtin.get("memory_bandwidth_gbps"),
+            source="builtin" if builtin else ("candidate" if row.get("source") == "tuple_candidate" else "configured"),
+        )
+    return [specs[key] for key in sorted(specs)]
+
+
+def _execution_surfaces(rows: list[Mapping[str, Any]]) -> list[ExecutionSurfaceSpec]:
+    surfaces: dict[str, ExecutionSurfaceSpec] = {}
+    for row in rows:
+        surface = str(row.get("execution_surface") or _surface_for_adapter(str(row.get("adapter") or "")) or "unknown")
+        surfaces[surface] = ExecutionSurfaceSpec(
+            surface_ref=surface,
+            execution_surface=surface,
+            lifecycle_kind=_surface_lifecycle_kind(surface),
+            isolation_model=_surface_isolation_model(surface),
+            cleanup_contract=_surface_cleanup_contract(surface),
+            network_exposure=_network_exposure(row),
+            cold_start_class=_surface_cold_start_class(surface),
+        )
+    return [surfaces[key] for key in sorted(surfaces)]
+
+
+def _surface_lifecycle_kind(surface: str) -> str:
+    return {
+        "iaas_vm": "leased_vm",
+        "managed_endpoint": "standing_or_scale_to_zero_endpoint",
+        "function_runtime": "scale_to_zero_function",
+        "container_instance": "leased_container",
+        "cluster_runtime": "leased_cluster",
+        "local_runtime": "local_process",
+        "lifecycle_only": "lifecycle_control",
+    }.get(surface, "unknown")
+
+
+def _surface_isolation_model(surface: str) -> str:
+    return {
+        "iaas_vm": "vm",
+        "managed_endpoint": "provider_container_endpoint",
+        "function_runtime": "provider_container_function",
+        "container_instance": "container",
+        "cluster_runtime": "kubernetes",
+        "local_runtime": "local_process",
+        "lifecycle_only": "control_plane",
+    }.get(surface, "unknown")
+
+
+def _surface_cleanup_contract(surface: str) -> str:
+    return {
+        "iaas_vm": "resource_lease_destroy_required",
+        "managed_endpoint": "provider_endpoint_scale_or_none",
+        "function_runtime": "scale_to_zero_no_per_request_cleanup",
+        "container_instance": "resource_lease_destroy_required",
+        "cluster_runtime": "cluster_lease_destroy_required",
+        "local_runtime": "none",
+        "lifecycle_only": "provider_resource_manager",
+    }.get(surface, "unknown")
+
+
+def _network_exposure(row: Mapping[str, Any]) -> str:
+    surface = str(row.get("execution_surface") or _surface_for_adapter(str(row.get("adapter") or "")) or "")
+    if surface == "local_runtime":
+        return "local_only"
+    if row.get("ssh_remote_cidr"):
+        return "public_ssh_restricted"
+    if row.get("endpoint") or row.get("target"):
+        return "provider_public_endpoint"
+    if surface == "managed_endpoint":
+        return "provider_public_endpoint"
+    if surface == "function_runtime":
+        return "provider_sdk_control_plane"
+    if surface == "cluster_runtime":
+        return "cluster_network"
+    return "unknown"
+
+
+def _surface_cold_start_class(surface: str) -> str:
+    return {
+        "iaas_vm": "vm_boot_and_worker_bootstrap",
+        "managed_endpoint": "endpoint_worker_cold_start",
+        "function_runtime": "function_container_cold_start",
+        "container_instance": "container_boot",
+        "cluster_runtime": "cluster_job_scheduling",
+        "local_runtime": "none",
+        "lifecycle_only": "none",
+    }.get(surface, "unknown")
+
+
+def _provider_offering(row: Mapping[str, Any]) -> ProviderOfferingSpec:
+    source = "tuple_candidate" if row.get("source") == "tuple_candidate" else "active_tuple"
+    name = str(row.get("name") or "")
+    adapter = str(row.get("adapter") or "")
+    resource_ref = f"{source}:{name}:resource"
+    return ProviderOfferingSpec(
+        offering_ref=f"{source}:{name}:offering",
+        source=source,
+        account_ref=_account_ref(row),
+        provider_family=_provider_family(adapter),
+        resource_ref=resource_ref,
+        surface_ref=str(row.get("surface_ref") or name),
+        gpu_sku_ref=_gpu_sku_ref(str(row.get("gpu") or "unknown")),
+        execution_surface=str(row.get("execution_surface") or _surface_for_adapter(adapter) or "unknown"),
+        provider_sku=str(row.get("instance") or row.get("gpu") or "unknown"),
+        region=str(row.get("region") or "") or None,
+        zone=str(row.get("zone") or "") or None,
+        network_topology=_network_topology(row),
+    )
+
+
+def _network_topology(row: Mapping[str, Any]) -> dict[str, Any]:
+    surface = str(row.get("execution_surface") or _surface_for_adapter(str(row.get("adapter") or "")) or "unknown")
+    topology: dict[str, Any] = {
+        "surface": surface,
+        "public_network_required": bool(row.get("endpoint") or row.get("target") or row.get("ssh_remote_cidr")),
+    }
+    for key in (
+        "region",
+        "zone",
+        "network",
+        "subnet",
+        "ssh_remote_cidr",
+        "service_account",
+        "security_group",
+        "vpc",
+    ):
+        value = row.get(key)
+        if value not in (None, ""):
+            topology[key] = value
+    if row.get("endpoint") or row.get("target"):
+        topology["endpoint_configured"] = True
+    return topology
+
+
+def _capability_claim(row: Mapping[str, Any]) -> CapabilityClaimSpec:
+    source = "tuple_candidate" if row.get("source") == "tuple_candidate" else "active_tuple"
+    name = str(row.get("name") or "")
+    trust = _trust_profile(row)
+    security_tier = str(trust.get("security_tier") or "shared_gpu")
+    requires_attestation = bool(trust.get("requires_attestation"))
+    return CapabilityClaimSpec(
+        claim_ref=f"{source}:{name}:claim",
+        resource_ref=f"{source}:{name}:resource",
+        worker_ref=f"{source}:{name}:worker",
+        model_ref=str(row.get("model_ref") or "") or None,
+        engine_ref=str(row.get("engine_ref") or "") or None,
+        claim_source="candidate_matrix" if source == "tuple_candidate" else "configured_binding",
+        required_input_contracts=[str(item) for item in row.get("input_contracts") or []],
+        output_contract=str(row.get("output_contract") or "") or None,
+        max_model_len=_positive_int(row.get("max_model_len"), default=1),
+        vram_gb=_positive_int(row.get("vram_gb"), default=1),
+        security_tier=security_tier,
+        sovereign_jurisdiction=str(trust.get("sovereign_jurisdiction") or "") or None,
+        dedicated_gpu=bool(trust.get("dedicated_gpu")),
+        tee_boot_capable=security_tier == "confidential_tee" or bool(trust.get("attestation_type")),
+        requires_attestation=requires_attestation,
+        supports_key_release=bool(trust.get("supports_key_release")),
+        attestation_type=str(trust.get("attestation_type") or "") or None,
+    )
+
+
+def _pricing_rule(row: Mapping[str, Any]) -> PricingRuleSpec:
+    source = "tuple_candidate" if row.get("source") == "tuple_candidate" else "active_tuple"
+    name = str(row.get("name") or "")
+    return PricingRuleSpec(
+        pricing_ref=f"{source}:{name}:configured-price",
+        source="candidate" if source == "tuple_candidate" else "configured",
+        account_ref=_account_ref(row),
+        resource_ref=f"{source}:{name}:resource",
+        price_per_second=float(row.get("cost_per_second") or 0.0),
+        billing_granularity_seconds=_optional_float(row.get("billing_granularity_seconds")),
+        min_billable_seconds=_optional_float(row.get("min_billable_seconds")),
+        scaledown_window_seconds=_optional_float(row.get("scaledown_window_seconds")),
+        standing_cost_per_second=_optional_float(row.get("standing_cost_per_second")),
+        endpoint_cost_per_second=_optional_float(row.get("endpoint_cost_per_second")),
+    )
+
+
+def _live_status_overlay(resource: ResourceCatalogEntry) -> LiveStatusOverlaySpec:
+    findings = resource.live_catalog_findings
+    dimensions = sorted({str(item.get("dimension")) for item in findings if item.get("dimension")})
+    observed_at = datetime.now(timezone.utc).isoformat() if resource.live_catalog_checked else None
+    ttl_seconds = _overlay_ttl_seconds(dimensions)
+    return LiveStatusOverlaySpec(
+        overlay_ref=f"{resource.resource_ref}:live-overlay",
+        resource_ref=resource.resource_ref,
+        checked=resource.live_catalog_checked,
+        status=resource.live_catalog_status,
+        stock_state=resource.live_stock_state,
+        price_per_second=resource.live_price_per_second,
+        price_source=resource.live_price_source,
+        dimensions=dimensions,
+        observed_at=observed_at,
+        next_revalidate_after=_next_revalidate_after(observed_at, ttl_seconds),
+        ttl_seconds=ttl_seconds,
+        finding_count=len(findings),
+        finding_hash=_stable_hash(findings) if findings else None,
+    )
+
+
+def _validation_evidence_row(resource: ResourceCatalogEntry) -> ValidationEvidenceSpec:
+    evidence = resource.validation_evidence
+    latest_path = str(evidence.get("latest_path") or "")
+    return ValidationEvidenceSpec(
+        evidence_ref=f"{resource.resource_ref}:validation",
+        tuple_name=resource.tuple_name,
+        resource_ref=resource.resource_ref,
+        worker_ref=f"{resource.source}:{resource.tuple_name}:worker",
+        artifact_count=int(evidence.get("artifact_count") or 0),
+        passed_count=int(evidence.get("passed_count") or 0),
+        failed_count=int(evidence.get("failed_count") or 0),
+        latest_passed=bool(evidence.get("latest_passed")),
+        latest_artifact_hash=_file_sha256(Path(latest_path)) if latest_path else None,
+        observed_wall_seconds_latest=_optional_float(evidence.get("observed_wall_seconds_latest")),
+        observed_wall_seconds_p50=_optional_float(evidence.get("observed_wall_seconds_p50")),
+        observed_wall_seconds_p99=_optional_float(evidence.get("observed_wall_seconds_p99")),
+        observed_wall_seconds_max=_optional_float(evidence.get("observed_wall_seconds_max")),
+        attestation_evidence_hash=str(evidence.get("attestation_evidence_hash") or "") or None,
+        attestation_verified=bool(evidence.get("attestation_verified")),
+        expires_at=_evidence_expires_at(),
+    )
+
+
+def _optional_float(value: Any) -> float | None:
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _overlay_ttl_seconds(dimensions: list[str]) -> int:
+    if not dimensions:
+        return 0
+    ttl_by_dimension = {
+        "stock": 60,
+        "endpoint": 60,
+        "capacity": 60,
+        "health": 60,
+        "credential": 300,
+        "price": 3600,
+        "contract": 86400,
+    }
+    return min(ttl_by_dimension.get(dimension, 300) for dimension in dimensions)
+
+
+def _next_revalidate_after(observed_at: str | None, ttl_seconds: int) -> str | None:
+    if observed_at is None or ttl_seconds <= 0:
+        return None
+    try:
+        observed = datetime.fromisoformat(observed_at)
+    except ValueError:
+        return None
+    return (observed + timedelta(seconds=ttl_seconds)).isoformat()
+
+
+def _stable_hash(value: Any) -> str:
+    payload = json.dumps(value, sort_keys=True, separators=(",", ":"), default=str).encode("utf-8")
+    return hashlib.sha256(payload).hexdigest()
+
+
+def _file_sha256(path: Path) -> str | None:
+    try:
+        digest = hashlib.sha256()
+        with path.open("rb") as handle:
+            for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+                digest.update(chunk)
+        return digest.hexdigest()
+    except OSError:
+        return None
+
+
+def _evidence_expires_at() -> str:
+    return (datetime.now(timezone.utc) + timedelta(days=7)).isoformat()
+
+
+def _trust_profile(row: Mapping[str, Any]) -> dict[str, Any]:
+    value = row.get("trust_profile")
+    if isinstance(value, Mapping):
+        return dict(value)
+    return {
+        "security_tier": row.get("security_tier"),
+        "sovereign_jurisdiction": row.get("sovereign_jurisdiction"),
+        "dedicated_gpu": row.get("dedicated_gpu"),
+        "requires_attestation": row.get("requires_attestation"),
+        "supports_key_release": row.get("supports_key_release"),
+        "attestation_type": row.get("attestation_type"),
+    }
 
 
 def _resource_entry(
@@ -405,9 +882,17 @@ def _validation_summary(rows: list[dict[str, Any]]) -> dict[str, Any]:
             {
                 "observed_wall_seconds_latest": seconds[-1],
                 "observed_wall_seconds_p50": float(median(seconds)),
+                "observed_wall_seconds_p99": _percentile(seconds, 0.99),
                 "observed_wall_seconds_max": max(seconds),
             }
         )
+    attestation = latest.get("attestation_evidence") or (latest.get("attestations") or {}).get("attestation_evidence")
+    if attestation:
+        summary["attestation_evidence_hash"] = _stable_hash(attestation)
+    if "attestation_verified" in latest:
+        summary["attestation_verified"] = bool(latest.get("attestation_verified"))
+    elif isinstance(attestation, Mapping):
+        summary["attestation_verified"] = bool(attestation.get("verified"))
     return summary
 
 
@@ -424,6 +909,14 @@ def _observed_seconds(row: Mapping[str, Any]) -> float | None:
     except ValueError:
         return None
     return max(0.0, (ended - started).total_seconds())
+
+
+def _percentile(values: list[float], percentile: float) -> float:
+    ordered = sorted(values)
+    if not ordered:
+        return 0.0
+    index = min(len(ordered) - 1, max(0, round((len(ordered) - 1) * percentile)))
+    return float(ordered[index])
 
 
 def _file_config_hash(config_dir: Path) -> str:

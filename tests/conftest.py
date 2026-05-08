@@ -13,6 +13,7 @@ def isolate_process_environment(tmp_path, monkeypatch):
     monkeypatch.setenv("XDG_CONFIG_HOME", str(xdg_config))
     monkeypatch.setenv("XDG_STATE_HOME", str(xdg_state))
     monkeypatch.setenv("GPUCALL_CREDENTIALS", str(credentials))
+    monkeypatch.setenv("GPUCALL_ALLOW_UNAUTHENTICATED", "1")
 
     for name in (
         "GPUCALL_API_KEY",
@@ -37,6 +38,8 @@ def isolate_process_environment(tmp_path, monkeypatch):
         "GPUCALL_MODAL_STREAM_FN",
         "GPUCALL_ALLOW_CALLER_ROUTING",
         "GPUCALL_ALLOW_FAKE_AUTO_TUPLES",
+        "GPUCALL_ALLOW_UNAUTHENTICATED",
         "GPUCALL_RUNPOD_FLASH_EXPERIMENTAL_WORKER",
     ):
         monkeypatch.delenv(name, raising=False)
+    monkeypatch.setenv("GPUCALL_ALLOW_UNAUTHENTICATED", "1")

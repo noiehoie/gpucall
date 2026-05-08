@@ -52,8 +52,8 @@ class ObjectStore:
         )
         return PresignPutResponse(upload_url=upload_url, data_ref=ref)
 
-    def presign_get(self, request: PresignGetRequest) -> PresignGetResponse:
-        self._validate_ref(request.data_ref)
+    def presign_get(self, request: PresignGetRequest, *, tenant_prefix: str | None = None) -> PresignGetResponse:
+        self._validate_ref(request.data_ref, tenant_prefix=tenant_prefix)
         bucket, key = self._bucket_key(request.data_ref)
         download_url = self.client.generate_presigned_url(
             "get_object",
@@ -81,7 +81,7 @@ class ObjectStore:
                 prefix = f"{prefix}/tenants/{safe_tenant}"
         return f"{prefix}/{uuid4().hex}/{clean}"
 
-    def _validate_ref(self, ref: DataRef) -> None:
+    def _validate_ref(self, ref: DataRef, *, tenant_prefix: str | None = None) -> None:
         if ref.expires_at is not None and ref.expires_at <= datetime.now(timezone.utc):
             raise ValueError("data_ref is expired")
         bucket, key = self._bucket_key(ref)
@@ -90,6 +90,12 @@ class ObjectStore:
         prefix = self.config.prefix.rstrip("/") + "/"
         if not key.startswith(prefix):
             raise ValueError("data_ref key is outside configured prefix")
+        if tenant_prefix:
+            safe_tenant = PurePosixPath(tenant_prefix).name
+            if safe_tenant:
+                tenant_prefix_key = f"{self.config.prefix.rstrip('/')}/tenants/{safe_tenant}/"
+                if not key.startswith(tenant_prefix_key):
+                    raise ValueError("data_ref key is outside tenant object prefix")
 
     @staticmethod
     def _bucket_key(ref: DataRef) -> tuple[str, str]:

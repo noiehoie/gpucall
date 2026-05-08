@@ -414,6 +414,7 @@ class ModelSpec(BaseModel):
     supports_vision: bool = False
     supports_guided_decoding: bool = False
     supports_streaming: bool = False
+    trust_remote_code: bool = False
     source: str | None = None
     evidence: list[str] = Field(default_factory=list)
     production_ready: bool = False
@@ -433,6 +434,10 @@ class EngineSpec(BaseModel):
     supports_data_refs: bool = False
     official_doc_refs: list[str] = Field(default_factory=list)
     production_ready: bool = False
+
+    @property
+    def supports_multimedia(self) -> bool:
+        return self.supports_multimodal
 
 
 class ExecutionTupleSpec(BaseModel):

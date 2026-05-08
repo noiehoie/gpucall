@@ -5,10 +5,11 @@ max_model_len: 131072
 min_vram_gb: 24
 supported_engines: [modal-vllm, hyperstack-vllm, runpod-vllm-openai, local-ollama]
 input_contracts: [text, chat_messages]
-output_contracts: [plain-text, json-object]
+output_contracts: [plain-text, json_object]
 supports_vision: false
 supports_guided_decoding: true
 supports_streaming: true
+trust_remote_code: true
 source: https://qwen.ai/blog?id=qwen2.5-llm
 evidence:
   - Qwen2.5 model family includes 7B instruction-tuned model; Qwen states most models support 128K context.

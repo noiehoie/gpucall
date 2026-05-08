@@ -136,6 +136,11 @@ def _rows(cursor: sqlite3.Cursor) -> list[dict[str, Any]]:
 
 
 def _ensure_column(conn: sqlite3.Connection, table: str, column: str, declaration: str) -> None:
+    allowed_tables = {"tuples", "tuple_candidates"}
+    allowed_columns = {"execution_surface"}
+    allowed_declarations = {"TEXT"}
+    if table not in allowed_tables or column not in allowed_columns or declaration not in allowed_declarations:
+        raise ValueError(f"unsupported catalog migration column: {table}.{column} {declaration}")
     existing = {str(row[1]) for row in conn.execute(f"PRAGMA table_info({table})")}
     if column not in existing:
         conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {declaration}")
