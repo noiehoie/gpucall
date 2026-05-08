@@ -117,6 +117,21 @@ const result = await client.infer({ prompt: "hello" });
 
 When adapting another product or service to gpucall, use the one-shot migration prompt in [docs/EXTERNAL_SYSTEM_ADAPTATION_PROMPT.md](docs/EXTERNAL_SYSTEM_ADAPTATION_PROMPT.md). External systems should normally send only `task`, `mode`, and input data or `DataRef`; recipe and provider selection belong to the gateway.
 
+For productized migration, use the deterministic migration kit:
+
+```bash
+gpucall-migrate assess /path/to/project --source news-system
+gpucall-migrate preflight /path/to/project --source news-system
+gpucall-migrate canary /path/to/project --command "uv run python -m src.pipeline.main"
+gpucall-migrate patch /path/to/project
+gpucall-migrate onboard /path/to/project --source news-system
+```
+
+The migration kit scans source files, classifies direct OpenAI/Anthropic paths,
+detects caller-side routing selectors, generates sanitized preflight commands,
+runs optional canaries, and writes JSON/Markdown reports under
+`.gpucall-migration`. It is deterministic and does not call an LLM.
+
 If a caller's workload is unknown to the installed recipe catalog and production tuples, gpucall fails closed instead of guessing or routing to a weaker model. If gpucall returns `200 OK` but the caller's own business validator rejects the output, treat it as low-quality success feedback. Use the SDK-distributed `gpucall-recipe-draft` helper to sanitize either case and submit a recipe intent request for gpucall administrators. See [docs/RECIPE_DRAFT_TOOL.md](docs/RECIPE_DRAFT_TOOL.md).
 
 Unknown workloads return a structured governance error instead of being silently routed:
@@ -164,6 +179,17 @@ truth under `inbox/processed` or `inbox/failed`. It also maintains a SQLite WAL
 index at `inbox/recipe_requests.db` with request id, source, task, intent,
 status, file paths, SHA-256, and timestamps so operators can query request
 history without treating the database as the canonical payload store.
+
+The operator inbox and runtime readiness are queryable without running billable
+validation:
+
+```bash
+gpucall-recipe-admin inbox list --inbox-dir /path/to/inbox
+gpucall-recipe-admin inbox status --inbox-dir /path/to/inbox --request-id rr-...
+gpucall-recipe-admin inbox materialize --inbox-dir /path/to/inbox --output-dir config/recipes --accept-all
+gpucall-recipe-admin inbox readiness --inbox-dir /path/to/inbox --config-dir config
+gpucall readiness --config-dir config --intent translate_text
+```
 
 ## Routing
 

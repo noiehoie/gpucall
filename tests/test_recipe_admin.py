@@ -293,6 +293,55 @@ def test_admin_cli_status(tmp_path, capsys) -> None:
     assert output["state"] == "pending"
 
 
+def test_admin_inbox_list_and_readiness(tmp_path, capsys) -> None:
+    config_dir = tmp_path / "config"
+    shutil.copytree("gpucall/config_templates", config_dir)
+    (config_dir / "admin.yml").write_text("recipe_inbox_auto_materialize: true\n", encoding="utf-8")
+    inbox = tmp_path / "inbox"
+    inbox.mkdir()
+    (inbox / "rr-test.json").write_text(
+        json.dumps(
+            {
+                "kind": "gpucall.recipe_request_submission",
+                "request_id": "rr-test",
+                "intake": {
+                    "sanitized_request": {"task": "infer", "intent": "summarize_text"},
+                    "redaction_report": {"prompt_body_forwarded": False, "data_ref_uri_forwarded": False, "presigned_url_forwarded": False},
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    assert (
+        main(
+            [
+                "inbox",
+                "materialize",
+                "--inbox-dir",
+                str(inbox),
+                "--output-dir",
+                str(config_dir / "recipes"),
+                "--config-dir",
+                str(config_dir),
+                "--force",
+            ]
+        )
+        == 0
+    )
+    materialize_output = json.loads(capsys.readouterr().out)
+    assert materialize_output["processed"][0]["ok"] is True
+
+    assert main(["inbox", "list", "--inbox-dir", str(inbox)]) == 0
+    list_output = json.loads(capsys.readouterr().out)
+    assert list_output["requests"][0]["status"] == "processed"
+
+    assert main(["inbox", "readiness", "--inbox-dir", str(inbox), "--config-dir", str(config_dir)]) == 0
+    readiness_output = json.loads(capsys.readouterr().out)
+    assert readiness_output["phase"] == "recipe-inbox-readiness"
+    assert readiness_output["readiness"][0]["recipes"][0]["recipe"] == "infer-summarize-text-draft"
+
+
 def test_admin_review_rejects_missing_redaction_report() -> None:
     report = review_artifact({"sanitized_request": {"task": "infer", "intent": "summarize_text"}})
 

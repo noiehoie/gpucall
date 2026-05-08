@@ -7,9 +7,12 @@ import json
 from gpucall_sdk import (
     AsyncGPUCallClient,
     GPUCallCallerRoutingError,
+    GPUCallColdStartTimeout,
     GPUCallClient,
     GPUCallEmptyOutputError,
     GPUCallJSONParseError,
+    GPUCallNoEligibleTupleError,
+    GPUCallNoRecipeError,
 )
 from gpucall_sdk.client import DEFAULT_AUTO_UPLOAD_THRESHOLD_BYTES
 
@@ -259,6 +262,47 @@ def test_python_sdk_422_malformed_output_maps_to_typed_exception() -> None:
     with pytest.raises(GPUCallJSONParseError) as exc_info:
         client.chat.completions.create(messages=[{"role": "user", "content": "json"}], parse_json=True)
     assert exc_info.value.raw_text == "{bad"
+
+
+def test_python_sdk_governance_errors_map_to_recipe_helpers() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            422,
+            json={
+                "detail": "no recipe",
+                "code": "NO_AUTO_SELECTABLE_RECIPE",
+                "failure_artifact": {"safe_request_summary": {"task": "infer", "mode": "sync"}},
+            },
+        )
+
+    client = GPUCallClient("http://gpucall.test", transport=httpx.MockTransport(handler))
+
+    with pytest.raises(GPUCallNoRecipeError) as exc_info:
+        client.infer()
+
+    intake = exc_info.value.to_preflight_intake(task="infer", intent="translate_text")
+    assert intake["phase"] == "deterministic-intake"
+    assert intake["sanitized_request"]["intent"] == "translate_text"
+
+
+def test_python_sdk_no_eligible_tuple_is_not_generic_provider_error() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(503, json={"detail": "no eligible provider after policy, recipe, and circuit constraints", "code": "NO_ELIGIBLE_TUPLE"})
+
+    client = GPUCallClient("http://gpucall.test", transport=httpx.MockTransport(handler))
+
+    with pytest.raises(GPUCallNoEligibleTupleError):
+        client.infer()
+
+
+def test_python_sdk_timeout_maps_to_cold_start_timeout() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        raise httpx.TimeoutException("cold start")
+
+    client = GPUCallClient("http://gpucall.test", transport=httpx.MockTransport(handler))
+
+    with pytest.raises(GPUCallColdStartTimeout):
+        client.infer()
 
 
 def test_python_sdk_redacts_presigned_urls_from_http_logs() -> None:

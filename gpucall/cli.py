@@ -37,6 +37,7 @@ from gpucall.execution.contracts import (
 )
 from gpucall.lease_reaper import active_manifest_leases, lease_reaper_report
 from gpucall.price_cache import load_cached_price_evidence, merge_price_evidence, store_live_price_evidence
+from gpucall.readiness import build_readiness_report, dumps_readiness
 from gpucall.tuple_audit import _tuple_from_candidate, tuple_audit_report
 from gpucall.tuple_catalog import live_tuple_catalog_evidence, live_tuple_catalog_findings
 from gpucall.execution.registry import adapter_descriptor, vendor_family_for_adapter
@@ -141,6 +142,12 @@ def main() -> None:
     release_check = sub.add_parser("release-check")
     release_check.add_argument("--config-dir", type=Path, default=default_config_dir())
     release_check.add_argument("--output-dir", type=Path, default=default_state_dir() / "release")
+    readiness = sub.add_parser("readiness")
+    readiness.add_argument("--config-dir", type=Path, default=default_config_dir())
+    readiness.add_argument("--source", default=None)
+    readiness.add_argument("--intent", default=None)
+    readiness.add_argument("--recipe", default=None)
+    readiness.add_argument("--validation-dir", type=Path, default=None)
     configure = sub.add_parser("configure")
     configure.add_argument("--config-dir", type=Path, default=default_config_dir())
     admin = sub.add_parser("admin")
@@ -267,6 +274,19 @@ def main() -> None:
         asyncio.run(post_launch_report_command(args.config_dir))
     elif args.command == "release-check":
         release_check_command(args.config_dir, args.output_dir)
+    elif args.command == "readiness":
+        print(
+            dumps_readiness(
+                build_readiness_report(
+                    config_dir=args.config_dir,
+                    source=args.source,
+                    intent=args.intent,
+                    recipe=args.recipe,
+                    validation_dir=args.validation_dir,
+                )
+            ),
+            end="",
+        )
     elif args.command == "configure":
         configure_command(args.config_dir)
     elif args.command == "admin":

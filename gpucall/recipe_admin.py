@@ -19,6 +19,7 @@ from gpucall.execution.registry import adapter_descriptor
 from gpucall.recipe_intents import capabilities_for
 from gpucall.recipe_materialize import canonical_recipe_from_artifact, materialization_report, to_yaml, write_recipe_yaml
 from gpucall.recipe_request_index import RecipeRequestIndex, default_recipe_request_index_path
+from gpucall.readiness import build_readiness_report
 from gpucall.tuple_promotion import promote_candidate, promote_production_tuple
 from gpucall.routing import tuple_route_rejection_reason
 
@@ -82,6 +83,17 @@ def main(argv: list[str] | None = None) -> int:
     watch.add_argument("--validation-dir", help="tuple live validation artifact directory")
     watch.add_argument("--interval-seconds", type=float, default=10.0)
     watch.add_argument("--max-iterations", type=int)
+
+    inbox_command = subcommands.add_parser("inbox", help="inspect and operate the recipe request inbox index")
+    inbox_command.add_argument("action", choices=["list", "status", "materialize", "readiness"])
+    inbox_command.add_argument("--inbox-dir", required=True)
+    inbox_command.add_argument("--output-dir")
+    inbox_command.add_argument("--request-id")
+    inbox_command.add_argument("--index-db")
+    inbox_command.add_argument("--config-dir", help="gpucall config directory to review against")
+    inbox_command.add_argument("--validation-dir", help="tuple live validation artifact directory")
+    inbox_command.add_argument("--accept-all", action="store_true")
+    inbox_command.add_argument("--force", action="store_true")
 
     args = parser.parse_args(argv)
     if args.command == "materialize":
@@ -163,6 +175,20 @@ def main(argv: list[str] | None = None) -> int:
             if args.max_iterations is not None and iterations >= args.max_iterations:
                 return 0
             time.sleep(args.interval_seconds)
+    if args.command == "inbox":
+        result = inbox_command_report(
+            action=args.action,
+            inbox_dir=args.inbox_dir,
+            output_dir=args.output_dir,
+            request_id=args.request_id,
+            index_db=args.index_db,
+            config_dir=args.config_dir,
+            validation_dir=args.validation_dir,
+            accept_all=args.accept_all,
+            force=args.force,
+        )
+        sys.stdout.write(json.dumps(result, ensure_ascii=False, indent=2, sort_keys=True) + "\n")
+        return 0
     raise AssertionError(args.command)
 
 
@@ -352,6 +378,67 @@ def recipe_request_status(request_id: str, inbox_dir: str | Path, *, index_db: s
                 result["report_error"] = "invalid report JSON"
         return result
     return {"request_id": request_id, "state": "missing"}
+
+
+def inbox_command_report(
+    *,
+    action: str,
+    inbox_dir: str | Path,
+    output_dir: str | Path | None = None,
+    request_id: str | None = None,
+    index_db: str | Path | None = None,
+    config_dir: str | Path | None = None,
+    validation_dir: str | Path | None = None,
+    accept_all: bool = False,
+    force: bool = False,
+) -> dict[str, Any]:
+    inbox = Path(inbox_dir)
+    db_path = Path(index_db) if index_db else default_recipe_request_index_path(inbox)
+    if action == "list":
+        rows = RecipeRequestIndex(db_path).list() if db_path.exists() else []
+        return {"phase": "recipe-inbox-list", "inbox_dir": str(inbox), "index_db": str(db_path), "requests": rows}
+    if action == "status":
+        if not request_id:
+            raise SystemExit("inbox status requires --request-id")
+        return recipe_request_status(request_id, inbox, index_db=db_path)
+    if action == "materialize":
+        if output_dir is None:
+            raise SystemExit("inbox materialize requires --output-dir")
+        if not _accept_all_allowed(accept_all, config_dir):
+            raise SystemExit("refusing to materialize inbox without --accept-all or admin.yml recipe_inbox_auto_materialize: true")
+        return {
+            "phase": "recipe-inbox-materialize",
+            "processed": process_inbox(
+                inbox_dir=inbox,
+                output_dir=output_dir,
+                index_db=db_path,
+                force=force,
+                config_dir=config_dir,
+                validation_dir=validation_dir,
+                accept_all=accept_all,
+            ),
+        }
+    if action == "readiness":
+        rows = RecipeRequestIndex(db_path).list(status="processed") if db_path.exists() else []
+        reports = []
+        for row in rows:
+            recipe_path = row.get("recipe_path")
+            if not recipe_path:
+                continue
+            try:
+                import yaml
+
+                data = yaml.safe_load(Path(str(recipe_path)).read_text(encoding="utf-8"))
+            except Exception:
+                continue
+            recipe_name = data.get("name") if isinstance(data, Mapping) else None
+            if recipe_name:
+                try:
+                    reports.append(build_readiness_report(config_dir=config_dir or default_config_dir(), recipe=str(recipe_name), validation_dir=validation_dir))
+                except Exception as exc:
+                    reports.append({"recipe": recipe_name, "error": str(exc)})
+        return {"phase": "recipe-inbox-readiness", "inbox_dir": str(inbox), "index_db": str(db_path), "readiness": reports}
+    raise AssertionError(action)
 
 
 def _review_redaction(artifact: Mapping[str, Any], report: dict[str, Any]) -> None:

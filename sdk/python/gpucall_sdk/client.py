@@ -50,6 +50,29 @@ class GPUCallHTTPError(RuntimeError):
         self.response_body = response_body or {}
         self.failure_artifact = failure_artifact
 
+    def to_preflight_intake(self, *, task: str | None = None, mode: str | None = None, intent: str | None = None) -> dict[str, Any]:
+        from gpucall_recipe_draft.core import DraftInputs, intake_from_error
+
+        return intake_from_error(DraftInputs(error_payload=self.response_body, task=task, mode=mode, intent=intent))
+
+
+class GPUCallNoRecipeError(GPUCallHTTPError):
+    pass
+
+
+class GPUCallNoEligibleTupleError(GPUCallHTTPError):
+    pass
+
+
+class GPUCallProviderRuntimeError(GPUCallHTTPError):
+    pass
+
+
+class GPUCallColdStartTimeout(TimeoutError):
+    def __init__(self, message: str, *, original: Exception | None = None) -> None:
+        super().__init__(message)
+        self.original = original
+
 
 class GPUCallClient:
     def __init__(
@@ -124,7 +147,10 @@ class GPUCallClient:
             messages=messages,
             auto_upload=auto_upload,
         )
-        response = self.client.post(f"/v2/tasks/{mode}", json=payload)
+        try:
+            response = self.client.post(f"/v2/tasks/{mode}", json=payload)
+        except httpx.TimeoutException as exc:
+            raise GPUCallColdStartTimeout("gpucall request timed out; this may be normal cold-start latency and is not a provider circuit-breaker signal", original=exc) from exc
         self._emit_warnings(response)
         self._raise_for_status(response)
         data = response.json()
@@ -287,7 +313,10 @@ class AsyncGPUCallClient:
             messages=messages,
             auto_upload=auto_upload,
         )
-        response = await self.client.post(f"/v2/tasks/{mode}", json=payload)
+        try:
+            response = await self.client.post(f"/v2/tasks/{mode}", json=payload)
+        except httpx.TimeoutException as exc:
+            raise GPUCallColdStartTimeout("gpucall request timed out; this may be normal cold-start latency and is not a provider circuit-breaker signal", original=exc) from exc
         _emit_warnings(response)
         _raise_for_status(response)
         data = response.json()
@@ -594,7 +623,15 @@ def _raise_typed_http_error(response: httpx.Response, exc: httpx.HTTPStatusError
         raise GPUCallEmptyOutputError(detail or "gpucall returned an empty output") from exc
     if code == "MALFORMED_OUTPUT":
         raise GPUCallJSONParseError(detail or "gpucall returned malformed JSON output", raw_text=raw_text) from exc
-    raise GPUCallHTTPError(
+    error_class: type[GPUCallHTTPError] = GPUCallHTTPError
+    detail_text = str(detail or "")
+    if code == "NO_AUTO_SELECTABLE_RECIPE":
+        error_class = GPUCallNoRecipeError
+    elif code == "NO_ELIGIBLE_TUPLE" or "NO_ELIGIBLE_TUPLE" in detail_text or "no eligible provider" in detail_text:
+        error_class = GPUCallNoEligibleTupleError
+    elif response.status_code >= 500:
+        error_class = GPUCallProviderRuntimeError
+    raise error_class(
         detail or str(exc),
         status_code=response.status_code,
         code=code,

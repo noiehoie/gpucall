@@ -326,6 +326,28 @@ def test_validate_config_cli(tmp_path) -> None:
     assert '"valid": true' in result.stdout
 
 
+def test_readiness_cli(tmp_path) -> None:
+    root = copy_config(tmp_path)
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            str(Path(__file__).resolve().parents[1] / "gpucall" / "cli.py"),
+            "readiness",
+            "--config-dir",
+            str(root),
+            "--intent",
+            "summarize_text",
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+
+    assert '"phase": "readiness"' in result.stdout
+    assert "infer-summarize-text-draft" in result.stdout
+
+
 def test_provider_smoke_writes_live_validation_artifact(tmp_path, monkeypatch) -> None:
     root = copy_config(tmp_path)
     monkeypatch.setenv("GPUCALL_ALLOW_FAKE_AUTO_TUPLES", "1")
