@@ -99,6 +99,20 @@ def test_execution_catalog_generates_snapshot_pinned_tuple_candidates() -> None:
     assert all(candidate.recipe_fit is not None for candidate in candidates)
 
 
+def test_execution_catalog_recipe_fit_respects_worker_contracts() -> None:
+    config = load_config(Path("config"))
+    snapshot = build_resource_catalog_snapshot(config, config_dir=Path("config"))
+    vision_candidates = generate_tuple_candidates(snapshot, recipe=config.recipes["vision-image-standard"])
+    hyperstack = next(item for item in vision_candidates if item.tuple_name == "hyperstack-a100")
+    modal_vision = next(item for item in vision_candidates if item.tuple_name == "modal-vision-a10g")
+
+    assert hyperstack.recipe_fit is not None
+    assert hyperstack.recipe_fit["eligible"] is False
+    assert "worker input_contracts do not declare image support" in hyperstack.recipe_fit["reasons"]
+    assert modal_vision.recipe_fit is not None
+    assert modal_vision.recipe_fit["eligible"] is True
+
+
 def test_execution_catalog_uses_live_price_and_stock_evidence() -> None:
     config = load_config(Path("config"))
     snapshot = build_resource_catalog_snapshot(

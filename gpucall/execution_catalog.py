@@ -830,6 +830,13 @@ def _recipe_fit(resource: ResourceCatalogEntry, worker: WorkerContractSpec, reci
     worker_modes = set(worker.modes)
     if recipe_modes and not recipe_modes.intersection(worker_modes):
         reasons.append("worker modes do not intersect recipe allowed_modes")
+    input_contracts = set(worker.input_contracts)
+    if recipe.task == "vision" and "image" not in input_contracts:
+        reasons.append("worker input_contracts do not declare image support")
+    if recipe.task == "infer" and input_contracts and not {"text", "chat_messages"}.intersection(input_contracts):
+        reasons.append("worker input_contracts do not declare text or chat support")
+    if recipe.output_contract and worker.output_contract and recipe.output_contract != worker.output_contract:
+        reasons.append("worker output_contract does not match recipe output_contract")
     return {"eligible": not reasons, "reasons": reasons}
 
 
