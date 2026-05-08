@@ -3,7 +3,9 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import os
 import shutil
+import subprocess
 import sys
 import time
 from collections.abc import Mapping
@@ -12,10 +14,12 @@ from pathlib import Path
 from typing import Any
 
 from gpucall.candidate_sources import load_tuple_candidate_payloads
+from gpucall.compiler import GovernanceCompiler
 from gpucall.config import ConfigError, default_config_dir, default_state_dir, load_admin_automation, load_config
-from gpucall.domain import ExecutionMode, ExecutionTupleSpec, Recipe, RecipeAdminAutomationConfig, recipe_requirements
+from gpucall.domain import ExecutionMode, ExecutionTupleSpec, Recipe, RecipeAdminAutomationConfig, TaskRequest, recipe_requirements
 from gpucall.execution.contracts import artifact_tuple_evidence_key, tuple_evidence_key
 from gpucall.execution.registry import adapter_descriptor
+from gpucall.registry import ObservedRegistry
 from gpucall.recipe_intents import capabilities_for
 from gpucall.recipe_materialize import canonical_recipe_from_artifact, materialization_report, to_yaml, write_recipe_yaml
 from gpucall.tuple_promotion import promote_candidate, promote_production_tuple
@@ -279,6 +283,13 @@ def _auto_promote_from_inbox(
     if not automation.recipe_inbox_auto_promote:
         return None
     root = Path(config_dir) if config_dir is not None else default_config_dir()
+    if not review.get("tuple_candidate_matches") and review.get("eligible_tuples"):
+        return _auto_validate_existing_tuple(
+            review=review,
+            config_dir=root,
+            validation_dir=validation_dir or automation.recipe_inbox_validation_dir,
+            automation=automation,
+        )
     work_root = (
         Path(automation.recipe_inbox_promotion_work_dir).expanduser()
         if automation.recipe_inbox_promotion_work_dir
@@ -295,6 +306,106 @@ def _auto_promote_from_inbox(
         activate=automation.recipe_inbox_auto_activate,
         force=force,
     )
+
+
+def _auto_validate_existing_tuple(
+    *,
+    review: Mapping[str, Any],
+    config_dir: Path,
+    validation_dir: str | Path | None,
+    automation: RecipeAdminAutomationConfig,
+) -> dict[str, Any]:
+    recipe = _mapping(review.get("canonical_recipe"))
+    recipe_name = str(recipe.get("name") or "")
+    tuple_name = _selected_existing_tuple_for_review(review, config_dir=config_dir)
+    if not recipe_name or not tuple_name:
+        raise ValueError("review does not contain an eligible active tuple")
+    report: dict[str, Any] = {
+        "phase": "active-tuple-validation",
+        "recipe": recipe_name,
+        "tuple": tuple_name,
+        "activated": False,
+        "validation": None,
+    }
+    if not automation.recipe_inbox_auto_run_validation:
+        report["decision"] = "READY_FOR_BILLABLE_VALIDATION"
+        return report
+    validation = _run_existing_tuple_validation(tuple_name, recipe_name, config_dir, validation_dir=validation_dir)
+    report["validation"] = validation
+    if validation.get("returncode") != 0 or validation.get("passed") is not True:
+        report["decision"] = "VALIDATION_FAILED"
+        return report
+    if automation.recipe_inbox_auto_activate:
+        report["activated"] = True
+        report["decision"] = "ACTIVATED"
+    else:
+        report["decision"] = "VALIDATED_READY_TO_ACTIVATE"
+    return report
+
+
+def _run_existing_tuple_validation(
+    tuple_name: str,
+    recipe_name: str,
+    config_dir: Path,
+    *,
+    validation_dir: str | Path | None,
+) -> dict[str, Any]:
+    command = [
+        sys.executable,
+        "-m",
+        "gpucall.cli",
+        "tuple-smoke",
+        tuple_name,
+        "--config-dir",
+        str(config_dir),
+        "--recipe",
+        recipe_name,
+        "--mode",
+        "sync",
+        "--write-artifact",
+    ]
+    env = dict(os.environ)
+    if validation_dir is not None:
+        env["GPUCALL_STATE_DIR"] = str(Path(validation_dir).expanduser().parent)
+    completed = subprocess.run(command, capture_output=True, text=True, env=env, check=False)
+    result: dict[str, Any] = {
+        "command": command,
+        "returncode": completed.returncode,
+        "stdout": completed.stdout,
+        "stderr": completed.stderr,
+        "passed": False,
+    }
+    if completed.stdout.strip():
+        try:
+            payload = json.loads(completed.stdout)
+            result["artifact"] = payload
+            result["passed"] = payload.get("passed") is True
+        except json.JSONDecodeError:
+            result["parse_error"] = "tuple-smoke stdout was not JSON"
+    return result
+
+
+def _selected_existing_tuple_for_review(review: Mapping[str, Any], *, config_dir: Path) -> str:
+    recipe = _mapping(review.get("canonical_recipe"))
+    recipe_name = str(recipe.get("name") or "")
+    task = str(recipe.get("task") or "")
+    modes = recipe.get("allowed_modes")
+    mode = str(modes[0]) if isinstance(modes, list) and modes else "sync"
+    if recipe_name and task:
+        config = load_config(config_dir)
+        compiler = GovernanceCompiler(
+            policy=config.policy,
+            recipes=config.recipes,
+            tuples=config.tuples,
+            models=config.models,
+            engines=config.engines,
+            registry=ObservedRegistry(path=default_state_dir() / "registry.db"),
+        )
+        plan = compiler.compile(TaskRequest(task=task, mode=ExecutionMode(mode), recipe=recipe_name))
+        if plan.tuple_chain:
+            return str(plan.tuple_chain[0])
+    eligible = review.get("eligible_tuples")
+    return str(eligible[0]) if isinstance(eligible, list) and eligible else ""
 
 
 def _admin_automation(config_dir: str | Path | None) -> RecipeAdminAutomationConfig:

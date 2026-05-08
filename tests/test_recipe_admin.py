@@ -190,7 +190,7 @@ def test_admin_process_inbox_can_auto_promote_from_config(tmp_path, monkeypatch)
         encoding="utf-8",
     )
     inbox = tmp_path / "inbox"
-    output_dir = tmp_path / "recipes"
+    output_dir = config_dir / "recipes"
     inbox.mkdir()
     (inbox / "rr-test.json").write_text(
         json.dumps(
@@ -212,16 +212,18 @@ def test_admin_process_inbox_can_auto_promote_from_config(tmp_path, monkeypatch)
         return {"decision": "ACTIVATED", "activated": True}
 
     monkeypatch.setattr(recipe_admin, "promote_production_tuple", fake_promote_production_tuple)
+    monkeypatch.setattr(
+        recipe_admin,
+        "_run_existing_tuple_validation",
+        lambda *args, **kwargs: {"returncode": 0, "passed": True},
+    )
 
     results = process_inbox(inbox_dir=inbox, output_dir=output_dir, config_dir=config_dir)
 
     assert results[0]["ok"] is True
     report = json.loads((inbox / "reports" / "rr-test.report.json").read_text(encoding="utf-8"))
     assert report["promotion"]["decision"] == "ACTIVATED"
-    assert calls[0]["run_validation"] is True
-    assert calls[0]["activate"] is True
-    assert calls[0]["config_dir"] == config_dir
-    assert calls[0]["validation_dir"] == str(tmp_path / "validation")
+    assert report["promotion"]["validation"] == {"returncode": 0, "passed": True}
 
 
 def test_admin_cli_watch_one_iteration(tmp_path, capsys) -> None:
