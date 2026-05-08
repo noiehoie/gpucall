@@ -36,7 +36,7 @@ from gpucall.execution.contracts import (
     tuple_evidence_label,
 )
 from gpucall.lease_reaper import active_manifest_leases, lease_reaper_report
-from gpucall.tuple_audit import tuple_audit_report
+from gpucall.tuple_audit import _tuple_from_candidate, tuple_audit_report
 from gpucall.tuple_catalog import live_tuple_catalog_evidence, live_tuple_catalog_findings
 from gpucall.execution.registry import adapter_descriptor, vendor_family_for_adapter
 from gpucall.registry import ObservedRegistry
@@ -779,6 +779,7 @@ def _provider_smoke_request(runtime, recipe, mode: ExecutionMode, tuple: str) ->
         mode=mode,
         recipe=recipe.name,
         requested_tuple=tuple,
+        bypass_circuit_for_validation=True,
         messages=messages,
         inline_inputs=inline_inputs,
         input_refs=input_refs,
@@ -796,6 +797,7 @@ def _finish_provider_smoke_summary(
     ended_at = datetime.now(timezone.utc)
     summary["started_at"] = started_at.isoformat()
     summary["ended_at"] = ended_at.isoformat()
+    summary["observed_wall_seconds"] = (ended_at - started_at).total_seconds()
     summary["validation_schema_version"] = 1
     summary["passed"] = _provider_smoke_passed(summary)
     summary.setdefault("cleanup", {"required": False, "completed": None})
@@ -880,7 +882,7 @@ def catalog_command(action: str, config_dir: Path, db: Path | None) -> None:
 
 def execution_catalog_command(action: str, config_dir: Path, *, recipe: str | None = None, live: bool = False) -> None:
     config = load_config(config_dir)
-    evidence = live_tuple_catalog_evidence(config.tuples, load_credentials()) if live else None
+    evidence = live_tuple_catalog_evidence(_live_catalog_scope(config, config_dir), load_credentials()) if live else None
     snapshot = build_resource_catalog_snapshot(config, config_dir=config_dir, live_catalog_evidence=evidence)
     if action == "snapshot":
         print(dumps_execution_snapshot(snapshot), end="")
@@ -891,6 +893,19 @@ def execution_catalog_command(action: str, config_dir: Path, *, recipe: str | No
         if selected_recipe is None:
             raise SystemExit(f"unknown recipe: {recipe}")
     print(dumps_candidates(generate_tuple_candidates(snapshot, recipe=selected_recipe)), end="")
+
+
+def _live_catalog_scope(config, config_dir: Path) -> dict[str, object]:
+    scope: dict[str, object] = dict(config.tuples)
+    from gpucall.candidate_sources import load_tuple_candidate_payloads
+
+    for candidate in load_tuple_candidate_payloads(config_dir):
+        try:
+            tuple_spec = _tuple_from_candidate(candidate, config)
+        except Exception:
+            continue
+        scope[tuple_spec.name] = tuple_spec
+    return scope
 
 
 def smoke_gateway(url: str, *, api_key: str | None, recipe: str) -> None:

@@ -267,6 +267,7 @@ class TaskRequest(BaseModel):
     webhook_url: AnyHttpUrl | None = None
     idempotency_key: str | None = Field(default=None, max_length=128)
     metadata: dict[str, str] = Field(default_factory=dict)
+    bypass_circuit_for_validation: bool = False
 
     @model_validator(mode="after")
     def validate_mode_contract(self) -> "TaskRequest":

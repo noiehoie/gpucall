@@ -544,7 +544,15 @@ async def recover_interrupted_jobs(runtime: Runtime) -> None:
 
 def warning_headers(plan, tuples=None) -> dict[str, str]:
     warnings = route_warning_tags(plan, tuples)
-    return {"X-GPUCall-Warning": ", ".join(warnings)} if warnings else {}
+    headers: dict[str, str] = {
+        "X-GPUCall-Timeout-Seconds": str(getattr(plan, "timeout_seconds", "")),
+        "X-GPUCall-Lease-TTL-Seconds": str(getattr(plan, "lease_ttl_seconds", "")),
+    }
+    if warnings:
+        headers["X-GPUCall-Warning"] = ", ".join(warnings)
+        if "remote_worker_cold_start_possible" in warnings:
+            headers["X-GPUCall-Min-Client-Timeout-Seconds"] = str(getattr(plan, "timeout_seconds", ""))
+    return {key: value for key, value in headers.items() if value}
 
 
 def tenant_headers(headers: dict[str, str], request: Request) -> dict[str, str]:

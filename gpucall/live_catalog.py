@@ -124,6 +124,29 @@ def price_per_second_from_hourly_text(text: str, label_patterns: list[str]) -> f
     return None
 
 
+def price_per_second_from_pricing_text(text: str, label_patterns: list[str]) -> float | None:
+    """Extract a provider-published GPU price from simple pricing HTML/text.
+
+    Provider pricing pages are not stable APIs. This parser only accepts values
+    adjacent to a declared GPU label and supports the two public formats used by
+    Modal and Hyperstack: explicit per-second prices and hourly table cells.
+    """
+    normalized = re.sub(r"<[^>]+>", " ", text)
+    normalized = re.sub(r"&nbsp;", " ", normalized)
+    normalized = re.sub(r"\s+", " ", normalized)
+    for pattern in label_patterns:
+        second = re.search(pattern + r".{0,240}?\$?\s*([0-9]+(?:\.[0-9]+)?)\s*(?:/|per)?\s*(?:sec|second)", normalized, re.I)
+        if second:
+            return float(second.group(1))
+        hourly = re.search(pattern + r".{0,240}?\$?\s*([0-9]+(?:\.[0-9]+)?)\s*(?:/|per)?\s*(?:hr|hour)", normalized, re.I)
+        if hourly:
+            return float(hourly.group(1)) / 3600.0
+        table_cell = re.search(pattern + r".{0,700}?\$\s*([0-9]+(?:\.[0-9]+)?)", normalized, re.I)
+        if table_cell:
+            return float(table_cell.group(1)) / 3600.0
+    return None
+
+
 def _floatish(value: Any) -> float | None:
     if value is None:
         return None

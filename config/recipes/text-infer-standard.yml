@@ -11,8 +11,8 @@ context_budget_tokens: 32768
 resource_class: standard
 latency_class: standard
 quality_floor: standard
-timeout_seconds: 180
-lease_ttl_seconds: 240
+timeout_seconds: 600
+lease_ttl_seconds: 900
 token_estimation_profile: generic_utf8
 max_input_bytes: 16777216
 allowed_mime_prefixes:

@@ -267,7 +267,7 @@ class GovernanceCompiler:
             allowed = self._eligible_tuples([request.requested_tuple], request, recipe, auto_selected=False)
             if request.requested_tuple not in allowed:
                 raise GovernanceError(f"requested tuple {request.requested_tuple!r} is not eligible for recipe {recipe.name}")
-            if not self.registry.is_available(request.requested_tuple):
+            if not request.bypass_circuit_for_validation and not self.registry.is_available(request.requested_tuple):
                 raise GovernanceError(f"requested tuple {request.requested_tuple!r} is unavailable due to circuit breaker")
             return [request.requested_tuple]
 

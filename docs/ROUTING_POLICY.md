@@ -120,6 +120,9 @@ When a request routes to a remote worker, the API returns:
 
 ```text
 X-GPUCall-Warning: remote_worker_cold_start_possible
+X-GPUCall-Timeout-Seconds: 600
+X-GPUCall-Lease-TTL-Seconds: 900
+X-GPUCall-Min-Client-Timeout-Seconds: 600
 ```
 
 When the worker must fetch DataRefs directly from object storage, the warning
@@ -131,3 +134,12 @@ dataref_worker_fetch
 
 This keeps the caller informed that the gateway has accepted the request and is
 dispatching it to a remote worker where cold start latency may dominate.
+
+The timeout boundary is explicit. gpucall is responsible for deterministic
+routing, dispatch, fallback, cleanup, and provider wait behavior until
+`X-GPUCall-Timeout-Seconds`. A caller that uses a shorter HTTP, SDK, reverse
+proxy, or job-runner timeout than `X-GPUCall-Min-Client-Timeout-Seconds` has
+chosen to abandon the accepted request early; that client-side abandonment is
+outside the gateway SLA. Callers that cannot wait for the advertised sync
+timeout should use `mode=async` and poll job state instead of lowering the
+client timeout.

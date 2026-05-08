@@ -40,6 +40,10 @@ models:
   slug: qwen25-7b
   provider_model_id: Qwen/Qwen2.5-7B-Instruct
   max_model_len: 131072
+- ref: qwen2.5-7b-instruct-1m
+  slug: qwen25-7b-1m
+  provider_model_id: Qwen/Qwen2.5-7B-Instruct-1M
+  max_model_len: 1010000
 - ref: qwen2.5-14b-instruct
   slug: qwen25-14b
   provider_model_id: Qwen/Qwen2.5-14B-Instruct
@@ -83,7 +87,7 @@ families:
     AMPERE_24: [qwen2.5-1.5b-instruct, qwen2.5-7b-instruct, qwen2.5-vl-3b-instruct]
     AMPERE_48: [qwen2.5-1.5b-instruct, qwen2.5-7b-instruct, qwen2.5-14b-instruct, qwen2.5-vl-3b-instruct, qwen2.5-vl-7b-instruct]
     AMPERE_80: [qwen2.5-1.5b-instruct, qwen2.5-7b-instruct, qwen2.5-14b-instruct, qwen2.5-32b-instruct, mistral-small-3.2-24b-instruct-2506, qwen2.5-vl-3b-instruct, qwen2.5-vl-7b-instruct]
-    HOPPER_141: [qwen2.5-1.5b-instruct, qwen2.5-7b-instruct, qwen2.5-14b-instruct, qwen2.5-32b-instruct, mistral-small-3.2-24b-instruct-2506, qwen2.5-vl-3b-instruct, qwen2.5-vl-7b-instruct]
+    HOPPER_141: [qwen2.5-1.5b-instruct, qwen2.5-7b-instruct, qwen2.5-7b-instruct-1m, qwen2.5-14b-instruct, qwen2.5-32b-instruct, mistral-small-3.2-24b-instruct-2506, qwen2.5-vl-3b-instruct, qwen2.5-vl-7b-instruct]
 - prefix: runpod-native
   adapter: runpod-serverless
   engine_ref: runpod-serverless-gpucall
@@ -104,4 +108,4 @@ families:
     AMPERE_24: [qwen2.5-1.5b-instruct, qwen2.5-7b-instruct]
     AMPERE_48: [qwen2.5-1.5b-instruct, qwen2.5-7b-instruct, qwen2.5-14b-instruct]
     AMPERE_80: [qwen2.5-1.5b-instruct, qwen2.5-7b-instruct, qwen2.5-14b-instruct, qwen2.5-32b-instruct, mistral-small-3.2-24b-instruct-2506]
-    HOPPER_141: [qwen2.5-1.5b-instruct, qwen2.5-7b-instruct, qwen2.5-14b-instruct, qwen2.5-32b-instruct, mistral-small-3.2-24b-instruct-2506]
+    HOPPER_141: [qwen2.5-1.5b-instruct, qwen2.5-7b-instruct, qwen2.5-7b-instruct-1m, qwen2.5-14b-instruct, qwen2.5-32b-instruct, mistral-small-3.2-24b-instruct-2506]

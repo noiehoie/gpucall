@@ -17,7 +17,7 @@ from gpucall.execution_surfaces.managed_endpoint import RUNPOD_API_BASE, json_or
 from gpucall.execution.base import TupleAdapter, RemoteHandle
 from gpucall.execution.payloads import plan_payload, plain_text_result
 from gpucall.execution.registry import TupleAdapterDescriptor, register_adapter
-from gpucall.live_catalog import live_error, live_info, price_per_second_from_hourly_text
+from gpucall.live_catalog import live_error, live_info, price_per_second_from_pricing_text
 
 _ephemeral_run_lock = threading.Lock()
 
@@ -349,9 +349,10 @@ def _modal_live_price(tuple: Any) -> dict[str, Any] | None:
         return None
     gpu = str(getattr(tuple, "gpu", "") or "")
     patterns = [re_escape for re_escape in _modal_gpu_label_patterns(gpu)]
-    price = price_per_second_from_hourly_text(text, patterns)
+    price = price_per_second_from_pricing_text(text, patterns)
     if price is None:
         return None
+    price *= _modal_gpu_count(gpu)
     return {"price_per_second": price, "source": "https://modal.com/pricing"}
 
 
@@ -359,12 +360,33 @@ def _modal_gpu_label_patterns(gpu: str) -> list[str]:
     compact = gpu.upper().replace(":", " ").replace("-", " ")
     labels = [compact]
     if "A10G" in compact:
-        labels.extend(["A10G", "NVIDIA A10G"])
+        labels.extend(["A10G", r"NVIDIA\s+A10G", r"(?<![A-Z0-9])A10(?![A-Z0-9])", r"NVIDIA\s+A10(?![A-Z0-9])"])
+    if "A100" in compact:
+        labels.extend([r"(?<![A-Z0-9])A100(?![A-Z0-9])", r"NVIDIA\s+A100(?![A-Z0-9])"])
     if "H100" in compact:
         labels.extend(["H100", "NVIDIA H100"])
     if "H200" in compact:
         labels.extend(["H200", "NVIDIA H200"])
+    if "L40S" in compact:
+        labels.extend(["L40S", "NVIDIA L40S"])
+    if compact == "L4":
+        labels.extend(["L4", "NVIDIA L4"])
+    if compact == "T4":
+        labels.extend(["T4", "NVIDIA T4"])
+    if "B200" in compact:
+        labels.extend(["B200", "NVIDIA B200"])
+    if "RTX PRO 6000" in compact:
+        labels.extend(["RTX PRO 6000", "NVIDIA RTX PRO 6000"])
     return [label.replace(" ", r"\s+") for label in labels]
+
+
+def _modal_gpu_count(gpu: str) -> int:
+    if ":" not in gpu:
+        return 1
+    try:
+        return max(1, int(gpu.rsplit(":", 1)[1]))
+    except ValueError:
+        return 1
 
 
 @register_adapter(

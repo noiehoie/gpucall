@@ -2,14 +2,16 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 from datetime import datetime, timezone
 from pathlib import Path
+from statistics import median
 from typing import Any, Literal, Mapping
 
 from pydantic import BaseModel, ConfigDict, Field
 
 from gpucall.candidate_sources import load_tuple_candidate_payloads
-from gpucall.config import GpucallConfig
+from gpucall.config import GpucallConfig, default_state_dir
 from gpucall.domain import ExecutionMode, Recipe, recipe_requirements
 from gpucall.execution.registry import adapter_descriptor, vendor_family_for_adapter
 
@@ -49,6 +51,7 @@ class ResourceCatalogEntry(BaseModel):
     live_catalog_status: Literal["not_checked", "unknown", "live_revalidated", "blocked"] = "not_checked"
     live_catalog_checked: bool = False
     live_catalog_findings: list[dict[str, Any]] = Field(default_factory=list)
+    validation_evidence: dict[str, Any] = Field(default_factory=dict)
 
 
 class WorkerContractSpec(BaseModel):
@@ -120,8 +123,12 @@ def build_resource_catalog_snapshot(
     rows = [_active_tuple_payload(tuple) for tuple in sorted(config.tuples.values(), key=lambda item: item.name)]
     if config_dir is not None:
         rows.extend(_candidate_payloads(config_dir))
+    validation_evidence = _tuple_validation_evidence(config_dir) if config_dir is not None else {}
     accounts = _accounts_for(rows)
-    resources = [_resource_entry(row, live_catalog_evidence=live_catalog_evidence) for row in rows]
+    resources = [
+        _resource_entry(row, live_catalog_evidence=live_catalog_evidence, validation_evidence=validation_evidence)
+        for row in rows
+    ]
     workers = [_worker_contract(row) for row in rows]
     config_hash = _config_hash(config=config, candidate_rows=rows)
     content = {
@@ -215,7 +222,12 @@ def _accounts_for(rows: list[Mapping[str, Any]]) -> list[ProviderAccountSpec]:
     return [accounts[key] for key in sorted(accounts)]
 
 
-def _resource_entry(row: Mapping[str, Any], *, live_catalog_evidence: Mapping[str, Mapping[str, Any]] | None = None) -> ResourceCatalogEntry:
+def _resource_entry(
+    row: Mapping[str, Any],
+    *,
+    live_catalog_evidence: Mapping[str, Mapping[str, Any]] | None = None,
+    validation_evidence: Mapping[str, Mapping[str, Any]] | None = None,
+) -> ResourceCatalogEntry:
     source = "tuple_candidate" if row.get("source") == "tuple_candidate" else "active_tuple"
     name = str(row.get("name") or "")
     adapter = str(row.get("adapter") or "")
@@ -250,6 +262,7 @@ def _resource_entry(row: Mapping[str, Any], *, live_catalog_evidence: Mapping[st
         live_catalog_status=status,
         live_catalog_checked=bool(evidence.get("checked")),
         live_catalog_findings=findings,
+        validation_evidence=dict((validation_evidence or {}).get(name) or {}),
     )
 
 
@@ -348,3 +361,99 @@ def _positive_int(value: Any, *, default: int) -> int:
     except (TypeError, ValueError):
         return default
     return max(1, number)
+
+
+def _tuple_validation_evidence(config_dir: Path) -> dict[str, dict[str, Any]]:
+    root = default_state_dir() / "tuple-validation"
+    if not root.exists():
+        return {}
+    expected_hash = _file_config_hash(config_dir)
+    expected_commit = _git_commit()
+    grouped: dict[str, list[dict[str, Any]]] = {}
+    for path in sorted(root.glob("*.json")):
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except Exception:
+            continue
+        if data.get("validation_schema_version") != 1:
+            continue
+        if data.get("config_hash") != expected_hash:
+            continue
+        if expected_commit and data.get("commit") != expected_commit:
+            continue
+        tuple_name = str(data.get("tuple") or "")
+        if tuple_name:
+            grouped.setdefault(tuple_name, []).append({**data, "_path": str(path)})
+    return {name: _validation_summary(rows) for name, rows in grouped.items()}
+
+
+def _validation_summary(rows: list[dict[str, Any]]) -> dict[str, Any]:
+    rows = sorted(rows, key=lambda item: str(item.get("ended_at") or item.get("started_at") or ""))
+    seconds = [_observed_seconds(row) for row in rows]
+    seconds = [value for value in seconds if value is not None]
+    passed = [row for row in rows if row.get("passed") is True]
+    latest = rows[-1] if rows else {}
+    summary: dict[str, Any] = {
+        "artifact_count": len(rows),
+        "passed_count": len(passed),
+        "failed_count": len(rows) - len(passed),
+        "latest_path": latest.get("_path"),
+        "latest_passed": bool(latest.get("passed")) if latest else False,
+    }
+    if seconds:
+        summary.update(
+            {
+                "observed_wall_seconds_latest": seconds[-1],
+                "observed_wall_seconds_p50": float(median(seconds)),
+                "observed_wall_seconds_max": max(seconds),
+            }
+        )
+    return summary
+
+
+def _observed_seconds(row: Mapping[str, Any]) -> float | None:
+    value = row.get("observed_wall_seconds")
+    try:
+        if value is not None:
+            return float(value)
+    except (TypeError, ValueError):
+        pass
+    try:
+        started = datetime.fromisoformat(str(row.get("started_at")).replace("Z", "+00:00"))
+        ended = datetime.fromisoformat(str(row.get("ended_at")).replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    return max(0.0, (ended - started).total_seconds())
+
+
+def _file_config_hash(config_dir: Path) -> str:
+    digest = hashlib.sha256()
+    for path in sorted(config_dir.rglob("*.yml")):
+        digest.update(str(path.relative_to(config_dir)).encode("utf-8"))
+        digest.update(b"\0")
+        digest.update(path.read_bytes())
+        digest.update(b"\0")
+    return digest.hexdigest()
+
+
+def _git_commit() -> str | None:
+    env_commit = os.getenv("GPUCALL_GIT_COMMIT")
+    if env_commit:
+        return env_commit
+    root = Path(__file__).resolve().parents[1]
+    build_commit = root / "BUILD_COMMIT"
+    try:
+        value = build_commit.read_text(encoding="utf-8").strip()
+        if value:
+            return value
+    except OSError:
+        pass
+    head = root / ".git" / "HEAD"
+    try:
+        value = head.read_text(encoding="utf-8").strip()
+        if value.startswith("ref: "):
+            ref = root / ".git" / value.removeprefix("ref: ")
+            return ref.read_text(encoding="utf-8").strip()
+        return value
+    except OSError:
+        return None

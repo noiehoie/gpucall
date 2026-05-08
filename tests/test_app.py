@@ -540,7 +540,11 @@ def test_warning_header_announces_remote_worker_cold_start() -> None:
         inline_inputs={},
     )
 
-    assert warning_headers(plan)["X-GPUCall-Warning"] == "remote_worker_cold_start_possible"
+    headers = warning_headers(plan)
+    assert headers["X-GPUCall-Warning"] == "remote_worker_cold_start_possible"
+    assert headers["X-GPUCall-Timeout-Seconds"] == "30"
+    assert headers["X-GPUCall-Lease-TTL-Seconds"] == "60"
+    assert headers["X-GPUCall-Min-Client-Timeout-Seconds"] == "30"
 
 
 def test_warning_header_announces_dataref_worker_fetch() -> None:
@@ -558,7 +562,9 @@ def test_warning_header_announces_dataref_worker_fetch() -> None:
         inline_inputs={},
     )
 
-    assert warning_headers(plan)["X-GPUCall-Warning"] == "remote_worker_cold_start_possible, dataref_worker_fetch"
+    headers = warning_headers(plan)
+    assert headers["X-GPUCall-Warning"] == "remote_worker_cold_start_possible, dataref_worker_fetch"
+    assert headers["X-GPUCall-Min-Client-Timeout-Seconds"] == "30"
 
 
 def test_rate_limit_rejects_excess_requests(tmp_path, monkeypatch) -> None:

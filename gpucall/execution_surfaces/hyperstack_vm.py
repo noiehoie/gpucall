@@ -17,7 +17,7 @@ from gpucall.config import default_state_dir
 from gpucall.execution.base import TupleAdapter, RemoteHandle
 from gpucall.execution.payloads import plan_payload
 from gpucall.execution.registry import TupleAdapterDescriptor, register_adapter
-from gpucall.live_catalog import live_error, live_info, price_per_second_from_hourly_text, price_per_second_from_mapping
+from gpucall.live_catalog import live_error, live_info, price_per_second_from_mapping, price_per_second_from_pricing_text
 
 HYPERSTACK_API_BASE = "https://infrahub-api.nexgencloud.com/v1"
 DEFAULT_HYPERSTACK_IMAGE = "Ubuntu Server 22.04 LTS R570 CUDA 12.8 with Docker"
@@ -597,7 +597,7 @@ def _hyperstack_live_price(tuple: Any, region: str, flavor_rows: dict[tuple[str,
         text = requests.get("https://www.hyperstack.cloud/gpu-pricing", timeout=10).text
     except Exception:
         return None
-    price = price_per_second_from_hourly_text(text, _hyperstack_gpu_label_patterns(str(tuple.gpu or "")))
+    price = price_per_second_from_pricing_text(text, _hyperstack_gpu_label_patterns(str(tuple.gpu or "")))
     if price is None:
         return None
     return {"price_per_second": price, "source": "https://www.hyperstack.cloud/gpu-pricing"}

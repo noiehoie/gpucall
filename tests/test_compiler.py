@@ -569,6 +569,23 @@ def test_requested_tuple_does_not_fall_back_when_circuit_is_open() -> None:
         compiler.compile(request)
 
 
+def test_validation_requested_tuple_can_bypass_open_circuit() -> None:
+    compiler = build_compiler()
+    compiler.registry.breakers["p1"].open = True
+    compiler.registry.breakers["p1"].opened_at = datetime.now(timezone.utc).timestamp()
+    request = TaskRequest(
+        task="infer",
+        mode="sync",
+        recipe="r1",
+        requested_tuple="p1",
+        bypass_circuit_for_validation=True,
+    )
+
+    plan = compiler.compile(request)
+
+    assert plan.tuple_chain == ["p1"]
+
+
 def test_requested_tuple_is_single_tuple_chain() -> None:
     compiler = build_compiler()
     request = TaskRequest(task="infer", mode="sync", recipe="r1", requested_tuple="p1")
