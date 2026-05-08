@@ -296,7 +296,15 @@ class HyperstackAdapter(TupleAdapter):
             if channel.exit_status_ready():
                 status = channel.recv_exit_status()
                 if status != 0:
-                    raise TupleError(f"Hyperstack script failed ({status})", retryable=True, status_code=502)
+                    stdout = channel.recv(8192).decode(errors="replace") if channel.recv_ready() else ""
+                    stderr = channel.recv_stderr(8192).decode(errors="replace") if channel.recv_stderr_ready() else ""
+                    raw = "\n".join(part for part in (stdout.strip(), stderr.strip()) if part)
+                    raise TupleError(
+                        f"Hyperstack script failed ({status})",
+                        retryable=True,
+                        status_code=502,
+                        raw_output=raw[:4000] if raw else None,
+                    )
                 ssh = handle.meta["ssh_client"]
                 _, stdout, _ = ssh.exec_command("cat /tmp/gpucall/output.txt")
                 value = stdout.read().decode().strip()
