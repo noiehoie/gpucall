@@ -299,3 +299,87 @@ gpucall post-launch-report
 ```
 
 Production launch checks require gateway auth, object-store credentials, a live gateway smoke result, complete provider cost metadata, live provider cost/resource audit access, cleanup audit success, and provider-validation JSON artifacts. Static launch checks remain available for local config validation.
+
+## v3 Roadmap
+
+v2.0 made deterministic governance routing production-ready. v3 builds on that foundation with execution guarantees from TEE attestation, sovereignty routing by legal jurisdiction, external KMS-backed key management, and encrypted training artifact export/reuse.
+
+### Provider Coverage
+
+gpucall's implemented and planned cloud GPU provider coverage:
+
+| Category | Provider | v2.0 | v3 | Notes |
+| :--- | :--- | :---: | :---: | :--- |
+| Serverless / PaaS | Modal | Implemented | — | Serverless function surface |
+| Serverless / PaaS | RunPod Serverless / Flash | Implemented | — | Managed endpoint surface |
+| Bare metal / IaaS | Hyperstack | Implemented | — | VM surface with SSH provisioning |
+| Bare metal / IaaS | Oracle Cloud Infrastructure | — | Planned | BM.GPU shapes and FastConnect |
+| Bare metal / IaaS | CoreWeave | — | Planned | AI-focused IaaS, SOC 2 |
+| Bare metal / IaaS | Lambda Labs | — | Planned | Dedicated H100 / A100 bare metal |
+| Bare metal / IaaS | RunPod Secure Cloud | — | Planned | Dedicated GPU upgrade path from serverless |
+| Hyperscaler / TEE | Microsoft Azure Confidential VMs | — | Planned | H100 CC Mode, primary TEE target |
+| Hyperscaler / TEE | Google Cloud Confidential Space | — | Planned | AMD SEV-SNP |
+| Hyperscaler / TEE | AWS | — | Planned | Strong private networking; GPU TEE support is limited |
+| Sovereign cloud | Scaleway | — | Planned | France, bare-metal GPU |
+| Sovereign cloud | OVHcloud | — | Planned | France, SecNumCloud |
+| Sovereign cloud | Hetzner / IONOS / Northern Data Taiga Cloud | — | Planned | Germany-oriented, EU-GDPR-native options |
+| On-prem / edge | Local (Ollama / vLLM) | Implemented | — | Local runtime |
+
+Providers referenced in v3 feature sections are expected to come from this list. Additional providers should be evaluated explicitly before being added.
+
+### TEE Provider Adapters
+
+v3 adds provider adapters for Trusted Execution Environment execution in addition to the current Modal, RunPod, Hyperstack, and local runtime surfaces.
+
+- **Microsoft Azure Confidential VMs (H100 CC Mode)**: use NVIDIA H100 Confidential Computing mode. GPU memory is hardware-encrypted and not readable by the host operator. The adapter handles VM provisioning, CC mode verification, and attestation report retrieval.
+- **Google Cloud Confidential Space (AMD SEV-SNP)**: use AMD SEV-SNP memory encryption. The adapter verifies Confidential Space workload identity tokens, retrieves attestation reports, and verifies workload container integrity.
+- **Attestation verification gate**: before the gateway releases a worker payload, it verifies the provider attestation report. Invalid, expired, or missing attestation fails closed. Attestation evidence is included in the audit hash chain.
+
+### Sovereignty Routing
+
+v3 adds legal-jurisdiction metadata to provider definitions and lets tenant policy constrain routing by jurisdiction.
+
+- **Provider jurisdiction field**: each provider declares jurisdiction metadata such as `us`, `eu-fr`, `eu-de`, or `jp`, representing the legal regime that controls provider data access.
+- **Tenant sovereignty policy**: tenant policy gains `allowed_jurisdictions` and `denied_jurisdictions`. An EU tenant that must avoid CLOUD Act exposure can set `denied_jurisdictions: [us]` and deterministically block routing to US-jurisdiction providers.
+- **Sovereign cloud provider adapters**: Scaleway, OVHcloud, Hetzner, IONOS, and Northern Data Taiga Cloud are planned as IaaS-style adapters with Hyperstack-like lifecycle plus jurisdiction metadata and EU compliance evidence.
+
+### IaaS Provider Adapters
+
+In parallel with TEE and sovereignty work, v3 expands non-TEE IaaS execution surfaces.
+
+- **Oracle Cloud Infrastructure**: BM.GPU shapes and FastConnect for dedicated bare-metal and strong network isolation.
+- **CoreWeave**: AI-focused IaaS with SOC 2 posture. gpucall should integrate at VM/container execution boundaries rather than requiring Kubernetes as the control plane.
+- **Lambda Labs**: dedicated H100 / A100 bare-metal capacity through a simple provisioning API.
+- **RunPod Secure Cloud**: dedicated GPU instance execution as an upgrade path from existing RunPod Serverless support.
+
+### External KMS Integration
+
+v3 moves artifact encryption key management out of gateway-local implementation and into external KMS systems.
+
+- **Supported KMS targets**: Azure Key Vault, Google Cloud KMS, AWS KMS, and HashiCorp Vault through a provider-agnostic KMS adapter interface.
+- **Key-release gate**: KMS releases a decryption key only after a valid TEE attestation report. The gateway orchestrates the attestation -> key release -> artifact decrypt chain and relies on KMS conditional access policies where available, such as Azure Secure Key Release or GCP EKM with Confidential Space.
+- **Encrypted ArtifactManifest**: the v2 append-only Artifact Registry gains `key_id`, `kms_provider`, and `key_release_condition`. Plaintext artifact bytes remain outside the gateway.
+
+### Chained LoRA Export
+
+v3 allows LoRA adapters produced by fine-tuning inside TEE to be exported encrypted and reused by later inference jobs.
+
+- **Export**: base model weights stay public or provider-local. Fine-tuning output is captured as a small LoRA adapter, encrypted under a KMS-managed key inside the TEE, and exported to the organization's object store.
+- **Reuse**: later inference jobs pass the encrypted adapter to a TEE worker. The worker obtains key release, decrypts inside the TEE, merges the adapter with the base model, and runs inference. The adapter does not leave the organization boundary in plaintext.
+- **Artifact lineage**: each adapter records training source hashes, training recipe, training tuple, timestamp, and parent adapter when chained fine-tuning is used. Adapters with broken lineage are rejected.
+
+### Split-Learning Execution
+
+v3 adds split-learning execution for cases where TEE is unavailable or unsuitable.
+
+- **Goal**: keep part of the model or forward pass under organizational control while only activation tensors cross the trust boundary.
+- **Execution gate**: split-learning routes require `trust_profile: split_learning` and explicit execution contracts for split ratio, activation transfer protocol, and the organization-side forward-pass endpoint.
+- **Constraint**: split learning adds latency overhead and is only considered when a recipe explicitly declares split-learning eligibility.
+
+### Hardened Deployment Profile
+
+v3 adds a production hardened deployment profile alongside the v2 Docker Compose / SQLite profile.
+
+- **Standard profile**: Docker Compose, SQLite WAL, single-node; suitable for PoC and early production.
+- **Hardened profile**: Helm chart, PostgreSQL HA, multi-replica gateway. Governance logic stays identical; only infrastructure changes.
+- **Profile selection**: `gpucall init --profile hardened` or `deployment_profile: hardened`, plus a profile migration tool such as `gpucall migrate-profile`.

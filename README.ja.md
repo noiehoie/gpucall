@@ -286,3 +286,87 @@ gpucall post-launch-report
 ```
 
 Production launch checks には gateway auth、object-store credentials、live gateway smoke result、complete provider cost metadata、live provider cost/resource audit access、cleanup audit success、provider-validation JSON artifacts が必要です。Static launch checks は local config validation 用に残っています。
+
+## v3 Roadmap
+
+v2.0 は deterministic governance routing を production-ready にしました。v3 では、この基盤の上に TEE attestation による実行保証、法管轄に基づく sovereignty routing、外部 KMS 連携による鍵管理、暗号化された学習成果の回収と再利用を載せます。
+
+### Provider 対応一覧
+
+gpucall が対応済み、または対応予定の cloud GPU provider の全体像です。
+
+| カテゴリ | Provider | v2.0 | v3 | 備考 |
+| :--- | :--- | :---: | :---: | :--- |
+| サーバーレス / PaaS | Modal | 実装済 | — | Serverless function 型 |
+| サーバーレス / PaaS | RunPod Serverless / Flash | 実装済 | — | Managed endpoint 型 |
+| ベアメタル / IaaS | Hyperstack | 実装済 | — | VM 型、SSH provisioning |
+| ベアメタル / IaaS | Oracle Cloud Infrastructure | — | 対応予定 | BM.GPU + FastConnect |
+| ベアメタル / IaaS | CoreWeave | — | 対応予定 | AI 特化 IaaS、SOC 2 |
+| ベアメタル / IaaS | Lambda Labs | — | 対応予定 | H100 / A100 専有ベアメタル |
+| ベアメタル / IaaS | RunPod Secure Cloud | — | 対応予定 | Serverless からの専有 GPU upgrade path |
+| ハイパースケーラー / TEE | Microsoft Azure Confidential VMs | — | 対応予定 | H100 CC Mode、TEE 大本命 |
+| ハイパースケーラー / TEE | Google Cloud Confidential Space | — | 対応予定 | AMD SEV-SNP |
+| ハイパースケーラー / TEE | AWS | — | 対応予定 | 閉域網は強いが GPU TEE 対応は限定的 |
+| ソブリン・クラウド | Scaleway | — | 対応予定 | フランス、ベアメタル GPU |
+| ソブリン・クラウド | OVHcloud | — | 対応予定 | フランス、SecNumCloud |
+| ソブリン・クラウド | Hetzner / IONOS / Northern Data Taiga Cloud | — | 対応予定 | ドイツ系、EU-GDPR native |
+| オンプレミス / エッジ | Local (Ollama / vLLM) | 実装済 | — | ローカル runtime |
+
+v3 の各機能セクションで言及される provider は、原則としてこの一覧に含まれます。一覧にない provider の追加は別途検討します。
+
+### TEE Provider Adapters
+
+現在の Modal、RunPod、Hyperstack、local runtime に加え、Trusted Execution Environment を提供する provider の adapter を実装します。
+
+- **Microsoft Azure Confidential VMs (H100 CC Mode)**: NVIDIA H100 の Confidential Computing mode を利用します。GPU memory は hardware-level で暗号化され、host operator からも読めません。adapter は VM provisioning、CC mode の有効化確認、attestation report の取得を担います。
+- **Google Cloud Confidential Space (AMD SEV-SNP)**: AMD SEV-SNP による memory encryption を利用します。adapter は Confidential Space workload identity token の検証、attestation report の取得、workload container の integrity verification を担います。
+- **Attestation verification gate**: gateway は worker に payload を渡す前に、provider が返す attestation report を検証します。attestation が invalid、expired、または未取得の場合は fail closed します。attestation evidence は audit hash chain に含めます。
+
+### Sovereignty Routing
+
+provider 定義に法管轄 metadata を追加し、tenant policy で routing 先の法管轄を制約できるようにします。
+
+- **Provider jurisdiction field**: 各 provider 定義に `us`、`eu-fr`、`eu-de`、`jp` などの jurisdiction を宣言します。どの国の法律が当該 provider のデータアクセス権限を支配するかを示します。
+- **Tenant sovereignty policy**: tenant policy に `allowed_jurisdictions` と `denied_jurisdictions` を追加します。CLOUD Act 回避が必要な EU tenant は `denied_jurisdictions: [us]` を設定し、US 法管轄 provider への routing を deterministic に遮断できます。
+- **Sovereign cloud provider adapters**: Scaleway、OVHcloud、Hetzner、IONOS、Northern Data Taiga Cloud は IaaS VM 型 adapter として計画します。Hyperstack adapter と同系統の lifecycle に、jurisdiction metadata と EU compliance evidence を追加します。
+
+### IaaS Provider Adapters
+
+v3 の TEE / sovereignty 対応と並行して、v2 の execution surface を拡張する非 TEE IaaS provider adapter を追加します。
+
+- **Oracle Cloud Infrastructure**: BM.GPU shape + FastConnect。専有ベアメタルと強い network isolation を狙います。
+- **CoreWeave**: AI 特化 IaaS、SOC 2 posture。gpucall は Kubernetes を control plane として必須にせず、VM / container execution boundary で統合します。
+- **Lambda Labs**: H100 / A100 専有ベアメタルをシンプルな API で provisioning します。
+- **RunPod Secure Cloud**: 既存 RunPod Serverless support の上位として、専有 GPU instance execution を追加します。同一 provider 内で serverless から dedicated への upgrade path を提供します。
+
+### 外部 KMS 連携
+
+artifact encryption の鍵管理を gateway-local な実装から外部 KMS に委譲します。
+
+- **対応 KMS**: Azure Key Vault、Google Cloud KMS、AWS KMS、HashiCorp Vault。provider-agnostic な KMS adapter interface を定義し、個別 KMS を plug します。
+- **Key-release gate**: TEE attestation report が valid な場合にのみ、KMS が decryption key を release します。gateway は attestation -> key release -> artifact decrypt の chain を orchestrate し、Azure Secure Key Release や GCP EKM with Confidential Space など、KMS 側の conditional access policy を活用します。
+- **Encrypted ArtifactManifest**: v2 の append-only Artifact Registry を拡張し、各 manifest entry に `key_id`、`kms_provider`、`key_release_condition` を追加します。plaintext artifact bytes は引き続き gateway に保存しません。
+
+### Chained LoRA Export
+
+TEE 内で fine-tuning した LoRA adapter を暗号化した状態で組織側に回収し、次回 inference に再利用可能にします。
+
+- **Export**: base model weight は public または provider-local のままにします。fine-tuning の成果は小さな LoRA adapter に集約し、TEE 内で KMS 管理の鍵により暗号化して、組織の object store に export します。
+- **Reuse**: 次回 inference 時、gateway は encrypted adapter を TEE worker に渡します。worker は KMS key release を経て TEE 内で復号し、base model に merge して inference を実行します。adapter が組織外に plaintext で出ることはありません。
+- **Artifact lineage**: 各 adapter の training source hash、training recipe、training tuple、timestamp、parent adapter を artifact manifest に記録します。lineage が途切れた adapter は reject します。
+
+### Split-Learning Execution
+
+TEE が使えない、または適さない場合のために split-learning execution を実装します。
+
+- **目的**: model または forward pass の一部を組織側に残し、activation tensor だけを trust boundary の外へ渡します。
+- **Execution gate**: split-learning route は `trust_profile: split_learning` を持つ execution surface に限定します。split ratio、activation transfer protocol、組織側 forward-pass endpoint を execution contract に含めます。
+- **制約**: split learning は latency overhead が大きいため、recipe が split-learning eligibility を明示した場合にだけ候補にします。
+
+### Hardened Deployment Profile
+
+v3 では、v2 の Docker Compose / SQLite profile に加えて production hardened profile を追加します。
+
+- **Standard profile**: Docker Compose、SQLite WAL、single-node。PoC と production 初期に適します。
+- **Hardened profile**: Helm chart、PostgreSQL HA、multi-replica gateway。governance logic は Standard と完全に共通で、infrastructure layer だけが異なります。
+- **Profile selection**: `gpucall init --profile hardened` または `deployment_profile: hardened` で選択します。`gpucall migrate-profile` のような profile migration tool を提供します。
