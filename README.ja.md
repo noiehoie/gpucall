@@ -2,17 +2,54 @@
 
 [English README](README.md)
 
-leased GPU タスク実行のための L7 governance gateway。v2.0 MVP の production 対象は `infer` と `vision` です。
+**gpucall は「どの GPU / model / provider で処理するか」をアプリケーション側に考えさせず、組織側の policy と evidence だけで 100% 決定論的に GPU 実行を統制する gateway です。**
+
+Gemini、GPT、Claude などの hosted AI API に業務データを投げることは、多くの組織にとって原理的には社内リソースの外部送信です。これを避けるには、自社管理の GPU 上に LLM / vLLM / Transformers を載せて処理するのが自然です。しかし GPU を購入して常時運用するには、巨額の初期投資、調達リードタイム、運用要員、余剰キャパシティの問題が発生します。
+
+gpucall は、その中間にある現実的な選択肢を狙います。**データと統制は組織側に残し、GPU の計算力だけをクラウドから借りる**。ただし、クラウド GPU を借りる以上、どの実行先が使われたか、価格は妥当か、検証済みか、policy に合うかを、アプリケーション側の場当たり的な判断ではなく gateway の決定論的 governance で強制します。
+
+OpenAI SDK 互換の facade の背後で、Modal serverless、RunPod managed endpoints、Hyperstack VMs、local runtimes などの heterogeneous GPU 実行面を束ねます。アプリケーション側は `task`、`mode`、input または `DataRef` を渡すだけです。gpucall が recipe、model、engine、execution tuple、price freshness、validation evidence、tenant policy を照合し、実行してよい production tuple だけに route します。
+
+v2.0 MVP の production 対象は `infer` と `vision` です。
+
+## どんなニーズを埋めるか
+
+LLM / Vision を業務システムに組み込むと、現場では次の問題が起きます。
+
+- **社内データを hosted AI API に投げたくない**: SaaS 型 AI API は便利ですが、業務データ、顧客データ、未公開文書、内部分析結果を外部 API に送ること自体が governance 上の問題になります。
+- **かといって GPU を買うのは重すぎる**: 自前 GPU は調達費、設置、運用、故障対応、空き時間の無駄が大きく、需要の波にも弱い。必要な時だけクラウド GPU を借りたいという圧力が生まれます。
+- **アプリケーション側が model / provider / GPU を選んでしまう**: アプリ側に `claude-haiku`、`gpt-4o`、`modal-h100` のような選択が散らばり、policy と cost control が崩れます。
+- **hosted API gateway では足りない**: LiteLLM や Portkey のような API gateway は hosted model provider の統一には強い一方、自前で借りた GPU 実行面の lifecycle、validation、cleanup、billable smoke、price freshness までは主責務にしません。
+- **Kubernetes inference stack では前提が重い**: すべての実行面が単一 K8s cluster 内にあるとは限りません。現実には serverless GPU、managed endpoint、IaaS VM、local runtime が混在します。
+- **条件を満たせない時に勝手な迂回をしてほしくない**: 使える GPU がない、価格情報が古い、まだ検証していない実行先しかない。そういう時に「とりあえず別の安い model に投げる」動作は、コスト事故や情報管理事故につながります。
+- **新しい業務要件を安全に受け付けたい**: 既存の設定で処理できない依頼が来た時、raw prompt や機密ファイルを管理者に渡して相談するのではなく、「何をしたいか」という intent だけを提出し、管理側で安全に審査・設定・検証できる流れが必要です。
+
+gpucall はこの隙間を埋めます。既存アプリは OpenAI 互換 API または gpucall SDK で呼び出し、GPU / provider / model selection は gateway 側に回収します。未知 workload は fail closed し、呼び出し側の補助ツールが sanitized intake を作り、管理側の補助ツールが recipe / tuple / validation pipeline に載せます。
+
+## 最大の売り: 100% 決定論ルーティング
+
+gpucall の routing 判断に LLM は入りません。
+
+どの recipe を選ぶか、どの tuple を候補にするか、どの provider に fallback するか、価格が予算上使えるか、validation evidence が production 昇格済みか、tenant policy に合うか。これらはすべて catalog、policy、runtime evidence、request metadata に対する deterministic evaluation です。
+
+つまり:
+
+- 同じ入力、同じ catalog、同じ policy、同じ live evidence なら、同じ routing decision になります。
+- なぜその tuple が選ばれたか、なぜ別 tuple が reject されたかを audit できます。
+- LLM による「なんとなくの model routing」や prompt classification は gateway runtime に入りません。
+- unknown / stale / unvalidated / over-budget は fail closed します。
+
+gpucall は「賢そうに選ぶ router」ではありません。**後から説明でき、再現でき、監査できる GPU governance router** です。
 
 ## 製品の形
 
 gpucall は単なる gateway binary ではなく、3つの部品で構成される製品です。
 
 - **Gateway runtime scripts**: 決定論的な request admission、recipe selection、tuple routing、policy enforcement、audit、validation gate、cleanup、fail-closed execution を担います。
-- **Caller-side helper**: SDK に同梱される `gpucall-recipe-draft` です。外部システムは raw content や provider / GPU / model / tuple 選択を渡さず、sanitized workload intent、preflight metadata、post-failure intake、low-quality-success feedback を提出できます。
-- **Administrator-side helper**: gateway 側に同梱される `gpucall-recipe-admin` です。caller intake をレビューし、recipe intent を materialize し、不足する execution contract を導出し、candidate tuple を isolated config と billable validation を通じて昇格し、最後に production activation を許可します。
+- **呼び出し側補助ツール**: SDK に同梱される `gpucall-recipe-draft` です。外部システムは raw content や provider / GPU / model / tuple 選択を渡さず、sanitized workload intent、preflight metadata、post-failure intake、low-quality-success feedback を提出できます。
+- **管理側補助ツール**: gateway 側に同梱される `gpucall-recipe-admin` です。呼び出し側 intake をレビューし、recipe intent を materialize し、不足する execution contract を導出し、candidate tuple を isolated config と billable validation を通じて昇格し、最後に production activation を許可します。
 
-責任境界は製品契約の一部です。caller は workload intent を記述するだけです。administrator は catalog、tuple、validation evidence、production promotion を管理します。gateway は検証済み policy decision だけを実行します。
+責任境界は製品契約の一部です。呼び出し側は workload intent を記述するだけです。管理側は catalog、tuple、validation evidence、production promotion を管理します。gateway は検証済み policy decision だけを実行します。
 
 ## 既存 router / inference stack ではない理由
 
@@ -29,19 +66,19 @@ gpucall は、すべての LLM gateway、Kubernetes inference stack、GPU provis
 
 意図的に重ならない部分があります。gpucall の差別化された surface は、次の組み合わせです。
 
-- **Heterogeneous execution governance**: Modal serverless functions、RunPod managed endpoints、Hyperstack VMs、local runtimes を caller-selected provider ではなく execution tuple として表現します。
+- **Heterogeneous execution governance**: Modal serverless functions、RunPod managed endpoints、Hyperstack VMs、local runtimes を、呼び出し側が選んだ provider ではなく execution tuple として表現します。
 - **Deterministic four-catalog routing**: recipe、model、engine、execution tuple の compatibility を LLM-based routing なしで評価します。
 - **Validation evidence before production**: YAML entry があるだけでは tuple を信用しません。review、endpoint configuration、billable validation、activation gate を通じて production 昇格します。
 - **Price freshness as policy input**: configured price と live price evidence を分離します。strict budget mode では stale / unknown price data に対して fail closed できます。
-- **Data-plane-less caller integration**: 外部システムは gateway に raw payload bytes や provider choice を渡さず、`DataRef` と sanitized recipe request を提出できます。
+- **Data-plane-less integration**: 外部システムは gateway に raw payload bytes や provider choice を渡さず、`DataRef` と sanitized recipe request を提出できます。
 
 ## LLM 境界
 
 gateway runtime は deterministic governance runtime です。recipe、tuple、provider、GPU、model、price、stock state、fallback order、cleanup action、production promotion の選択に LLM を使ってはいけません。
 
-LLM inference が許されるのは、deterministic routing が production tuple を選択し、worker payload を選ばれた execution surface に渡した後だけです。その時点で provider worker は、caller task を処理するために vLLM、Transformers、worker-vLLM、または宣言済み model engine を実行できます。
+LLM inference が許されるのは、deterministic routing が production tuple を選択し、worker payload を選ばれた execution surface に渡した後だけです。その時点で provider worker は、呼び出し側の task を処理するために vLLM、Transformers、worker-vLLM、または宣言済み model engine を実行できます。
 
-caller-side helper と administrator-side helper は boundary tools です。caller-side helper は deterministic のままで、sanitized intake だけを作ります。仮に LLM-assisted recipe authoring を使う場合でも、それは sanitized intake に対する audited administrator-side workflow に限定されます。production activation には、なお deterministic materialization、validation evidence、launch checks、deployment が必要です。
+呼び出し側補助ツールと管理側補助ツールは boundary tools です。呼び出し側補助ツールは deterministic のままで、sanitized intake だけを作ります。仮に LLM-assisted recipe authoring を使う場合でも、それは sanitized intake に対する audited 管理側 workflow に限定されます。production activation には、なお deterministic materialization、validation evidence、launch checks、deployment が必要です。
 
 ## Quickstart
 
@@ -150,9 +187,9 @@ gpucall-migrate patch /path/to/project
 gpucall-migrate onboard /path/to/project --source example-caller-app
 ```
 
-migration kit は source files を scan し、direct OpenAI / Anthropic paths を分類し、caller-side routing selectors を検出し、sanitized preflight commands を生成し、optional canaries を実行し、`.gpucall-migration` に JSON / Markdown reports を書きます。これは deterministic で、LLM を呼びません。
+migration kit は source files を scan し、direct OpenAI / Anthropic paths を分類し、呼び出し側 routing selectors を検出し、sanitized preflight commands を生成し、optional canaries を実行し、`.gpucall-migration` に JSON / Markdown reports を書きます。これは deterministic で、LLM を呼びません。
 
-caller workload が installed recipe catalog と production tuples に存在しない場合、gpucall は推測や弱い model への routing をせず fail closed します。gpucall が `200 OK` を返しても caller 側 business validator が output を拒否した場合、それは low-quality success feedback として扱います。どちらの場合も、SDK に同梱された `gpucall-recipe-draft` helper で sanitize し、gpucall administrator に recipe intent request を提出します。詳しくは [docs/RECIPE_DRAFT_TOOL.md](docs/RECIPE_DRAFT_TOOL.md) を参照してください。
+呼び出し側 workload が installed recipe catalog と production tuples に存在しない場合、gpucall は推測や弱い model への routing をせず fail closed します。gpucall が `200 OK` を返しても、呼び出し側 business validator が output を拒否した場合、それは low-quality success feedback として扱います。どちらの場合も、SDK に同梱された `gpucall-recipe-draft` helper で sanitize し、gpucall 管理者に recipe intent request を提出します。詳しくは [docs/RECIPE_DRAFT_TOOL.md](docs/RECIPE_DRAFT_TOOL.md) を参照してください。
 
 unknown workload は silent routing ではなく structured governance error を返します。
 
@@ -165,16 +202,16 @@ response には、redacted request metadata、rejection reasons、`caller_action
 
 ```bash
 gpucall-recipe-draft preflight --task vision --intent understand_document_image --content-type image/png --bytes 2000000 --output preflight-intake.json
-gpucall-recipe-draft intake --error gpucall-error.json --intent <caller-intent> --output intake.json --remote-inbox admin@gateway.example.internal:/opt/gpucall/state/recipe_requests/inbox
+gpucall-recipe-draft intake --error gpucall-error.json --intent <calling-app-intent> --output intake.json --remote-inbox admin@gateway.example.internal:/opt/gpucall/state/recipe_requests/inbox
 gpucall-recipe-draft quality --task vision --intent understand_document_image --quality-failure-kind insufficient_ocr --remote-inbox admin@gateway.example.internal:/opt/gpucall/state/recipe_requests/inbox
 gpucall-recipe-draft compare --preflight preflight-intake.json --failure intake.json --output drift-report.json
 gpucall-recipe-draft draft --input intake.json --output recipe-draft.json
 gpucall-recipe-draft submit --intake intake.json --draft recipe-draft.json --remote-inbox admin@gateway.example.internal:/opt/gpucall/state/recipe_requests/inbox
 ```
 
-caller-side helper は deterministic で、LLM を呼びません。sanitized intake と optional local draft summary を作り、gpucall administrator が workload class を supported recipe にすべきか判断できるようにします。`--inbox-dir` または `--remote-inbox` を使うと、helper は sanitized intake を approved operator inbox に直接提出します。remote submission は SSH を使い、gateway API は呼びません。administrator が accept-all policy を採用する場合、gateway 側の `gpucall-recipe-admin materialize --accept-all` helper は sanitized intake を canonical recipe YAML に変換できます。ただし、draft または materialized recipe は、その後も `validate-config`、tests、launch checks、deployment を通らなければ subsequent requests には使えません。
+呼び出し側補助ツールは deterministic で、LLM を呼びません。sanitized intake と optional local draft summary を作り、gpucall 管理者が workload class を supported recipe にすべきか判断できるようにします。`--inbox-dir` または `--remote-inbox` を使うと、helper は sanitized intake を approved operator inbox に直接提出します。remote submission は SSH を使い、gateway API は呼びません。管理側が accept-all policy を採用する場合、gateway 側の `gpucall-recipe-admin materialize --accept-all` helper は sanitized intake を canonical recipe YAML に変換できます。ただし、draft または materialized recipe は、その後も `validate-config`、tests、launch checks、deployment を通らなければ subsequent requests には使えません。
 
-gateway API を追加せず、file-based automation だけで運用する場合、administrator は次を実行できます。
+gateway API を追加せず、file-based automation だけで運用する場合、管理側は次を実行できます。
 
 ```bash
 gpucall-recipe-admin watch --inbox-dir /path/to/inbox --output-dir config/recipes --accept-all
@@ -187,7 +224,7 @@ persistent operator host では、per-command flag ではなく config で同じ
 recipe_inbox_auto_materialize: true
 ```
 
-この file が存在すると、`gpucall-recipe-admin watch` と `process-inbox` は `--accept-all` なしで sanitized caller submissions を materialize できます。この route は reviewed recipe YAML と static catalog-readiness report だけを書きます。billable smoke validation と production activation は別の明示的 promotion step です。provider cost を発生させたり active routing を変更したりする可能性があるためです。
+この file が存在すると、`gpucall-recipe-admin watch` と `process-inbox` は `--accept-all` なしで sanitized 呼び出し側 submissions を materialize できます。この route は reviewed recipe YAML と static catalog-readiness report だけを書きます。billable smoke validation と production activation は別の明示的 promotion step です。provider cost を発生させたり active routing を変更したりする可能性があるためです。
 
 Inbox processing は、提出された original JSON を audit source of truth として `inbox/processed` または `inbox/failed` に保存します。また、`inbox/recipe_requests.db` に SQLite WAL index を維持します。そこには request id、source、task、intent、status、file paths、SHA-256、timestamps が入り、operator は database を canonical payload store として扱わずに request history を query できます。
 

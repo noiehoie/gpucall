@@ -2,7 +2,44 @@
 
 [日本語版 README](README.ja.md)
 
-L7 governance gateway for leased GPU task execution. The v2.0 MVP is scoped to `infer` and `vision` only.
+**gpucall is a gateway that keeps GPU / model / provider choice out of application code and enforces GPU execution with 100% deterministic routing from organizational policy and evidence.**
+
+Sending business data to hosted AI APIs such as Gemini, GPT, or Claude is, for many organizations, still an external transfer of internal resources. The natural way to avoid that is to run LLMs, vLLM, or Transformers on GPU capacity under your own governance. Buying and operating GPUs directly, however, means large upfront spend, procurement lead time, operational burden, hardware failure handling, and idle capacity.
+
+gpucall targets the practical middle path: **keep data and control inside the organization, but rent GPU compute from the cloud when needed**. Once cloud GPUs enter the picture, the organization still has to know which execution surface ran the job, whether the price was current, whether the tuple was validated, and whether the route satisfied policy. gpucall enforces those checks in the gateway instead of leaving them to ad hoc application-side decisions.
+
+Behind an OpenAI-compatible facade, gpucall normalizes heterogeneous GPU execution surfaces such as Modal serverless functions, RunPod managed endpoints, Hyperstack VMs, and local runtimes. Application code sends only `task`, `mode`, input data, or `DataRef`s. gpucall joins recipe, model, engine, execution tuple, price freshness, validation evidence, and tenant policy, then routes only to production tuples that are allowed to run.
+
+The v2.0 MVP production scope is `infer` and `vision`.
+
+## What Need Does gpucall Serve?
+
+When teams put LLM / Vision workloads into real business systems, the same problems keep appearing:
+
+- **Internal data should not be sent to hosted AI APIs by default**: SaaS AI APIs are useful, but sending business data, customer data, unpublished documents, or internal analysis to an external API is itself a governance event.
+- **Buying GPUs is too heavy**: Owned GPUs bring procurement cost, installation, operations, failure handling, idle capacity, and poor fit for bursty demand. Teams often want to rent cloud GPUs only when needed.
+- **Application code starts choosing models, providers, and GPUs**: Strings such as `claude-haiku`, `gpt-4o`, or `modal-h100` get scattered across application code, undermining policy and cost control.
+- **Hosted API gateways are not enough**: Tools such as LiteLLM and Portkey are strong at unifying hosted model providers, but they do not primarily own the lifecycle, validation, cleanup, billable smoke checks, and price freshness of GPU execution surfaces you rent yourself.
+- **Kubernetes inference stacks assume too much**: Not every execution surface lives inside one Kubernetes cluster. In practice, serverless GPUs, managed endpoints, IaaS VMs, and local runtimes coexist.
+- **Routes must not silently bypass policy when conditions are not met**: If no GPU is available, price data is stale, or only unvalidated execution targets exist, "just send it to another cheap model" can become a cost or information-governance incident.
+- **New business requirements need a safe intake path**: When an application needs work the current configuration cannot handle, the answer should not be to send raw prompts or confidential files to an administrator. It should submit intent, and the operator should review, configure, validate, and promote support safely.
+
+gpucall fills that gap. Existing applications call an OpenAI-compatible API or the gpucall SDK, while GPU / provider / model selection is pulled back into the gateway. Unknown workloads fail closed. The caller-side helper produces sanitized intake, and the administrator-side helper moves that intake through the recipe / tuple / validation pipeline.
+
+## Core Selling Point: 100% Deterministic Routing
+
+gpucall does not use an LLM for routing decisions.
+
+Which recipe is selected, which tuple is considered, which provider comes next in fallback order, whether price freshness is acceptable for budget policy, whether validation evidence is production-ready, and whether tenant policy allows the route are all deterministic evaluations over catalog, policy, runtime evidence, and request metadata.
+
+That means:
+
+- The same input, catalog, policy, and live evidence produce the same routing decision.
+- Operators can audit why one tuple was selected and why another tuple was rejected.
+- LLM-based "smart model routing" or prompt classification does not enter the gateway runtime.
+- Unknown, stale, unvalidated, and over-budget states fail closed.
+
+gpucall is not a router that tries to look clever. It is a GPU governance router whose decisions are explainable, reproducible, and auditable.
 
 ## Product Shape
 
