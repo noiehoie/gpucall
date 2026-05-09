@@ -80,3 +80,9 @@ def test_runpod_flash_is_optional_provider_dependency() -> None:
     project_deps = text.split("[project.optional-dependencies]", 1)[0]
     assert "runpod-flash" not in project_deps
     assert "runpod-flash" in text
+
+
+def test_public_repo_uses_canonical_release_checklist_only() -> None:
+    root = Path(__file__).resolve().parents[1]
+    assert not (root / "RELEASE_CHECKLIST.md").exists()
+    assert (root / "docs" / "PUBLIC_RELEASE_CHECKLIST.md").exists()

@@ -3,6 +3,12 @@
 This checklist records the deterministic checks required before making this
 repository publicly visible.
 
+For operator launch steps, use `gpucall launch-check`, `gpucall smoke`,
+`gpucall audit verify`, `gpucall post-launch-report`, and tuple-specific
+`gpucall tuple-smoke ...` commands only in private deployment runbooks. Keep
+live endpoint IDs, hostnames, credentials, and local audit transcripts out of
+the public repository.
+
 ## Required Checks
 
 ```bash
@@ -43,3 +49,4 @@ The public v2.0 repository intentionally does not include:
 - private AI council audit transcripts
 - local state, cache, build artifacts, wheel files, or gateway distribution artifacts
 - high-confidential provider live connection credentials or deployments
+- private operator launch checklists

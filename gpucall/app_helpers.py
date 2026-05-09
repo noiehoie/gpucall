@@ -7,7 +7,7 @@ import os
 import time
 from contextlib import asynccontextmanager
 from pathlib import PurePosixPath
-from typing import Any
+from typing import TYPE_CHECKING, Any
 from uuid import uuid4
 
 from fastapi import HTTPException, Request
@@ -18,6 +18,10 @@ from gpucall.domain import DataRef, PresignGetRequest, TaskRequest, TupleError
 from gpucall.routing import route_warning_tags
 from gpucall.sqlite_store import SQLiteIdempotencyStore
 from gpucall.tenant import TenantBudgetError, enforce_tenant_budget, tenant_identity
+
+if TYPE_CHECKING:
+    from gpucall.app import Runtime
+
 
 def warning_headers(plan, tuples=None) -> dict[str, str]:
     warnings = route_warning_tags(plan, tuples)

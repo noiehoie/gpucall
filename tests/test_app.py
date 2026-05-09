@@ -19,6 +19,7 @@ from gpucall.app import (
 )
 from gpucall.audit import AuditTrail
 from gpucall.compiler import GovernanceError
+from gpucall.credentials import save_credentials
 from gpucall.dispatcher import Dispatcher, JobStore
 from gpucall.domain import CompiledPlan, DataRef, ExecutionMode, JobState, PresignGetResponse, TupleResult, TaskRequest
 from gpucall.registry import ObservedRegistry
@@ -847,6 +848,17 @@ def test_prometheus_metrics_endpoint_reports_requests(tmp_path, monkeypatch) -> 
     assert "gpucall_latency_samples" in metrics.text
     assert "gpucall_tuple_success_rate" in metrics.text
     assert "gpucall_governance_error_total" in metrics.text
+
+
+def test_metrics_access_reflects_legacy_key_added_after_startup(tmp_path, monkeypatch) -> None:
+    monkeypatch.delenv("GPUCALL_PUBLIC_METRICS", raising=False)
+    with TestClient(create_app(copy_config(tmp_path))) as client:
+        before = client.get("/metrics")
+        save_credentials("auth", {"api_keys": "late-key"})
+        after = client.get("/metrics", headers={"authorization": "Bearer late-key"})
+
+    assert before.status_code == 403
+    assert after.status_code == 200
 
 
 def test_public_task_endpoint_rejects_caller_recipe(tmp_path) -> None:

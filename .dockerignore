@@ -13,5 +13,6 @@ dist
 config
 sdk/typescript/node_modules
 0508fullaudit
+0509githubfullaudit
 *.log
 AUDIT_EVIDENCE.md

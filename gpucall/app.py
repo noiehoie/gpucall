@@ -312,7 +312,6 @@ def create_app(config_dir: Path | None = None) -> FastAPI:
 
     app = FastAPI(title="gpucall v2.0", version="2.0.1", lifespan=lifespan)
     max_request_bytes = int(os.getenv("GPUCALL_MAX_REQUEST_BYTES", "1048576"))
-    configured_api_keys = load_credentials().get("auth", {}).get("api_keys", "")
     idempotency_cache = _idempotency_store(default_state_dir())
     idempotency_locks: dict[str, asyncio.Lock] = {}
     idempotency_locks_guard = asyncio.Lock()
@@ -491,7 +490,7 @@ def create_app(config_dir: Path | None = None) -> FastAPI:
         }
 
     def _enforce_metrics_access() -> None:
-        if not (os.getenv("GPUCALL_API_KEYS") or configured_api_keys or os.getenv("GPUCALL_TENANT_API_KEYS") or tenant_key_map()) and not _public_metrics_enabled():
+        if not (legacy_api_keys() or os.getenv("GPUCALL_TENANT_API_KEYS") or tenant_key_map()) and not _public_metrics_enabled():
             raise HTTPException(status_code=403, detail="metrics require authentication or GPUCALL_PUBLIC_METRICS=1")
 
     @app.get("/metrics")
