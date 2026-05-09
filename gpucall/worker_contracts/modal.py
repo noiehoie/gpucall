@@ -144,6 +144,18 @@ def _looks_like_document_prompt(prompt: str) -> bool:
     return any(marker in lowered for marker in markers)
 
 
+def _prepare_vision_image(image_body: bytes) -> Any:
+    from PIL import Image
+
+    image = Image.open(io.BytesIO(image_body)).convert("RGB")
+    min_edge = int(os.getenv("GPUCALL_MODAL_MIN_VISION_EDGE_PX", "4"))
+    if min_edge > 1 and (image.width < min_edge or image.height < min_edge):
+        width = max(image.width, min_edge)
+        height = max(image.height, min_edge)
+        image = image.resize((width, height))
+    return image
+
+
 def _fetch_data_ref_text(ref: dict[str, Any]) -> str:
     body = _fetch_data_ref_bytes(ref)
     content_type = str(ref.get("content_type") or "").lower()
@@ -569,9 +581,7 @@ if modal is not None:
     def _generate_vision_text(payload: dict[str, Any], model: str | None) -> str:
         image_ref = _first_image_ref(payload)
         image_body = _fetch_data_ref_bytes(image_ref)
-        from PIL import Image
-
-        image = Image.open(io.BytesIO(image_body)).convert("RGB")
+        image = _prepare_vision_image(image_body)
         model_id = model or os.getenv("GPUCALL_MODAL_VISION_MODEL", "Salesforce/blip-image-captioning-base")
         processor, vision_model, _ = _load_vision_model(model_id, trust_remote_code=bool(payload.get("trust_remote_code")))
         prompt = vision_prompt_from_payload(payload).strip()

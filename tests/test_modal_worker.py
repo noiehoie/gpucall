@@ -1,12 +1,16 @@
 from __future__ import annotations
 
 import json
+import base64
+
+import pytest
 
 from gpucall.worker_contracts.modal import (
     _env_int,
     _format_prompt_for_model,
     _json_object_guided_schema,
     _looks_like_document_prompt,
+    _prepare_vision_image,
     vision_prompt_from_payload,
 )
 
@@ -97,6 +101,18 @@ def test_vision_prompt_excludes_gateway_system_prompt() -> None:
 
 def test_florence_document_prompt_detects_japanese_headline_request() -> None:
     assert _looks_like_document_prompt("この新聞紙面の主要ヘッドライン上位3件を日本語で箇条書きにせよ。")
+
+
+def test_modal_worker_normalizes_tiny_vision_images() -> None:
+    pytest.importorskip("PIL.Image")
+    image_body = base64.b64decode(
+        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII="
+    )
+
+    image = _prepare_vision_image(image_body)
+
+    assert image.mode == "RGB"
+    assert image.size == (4, 4)
 
 
 def test_modal_autoscaler_env_int_is_non_negative(monkeypatch) -> None:
