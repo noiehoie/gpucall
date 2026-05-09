@@ -200,6 +200,19 @@ The external-system agent should read those documents only. It should not clone,
 install, modify, or vendor the gpucall gateway repository unless the operator
 explicitly asks for that. Its worktree is the application being migrated.
 
+If the caller-side helper is not installed, install only the SDK helper wheel:
+
+```bash
+uv tool install https://raw.githubusercontent.com/noiehoie/gpucall3/main/sdk/python/dist/gpucall_sdk-2.0.0a2-py3-none-any.whl
+gpucall-recipe-draft --help
+```
+
+This installs `gpucall-recipe-draft` and `gpucall_sdk`; it does not install the
+gateway router. `gpucall-migrate` is optional and should be used only when it is
+already available.
+Wheel checksums are published at
+[sdk/python/dist/SHA256SUMS](sdk/python/dist/SHA256SUMS).
+
 External systems should normally send only `task`, `mode`, and input data or `DataRef`; recipe and provider selection belong to the gateway.
 
 For productized migration, use the deterministic migration kit:

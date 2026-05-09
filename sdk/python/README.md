@@ -1,30 +1,28 @@
 # gpucall Python SDK
 
-Private alpha package for gpucall v2.0 integrations.
+Public evaluation package for gpucall v2.0 integrations.
 
-Install from a private wheel:
+Install the caller SDK helper without cloning the gateway repository:
 
 ```bash
-uv add "gpucall-sdk @ file:///path/to/gpucall_sdk-2.0.0a2-py3-none-any.whl"
+uv tool install https://raw.githubusercontent.com/noiehoie/gpucall3/main/sdk/python/dist/gpucall_sdk-2.0.0a2-py3-none-any.whl
+uv tool run --from https://raw.githubusercontent.com/noiehoie/gpucall3/main/sdk/python/dist/gpucall_sdk-2.0.0a2-py3-none-any.whl gpucall-recipe-draft --help
 ```
 
 Verify that the SDK console script is installed:
 
 ```bash
-uv run gpucall-recipe-draft --help
+gpucall-recipe-draft --help
 ```
 
-When running directly from a source checkout instead of an installed wheel, use:
-
-```bash
-uv run python -m gpucall_recipe_draft.cli --help
-```
+External systems should use the public wheel or an operator-provided wheel. They
+should not clone the gpucall gateway repository to obtain this helper.
 
 Configure:
 
 ```bash
 export GPUCALL_API_KEY="<gateway token>"
-export GPUCALL_BASE_URL="http://gpucall.example.internal:18088"
+export GPUCALL_BASE_URL="https://gpucall-gateway.example.internal"
 ```
 
 Use:
@@ -75,8 +73,8 @@ gpucall-recipe-draft intake \
   --intent understand_document_image \
   --classification confidential \
   --output intake.json \
-  --remote-inbox admin@gpucall.example.internal:/srv/gpucall/state/recipe_requests/inbox \
-  --source news-system
+  --remote-inbox operator@gateway.example.internal:/opt/gpucall/state/recipe_requests/inbox \
+  --source example-caller-app
 
 gpucall-recipe-draft quality \
   --task vision \
@@ -89,8 +87,8 @@ gpucall-recipe-draft quality \
   --reported-tuple-model Salesforce/blip-vqa-base \
   --quality-failure-kind insufficient_ocr \
   --quality-failure-reason "short answer only; expected top headlines" \
-  --remote-inbox admin@gpucall.example.internal:/srv/gpucall/state/recipe_requests/inbox \
-  --source news-system
+  --remote-inbox operator@gateway.example.internal:/opt/gpucall/state/recipe_requests/inbox \
+  --source example-caller-app
 
 gpucall-recipe-draft draft --input intake.json --output recipe-draft.json
 
@@ -102,8 +100,8 @@ gpucall-recipe-draft compare \
 gpucall-recipe-draft submit \
   --intake intake.json \
   --draft recipe-draft.json \
-  --remote-inbox admin@gpucall.example.internal:/srv/gpucall/state/recipe_requests/inbox \
-  --source news-system
+  --remote-inbox operator@gateway.example.internal:/opt/gpucall/state/recipe_requests/inbox \
+  --source example-caller-app
 ```
 
 The caller-side helper does not call an LLM. It creates deterministic intake material for gpucall administrators. If LLM-assisted recipe authoring is needed, it should run on the gpucall administrator side as an audited admin workflow.

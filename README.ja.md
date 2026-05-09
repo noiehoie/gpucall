@@ -192,6 +192,16 @@ https://raw.githubusercontent.com/noiehoie/gpucall3/main/docs/EXTERNAL_SYSTEM_ON
 
 外部システム側の agent は、この2文書だけを読みます。operator が明示しない限り、gpucall gateway repository を clone / install / modify / vendor してはいけません。作業対象 worktree は移行対象アプリケーションだけです。
 
+呼び出し側補助ツールが未導入の場合は、SDK helper wheel だけを導入します。
+
+```bash
+uv tool install https://raw.githubusercontent.com/noiehoie/gpucall3/main/sdk/python/dist/gpucall_sdk-2.0.0a2-py3-none-any.whl
+gpucall-recipe-draft --help
+```
+
+これは `gpucall-recipe-draft` と `gpucall_sdk` だけを入れます。gateway router は入れません。`gpucall-migrate` は optional で、すでに使える場合だけ使います。
+wheel checksum は [sdk/python/dist/SHA256SUMS](sdk/python/dist/SHA256SUMS) にあります。
+
 外部システムは通常、`task`、`mode`、input data または `DataRef` だけを送ります。recipe と provider selection は gateway の責任です。
 
 productized migration には deterministic migration kit を使います。

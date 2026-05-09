@@ -154,7 +154,7 @@ def test_submit_writes_file_based_bundle(tmp_path) -> None:
     bundle = build_submission_bundle(
         intake={"phase": "deterministic-intake", "sanitized_request": {"task": "infer"}},
         draft={"phase": "draft", "proposed_recipe": {"name": "infer-draft", "task": "infer"}},
-        source="news-system",
+        source="example-caller-app",
     )
 
     path = submit_bundle(bundle, tmp_path / "inbox")
@@ -162,7 +162,7 @@ def test_submit_writes_file_based_bundle(tmp_path) -> None:
 
     assert path.name.startswith("rr-")
     assert data["kind"] == "gpucall.recipe_request_submission"
-    assert data["source"] == "news-system"
+    assert data["source"] == "example-caller-app"
     assert data["intake"]["sanitized_request"]["task"] == "infer"
 
 
@@ -182,9 +182,9 @@ def test_recipe_draft_cli_submit(tmp_path, capsys) -> None:
 
 
 def test_parse_remote_inbox_requires_absolute_path() -> None:
-    target = parse_remote_inbox("admin@gpucall.example.internal:/srv/gpucall/state/recipe_requests/inbox")
+    target = parse_remote_inbox("operator@gateway.example.internal:/opt/gpucall/state/recipe_requests/inbox")
 
-    assert target.host == "root@gpucall.example.internal"
+    assert target.host == "operator@gateway.example.internal"
     assert target.inbox_dir == "/opt/gpucall/state/recipe_requests/inbox"
 
 
@@ -205,18 +205,18 @@ def test_submit_bundle_to_remote_uses_ssh_atomic_write(monkeypatch) -> None:
     monkeypatch.setattr("gpucall_recipe_draft.submit.subprocess.run", fake_run)
     bundle = build_submission_bundle(
         intake={"phase": "deterministic-intake", "sanitized_request": {"task": "infer"}},
-        source="news-system",
+        source="example-caller-app",
     )
     request_id = bundle["request_id"]
 
-    result = submit_bundle_to_remote(bundle, "admin@gpucall.example.internal:/srv/gpucall/state/recipe_requests/inbox")
+    result = submit_bundle_to_remote(bundle, "operator@gateway.example.internal:/opt/gpucall/state/recipe_requests/inbox")
 
-    assert result == f"admin@gpucall.example.internal:/srv/gpucall/state/recipe_requests/inbox/{request_id}.json"
-    assert calls[0]["args"][0:2] == ["ssh", "root@gpucall.example.internal"]
+    assert result == f"operator@gateway.example.internal:/opt/gpucall/state/recipe_requests/inbox/{request_id}.json"
+    assert calls[0]["args"][0:2] == ["ssh", "operator@gateway.example.internal"]
     assert "mkdir -p" in calls[0]["args"][2]
     assert f".{request_id}.tmp" in calls[0]["args"][2]
     assert f"{request_id}.json" in calls[0]["args"][2]
-    assert json.loads(calls[0]["input"])["source"] == "news-system"
+    assert json.loads(calls[0]["input"])["source"] == "example-caller-app"
 
 
 def test_recipe_draft_cli_quality_can_submit_to_remote(monkeypatch, capsys) -> None:
@@ -243,19 +243,19 @@ def test_recipe_draft_cli_quality_can_submit_to_remote(monkeypatch, capsys) -> N
                 "--quality-failure-kind",
                 "insufficient_ocr",
                 "--remote-inbox",
-                "admin@gpucall.example.internal:/srv/gpucall/state/recipe_requests/inbox",
+                "operator@gateway.example.internal:/opt/gpucall/state/recipe_requests/inbox",
                 "--source",
-                "news-system",
+                "example-caller-app",
             ]
         )
         == 0
     )
     captured = capsys.readouterr()
 
-    assert submitted[0]["remote_inbox"] == "admin@gpucall.example.internal:/srv/gpucall/state/recipe_requests/inbox"
-    assert submitted[0]["bundle"]["source"] == "news-system"
+    assert submitted[0]["remote_inbox"] == "operator@gateway.example.internal:/opt/gpucall/state/recipe_requests/inbox"
+    assert submitted[0]["bundle"]["source"] == "example-caller-app"
     assert submitted[0]["bundle"]["intake"]["phase"] == "deterministic-quality-feedback-intake"
-    assert "admin@gpucall.example.internal:/srv/gpucall/state/recipe_requests/inbox/rr-test.json" in captured.err
+    assert "operator@gateway.example.internal:/opt/gpucall/state/recipe_requests/inbox/rr-test.json" in captured.err
 
 
 def test_preflight_intake_is_sanitized_metadata_only() -> None:
@@ -439,7 +439,7 @@ def test_recipe_draft_cli_quality_can_auto_submit(tmp_path, capsys) -> None:
                 "--inbox-dir",
                 str(inbox),
                 "--source",
-                "news-system",
+                "example-caller-app",
             ]
         )
         == 0

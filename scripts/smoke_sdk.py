@@ -7,8 +7,11 @@ from gpucall_sdk import GPUCallClient
 
 
 def main() -> int:
-    base_url = os.getenv("GPUCALL_BASE_URL", "http://gpucall.example.internal:18088")
+    base_url = os.getenv("GPUCALL_BASE_URL")
     api_key = os.getenv("GPUCALL_API_KEY")
+    if not base_url:
+        print("GPUCALL_BASE_URL is required", file=sys.stderr)
+        return 2
     if not api_key:
         print("GPUCALL_API_KEY is required", file=sys.stderr)
         return 2

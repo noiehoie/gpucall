@@ -30,6 +30,19 @@ The sections below define what that command should discover, what the
 implementation agent must still verify, and when the integration is allowed to
 move beyond canary.
 
+External systems do not need to clone the gpucall gateway repository. The
+caller-side helper is distributed as the SDK wheel:
+
+```bash
+uv tool install https://raw.githubusercontent.com/noiehoie/gpucall3/main/sdk/python/dist/gpucall_sdk-2.0.0a2-py3-none-any.whl
+gpucall-recipe-draft --help
+```
+
+`gpucall-recipe-draft` and `gpucall_sdk` come from this caller SDK wheel.
+`gpucall-migrate` is optional and belongs to the gateway package; if it is not
+already available, use deterministic `rg` inventory instead of installing the
+gateway package.
+
 This manual is intentionally strict. `Conditional Go` is not an allowed final
 state. If live canary is skipped, required preflight intake is only generated but
 not submitted, direct hosted-AI fallback remains enabled by default, or DataRef
@@ -101,6 +114,10 @@ Run `gpucall-migrate` if available:
 gpucall-migrate assess /path/to/project --source example-caller-app
 gpucall-migrate report /path/to/project --source example-caller-app
 ```
+
+If `gpucall-migrate` is unavailable, do not clone or install the gateway package
+to obtain it. Continue with the `rg` scan below and the report template in this
+manual.
 
 Also run deterministic source search:
 

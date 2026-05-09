@@ -18,9 +18,18 @@ Important boundary for external-system agents:
   provides a local gpucall checkout for reference.
 - Make code changes only in the external system being migrated.
 - If `gpucall-migrate`, `gpucall-recipe-draft`, or `gpucall_sdk` are not
-  already available in the external system's environment, report that fact and
-  continue with source inventory, wrapper design, tests, and preflight command
-  generation. Do not fetch the gpucall repository to obtain them.
+  already available in the external system's environment, do not fetch the
+  gpucall gateway repository. Install only the caller SDK helper from the public
+  wheel URL below, or use an operator-provided wheel. `gpucall-migrate` is
+  optional and belongs to the gateway package; if it is unavailable, report that
+  fact and continue without it.
+
+Caller SDK helper wheel:
+
+```bash
+uv tool install https://raw.githubusercontent.com/noiehoie/gpucall3/main/sdk/python/dist/gpucall_sdk-2.0.0a2-py3-none-any.whl
+gpucall-recipe-draft --help
+```
 
 Fill these values before handing the prompt to the external-system agent:
 
@@ -28,6 +37,8 @@ Fill these values before handing the prompt to the external-system agent:
 - `<gpucall-base-url>`: gateway base URL
 - `<admin-inbox>`: approved local or SSH inbox for sanitized recipe requests
 - `<canary-command>`: smallest representative command for that system
+- `<gpucall-sdk-wheel-url>`: caller SDK helper wheel URL; default is
+  `https://raw.githubusercontent.com/noiehoie/gpucall3/main/sdk/python/dist/gpucall_sdk-2.0.0a2-py3-none-any.whl`
 
 Strict acceptance rule:
 
@@ -58,8 +69,11 @@ locally, read the same files from that checkout instead.
 
 Do not clone, install, modify, or vendor the gpucall gateway repository. Your
 worktree is the external system only. If gpucall helper commands or SDK packages
-are not already installed, report that they are unavailable and proceed with the
-parts that can be completed from this repository's source code.
+are not already installed, install only the caller SDK helper from
+`<gpucall-sdk-wheel-url>` or an operator-provided wheel. Do not fetch the
+gateway repository to obtain tools. If the wheel cannot be installed, report
+that blocker and proceed with the parts that can be completed from this
+repository's source code.
 
 You must read the actual code and configuration before making claims. Do not
 guess from filenames.
@@ -116,6 +130,9 @@ gpucall-migrate assess . --source <system-name>
 gpucall-migrate report . --source <system-name>
 gpucall-migrate onboard . --source <system-name>
 ```
+
+If `gpucall-migrate` is unavailable, do not install the gateway package to get
+it. Treat it as optional and continue with `rg`-based inventory.
 
 ## Phase 1: Classify workloads
 
