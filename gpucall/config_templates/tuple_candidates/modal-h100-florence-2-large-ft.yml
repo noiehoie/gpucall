@@ -21,7 +21,7 @@ endpoint_contract: modal-function
 input_contracts: [image, data_refs, text]
 output_contract: plain-text
 stream_contract: none
-target: gpucall-worker:run_inference_on_modal_vision_h100
+target: gpucall-worker-json:run_inference_on_modal_vision_h100
 official_doc_refs:
   - https://modal.com/docs/guide/gpu
   - https://huggingface.co/microsoft/Florence-2-large-ft

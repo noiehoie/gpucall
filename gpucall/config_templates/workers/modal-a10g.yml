@@ -14,8 +14,8 @@ input_contracts:
 - data_refs
 output_contract: plain-text
 stream_contract: token-incremental
-target: gpucall-worker:run_inference_on_modal
-stream_target: gpucall-worker:stream_inference_on_modal
+target: gpucall-worker-json:run_inference_on_modal
+stream_target: gpucall-worker-json:stream_inference_on_modal
 endpoint_contract: modal-function
 model: Qwen/Qwen2.5-1.5B-Instruct
 declared_model_max_len: 32768
