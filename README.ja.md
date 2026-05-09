@@ -289,6 +289,14 @@ gpucall は、local execution で十分かつ policy が許す場合、local run
 組み込みの `local-openai-compatible` adapter は、ds4-server、llama.cpp server、local vLLM などの local OpenAI-compatible chat server を対象にします。ds4 用の設定例は `gpucall/config_templates/surfaces/local-ds4.example` と `gpucall/config_templates/workers/local-ds4.example` にあります。
 
 Local OpenAI-compatible tuple は inline text/chat workload 用です。`DataRef` は dereference しません。gateway は data-byte-less のまま維持するためです。大きな file を DataRef として送る caller には、approved execution boundary の内部で DataRef fetching を明示的にサポートする worker を使ってください。
+
+local text `DataRef` workload には、別アダプタ `local-dataref-openai-worker` と `gpucall.local_dataref_worker` の worker process を使います。gateway adapter は worker-readable plan と DataRef metadata だけを local worker endpoint に渡します。実バイトの fetch、size/SHA256 検証、local OpenAI-compatible server 呼び出し、`TupleResult` 返却は worker 側の責任です。設定例は `gpucall/config_templates/surfaces/local-dataref-openai.example` と `gpucall/config_templates/workers/local-dataref-openai.example` にあります。
+
+```bash
+GPUCALL_LOCAL_OPENAI_BASE_URL=http://127.0.0.1:8000/v1 \
+GPUCALL_LOCAL_OPENAI_MODEL=deepseek-v4-flash \
+uv run uvicorn gpucall.local_dataref_worker:app --host 127.0.0.1 --port 18181
+```
 RunPod Serverless catalog expansion rules は [docs/RUNPOD_SERVERLESS_CATALOG.md](docs/RUNPOD_SERVERLESS_CATALOG.md) にあります。
 
 ## Zero-Trust Contracts

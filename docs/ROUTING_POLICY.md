@@ -157,3 +157,12 @@ endpoint. It supports inline text/chat requests only. It intentionally rejects
 `DataRef` inputs so the gateway does not download or forward object bytes. Use a
 dedicated worker contract when DataRef fetching must happen inside an approved
 local execution boundary.
+
+The dedicated local worker contract is `local-dataref-openai-worker`. That
+adapter does not fetch DataRefs in the gateway process. It forwards the
+worker-readable plan and DataRef metadata to a separately running local worker
+endpoint. The worker process fetches HTTP(S) DataRefs, validates declared byte
+length and SHA256, rejects non-text inputs, calls its configured local
+OpenAI-compatible `/v1/chat/completions` server, and returns a gpucall
+`TupleResult`. This keeps the gateway data-byte-less while allowing controlled
+local runtimes to handle large text inputs without leasing cloud GPU capacity.

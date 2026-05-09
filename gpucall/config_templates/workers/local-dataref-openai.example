@@ -1,0 +1,20 @@
+worker_ref: local-dataref-openai
+account_ref: local
+adapter: local-dataref-openai-worker
+execution_surface: local_runtime
+model_ref: deepseek-v4-flash-local
+engine_ref: local-dataref-openai-worker-chat
+modes:
+  - async
+input_contracts:
+  - text
+  - chat_messages
+  - data_refs
+output_contract: gpucall-tuple-result
+stream_contract: none
+target: null
+stream_target: null
+endpoint_contract: local-dataref-openai-worker
+model: deepseek-v4-flash
+provider_params:
+  worker_api_key_env: GPUCALL_LOCAL_DATAREF_WORKER_API_KEY

@@ -316,6 +316,14 @@ gpucall can route to local runtimes when local execution is sufficient and polic
 The built-in `local-openai-compatible` adapter targets local OpenAI-compatible chat servers such as ds4-server, llama.cpp server, local vLLM, or other private endpoints. A ds4 example is shipped as `gpucall/config_templates/surfaces/local-ds4.example` and `gpucall/config_templates/workers/local-ds4.example`.
 
 Local OpenAI-compatible tuples are for inline text/chat workloads. They do not dereference `DataRef` objects, because the gateway remains data-byte-less. If a caller submits large files as DataRefs, use a worker that explicitly supports DataRef fetching inside the approved execution boundary.
+
+For local text `DataRef` workloads, use the separate `local-dataref-openai-worker` adapter and run the worker process from `gpucall.local_dataref_worker`. The gateway adapter forwards only the worker-readable plan and DataRef metadata to that local worker endpoint; the worker fetches bytes, validates size and SHA256, calls the local OpenAI-compatible server, and returns a `TupleResult`. Example templates are shipped as `gpucall/config_templates/surfaces/local-dataref-openai.example` and `gpucall/config_templates/workers/local-dataref-openai.example`.
+
+```bash
+GPUCALL_LOCAL_OPENAI_BASE_URL=http://127.0.0.1:8000/v1 \
+GPUCALL_LOCAL_OPENAI_MODEL=deepseek-v4-flash \
+uv run uvicorn gpucall.local_dataref_worker:app --host 127.0.0.1 --port 18181
+```
 RunPod Serverless catalog expansion rules are documented in [docs/RUNPOD_SERVERLESS_CATALOG.md](docs/RUNPOD_SERVERLESS_CATALOG.md).
 
 ## Zero-Trust Contracts

@@ -12,7 +12,7 @@ def tuple_configured_price_freshness(tuple: ExecutionTupleSpec, *, now: datetime
     is_local_free = (
         tuple.configured_price_source == "local-free"
         or surface == "local_runtime"
-        or str(tuple.adapter) in {"echo", "local", "local-echo", "local-ollama", "local-openai-compatible"}
+        or str(tuple.adapter) in {"echo", "local", "local-echo", "local-ollama", "local-openai-compatible", "local-dataref-openai-worker"}
     )
     if float(tuple.cost_per_second) == 0.0 and is_local_free:
         return PriceFreshness.FRESH

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 
 import asyncio
+import os
 from datetime import datetime, timezone
 from typing import Any
 from uuid import uuid4
@@ -10,8 +11,10 @@ import httpx
 
 from gpucall.domain import CompiledPlan, TupleError, TupleResult
 from gpucall.execution.base import TupleAdapter, RemoteHandle
+from gpucall.execution.payloads import gpucall_tuple_result
 from gpucall.execution.payloads import openai_chat_completion_result
 from gpucall.execution.payloads import ollama_generate_result
+from gpucall.execution.payloads import plan_payload
 from gpucall.execution.registry import TupleAdapterDescriptor, register_adapter
 
 
@@ -284,4 +287,90 @@ def build_local_openai_compatible_adapter(spec, _credentials):
         base_url=str(spec.endpoint),
         model=spec.model,
         api_key=api_key,
+    )
+
+
+class LocalDataRefOpenAIWorkerAdapter(TupleAdapter):
+    """Adapter for a separate local worker that fetches DataRefs inside its boundary."""
+
+    def __init__(
+        self,
+        name: str = "local-dataref-openai-worker",
+        *,
+        worker_url: str,
+        api_key: str = "",
+        transport: httpx.AsyncBaseTransport | None = None,
+    ) -> None:
+        self.name = name
+        self.worker_url = worker_url.rstrip("/")
+        self.api_key = api_key
+        self.transport = transport
+
+    async def start(self, plan: CompiledPlan) -> RemoteHandle:
+        return RemoteHandle(
+            tuple=self.name,
+            remote_id=uuid4().hex,
+            expires_at=plan.expires_at(),
+            account_ref="local",
+            execution_surface="local_runtime",
+            resource_kind="local_dataref_openai_worker_request",
+            cleanup_required=False,
+            reaper_eligible=False,
+        )
+
+    async def wait(self, handle: RemoteHandle, plan: CompiledPlan) -> TupleResult:
+        try:
+            async with httpx.AsyncClient(timeout=plan.timeout_seconds, transport=self.transport) as client:
+                response = await client.post(
+                    f"{self.worker_url}/gpucall/local-dataref-openai/v1/chat",
+                    headers=self._headers(),
+                    json=plan_payload(plan),
+                )
+            if response.status_code == 404:
+                raise TupleError("local DataRef OpenAI worker endpoint not found", retryable=False, status_code=502)
+            response.raise_for_status()
+            return gpucall_tuple_result(response.json())
+        except TupleError:
+            raise
+        except httpx.ConnectError as exc:
+            raise TupleError("local DataRef OpenAI worker is unavailable", retryable=True, status_code=503) from exc
+        except httpx.HTTPStatusError as exc:
+            retryable = exc.response.status_code >= 500
+            raise TupleError(f"local DataRef OpenAI worker failed: {exc.response.status_code}", retryable=retryable, status_code=502) from exc
+        except httpx.TimeoutException as exc:
+            raise TupleError("local DataRef OpenAI worker timed out", retryable=True, status_code=504) from exc
+
+    async def cancel_remote(self, handle: RemoteHandle) -> None:
+        return None
+
+    def _headers(self) -> dict[str, str]:
+        if not self.api_key:
+            return {}
+        return {"authorization": f"Bearer {self.api_key}"}
+
+
+@register_adapter(
+    "local-dataref-openai-worker",
+    aliases=("local-dataref-openai", "dataref-openai-local"),
+    descriptor=TupleAdapterDescriptor(
+        endpoint_contract="local-dataref-openai-worker",
+        output_contract="gpucall-tuple-result",
+        stream_contract="none",
+        local_execution=True,
+        required_auto_fields={
+            "endpoint": "local DataRef OpenAI worker endpoint is not configured",
+        },
+        official_sources=(
+            "https://platform.openai.com/docs/api-reference/chat/create",
+        ),
+    ),
+)
+def build_local_dataref_openai_worker_adapter(spec, _credentials):
+    if not spec.endpoint:
+        raise ValueError("local-dataref-openai-worker tuple requires explicit worker endpoint")
+    api_key_env = str(spec.provider_params.get("worker_api_key_env") or "GPUCALL_LOCAL_DATAREF_WORKER_API_KEY")
+    return LocalDataRefOpenAIWorkerAdapter(
+        name=spec.name,
+        worker_url=str(spec.endpoint),
+        api_key=os.environ.get(api_key_env, ""),
     )

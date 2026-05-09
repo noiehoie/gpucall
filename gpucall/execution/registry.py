@@ -40,6 +40,7 @@ _DEFAULT_EXECUTION_SURFACES = {
     "gcp-confidential-space-vm": ExecutionSurface.IAAS_VM,
     "hyperstack": ExecutionSurface.IAAS_VM,
     "local-ollama": ExecutionSurface.LOCAL_RUNTIME,
+    "local-dataref-openai-worker": ExecutionSurface.LOCAL_RUNTIME,
     "local-openai-compatible": ExecutionSurface.LOCAL_RUNTIME,
     "modal": ExecutionSurface.FUNCTION_RUNTIME,
     "ovhcloud-public-cloud-instance": ExecutionSurface.IAAS_VM,
@@ -138,7 +139,7 @@ def vendor_family_for_adapter(adapter: str) -> str:
         return "ovhcloud"
     if adapter == "scaleway-instance":
         return "scaleway"
-    if adapter in {"echo", "local-ollama", "local-openai-compatible"}:
+    if adapter in {"echo", "local-ollama", "local-openai-compatible", "local-dataref-openai-worker"}:
         return "local"
     return adapter
 

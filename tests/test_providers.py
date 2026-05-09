@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import contextlib
+import hashlib
 import json
 from pathlib import Path
 import sys
@@ -17,6 +18,7 @@ from gpucall.execution import (
     AzureComputeVMAdapter,
     EchoTuple,
     GCPConfidentialSpaceVMAdapter,
+    LocalDataRefOpenAIWorkerAdapter,
     LocalOpenAICompatibleAdapter,
     LocalOllamaAdapter,
     ModalAdapter,
@@ -29,6 +31,7 @@ from gpucall.execution.payloads import gpucall_tuple_result, plan_payload
 from gpucall.execution_surfaces.function_runtime import RunpodVllmFlashBootAdapter
 from gpucall.execution_surfaces.managed_endpoint import RunpodServerlessAdapter
 from gpucall.execution_surfaces.managed_endpoint import RunpodVllmServerlessAdapter, runpod_vllm_health_rejection_reason
+from gpucall.local_dataref_worker import run_dataref_openai_request
 
 
 def test_router_core_does_not_hardcode_builtin_tuple_implementations() -> None:
@@ -46,6 +49,7 @@ def test_router_core_does_not_hardcode_builtin_tuple_implementations() -> None:
         "gcp-confidential-space-vm",
         "hyperstack",
         "local-ollama",
+        "local-dataref-openai-worker",
         "local-openai-compatible",
         "modal",
         "ovhcloud",
@@ -83,6 +87,7 @@ def test_provider_contract_modules_are_separated_and_sourced() -> None:
     expected = {
         "local-ollama": "https://github.com/ollama/ollama/blob/main/docs/api.md#generate-a-completion",
         "local-openai-compatible": "https://platform.openai.com/docs/api-reference/chat/create",
+        "local-dataref-openai-worker": "https://platform.openai.com/docs/api-reference/chat/create",
         "modal": "https://modal.com/docs/reference/modal.Function#from_name",
         "runpod-serverless": "https://docs.runpod.io/serverless/endpoints/send-requests",
         "runpod-vllm-serverless": "https://docs.runpod.io/serverless/vllm/openai-compatibility",
@@ -169,6 +174,20 @@ def test_factory_builds_configured_adapter_types() -> None:
             endpoint="http://127.0.0.1:8000/v1",
             endpoint_contract="openai-chat-completions",
             output_contract="openai-chat-completions",
+            model="deepseek-v4-flash",
+        ),
+        "local-dataref-openai": ExecutionTupleSpec(
+            name="local-dataref-openai",
+            adapter="local-dataref-openai-worker",
+            gpu="local",
+            vram_gb=1,
+            max_model_len=8192,
+            cost_per_second=0,
+            modes=[ExecutionMode.ASYNC],
+            endpoint="http://127.0.0.1:18181",
+            endpoint_contract="local-dataref-openai-worker",
+            input_contracts=["text", "chat_messages", "data_refs"],
+            output_contract="gpucall-tuple-result",
             model="deepseek-v4-flash",
         ),
         "modal": ExecutionTupleSpec(
@@ -296,6 +315,7 @@ def test_factory_builds_configured_adapter_types() -> None:
     assert isinstance(adapters["echo"], EchoTuple)
     assert isinstance(adapters["local"], LocalOllamaAdapter)
     assert isinstance(adapters["local-openai"], LocalOpenAICompatibleAdapter)
+    assert isinstance(adapters["local-dataref-openai"], LocalDataRefOpenAIWorkerAdapter)
     assert isinstance(adapters["modal"], ModalAdapter)
     assert isinstance(adapters["hyperstack"], HyperstackAdapter)
     assert isinstance(adapters["runpod-vllm-serverless"], RunpodVllmServerlessAdapter)
@@ -391,6 +411,124 @@ async def test_local_openai_compatible_adapter_rejects_data_refs() -> None:
         await adapter.wait(handle, plan)
 
     assert excinfo.value.status_code == 400
+    assert excinfo.value.retryable is False
+
+
+@pytest.mark.asyncio
+async def test_local_dataref_openai_worker_adapter_forwards_refs_without_dereferencing() -> None:
+    captured: dict[str, object] = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured["path"] = request.url.path
+        captured["authorization"] = request.headers.get("authorization")
+        captured["body"] = json.loads(request.content)
+        return httpx.Response(200, json={"kind": "inline", "value": "worker ok", "usage": {"completion_tokens": 2}})
+
+    adapter = LocalDataRefOpenAIWorkerAdapter(
+        name="local-dataref-worker",
+        worker_url="http://127.0.0.1:18181",
+        api_key="worker-secret",
+        transport=httpx.MockTransport(handler),
+    )
+    plan = CompiledPlan(
+        policy_version="test",
+        recipe_name="r1",
+        task="infer",
+        mode=ExecutionMode.ASYNC,
+        tuple_chain=["local-dataref-worker"],
+        timeout_seconds=2,
+        lease_ttl_seconds=10,
+        token_estimation_profile="generic_utf8",
+        token_budget=100,
+        input_refs=[DataRef(uri="https://objects.local/doc.txt", sha256="a" * 64, bytes=11, content_type="text/plain")],
+        inline_inputs={"prompt": InlineValue(value="summarize")},
+    )
+
+    handle = await adapter.start(plan)
+    result = await adapter.wait(handle, plan)
+
+    assert result.value == "worker ok"
+    assert result.usage["completion_tokens"] == 2
+    assert captured["path"] == "/gpucall/local-dataref-openai/v1/chat"
+    assert captured["authorization"] == "Bearer worker-secret"
+    body = captured["body"]
+    assert isinstance(body, dict)
+    assert body["input_refs"][0]["uri"] == "https://objects.local/doc.txt"
+    assert "doc bytes" not in json.dumps(body)
+
+
+@pytest.mark.asyncio
+async def test_local_dataref_worker_fetches_validates_and_calls_openai() -> None:
+    content = b"long local document"
+    content_sha = hashlib.sha256(content).hexdigest()
+    captured: dict[str, object] = {}
+
+    def dataref_handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.host == "objects.local"
+        return httpx.Response(200, content=content, headers={"content-type": "text/plain; charset=utf-8"})
+
+    def openai_handler(request: httpx.Request) -> httpx.Response:
+        captured["path"] = request.url.path
+        captured["authorization"] = request.headers.get("authorization")
+        captured["body"] = json.loads(request.content)
+        return httpx.Response(
+            200,
+            json={
+                "choices": [{"message": {"content": "local answer"}}],
+                "usage": {"prompt_tokens": 8, "completion_tokens": 2},
+            },
+        )
+
+    result = await run_dataref_openai_request(
+        {
+            "input_refs": [
+                {"uri": "https://objects.local/doc.txt", "sha256": content_sha, "bytes": len(content), "content_type": "text/plain"}
+            ],
+            "inline_inputs": {"prompt": {"value": "summarize this", "content_type": "text/plain"}},
+            "system_prompt": "Answer directly.",
+            "max_tokens": 64,
+            "temperature": 0.0,
+        },
+        openai_base_url="http://127.0.0.1:8000/v1",
+        model="deepseek-v4-flash",
+        api_key="local-key",
+        dataref_transport=httpx.MockTransport(dataref_handler),
+        openai_transport=httpx.MockTransport(openai_handler),
+    )
+
+    assert result.value == "local answer"
+    assert result.usage == {"prompt_tokens": 8, "completion_tokens": 2}
+    assert captured["path"] == "/v1/chat/completions"
+    assert captured["authorization"] == "Bearer local-key"
+    body = captured["body"]
+    assert isinstance(body, dict)
+    assert body["model"] == "deepseek-v4-flash"
+    assert body["messages"][0] == {"role": "system", "content": "Answer directly."}
+    assert body["messages"][1]["role"] == "user"
+    assert "summarize this" in body["messages"][1]["content"]
+    assert "long local document" in body["messages"][1]["content"]
+
+
+@pytest.mark.asyncio
+async def test_local_dataref_worker_rejects_sha_mismatch() -> None:
+    def dataref_handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, content=b"tampered", headers={"content-type": "text/plain"})
+
+    with pytest.raises(TupleError) as excinfo:
+        await run_dataref_openai_request(
+            {
+                "input_refs": [
+                    {"uri": "https://objects.local/doc.txt", "sha256": "0" * 64, "bytes": 8, "content_type": "text/plain"}
+                ],
+                "inline_inputs": {},
+            },
+            openai_base_url="http://127.0.0.1:8000/v1",
+            model="deepseek-v4-flash",
+            dataref_transport=httpx.MockTransport(dataref_handler),
+            openai_transport=httpx.MockTransport(lambda request: httpx.Response(500)),
+        )
+
+    assert excinfo.value.status_code == 422
     assert excinfo.value.retryable is False
 
 

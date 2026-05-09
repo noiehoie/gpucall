@@ -6,6 +6,7 @@ max_model_len: 1000000
 min_vram_gb: 128
 supported_engines:
   - local-openai-compatible-chat
+  - local-dataref-openai-worker-chat
 input_contracts: [text, chat_messages]
 output_contracts: [openai-chat-completions, plain-text]
 supports_vision: false
