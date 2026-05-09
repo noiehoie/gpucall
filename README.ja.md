@@ -175,7 +175,13 @@ const result = await client.infer({ prompt: "hello" });
 
 ## External System Migration
 
-他の product / service を gpucall に適応させるときは、[docs/EXTERNAL_SYSTEM_ONBOARDING_MANUAL.md](docs/EXTERNAL_SYSTEM_ONBOARDING_MANUAL.md) と [docs/EXTERNAL_SYSTEM_ONBOARDING_PROMPT.md](docs/EXTERNAL_SYSTEM_ONBOARDING_PROMPT.md) の onboarding manual / reusable prompt を使ってください。従来の compact な one-shot prompt は [docs/EXTERNAL_SYSTEM_ADAPTATION_PROMPT.md](docs/EXTERNAL_SYSTEM_ADAPTATION_PROMPT.md) に残しています。外部システムは通常、`task`、`mode`、input data または `DataRef` だけを送ります。recipe と provider selection は gateway の責任です。
+gpucall は、外部システムに渡すための受容パッケージを配布物として含みます。移行対象アプリケーションを担当する team または coding agent には、まずこの package を渡します。
+
+- [docs/EXTERNAL_SYSTEM_ONBOARDING_PROMPT.md](docs/EXTERNAL_SYSTEM_ONBOARDING_PROMPT.md): 外部システム側の coding agent にそのまま貼る reusable prompt です。LLM / Vision / GPU 呼び出しの棚卸し、preflight intake、wrapper 移行、failure classification、canary、検証済み報告まで指示します。
+- [docs/EXTERNAL_SYSTEM_ONBOARDING_MANUAL.md](docs/EXTERNAL_SYSTEM_ONBOARDING_MANUAL.md): operator / implementer 向けの詳細 migration manual です。
+- [docs/EXTERNAL_SYSTEM_ADAPTATION_PROMPT.md](docs/EXTERNAL_SYSTEM_ADAPTATION_PROMPT.md): 小規模移行向けに残している compact な one-shot prompt です。
+
+外部システムは通常、`task`、`mode`、input data または `DataRef` だけを送ります。recipe と provider selection は gateway の責任です。
 
 productized migration には deterministic migration kit を使います。
 

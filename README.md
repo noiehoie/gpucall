@@ -175,7 +175,14 @@ const result = await client.infer({ prompt: "hello" });
 
 ## External System Migration
 
-When adapting another product or service to gpucall, use the onboarding manual and reusable prompt in [docs/EXTERNAL_SYSTEM_ONBOARDING_MANUAL.md](docs/EXTERNAL_SYSTEM_ONBOARDING_MANUAL.md) and [docs/EXTERNAL_SYSTEM_ONBOARDING_PROMPT.md](docs/EXTERNAL_SYSTEM_ONBOARDING_PROMPT.md). The older compact one-shot prompt remains available at [docs/EXTERNAL_SYSTEM_ADAPTATION_PROMPT.md](docs/EXTERNAL_SYSTEM_ADAPTATION_PROMPT.md). External systems should normally send only `task`, `mode`, and input data or `DataRef`; recipe and provider selection belong to the gateway.
+gpucall ships an external-system handoff package. Give this package to the team
+or coding agent that owns the application being migrated:
+
+- [docs/EXTERNAL_SYSTEM_ONBOARDING_PROMPT.md](docs/EXTERNAL_SYSTEM_ONBOARDING_PROMPT.md): the reusable prompt to paste into the external system's coding agent. It tells the agent how to inventory LLM / Vision / GPU paths, submit preflight intake, migrate wrappers, classify failures, run canaries, and report verified results.
+- [docs/EXTERNAL_SYSTEM_ONBOARDING_MANUAL.md](docs/EXTERNAL_SYSTEM_ONBOARDING_MANUAL.md): the detailed migration manual for operators and implementers.
+- [docs/EXTERNAL_SYSTEM_ADAPTATION_PROMPT.md](docs/EXTERNAL_SYSTEM_ADAPTATION_PROMPT.md): the older compact one-shot prompt for smaller migrations.
+
+External systems should normally send only `task`, `mode`, and input data or `DataRef`; recipe and provider selection belong to the gateway.
 
 For productized migration, use the deterministic migration kit:
 
