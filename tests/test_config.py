@@ -5,6 +5,8 @@ import subprocess
 import sys
 import os
 import json
+import ast
+import re
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -23,6 +25,80 @@ def copy_config(tmp_path: Path) -> Path:
     root = tmp_path / "config"
     shutil.copytree(source, root)
     return root
+
+
+def test_modal_config_targets_match_worker_app_and_functions() -> None:
+    root = Path(__file__).resolve().parents[1]
+    source = (root / "gpucall" / "worker_contracts" / "modal.py").read_text(encoding="utf-8")
+    app_default = re.search(r'modal\.App\(os\.getenv\("GPUCALL_MODAL_WORKER_APP_NAME", "([^"]+)"\)\)', source)
+    assert app_default is not None
+    app_name = app_default.group(1)
+    function_names = {node.name for node in ast.walk(ast.parse(source)) if isinstance(node, ast.FunctionDef)}
+    target_files = [
+        *sorted((root / "config" / "workers").glob("modal*.yml")),
+        *sorted((root / "config" / "tuple_candidates").glob("modal*.yml")),
+        *sorted((root / "config" / "tuples").glob("modal*.example")),
+        *sorted((root / "gpucall" / "config_templates" / "workers").glob("modal*.yml")),
+        *sorted((root / "gpucall" / "config_templates" / "tuple_candidates").glob("modal*.yml")),
+        *sorted((root / "gpucall" / "config_templates" / "tuples").glob("modal*.example")),
+    ]
+
+    errors: list[str] = []
+    for path in target_files:
+        payload = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+        for field in ("target", "stream_target"):
+            value = payload.get(field)
+            if not isinstance(value, str) or not value:
+                continue
+            if ":" not in value:
+                errors.append(f"{path.relative_to(root)}:{field}: missing '<app>:<function>'")
+                continue
+            target_app, target_function = value.split(":", 1)
+            if target_app != app_name:
+                errors.append(f"{path.relative_to(root)}:{field}: app {target_app!r} != {app_name!r}")
+            if target_function not in function_names:
+                errors.append(f"{path.relative_to(root)}:{field}: unknown function {target_function!r}")
+
+    assert errors == []
+
+
+def test_runpod_vllm_tuple_examples_include_official_worker_env() -> None:
+    root = Path(__file__).resolve().parents[1]
+    target_files = [
+        *sorted((root / "config" / "tuples").glob("runpod-vllm*.example")),
+        *sorted((root / "gpucall" / "config_templates" / "tuples").glob("runpod-vllm*.example")),
+    ]
+    required_env = {
+        "MODEL_NAME",
+        "MAX_MODEL_LEN",
+        "GPU_MEMORY_UTILIZATION",
+        "MAX_CONCURRENCY",
+    }
+
+    errors: list[str] = []
+    for path in target_files:
+        payload = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+        if payload.get("adapter") != "runpod-vllm-serverless":
+            continue
+        worker_env = ((payload.get("provider_params") or {}).get("worker_env") or {})
+        missing = sorted(required_env.difference(worker_env))
+        if missing:
+            errors.append(f"{path.relative_to(root)} missing worker_env keys: {missing}")
+        declared_model = str(payload.get("model") or "")
+        if declared_model and declared_model not in {
+            str(worker_env.get("MODEL_NAME") or ""),
+            str(worker_env.get("OPENAI_SERVED_MODEL_NAME_OVERRIDE") or ""),
+        }:
+            errors.append(f"{path.relative_to(root)} model does not match worker_env")
+        try:
+            max_model_len = int(worker_env.get("MAX_MODEL_LEN"))
+        except (TypeError, ValueError):
+            errors.append(f"{path.relative_to(root)} worker_env.MAX_MODEL_LEN is not an integer")
+        else:
+            if max_model_len < int(payload.get("max_model_len") or 0):
+                errors.append(f"{path.relative_to(root)} worker_env.MAX_MODEL_LEN is below tuple max_model_len")
+
+    assert errors == []
 
 
 def test_recipe_v3_rejects_provider_resource_fields() -> None:
