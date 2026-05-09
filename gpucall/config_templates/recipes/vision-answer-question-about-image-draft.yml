@@ -1,0 +1,36 @@
+name: vision-answer-question-about-image-draft
+recipe_schema_version: 3
+task: vision
+intent: answer_question_about_image
+auto_select: false
+data_classification: confidential
+allowed_modes:
+- sync
+context_budget_tokens: 8192
+resource_class: document_vision
+latency_class: standard
+quality_floor: draft
+timeout_seconds: 1800
+lease_ttl_seconds: 2100
+token_estimation_profile: generic_utf8
+max_input_bytes: 16777216
+allowed_mime_prefixes:
+- image/
+default_temperature: 0.2
+structured_temperature: 0.0
+structured_system_prompt: Return only valid JSON when response_format requests JSON.
+  Do not include markdown fences or prose.
+system_prompt: Answer the user's vision request directly from the supplied image and
+  prompt.
+stop_tokens:
+- <|im_end|>
+- <|endoftext|>
+repetition_penalty: 1.05
+guided_decoding: true
+output_validation_attempts: 1
+required_model_capabilities:
+- visual_question_answering
+- instruction_following
+output_contract: plain-text
+allowed_inline_mime_prefixes:
+- text/
