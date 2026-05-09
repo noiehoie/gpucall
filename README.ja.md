@@ -181,6 +181,13 @@ gpucall は、外部システムに渡すための受容パッケージを配布
 - [docs/EXTERNAL_SYSTEM_ONBOARDING_MANUAL.md](docs/EXTERNAL_SYSTEM_ONBOARDING_MANUAL.md): operator / implementer 向けの詳細 migration manual です。
 - [docs/EXTERNAL_SYSTEM_ADAPTATION_PROMPT.md](docs/EXTERNAL_SYSTEM_ADAPTATION_PROMPT.md): 小規模移行向けに残している compact な one-shot prompt です。
 
+この repository の外で動く AI CLI には、raw URL を渡します。
+
+```text
+https://raw.githubusercontent.com/noiehoie/gpucall3/main/docs/EXTERNAL_SYSTEM_ONBOARDING_PROMPT.md
+https://raw.githubusercontent.com/noiehoie/gpucall3/main/docs/EXTERNAL_SYSTEM_ONBOARDING_MANUAL.md
+```
+
 外部システムは通常、`task`、`mode`、input data または `DataRef` だけを送ります。recipe と provider selection は gateway の責任です。
 
 productized migration には deterministic migration kit を使います。

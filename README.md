@@ -182,6 +182,13 @@ or coding agent that owns the application being migrated:
 - [docs/EXTERNAL_SYSTEM_ONBOARDING_MANUAL.md](docs/EXTERNAL_SYSTEM_ONBOARDING_MANUAL.md): the detailed migration manual for operators and implementers.
 - [docs/EXTERNAL_SYSTEM_ADAPTATION_PROMPT.md](docs/EXTERNAL_SYSTEM_ADAPTATION_PROMPT.md): the older compact one-shot prompt for smaller migrations.
 
+For an AI CLI running outside this repository, use the raw URLs:
+
+```text
+https://raw.githubusercontent.com/noiehoie/gpucall3/main/docs/EXTERNAL_SYSTEM_ONBOARDING_PROMPT.md
+https://raw.githubusercontent.com/noiehoie/gpucall3/main/docs/EXTERNAL_SYSTEM_ONBOARDING_MANUAL.md
+```
+
 External systems should normally send only `task`, `mode`, and input data or `DataRef`; recipe and provider selection belong to the gateway.
 
 For productized migration, use the deterministic migration kit:

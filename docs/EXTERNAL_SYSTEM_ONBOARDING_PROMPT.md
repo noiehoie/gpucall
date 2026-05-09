@@ -4,6 +4,13 @@ Use this prompt when asking a coding agent inside another product to make that
 product accept gpucall. It is written to avoid the migration mistakes that make
 gpucall adoption harder than it should be.
 
+Public reference URLs for agents that are not running inside the gpucall
+repository:
+
+- Prompt: https://raw.githubusercontent.com/noiehoie/gpucall3/main/docs/EXTERNAL_SYSTEM_ONBOARDING_PROMPT.md
+- Manual: https://raw.githubusercontent.com/noiehoie/gpucall3/main/docs/EXTERNAL_SYSTEM_ONBOARDING_MANUAL.md
+- Repository: https://github.com/noiehoie/gpucall3
+
 Fill these values before handing the prompt to the external-system agent:
 
 - `<system-name>`: stable name of the external system
@@ -15,6 +22,14 @@ Fill these values before handing the prompt to the external-system agent:
 You are the implementation agent for this repository. Your task is to migrate
 this system's LLM / Vision / GPU inference paths to gpucall v2.0 with minimum
 behavioral disruption and maximum determinism.
+
+Before editing, read the current gpucall onboarding documents:
+
+- https://raw.githubusercontent.com/noiehoie/gpucall3/main/docs/EXTERNAL_SYSTEM_ONBOARDING_PROMPT.md
+- https://raw.githubusercontent.com/noiehoie/gpucall3/main/docs/EXTERNAL_SYSTEM_ONBOARDING_MANUAL.md
+
+If network access is unavailable and the gpucall repository is checked out
+locally, read the same files from that checkout instead.
 
 You must read the actual code and configuration before making claims. Do not
 guess from filenames.
