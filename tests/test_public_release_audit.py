@@ -4,6 +4,7 @@ import re
 import subprocess
 from pathlib import Path
 
+import pytest
 import yaml
 
 from gpucall.recipe_intents import CAPABILITY_BY_INTENT
@@ -11,6 +12,8 @@ from gpucall.recipe_intents import CAPABILITY_BY_INTENT
 
 def test_tracked_files_do_not_contain_private_operator_artifacts() -> None:
     root = Path(__file__).resolve().parents[1]
+    if not (root / ".git").exists():
+        pytest.skip("public release tracked-file audit requires a git checkout")
     files = subprocess.check_output(["git", "ls-files"], cwd=root, text=True).splitlines()
     ignored = {
         "docs/PUBLIC_RELEASE_CHECKLIST.md",
@@ -84,5 +87,7 @@ def test_runpod_flash_is_optional_provider_dependency() -> None:
 
 def test_public_repo_uses_canonical_release_checklist_only() -> None:
     root = Path(__file__).resolve().parents[1]
+    if not (root / ".git").exists():
+        pytest.skip("public release tracked-file audit requires a git checkout")
     assert not (root / "RELEASE_CHECKLIST.md").exists()
     assert (root / "docs" / "PUBLIC_RELEASE_CHECKLIST.md").exists()
