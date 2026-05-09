@@ -11,6 +11,17 @@ repository:
 - Manual: https://raw.githubusercontent.com/noiehoie/gpucall3/main/docs/EXTERNAL_SYSTEM_ONBOARDING_MANUAL.md
 - Repository: https://github.com/noiehoie/gpucall3
 
+Important boundary for external-system agents:
+
+- Do not clone, install, modify, or vendor the gpucall gateway repository.
+- Read only the raw onboarding documents above unless the operator explicitly
+  provides a local gpucall checkout for reference.
+- Make code changes only in the external system being migrated.
+- If `gpucall-migrate`, `gpucall-recipe-draft`, or `gpucall_sdk` are not
+  already available in the external system's environment, report that fact and
+  continue with source inventory, wrapper design, tests, and preflight command
+  generation. Do not fetch the gpucall repository to obtain them.
+
 Fill these values before handing the prompt to the external-system agent:
 
 - `<system-name>`: stable name of the external system
@@ -30,6 +41,11 @@ Before editing, read the current gpucall onboarding documents:
 
 If network access is unavailable and the gpucall repository is checked out
 locally, read the same files from that checkout instead.
+
+Do not clone, install, modify, or vendor the gpucall gateway repository. Your
+worktree is the external system only. If gpucall helper commands or SDK packages
+are not already installed, report that they are unavailable and proceed with the
+parts that can be completed from this repository's source code.
 
 You must read the actual code and configuration before making claims. Do not
 guess from filenames.

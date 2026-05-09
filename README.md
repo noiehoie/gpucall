@@ -189,6 +189,10 @@ https://raw.githubusercontent.com/noiehoie/gpucall3/main/docs/EXTERNAL_SYSTEM_ON
 https://raw.githubusercontent.com/noiehoie/gpucall3/main/docs/EXTERNAL_SYSTEM_ONBOARDING_MANUAL.md
 ```
 
+The external-system agent should read those documents only. It should not clone,
+install, modify, or vendor the gpucall gateway repository unless the operator
+explicitly asks for that. Its worktree is the application being migrated.
+
 External systems should normally send only `task`, `mode`, and input data or `DataRef`; recipe and provider selection belong to the gateway.
 
 For productized migration, use the deterministic migration kit:

@@ -188,6 +188,8 @@ https://raw.githubusercontent.com/noiehoie/gpucall3/main/docs/EXTERNAL_SYSTEM_ON
 https://raw.githubusercontent.com/noiehoie/gpucall3/main/docs/EXTERNAL_SYSTEM_ONBOARDING_MANUAL.md
 ```
 
+外部システム側の agent は、この2文書だけを読みます。operator が明示しない限り、gpucall gateway repository を clone / install / modify / vendor してはいけません。作業対象 worktree は移行対象アプリケーションだけです。
+
 外部システムは通常、`task`、`mode`、input data または `DataRef` だけを送ります。recipe と provider selection は gateway の責任です。
 
 productized migration には deterministic migration kit を使います。
