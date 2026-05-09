@@ -37,6 +37,7 @@ class TenantUsageLedger:
                 )
                 """
             )
+            self._migrate_schema(conn)
             conn.execute("CREATE INDEX IF NOT EXISTS idx_tenant_usage_time ON tenant_usage(tenant_id, recorded_at)")
 
     def _connect(self) -> sqlite3.Connection:
@@ -44,6 +45,21 @@ class TenantUsageLedger:
         conn = sqlite3.connect(self.path, timeout=30)
         conn.execute("PRAGMA journal_mode=WAL")
         return conn
+
+    @staticmethod
+    def _migrate_schema(conn: sqlite3.Connection) -> None:
+        columns = {str(row[1]) for row in conn.execute("PRAGMA table_info(tenant_usage)").fetchall()}
+        required = {
+            "tuple": "TEXT",
+            "recipe": "TEXT",
+            "plan_id": "TEXT",
+        }
+        for column, declaration in required.items():
+            if column not in columns:
+                conn.execute(f"ALTER TABLE tenant_usage ADD COLUMN {column} {declaration}")
+                columns.add(column)
+        if "provider" in columns:
+            conn.execute("UPDATE tenant_usage SET tuple = provider WHERE tuple IS NULL AND provider IS NOT NULL")
 
     def reserve(self, tenant_id: str, estimated_cost_usd: float, *, tuple: str | None, recipe: str | None, plan_id: str | None) -> None:
         with self._connect() as conn:
