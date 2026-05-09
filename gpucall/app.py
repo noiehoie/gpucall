@@ -179,18 +179,39 @@ def _write_bootstrap_tenant(config_dir: Path, tenant: TenantSpec) -> None:
     if path.exists():
         return
     payload = tenant.model_dump(mode="json", exclude_none=True)
-    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
     try:
-        with os.fdopen(fd, "w", encoding="utf-8") as handle:
-            yaml.safe_dump(payload, handle, sort_keys=False)
-            handle.flush()
-            os.fsync(handle.fileno())
-    except Exception:
+        fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
         try:
-            path.unlink()
-        except FileNotFoundError:
-            pass
-        raise
+            with os.fdopen(fd, "w", encoding="utf-8") as handle:
+                yaml.safe_dump(payload, handle, sort_keys=False)
+                handle.flush()
+                os.fsync(handle.fileno())
+        except Exception:
+            try:
+                path.unlink()
+            except FileNotFoundError:
+                pass
+            raise
+    except PermissionError as exc:
+        raise HTTPException(status_code=503, detail="bootstrap tenant directory is not writable") from exc
+
+
+def _bootstrap_writable_status(config_dir: Path) -> dict[str, object]:
+    tenants_dir = config_dir / "tenants"
+    creds = credentials_path()
+    return {
+        "tenants_dir": str(tenants_dir),
+        "tenants_dir_writable": tenants_dir.exists() and os.access(tenants_dir, os.W_OK),
+        "credentials_path": str(creds),
+        "credentials_writable": creds.exists() and os.access(creds, os.W_OK),
+    }
+
+
+def _safe_create_bootstrap_tenant_key(tenant_name: str) -> str:
+    try:
+        return _create_bootstrap_tenant_key(tenant_name)
+    except PermissionError as exc:
+        raise HTTPException(status_code=503, detail="bootstrap credentials file is not writable") from exc
 
 
 def _create_bootstrap_tenant_key(tenant_name: str) -> str:
@@ -434,6 +455,10 @@ def create_app(config_dir: Path | None = None) -> FastAPI:
             "status": "ready",
             "object_store": runtime.object_store is not None,
             "tenants_configured": sorted(runtime.tenants),
+            "trusted_bootstrap": {
+                "enabled": load_config(root).admin_automation.api_key_handoff_mode is ApiKeyHandoffMode.TRUSTED_BOOTSTRAP,
+                **_bootstrap_writable_status(root),
+            },
             "recipes": {
                 name: {
                     "task": recipe.task,
@@ -496,7 +521,7 @@ def create_app(config_dir: Path | None = None) -> FastAPI:
             return error_response(409, "tenant key already exists")
         tenant = _bootstrap_tenant_spec(request, tenant_name)
         _write_bootstrap_tenant(root, tenant)
-        token = _create_bootstrap_tenant_key(tenant_name)
+        token = _safe_create_bootstrap_tenant_key(tenant_name)
         runtime.tenants[tenant_name] = tenant
         gateway_url = automation.api_key_bootstrap_gateway_url or str(http_request.base_url).rstrip("/")
         recipe_inbox = automation.api_key_bootstrap_recipe_inbox or ""

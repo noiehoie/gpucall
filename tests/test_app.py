@@ -386,6 +386,28 @@ def test_trusted_bootstrap_rejects_untrusted_client(tmp_path, monkeypatch) -> No
     assert response.status_code == 403
 
 
+def test_readyz_reports_trusted_bootstrap_writable_state(tmp_path, monkeypatch) -> None:
+    root = copy_config(tmp_path)
+    (root / "admin.yml").write_text(
+        "\n".join(
+            [
+                "api_key_handoff_mode: trusted_bootstrap",
+                "api_key_bootstrap_allowed_hosts: [testclient]",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    with TestClient(create_app(root)) as client:
+        response = client.get("/readyz")
+
+    payload = response.json()["trusted_bootstrap"]
+    assert payload["enabled"] is True
+    assert payload["tenants_dir_writable"] is True
+    assert payload["credentials_writable"] is True
+
+
 def test_trusted_bootstrap_disabled_by_default(tmp_path, monkeypatch) -> None:
     with TestClient(create_app(copy_config(tmp_path))) as client:
         response = client.post("/v2/bootstrap/tenant-key", json={"system_name": "new-system"})
