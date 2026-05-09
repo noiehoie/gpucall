@@ -142,7 +142,7 @@ This repository is public for evaluation, integration review, and security discu
 
 ## SaaS v1 Operations
 
-External SaaS operation uses tenant quota YAML plus credentials-managed tenant API keys. See [docs/SAAS_V1_OPERATIONS.md](docs/SAAS_V1_OPERATIONS.md).
+External SaaS operation uses tenant quota YAML plus credentials-managed tenant API keys. See [docs/SAAS_V1_OPERATIONS.md](docs/SAAS_V1_OPERATIONS.md) and [docs/GATEWAY_API_KEYS.md](docs/GATEWAY_API_KEYS.md).
 
 ## Python SDK
 

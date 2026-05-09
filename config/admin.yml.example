@@ -2,3 +2,14 @@
 # This only materializes reviewed recipe YAML and static catalog readiness.
 # It never runs billable smoke tests or activates production routing.
 recipe_inbox_auto_materialize: false
+# manual: administrators issue keys explicitly and hand them off through an
+# operator-approved channel.
+# handoff_file: tenant-onboard may generate a 0600 handoff file containing the
+# caller gateway key and onboarding URLs.
+# trusted_bootstrap: trusted clients may POST to /v2/bootstrap/tenant-key and
+# receive a tenant-scoped key without human handoff.
+api_key_handoff_mode: manual
+api_key_bootstrap_allowed_cidrs: []
+api_key_bootstrap_allowed_hosts: []
+api_key_bootstrap_gateway_url:
+api_key_bootstrap_recipe_inbox:

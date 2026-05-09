@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import asyncio
+import ipaddress
 import os
+import secrets
 import time
 import hashlib
 import hmac
@@ -11,6 +13,7 @@ from contextlib import asynccontextmanager
 from pathlib import Path, PurePosixPath
 from typing import Any, Literal
 from uuid import uuid4
+import yaml
 
 from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.exceptions import RequestValidationError
@@ -54,9 +57,9 @@ from gpucall.artifacts import SQLiteArtifactRegistry
 from gpucall.audit import AuditTrail
 from gpucall.compiler import GovernanceCompiler, GovernanceError
 from gpucall.config import ConfigError, default_config_dir, default_state_dir, load_config
-from gpucall.credentials import load_credentials
+from gpucall.credentials import credentials_path, load_credentials, save_credentials
 from gpucall.dispatcher import Dispatcher, LeaseReaper, TupleReconciler
-from gpucall.domain import ChatMessage, DataRef, ExecutionMode, InlineValue, JobRecord, JobState, TupleError, ResponseFormat, TaskRequest, recipe_requirements
+from gpucall.domain import ApiKeyHandoffMode, ChatMessage, DataRef, ExecutionMode, InlineValue, JobRecord, JobState, TenantSpec, TupleError, ResponseFormat, TaskRequest, recipe_requirements
 from gpucall.domain import PresignGetRequest, PresignGetResponse, PresignPutRequest, PresignPutResponse
 from gpucall.object_store import ObjectStore
 from gpucall.execution.factory import build_adapters
@@ -111,6 +114,15 @@ class BatchTaskRequest(BaseModel):
     continue_on_error: bool = True
 
 
+class BootstrapTenantKeyRequest(BaseModel):
+    system_name: str = Field(min_length=2, max_length=63)
+    requests_per_minute: int | None = Field(default=None, gt=0)
+    daily_budget_usd: float | None = Field(default=None, ge=0)
+    monthly_budget_usd: float | None = Field(default=None, ge=0)
+    max_request_estimated_cost_usd: float | None = Field(default=None, ge=0)
+    object_prefix: str | None = None
+
+
 def _database_url() -> str | None:
     value = os.getenv("GPUCALL_DATABASE_URL") or os.getenv("DATABASE_URL")
     return value.strip() if value and value.strip() else None
@@ -128,6 +140,93 @@ def _idempotency_store(state_dir: Path):
     if database_url and database_url.startswith(("postgres://", "postgresql://")):
         return PostgresIdempotencyStore(database_url)
     return SQLiteIdempotencyStore(state_dir / "idempotency.db")
+
+
+_BOOTSTRAP_TENANT_NAME_RE = re.compile(r"^[a-z0-9][a-z0-9._-]{1,62}$")
+
+
+def _bootstrap_client_allowed(client_host: str, cidrs: tuple[str, ...], hosts: tuple[str, ...]) -> bool:
+    if client_host in hosts:
+        return True
+    try:
+        client_ip = ipaddress.ip_address(client_host)
+    except ValueError:
+        return False
+    for raw_cidr in cidrs:
+        try:
+            if client_ip in ipaddress.ip_network(raw_cidr, strict=False):
+                return True
+        except ValueError:
+            continue
+    return False
+
+
+def _bootstrap_tenant_spec(request: BootstrapTenantKeyRequest, tenant_name: str) -> TenantSpec:
+    return TenantSpec(
+        name=tenant_name,
+        requests_per_minute=request.requests_per_minute or 120,
+        daily_budget_usd=request.daily_budget_usd if request.daily_budget_usd is not None else 25.0,
+        monthly_budget_usd=request.monthly_budget_usd if request.monthly_budget_usd is not None else 500.0,
+        max_request_estimated_cost_usd=request.max_request_estimated_cost_usd if request.max_request_estimated_cost_usd is not None else 10.0,
+        object_prefix=request.object_prefix or tenant_name,
+    )
+
+
+def _write_bootstrap_tenant(config_dir: Path, tenant: TenantSpec) -> None:
+    tenants_dir = config_dir / "tenants"
+    tenants_dir.mkdir(parents=True, exist_ok=True)
+    path = tenants_dir / f"{tenant.name}.yml"
+    if path.exists():
+        return
+    payload = tenant.model_dump(mode="json", exclude_none=True)
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            yaml.safe_dump(payload, handle, sort_keys=False)
+            handle.flush()
+            os.fsync(handle.fileno())
+    except Exception:
+        try:
+            path.unlink()
+        except FileNotFoundError:
+            pass
+        raise
+
+
+def _create_bootstrap_tenant_key(tenant_name: str) -> str:
+    creds = load_credentials()
+    auth = dict(creds.get("auth", {}))
+    tenant_keys = _parse_bootstrap_tenant_keys(auth.get("tenant_keys", ""))
+    if tenant_name in tenant_keys:
+        raise HTTPException(status_code=409, detail="tenant key already exists")
+    token = "gpk_" + secrets.token_urlsafe(32)
+    tenant_keys[tenant_name] = token
+    auth["tenant_keys"] = ",".join(f"{tenant}:{key}" for tenant, key in sorted(tenant_keys.items()))
+    save_credentials("auth", auth)
+    return token
+
+
+def _parse_bootstrap_tenant_keys(raw: str) -> dict[str, str]:
+    pairs: dict[str, str] = {}
+    for item in raw.split(","):
+        tenant, sep, key = item.partition(":")
+        tenant = tenant.strip()
+        key = key.strip()
+        if sep and tenant and key:
+            pairs[tenant] = key
+    return pairs
+
+
+def _bootstrap_handoff_payload(*, tenant: str, token: str, gateway_url: str, recipe_inbox: str) -> dict[str, str]:
+    return {
+        "GPUCALL_TENANT": tenant,
+        "GPUCALL_BASE_URL": gateway_url,
+        "GPUCALL_API_KEY": token,
+        "GPUCALL_RECIPE_INBOX": recipe_inbox,
+        "GPUCALL_ONBOARDING_PROMPT_URL": "https://raw.githubusercontent.com/noiehoie/gpucall3/main/docs/EXTERNAL_SYSTEM_ONBOARDING_PROMPT.md",
+        "GPUCALL_ONBOARDING_MANUAL_URL": "https://raw.githubusercontent.com/noiehoie/gpucall3/main/docs/EXTERNAL_SYSTEM_ONBOARDING_MANUAL.md",
+        "GPUCALL_SDK_WHEEL_URL": "https://raw.githubusercontent.com/noiehoie/gpucall3/main/sdk/python/dist/gpucall_sdk-2.0.0a2-py3-none-any.whl",
+    }
 
 
 def build_runtime(config_dir: Path) -> Runtime:
@@ -278,7 +377,7 @@ def create_app(config_dir: Path | None = None) -> FastAPI:
     async def api_key_auth(request: Request, call_next):
         tenant_keys = tenant_key_map()
         configured = legacy_api_keys() + list(tenant_keys)
-        if request.url.path in {"/healthz", "/readyz"}:
+        if request.url.path in {"/healthz", "/readyz", "/v2/bootstrap/tenant-key"}:
             return await call_next(request)
         if not configured:
             if not _allow_unauthenticated_gateway():
@@ -380,6 +479,38 @@ def create_app(config_dir: Path | None = None) -> FastAPI:
     async def prometheus_metrics(runtime: Runtime = Depends(runtime_dep)) -> PlainTextResponse:
         _enforce_metrics_access()
         return PlainTextResponse(_prometheus_metrics_text(_metrics_payload(runtime)), media_type="text/plain; version=0.0.4")
+
+    @app.post("/v2/bootstrap/tenant-key")
+    async def bootstrap_tenant_key(request: BootstrapTenantKeyRequest, http_request: Request, runtime: Runtime = Depends(runtime_dep)) -> JSONResponse:
+        config = load_config(root)
+        automation = config.admin_automation
+        if automation.api_key_handoff_mode is not ApiKeyHandoffMode.TRUSTED_BOOTSTRAP:
+            return error_response(403, "trusted bootstrap is disabled")
+        client_host = http_request.client.host if http_request.client else ""
+        if not _bootstrap_client_allowed(client_host, automation.api_key_bootstrap_allowed_cidrs, automation.api_key_bootstrap_allowed_hosts):
+            return error_response(403, "client is not in trusted bootstrap scope")
+        tenant_name = request.system_name.strip()
+        if not _BOOTSTRAP_TENANT_NAME_RE.fullmatch(tenant_name):
+            return error_response(422, "invalid system_name")
+        if tenant_name in tenant_key_map():
+            return error_response(409, "tenant key already exists")
+        tenant = _bootstrap_tenant_spec(request, tenant_name)
+        _write_bootstrap_tenant(root, tenant)
+        token = _create_bootstrap_tenant_key(tenant_name)
+        runtime.tenants[tenant_name] = tenant
+        gateway_url = automation.api_key_bootstrap_gateway_url or str(http_request.base_url).rstrip("/")
+        recipe_inbox = automation.api_key_bootstrap_recipe_inbox or ""
+        payload = _bootstrap_handoff_payload(tenant=tenant_name, token=token, gateway_url=gateway_url, recipe_inbox=recipe_inbox)
+        return JSONResponse(
+            {
+                "tenant": tenant_name,
+                "api_key": token,
+                "api_key_fingerprint": hashlib.sha256(token.encode("utf-8")).hexdigest()[:16],
+                "credentials_path": str(credentials_path()),
+                "handoff": payload,
+                "secret_handling": "store this response in the caller system secret manager; do not log it",
+            }
+        )
 
     @app.post("/v2/tasks/sync")
     async def task_sync(

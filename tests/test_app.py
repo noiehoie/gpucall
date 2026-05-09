@@ -338,6 +338,61 @@ def test_api_key_auth_fails_closed_without_explicit_dev_override(tmp_path, monke
     assert response.status_code == 401
 
 
+def test_trusted_bootstrap_issues_tenant_key_without_existing_auth(tmp_path, monkeypatch) -> None:
+    root = copy_config(tmp_path)
+    (root / "admin.yml").write_text(
+        "\n".join(
+            [
+                "api_key_handoff_mode: trusted_bootstrap",
+                "api_key_bootstrap_allowed_hosts: [testclient]",
+                "api_key_bootstrap_gateway_url: http://gpucall.internal:18088",
+                "api_key_bootstrap_recipe_inbox: root@gpucall.internal:/opt/gpucall/state/recipe_requests/inbox",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    with TestClient(create_app(root)) as client:
+        response = client.post("/v2/bootstrap/tenant-key", json={"system_name": "new-system"})
+        issued = response.json()
+        second = client.post("/v2/bootstrap/tenant-key", json={"system_name": "new-system"})
+
+    assert response.status_code == 200
+    assert issued["api_key"].startswith("gpk_")
+    assert issued["handoff"]["GPUCALL_TENANT"] == "new-system"
+    assert issued["handoff"]["GPUCALL_BASE_URL"] == "http://gpucall.internal:18088"
+    assert issued["handoff"]["GPUCALL_RECIPE_INBOX"] == "root@gpucall.internal:/opt/gpucall/state/recipe_requests/inbox"
+    assert "api_key" not in second.text
+    assert second.status_code == 409
+
+
+def test_trusted_bootstrap_rejects_untrusted_client(tmp_path, monkeypatch) -> None:
+    root = copy_config(tmp_path)
+    (root / "admin.yml").write_text(
+        "\n".join(
+            [
+                "api_key_handoff_mode: trusted_bootstrap",
+                "api_key_bootstrap_allowed_cidrs: [10.0.0.0/8]",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    with TestClient(create_app(root)) as client:
+        response = client.post("/v2/bootstrap/tenant-key", json={"system_name": "new-system"})
+
+    assert response.status_code == 403
+
+
+def test_trusted_bootstrap_disabled_by_default(tmp_path, monkeypatch) -> None:
+    with TestClient(create_app(copy_config(tmp_path))) as client:
+        response = client.post("/v2/bootstrap/tenant-key", json={"system_name": "new-system"})
+
+    assert response.status_code == 403
+
+
 def test_tenant_api_key_sets_tenant_header_and_usage(tmp_path, monkeypatch) -> None:
     monkeypatch.setenv("GPUCALL_TENANT_API_KEYS", "tenant-a:secret-a")
     root = copy_config(tmp_path)

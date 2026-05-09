@@ -35,6 +35,8 @@ Fill these values before handing the prompt to the external-system agent:
 
 - `<system-name>`: stable name of the external system
 - `<gpucall-base-url>`: gateway base URL
+- `<gpucall-api-key>`: gateway API key issued by the gpucall administrator for
+  this system or tenant
 - `<admin-inbox>`: approved local or SSH inbox for sanitized recipe requests
 - `<canary-command>`: smallest representative command for that system
 - `<gpucall-sdk-wheel-url>`: caller SDK helper wheel URL; default is
@@ -42,6 +44,11 @@ Fill these values before handing the prompt to the external-system agent:
 
 Strict acceptance rule:
 
+- The external system must not self-register for a key, scrape keys from
+  gpucall configuration, or reuse provider credentials. The operator supplies a
+  gateway API key issued according to `docs/GATEWAY_API_KEYS.md`.
+- Never print `<gpucall-api-key>` in reports. Report only
+  `GPUCALL_API_KEY=<set>`.
 - Do not report `Go` unless live gpucall canary succeeded against the configured
   gateway and all required preflight intake was actually submitted.
 - Do not report `Conditional Go`. Use `No-Go` with explicit blockers.
@@ -81,6 +88,33 @@ guess from filenames.
 ## gpucall contract
 
 gpucall is a deterministic GPU governance gateway.
+
+Use these operator-provided values:
+
+```bash
+export GPUCALL_BASE_URL="<gpucall-base-url>"
+export GPUCALL_API_KEY="<gpucall-api-key>"
+export GPUCALL_RECIPE_INBOX="<admin-inbox>"
+```
+
+`GPUCALL_API_KEY` is a caller-facing gateway API key. It is not a provider API
+key. It must be loaded from the runtime environment or secret manager, never
+hard-coded into source, tests, docs, or completion reports.
+
+If the operator enabled trusted bootstrap and did not provide
+`GPUCALL_API_KEY`, request one exactly once from the gateway:
+
+```bash
+curl -fsS -X POST "$GPUCALL_BASE_URL/v2/bootstrap/tenant-key" \
+  -H 'content-type: application/json' \
+  -d '{"system_name":"<system-name>"}'
+```
+
+Store the returned `handoff` values in this system's secret environment and do
+not print the raw `api_key` in reports. If the endpoint returns `403`, this
+machine is not in the trusted bootstrap scope. If it returns `409`, a key
+already exists and the operator must rotate or provide the existing secret; do
+not try to bypass this.
 
 Application code must not choose:
 

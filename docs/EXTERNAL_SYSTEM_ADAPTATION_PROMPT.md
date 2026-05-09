@@ -32,6 +32,9 @@ public internet には公開されていません。
   GPUCALL_API_KEY=<実トークン>
 
 注意:
+- `GPUCALL_API_KEY` は gpucall 管理者が対象システム/tenant 向けに発行した gateway API key である。
+- 外部システムは API key を自力取得しない。
+- provider credential や gpucall 管理側 `credentials.yml` の provider API key を caller 用 key として使わないこと。
 - `GPUCALL_API_KEY=dummy` は禁止。
 - API key をコード、テスト fixture、README、ログ、レポートに平文出力しないこと。
 - API key 未設定時は明確なエラー、または integration test skip にすること。

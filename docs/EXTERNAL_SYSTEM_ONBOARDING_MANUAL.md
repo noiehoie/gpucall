@@ -88,7 +88,12 @@ They should not send:
 
 ### 1. Prepare gateway details
 
-Give the external system only the public integration facts it needs:
+The gpucall administrator issues the caller-facing gateway API key. External
+systems do not self-register, scrape keys from the gateway repository, or reuse
+provider credentials. See [GATEWAY_API_KEYS.md](GATEWAY_API_KEYS.md) for the
+operator procedure.
+
+Give the external system only the integration facts it needs:
 
 ```bash
 export GPUCALL_BASE_URL="https://gpucall-gateway.example.internal"
@@ -98,6 +103,14 @@ export GPUCALL_RECIPE_INBOX="admin@gateway.example.internal:/opt/gpucall/state/r
 
 Rules:
 
+- `GPUCALL_API_KEY` must be a gateway key issued for this external system or
+  tenant;
+- provider credentials from gpucall `credentials.yml` are not gateway API keys
+  and must never be handed to callers;
+- if trusted bootstrap is enabled, a trusted internal system may obtain its own
+  key from `POST /v2/bootstrap/tenant-key`; `403` means the system is outside
+  the trusted scope, and `409` means a key already exists and must not be
+  reprinted;
 - never use `GPUCALL_API_KEY=dummy` for integration;
 - never commit the token;
 - never print the token in completion reports;

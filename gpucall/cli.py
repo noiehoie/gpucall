@@ -5,6 +5,8 @@ import asyncio
 import hashlib
 import json
 import os
+import re
+import secrets
 import shutil
 import subprocess
 import sys
@@ -28,6 +30,7 @@ from gpucall.config import ConfigError, default_config_dir, default_state_dir, l
 from gpucall.configure import configure_command
 from gpucall.credentials import configured_credentials, credentials_path, load_credentials
 from gpucall.domain import ExecutionMode, JobState, PresignPutRequest, TupleError, TaskRequest, recipe_requirements
+from gpucall.domain import ApiKeyHandoffMode
 from gpucall.execution_catalog import build_resource_catalog_snapshot, dumps_candidates, dumps_snapshot as dumps_execution_snapshot, generate_tuple_candidates
 from gpucall.execution.contracts import (
     artifact_tuple_evidence_key,
@@ -146,9 +149,26 @@ def main() -> None:
     configure = sub.add_parser("configure")
     configure.add_argument("--config-dir", type=Path, default=default_config_dir())
     admin = sub.add_parser("admin")
-    admin.add_argument("action", choices=["status", "tenant-list", "tenant-create", "tenant-usage"])
+    admin.add_argument(
+        "action",
+        choices=[
+            "status",
+            "tenant-list",
+            "tenant-create",
+            "tenant-key-create",
+            "tenant-key-list",
+            "tenant-onboard",
+            "tenant-onboard-batch",
+            "tenant-usage",
+        ],
+    )
     admin.add_argument("--config-dir", type=Path, default=default_config_dir())
     admin.add_argument("--name", default=None)
+    admin.add_argument("--manifest", type=Path, default=None)
+    admin.add_argument("--gateway-url", default=None)
+    admin.add_argument("--recipe-inbox", default=None)
+    admin.add_argument("--output", type=Path, default=None)
+    admin.add_argument("--format", choices=["json", "env"], default="json")
     admin.add_argument("--requests-per-minute", type=int, default=None)
     admin.add_argument("--daily-budget-usd", type=float, default=None)
     admin.add_argument("--monthly-budget-usd", type=float, default=None)
@@ -278,6 +298,11 @@ def main() -> None:
             args.action,
             args.config_dir,
             name=args.name,
+            manifest=args.manifest,
+            gateway_url=args.gateway_url,
+            recipe_inbox=args.recipe_inbox,
+            output=args.output,
+            output_format=args.format,
             requests_per_minute=args.requests_per_minute,
             daily_budget_usd=args.daily_budget_usd,
             monthly_budget_usd=args.monthly_budget_usd,
@@ -351,6 +376,11 @@ def admin_command(
     config_dir: Path,
     *,
     name: str | None,
+    manifest: Path | None = None,
+    gateway_url: str | None = None,
+    recipe_inbox: str | None = None,
+    output: Path | None = None,
+    output_format: str = "json",
     requests_per_minute: int | None,
     daily_budget_usd: float | None,
     monthly_budget_usd: float | None,
@@ -376,6 +406,145 @@ def admin_command(
         print(json.dumps({"created": name, "path": str(path), "credential_action": "add auth.tenant_keys entry outside YAML"}, indent=2))
         return
     config = load_config(config_dir)
+    if action == "tenant-onboard":
+        if not name:
+            raise SystemExit("admin tenant-onboard requires --name")
+        if not gateway_url:
+            raise SystemExit("admin tenant-onboard requires --gateway-url")
+        if not recipe_inbox:
+            raise SystemExit("admin tenant-onboard requires --recipe-inbox")
+        if config.admin_automation.api_key_handoff_mode is not ApiKeyHandoffMode.HANDOFF_FILE:
+            raise SystemExit("admin tenant-onboard requires admin.yml api_key_handoff_mode: handoff_file")
+        if output is None:
+            raise SystemExit("admin tenant-onboard requires --output when api_key_handoff_mode is handoff_file")
+        tenant_path = _ensure_tenant_file(
+            config_dir,
+            name=name,
+            requests_per_minute=requests_per_minute,
+            daily_budget_usd=daily_budget_usd,
+            monthly_budget_usd=monthly_budget_usd,
+            max_request_estimated_cost_usd=max_request_estimated_cost_usd,
+            object_prefix=object_prefix,
+        )
+        token = _create_tenant_key(name)
+        handoff = _handoff_payload(
+            tenant=name,
+            token=token,
+            gateway_url=gateway_url,
+            recipe_inbox=recipe_inbox,
+        )
+        rendered = _render_handoff(handoff, output_format)
+        _write_secret_file(output, rendered)
+        print(
+            json.dumps(
+                {
+                    "tenant": name,
+                    "tenant_path": str(tenant_path),
+                    "handoff_path": str(output),
+                    "handoff_format": output_format,
+                    "api_key_fingerprint": _fingerprint_secret(token),
+                    "credentials_path": str(credentials_path()),
+                },
+                indent=2,
+                sort_keys=True,
+            )
+        )
+        return
+    if action == "tenant-onboard-batch":
+        if not gateway_url:
+            raise SystemExit("admin tenant-onboard-batch requires --gateway-url")
+        if not recipe_inbox:
+            raise SystemExit("admin tenant-onboard-batch requires --recipe-inbox")
+        if output is None:
+            raise SystemExit("admin tenant-onboard-batch requires --output directory")
+        if config.admin_automation.api_key_handoff_mode is not ApiKeyHandoffMode.HANDOFF_FILE:
+            raise SystemExit("admin tenant-onboard-batch requires admin.yml api_key_handoff_mode: handoff_file")
+        specs = _batch_onboard_specs(manifest)
+        _validate_batch_specs(specs, output, output_format)
+        output.mkdir(parents=True, exist_ok=True)
+        os.chmod(output, 0o700)
+        results: list[dict[str, str]] = []
+        for spec in specs:
+            tenant_name = spec["name"]
+            handoff_path = output / f"{tenant_name}.gpucall.{output_format}"
+            tenant_path = _ensure_tenant_file(
+                config_dir,
+                name=tenant_name,
+                requests_per_minute=_optional_int(spec.get("requests_per_minute")),
+                daily_budget_usd=_optional_float(spec.get("daily_budget_usd")),
+                monthly_budget_usd=_optional_float(spec.get("monthly_budget_usd")),
+                max_request_estimated_cost_usd=_optional_float(spec.get("max_request_estimated_cost_usd")),
+                object_prefix=str(spec.get("object_prefix") or tenant_name),
+            )
+            token = _create_tenant_key(tenant_name)
+            rendered = _render_handoff(
+                _handoff_payload(tenant=tenant_name, token=token, gateway_url=gateway_url, recipe_inbox=recipe_inbox),
+                output_format,
+            )
+            _write_secret_file(handoff_path, rendered)
+            results.append(
+                {
+                    "tenant": tenant_name,
+                    "tenant_path": str(tenant_path),
+                    "handoff_path": str(handoff_path),
+                    "api_key_fingerprint": _fingerprint_secret(token),
+                }
+            )
+        print(
+            json.dumps(
+                {
+                    "created": results,
+                    "count": len(results),
+                    "handoff_dir": str(output),
+                    "handoff_format": output_format,
+                    "credentials_path": str(credentials_path()),
+                },
+                indent=2,
+                sort_keys=True,
+            )
+        )
+        return
+    if action == "tenant-key-create":
+        if not name:
+            raise SystemExit("admin tenant-key-create requires --name")
+        if name not in config.tenants:
+            raise SystemExit(f"unknown tenant: {name}; run admin tenant-create first")
+        token = _create_tenant_key(name)
+        print(
+            json.dumps(
+                {
+                    "tenant": name,
+                    "api_key": token,
+                    "api_key_fingerprint": _fingerprint_secret(token),
+                    "credentials_path": str(credentials_path()),
+                    "handoff": {
+                        "GPUCALL_API_KEY": token,
+                        "secret_handling": "show this value only once; store it in the caller system secret manager or process environment",
+                    },
+                },
+                indent=2,
+                sort_keys=True,
+            )
+        )
+        return
+    if action == "tenant-key-list":
+        creds = load_credentials()
+        auth = dict(creds.get("auth", {}))
+        tenant_keys = _parse_tenant_key_pairs(auth.get("tenant_keys", ""))
+        print(
+            json.dumps(
+                {
+                    "credentials_path": str(credentials_path()),
+                    "tenant_keys": {
+                        tenant: {"configured": True, "api_key_fingerprint": _fingerprint_secret(key)}
+                        for tenant, key in sorted(tenant_keys.items())
+                    },
+                },
+                indent=2,
+                sort_keys=True,
+            )
+        )
+        return
     if action == "tenant-list":
         print(json.dumps({"tenants": {name: tenant.model_dump(mode="json") for name, tenant in sorted(config.tenants.items())}}, indent=2, sort_keys=True))
         return
@@ -395,6 +564,167 @@ def admin_command(
         print(json.dumps(report, indent=2, sort_keys=True))
         return
     raise SystemExit(f"unknown admin action: {action}")
+
+
+def _parse_tenant_key_pairs(raw: str) -> dict[str, str]:
+    pairs: dict[str, str] = {}
+    for item in raw.split(","):
+        tenant, sep, key = item.partition(":")
+        tenant = tenant.strip()
+        key = key.strip()
+        if sep and tenant and key:
+            pairs[tenant] = key
+    return pairs
+
+
+def _format_tenant_key_pairs(pairs: dict[str, str]) -> str:
+    return ",".join(f"{tenant}:{key}" for tenant, key in sorted(pairs.items()))
+
+
+def _fingerprint_secret(value: str) -> str:
+    return hashlib.sha256(value.encode("utf-8")).hexdigest()[:16]
+
+
+def _ensure_tenant_file(
+    config_dir: Path,
+    *,
+    name: str,
+    requests_per_minute: int | None,
+    daily_budget_usd: float | None,
+    monthly_budget_usd: float | None,
+    max_request_estimated_cost_usd: float | None,
+    object_prefix: str | None,
+) -> Path:
+    path = config_dir / "tenants" / f"{name}.yml"
+    if path.exists():
+        return path
+    path.parent.mkdir(parents=True, exist_ok=True)
+    payload = {
+        "name": name,
+        "requests_per_minute": requests_per_minute or 120,
+        "daily_budget_usd": daily_budget_usd if daily_budget_usd is not None else 25.0,
+        "monthly_budget_usd": monthly_budget_usd if monthly_budget_usd is not None else 500.0,
+        "max_request_estimated_cost_usd": max_request_estimated_cost_usd if max_request_estimated_cost_usd is not None else 10.0,
+        "object_prefix": object_prefix or name,
+    }
+    path.write_text(yaml.safe_dump(payload, sort_keys=False), encoding="utf-8")
+    return path
+
+
+def _create_tenant_key(name: str) -> str:
+    creds = load_credentials()
+    auth = dict(creds.get("auth", {}))
+    tenant_keys = _parse_tenant_key_pairs(auth.get("tenant_keys", ""))
+    if name in tenant_keys:
+        raise SystemExit(f"tenant key already exists for {name}; rotate by removing or replacing auth.tenant_keys outside this command")
+    token = "gpk_" + secrets.token_urlsafe(32)
+    tenant_keys[name] = token
+    auth["tenant_keys"] = _format_tenant_key_pairs(tenant_keys)
+    from gpucall.credentials import save_credentials
+
+    save_credentials("auth", auth)
+    return token
+
+
+def _handoff_payload(*, tenant: str, token: str, gateway_url: str, recipe_inbox: str) -> dict[str, str]:
+    return {
+        "GPUCALL_TENANT": tenant,
+        "GPUCALL_BASE_URL": gateway_url,
+        "GPUCALL_API_KEY": token,
+        "GPUCALL_RECIPE_INBOX": recipe_inbox,
+        "GPUCALL_ONBOARDING_PROMPT_URL": "https://raw.githubusercontent.com/noiehoie/gpucall3/main/docs/EXTERNAL_SYSTEM_ONBOARDING_PROMPT.md",
+        "GPUCALL_ONBOARDING_MANUAL_URL": "https://raw.githubusercontent.com/noiehoie/gpucall3/main/docs/EXTERNAL_SYSTEM_ONBOARDING_MANUAL.md",
+        "GPUCALL_SDK_WHEEL_URL": "https://raw.githubusercontent.com/noiehoie/gpucall3/main/sdk/python/dist/gpucall_sdk-2.0.0a2-py3-none-any.whl",
+    }
+
+
+def _render_handoff(payload: dict[str, str], output_format: str) -> str:
+    if output_format == "json":
+        return json.dumps(payload, indent=2, sort_keys=True) + "\n"
+    if output_format == "env":
+        return "".join(f"{key}={_shell_quote(value)}\n" for key, value in payload.items())
+    raise SystemExit(f"unknown handoff format: {output_format}")
+
+
+def _shell_quote(value: str) -> str:
+    return "'" + value.replace("'", "'\"'\"'") + "'"
+
+
+def _write_secret_file(path: Path, payload: str) -> None:
+    if path.exists():
+        raise SystemExit(f"refusing to overwrite existing handoff file: {path}")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            handle.write(payload)
+            handle.flush()
+            os.fsync(handle.fileno())
+    except Exception:
+        try:
+            path.unlink()
+        except FileNotFoundError:
+            pass
+        raise
+
+
+_TENANT_NAME_RE = re.compile(r"^[a-z0-9][a-z0-9._-]{1,62}$")
+
+
+def _batch_onboard_specs(manifest: Path | None) -> list[dict[str, object]]:
+    if manifest is None:
+        raise SystemExit("admin tenant-onboard-batch requires --manifest")
+    try:
+        payload = yaml.safe_load(manifest.read_text(encoding="utf-8")) or {}
+    except yaml.YAMLError as exc:
+        raise SystemExit(f"invalid tenant onboard manifest YAML: {exc}") from exc
+    if isinstance(payload, list):
+        raw_items = payload
+    elif isinstance(payload, dict) and isinstance(payload.get("systems"), list):
+        raw_items = payload["systems"]
+    else:
+        raise SystemExit("tenant onboard manifest must be a list or a mapping with systems: [...]")
+    specs: list[dict[str, object]] = []
+    for index, item in enumerate(raw_items):
+        if not isinstance(item, dict):
+            raise SystemExit(f"tenant onboard manifest item {index} must be a mapping")
+        specs.append(dict(item))
+    if not specs:
+        raise SystemExit("tenant onboard manifest is empty")
+    return specs
+
+
+def _validate_batch_specs(specs: list[dict[str, object]], output_dir: Path, output_format: str) -> None:
+    names: set[str] = set()
+    outputs: set[Path] = set()
+    existing_keys = _parse_tenant_key_pairs(load_credentials().get("auth", {}).get("tenant_keys", ""))
+    for index, spec in enumerate(specs):
+        name = str(spec.get("name") or "").strip()
+        if not _TENANT_NAME_RE.fullmatch(name):
+            raise SystemExit(f"tenant onboard manifest item {index} has invalid name: {name!r}")
+        if name in names:
+            raise SystemExit(f"tenant onboard manifest contains duplicate tenant name: {name}")
+        if name in existing_keys:
+            raise SystemExit(f"tenant key already exists for {name}; refusing batch onboarding")
+        handoff_path = output_dir / f"{name}.gpucall.{output_format}"
+        if handoff_path in outputs:
+            raise SystemExit(f"tenant onboard manifest contains duplicate handoff path: {handoff_path}")
+        if handoff_path.exists():
+            raise SystemExit(f"handoff file already exists: {handoff_path}")
+        names.add(name)
+        outputs.add(handoff_path)
+
+
+def _optional_int(value: object) -> int | None:
+    if value is None:
+        return None
+    return int(value)
+
+
+def _optional_float(value: object) -> float | None:
+    if value is None:
+        return None
+    return float(value)
 
 
 def launch_check_command(config_dir: Path, *, url: str | None = None, api_key: str | None = None, profile: str = "production") -> None:

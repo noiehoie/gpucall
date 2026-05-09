@@ -142,7 +142,7 @@ Copyright (c) 2026 Sugano Tamotsu. All rights reserved.
 
 ## SaaS v1 Operations
 
-外部 SaaS operation は、tenant quota YAML と credentials-managed tenant API keys を使います。詳しくは [docs/SAAS_V1_OPERATIONS.md](docs/SAAS_V1_OPERATIONS.md) を参照してください。
+外部 SaaS operation は、tenant quota YAML と credentials-managed tenant API keys を使います。詳しくは [docs/SAAS_V1_OPERATIONS.md](docs/SAAS_V1_OPERATIONS.md) と [docs/GATEWAY_API_KEYS.md](docs/GATEWAY_API_KEYS.md) を参照してください。
 
 ## Python SDK
 

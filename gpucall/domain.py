@@ -70,10 +70,21 @@ class PriceFreshness(StrEnum):
     UNKNOWN = "unknown"
 
 
+class ApiKeyHandoffMode(StrEnum):
+    MANUAL = "manual"
+    HANDOFF_FILE = "handoff_file"
+    TRUSTED_BOOTSTRAP = "trusted_bootstrap"
+
+
 class RecipeAdminAutomationConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     recipe_inbox_auto_materialize: bool = False
+    api_key_handoff_mode: ApiKeyHandoffMode = ApiKeyHandoffMode.MANUAL
+    api_key_bootstrap_allowed_cidrs: tuple[str, ...] = ()
+    api_key_bootstrap_allowed_hosts: tuple[str, ...] = ()
+    api_key_bootstrap_gateway_url: str | None = None
+    api_key_bootstrap_recipe_inbox: str | None = None
 
 
 class RecipeLatencyClass(StrEnum):

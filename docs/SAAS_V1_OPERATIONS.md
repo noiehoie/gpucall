@@ -15,7 +15,9 @@ max_request_estimated_cost_usd: 10.0
 object_prefix: default
 ```
 
-Tenant API keys do not belong in YAML. Configure them through credentials or the environment:
+Tenant API keys do not belong in YAML. Issue and hand off caller-facing
+gateway keys with the procedure in [GATEWAY_API_KEYS.md](GATEWAY_API_KEYS.md).
+Configure tenant keys through credentials or the environment:
 
 ```yaml
 providers:
@@ -51,10 +53,36 @@ Object uploads are tenant-prefixed as `gpucall/tenants/<tenant>/...` unless the 
 gpucall admin status
 gpucall admin tenant-list
 gpucall admin tenant-create --name tenant-a --daily-budget-usd 25 --monthly-budget-usd 500
+gpucall admin tenant-key-create --name tenant-a
+gpucall admin tenant-key-list
+gpucall admin tenant-onboard \
+  --name tenant-b \
+  --gateway-url https://gpucall-gateway.example.internal \
+  --recipe-inbox admin@gateway.example.internal:/opt/gpucall/state/recipe_requests/inbox \
+  --format env \
+  --output /secure/handoff/tenant-b.gpucall.env
+gpucall admin tenant-onboard-batch \
+  --manifest systems.yml \
+  --gateway-url https://gpucall-gateway.example.internal \
+  --recipe-inbox admin@gateway.example.internal:/opt/gpucall/state/recipe_requests/inbox \
+  --format env \
+  --output /secure/handoff
 gpucall admin tenant-usage
 ```
 
-`tenant-create` writes quota metadata only. Add the tenant key in credentials or an environment variable.
+`tenant-create` writes quota metadata only. `tenant-key-create` generates a
+caller-facing gateway API key, stores it in credentials, and prints the secret
+once for handoff. `tenant-onboard` creates tenant metadata when needed,
+generates the key, and writes a `0600` handoff file for internal automation
+only when `admin.yml` sets `api_key_handoff_mode: handoff_file`.
+`tenant-onboard-batch` does the same for a manifest of systems and validates
+the full batch before issuing keys, so parallel migrations cannot accidentally
+share one tenant or overwrite a handoff file.
+For small trusted internal networks, `api_key_handoff_mode: trusted_bootstrap`
+allows callers inside configured CIDRs/hosts to request their own tenant key
+from `POST /v2/bootstrap/tenant-key`; the gateway still enforces one tenant/key
+per system name and refuses to reprint existing keys.
+`tenant-key-list` prints fingerprints only.
 
 ## Release Gate
 
