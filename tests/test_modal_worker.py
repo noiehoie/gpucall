@@ -104,3 +104,12 @@ def test_modal_autoscaler_env_int_is_non_negative(monkeypatch) -> None:
     assert _env_int("GPUCALL_MODAL_H200X4_MIN_CONTAINERS", 0) == 1
     monkeypatch.setenv("GPUCALL_MODAL_H200X4_MIN_CONTAINERS", "-1")
     assert _env_int("GPUCALL_MODAL_H200X4_MIN_CONTAINERS", 0) == 0
+
+
+def test_modal_worker_image_dependencies_are_pinned() -> None:
+    source = __import__("pathlib").Path("gpucall/worker_contracts/modal.py").read_text(encoding="utf-8")
+
+    assert 'os.getenv("GPUCALL_MODAL_VLLM_PACKAGE", "vllm==0.8.5")' in source
+    assert 'os.getenv("GPUCALL_MODAL_TRANSFORMERS_PACKAGE", "transformers==4.51.3")' in source
+    assert 'os.getenv("GPUCALL_MODAL_HUGGINGFACE_HUB_PACKAGE", "huggingface-hub>=0.30.0,<1.0")' in source
+    assert '"huggingface-hub[hf_transfer]"' not in source

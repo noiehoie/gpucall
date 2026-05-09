@@ -223,8 +223,9 @@ def _env_int(name: str, default: int) -> int:
 
 if modal is not None:
     app = modal.App(os.getenv("GPUCALL_MODAL_WORKER_APP_NAME", "gpucall-worker-json"))
-    _VLLM_PACKAGE = os.getenv("GPUCALL_MODAL_VLLM_PACKAGE", "vllm>=0.6.3,<0.8")
-    _TRANSFORMERS_PACKAGE = os.getenv("GPUCALL_MODAL_TRANSFORMERS_PACKAGE", "transformers>=4.45.2,<4.52")
+    _VLLM_PACKAGE = os.getenv("GPUCALL_MODAL_VLLM_PACKAGE", "vllm==0.8.5")
+    _TRANSFORMERS_PACKAGE = os.getenv("GPUCALL_MODAL_TRANSFORMERS_PACKAGE", "transformers==4.51.3")
+    _HUGGINGFACE_HUB_PACKAGE = os.getenv("GPUCALL_MODAL_HUGGINGFACE_HUB_PACKAGE", "huggingface-hub>=0.30.0,<1.0")
     _VLLM_IMAGE = (
         modal.Image.from_registry("nvidia/cuda:12.1.1-devel-ubuntu22.04", add_python="3.11")
         .apt_install("git", "ffmpeg")
@@ -235,7 +236,7 @@ if modal is not None:
             "pillow",
             _VLLM_PACKAGE,
             _TRANSFORMERS_PACKAGE,
-            "huggingface-hub[hf_transfer]",
+            _HUGGINGFACE_HUB_PACKAGE,
             "hf_transfer",
             "pyairports",
         )
@@ -253,7 +254,7 @@ if modal is not None:
             "transformers==4.51.3",
             "accelerate",
             "vllm==0.8.5",
-            "huggingface-hub[hf_transfer]",
+            _HUGGINGFACE_HUB_PACKAGE,
             "hf_transfer",
             "pyairports",
         )
@@ -274,7 +275,7 @@ if modal is not None:
             "accelerate",
             "transformers==4.51.3",
             "qwen-vl-utils==0.0.8",
-            "huggingface-hub[hf_transfer]",
+            _HUGGINGFACE_HUB_PACKAGE,
             "hf_transfer",
             "pyairports",
         )
