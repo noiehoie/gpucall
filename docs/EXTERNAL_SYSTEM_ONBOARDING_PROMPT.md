@@ -36,7 +36,9 @@ Fill these values before handing the prompt to the external-system agent:
 - `<system-name>`: stable name of the external system
 - `<gpucall-base-url>`: gateway base URL
 - `<gpucall-api-key>`: gateway API key issued by the gpucall administrator for
-  this system or tenant
+  this system or tenant, or the literal placeholder
+  `<use-trusted-bootstrap>` when the administrator has explicitly enabled
+  trusted bootstrap for this system
 - `<admin-inbox>`: approved local or SSH inbox for sanitized recipe requests
 - `<canary-command>`: smallest representative command for that system
 - `<gpucall-sdk-wheel-url>`: caller SDK helper wheel URL; default is
@@ -44,9 +46,17 @@ Fill these values before handing the prompt to the external-system agent:
 
 Strict acceptance rule:
 
-- The external system must not self-register for a key, scrape keys from
-  gpucall configuration, or reuse provider credentials. The operator supplies a
-  gateway API key issued according to `docs/GATEWAY_API_KEYS.md`.
+- The external system must not perform unauthorized self-registration, scrape
+  keys from gpucall configuration, or reuse provider credentials. API key setup
+  has exactly two allowed routes:
+  1. the operator supplies a gateway API key issued according to
+     `docs/GATEWAY_API_KEYS.md`;
+  2. the operator explicitly authorizes trusted bootstrap by setting
+     `<gpucall-api-key>` to `<use-trusted-bootstrap>` and providing a reachable
+     `<gpucall-base-url>`.
+- Trusted bootstrap is operator-authorized key delivery, not caller-controlled
+  registration. If the placeholder is anything other than
+  `<use-trusted-bootstrap>`, do not call `/v2/bootstrap/tenant-key`.
 - Never print `<gpucall-api-key>` in reports. Report only
   `GPUCALL_API_KEY=<set>`.
 - Do not report `Go` unless live gpucall canary succeeded against the configured
@@ -106,8 +116,14 @@ export GPUCALL_RECIPE_INBOX="<admin-inbox>"
 key. It must be loaded from the runtime environment or secret manager, never
 hard-coded into source, tests, docs, or completion reports.
 
-If the operator enabled trusted bootstrap and did not provide
-`GPUCALL_API_KEY`, request one exactly once from the gateway:
+There are exactly two valid ways to obtain `GPUCALL_API_KEY`:
+
+1. **Operator-issued secret**: `<gpucall-api-key>` is a real tenant-scoped
+   gateway key. Store it in this system's secret environment and do not call
+   `/v2/bootstrap/tenant-key`.
+2. **Operator-authorized trusted bootstrap**: `<gpucall-api-key>` is exactly
+   `<use-trusted-bootstrap>`. In that case, request one key exactly once from
+   the gateway:
 
 ```bash
 curl -fsS -X POST "$GPUCALL_BASE_URL/v2/bootstrap/tenant-key" \
@@ -115,11 +131,21 @@ curl -fsS -X POST "$GPUCALL_BASE_URL/v2/bootstrap/tenant-key" \
   -d '{"system_name":"<system-name>"}'
 ```
 
-Store the returned `handoff` values in this system's secret environment and do
-not print the raw `api_key` in reports. If the endpoint returns `403`, this
-machine is not in the trusted bootstrap scope. If it returns `409`, a key
-already exists and the operator must rotate or provide the existing secret; do
-not try to bypass this.
+Store the returned `api_key` and `handoff` values in this system's secret
+environment, then set `GPUCALL_API_KEY` from that secret. Do not print the raw
+`api_key` in reports.
+
+If `<gpucall-api-key>` is empty, `dummy`, unset, or any placeholder other than
+`<use-trusted-bootstrap>`, do not bootstrap. Report `No-Go: gateway API key not
+provided`.
+
+Trusted bootstrap response handling:
+
+- `200`: store the returned key and continue.
+- `403`: this machine is not in the trusted bootstrap scope; report `No-Go`.
+- `409`: a key already exists and gpucall will not reprint it; the operator
+  must rotate or provide the existing secret. Do not try to bypass this.
+- `500`: gateway-side internal error; report `No-Go` with verified facts only.
 
 Application code must not choose:
 

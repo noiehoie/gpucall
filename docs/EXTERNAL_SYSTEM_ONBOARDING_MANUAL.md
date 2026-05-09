@@ -119,10 +119,21 @@ They should not send:
 
 ### 1. Prepare gateway details
 
-The gpucall administrator issues the caller-facing gateway API key. External
-systems do not self-register, scrape keys from the gateway repository, or reuse
-provider credentials. See [GATEWAY_API_KEYS.md](GATEWAY_API_KEYS.md) for the
-operator procedure.
+The gpucall administrator controls caller-facing gateway API key delivery.
+External systems do not perform unauthorized self-registration, scrape keys
+from the gateway repository, or reuse provider credentials. See
+[GATEWAY_API_KEYS.md](GATEWAY_API_KEYS.md) for the operator procedure.
+
+There are exactly two valid key-delivery routes:
+
+1. **Operator-issued secret**: the administrator creates a tenant-scoped
+   gateway key and passes it through the organization's approved secret channel.
+2. **Operator-authorized trusted bootstrap**: the administrator explicitly
+   enables trusted bootstrap for a CIDR or host allowlist, and the trusted
+   internal system requests its own tenant-scoped key from the gateway once.
+
+Trusted bootstrap is not caller-controlled registration. It is an administrator
+policy that delegates delivery to machines inside the configured trust scope.
 
 Give the external system only the integration facts it needs:
 
@@ -138,13 +149,18 @@ Rules:
   tenant;
 - provider credentials from gpucall `credentials.yml` are not gateway API keys
   and must never be handed to callers;
-- if trusted bootstrap is enabled, a trusted internal system may obtain its own
-  key from `POST /v2/bootstrap/tenant-key`; `403` means the system is outside
-  the trusted scope, and `409` means a key already exists and must not be
-  reprinted;
+- if trusted bootstrap is enabled and the operator instructs the system to use
+  it, a trusted internal system may obtain its own key from
+  `POST /v2/bootstrap/tenant-key`;
+- trusted bootstrap response handling is strict: `200` means store the returned
+  key, `403` means the system is outside the trusted scope, `409` means a key
+  already exists and must not be reprinted, and `500` is a gateway-side
+  internal error rather than a caller-side condition;
 - administrators can inspect or enable this mode with
   `gpucall admin automation-status` and `gpucall admin automation-configure`;
 - never use `GPUCALL_API_KEY=dummy` for integration;
+- never call `/v2/bootstrap/tenant-key` unless the operator explicitly selected
+  trusted bootstrap for this system;
 - never commit the token;
 - never print the token in completion reports;
 - missing `GPUCALL_BASE_URL` or `GPUCALL_API_KEY` must fail closed in the
