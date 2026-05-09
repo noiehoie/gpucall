@@ -182,6 +182,11 @@ or coding agent that owns the application being migrated:
 - [docs/EXTERNAL_SYSTEM_ONBOARDING_MANUAL.md](docs/EXTERNAL_SYSTEM_ONBOARDING_MANUAL.md): the detailed migration manual for operators and implementers.
 - [docs/EXTERNAL_SYSTEM_ADAPTATION_PROMPT.md](docs/EXTERNAL_SYSTEM_ADAPTATION_PROMPT.md): the older compact one-shot prompt for smaller migrations.
 
+The onboarding package is strict by design: direct hosted-AI fallback must be
+disabled by default, generated-only preflight is not the same as submitted
+preflight, skipped live canary means `No-Go`, and `Conditional Go` is not an
+allowed final status.
+
 For an AI CLI running outside this repository, use the raw URLs:
 
 ```text

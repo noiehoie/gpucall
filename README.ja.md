@@ -181,6 +181,8 @@ gpucall は、外部システムに渡すための受容パッケージを配布
 - [docs/EXTERNAL_SYSTEM_ONBOARDING_MANUAL.md](docs/EXTERNAL_SYSTEM_ONBOARDING_MANUAL.md): operator / implementer 向けの詳細 migration manual です。
 - [docs/EXTERNAL_SYSTEM_ADAPTATION_PROMPT.md](docs/EXTERNAL_SYSTEM_ADAPTATION_PROMPT.md): 小規模移行向けに残している compact な one-shot prompt です。
 
+この onboarding package は意図的に厳格です。direct hosted-AI fallback はデフォルト無効、generated-only preflight は submitted preflight ではない、live canary skipped は `No-Go`、`Conditional Go` は最終判定として禁止です。
+
 この repository の外で動く AI CLI には、raw URL を渡します。
 
 ```text

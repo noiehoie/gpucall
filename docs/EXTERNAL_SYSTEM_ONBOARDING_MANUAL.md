@@ -9,6 +9,7 @@ The goal is not merely "make an API call succeed." The goal is:
   order;
 - unsupported workloads produce deterministic intake for administrators instead
   of ad hoc direct-provider fallbacks;
+- direct hosted-AI fallback is disabled by default in production;
 - cold starts, capacity misses, and governance failures are classified correctly;
 - no prompts, files, presigned URLs, DataRef URIs, or secrets leak into logs;
 - the migration leaves behind tests and reports that the next operator can
@@ -29,6 +30,11 @@ The sections below define what that command should discover, what the
 implementation agent must still verify, and when the integration is allowed to
 move beyond canary.
 
+This manual is intentionally strict. `Conditional Go` is not an allowed final
+state. If live canary is skipped, required preflight intake is only generated but
+not submitted, direct hosted-AI fallback remains enabled by default, or DataRef
+rules are not enforced, the result is `No-Go`.
+
 ## Product Contract
 
 gpucall has three product components:
@@ -45,7 +51,7 @@ External systems should normally send only:
 
 - `task`
 - `mode`
-- inline input or `DataRef`
+- small non-confidential inline text or `DataRef`
 - execution preferences such as max tokens or timeout
 
 They should not send:
@@ -55,6 +61,7 @@ They should not send:
 - GPU names
 - direct provider model names as routing selectors
 - fallback order
+- direct hosted-AI fallback after gpucall is configured
 - cleanup decisions
 - production promotion decisions
 
@@ -75,7 +82,10 @@ Rules:
 - never use `GPUCALL_API_KEY=dummy` for integration;
 - never commit the token;
 - never print the token in completion reports;
-- skip live integration tests when the token is absent.
+- missing `GPUCALL_BASE_URL` or `GPUCALL_API_KEY` must fail closed in the
+  application wrapper;
+- if live integration tests cannot run because credentials are absent, the final
+  status is `No-Go: live canary skipped`.
 
 ### 2. Inventory all model and GPU paths
 
@@ -97,16 +107,29 @@ The inventory must classify every path:
 | Class | Meaning | Action |
 | :--- | :--- | :--- |
 | `already-gpucall` | already routes through gpucall | verify payload and errors |
-| `direct-hosted-api` | OpenAI / Anthropic / Gemini / hosted API | migrate or intentionally leave with documented reason |
+| `direct-hosted-api` | OpenAI / Anthropic / Gemini / hosted API | migrate behind gpucall, or keep only as dev/test opt-in that is disabled by default and unavailable in production |
 | `direct-provider-gpu` | direct GPU provider or worker path | migrate behind gpucall or mark out of scope |
 | `local-only` | local model path | keep if intentional |
 | `unknown-workload` | no installed gpucall recipe likely fits | submit preflight before production |
+
+Do not write "intentionally retained" for a production direct hosted-AI fallback.
+The only acceptable retained hosted-AI path is a local development or test path
+behind an explicit opt-in flag, with tests proving production fails closed.
 
 ### 3. Submit preflight before production
 
 Preflight is not smoke testing. It does not start GPU resources. It gives the
 administrator a sanitized statement of the workload class before traffic reaches
 production.
+
+Use terms precisely:
+
+- `submitted`: intake reached the approved local or remote inbox and the path or
+  request id is recorded.
+- `generated-only`: a command, script, or JSON artifact exists, but no approved
+  inbox received it.
+
+Generated-only preflight is not enough for `Go`.
 
 Example for translation:
 
@@ -164,6 +187,19 @@ Prefer a single local wrapper around gpucall. That wrapper should own:
 The wrapper should not expose provider, GPU, tuple, or fallback selection to the
 rest of the application.
 
+Production default must be fail-closed:
+
+- missing `GPUCALL_BASE_URL` or `GPUCALL_API_KEY` raises a configuration error;
+- gpucall governance failures do not trigger hosted-AI fallback;
+- direct OpenAI / Anthropic / Gemini fallback is disabled by default;
+- if fallback is retained for local development or tests, it requires an
+  explicit opt-in environment variable and is rejected or ignored in production
+  mode.
+
+Images, files, confidential inputs, and text above the configured small-text
+inline limit must use DataRef / presigned upload, or fail closed with a clear
+`DataRef required` error. Inline input is for small non-confidential text only.
+
 Correct direct task payload:
 
 ```json
@@ -190,6 +226,10 @@ client = OpenAI(
     api_key=api_key,
 )
 ```
+
+Use the OpenAI-compatible facade for simple text/chat compatibility. Do not use
+it for vision or file workflows unless gpucall explicitly documents that payload
+shape. For images and files, prefer `/v2/tasks/*` with `input_refs`.
 
 ### 5. Decide sync, async, or stream
 
@@ -224,6 +264,7 @@ default.
 | timeout during cold start | caller did not wait long enough or should use async | do not open provider circuit by default |
 | malformed output / business validator failure after `200 OK` | quality feedback, not necessarily routing failure | submit `gpucall-recipe-draft quality` |
 | provider 5xx without governance code | provider/runtime failure | retry/circuit according to local policy |
+| gpucall not configured | application not ready for gpucall production | fail closed; do not call hosted AI by default |
 
 ### 7. Redaction rules
 
@@ -260,6 +301,12 @@ Every integration should leave tests for:
 - OpenAI messages are converted correctly when using `/v2/tasks/*`;
 - `input_refs` is a list;
 - large input uses DataRef / presigned upload;
+- image, file, confidential input, and over-limit text use DataRef or fail
+  closed;
+- missing gpucall configuration fails closed;
+- direct hosted-AI fallback is disabled by default;
+- dev/test fallback, if retained, requires explicit opt-in and cannot run in
+  production mode;
 - API key is required;
 - API key and presigned URLs are redacted;
 - `NO_AUTO_SELECTABLE_RECIPE` does not open a provider circuit;
@@ -286,28 +333,46 @@ gpucall-migrate canary /path/to/project \
   --command "<smallest representative command>"
 ```
 
+Live canary is mandatory for `Go`. If gateway credentials or network access are
+missing, the correct final status is `No-Go: live canary skipped`. Local tests
+can prove implementation progress, but they cannot prove production readiness.
+
 ### 10. Go / No-Go checklist
 
 Go only when:
 
-- all direct provider paths are either migrated or intentionally documented;
-- all unknown workloads have preflight submissions;
+- all direct hosted-AI production fallbacks are removed or disabled by default;
+- any retained hosted-AI fallback is dev/test-only, explicit opt-in, and blocked
+  in production;
+- all unknown workloads have submitted preflight intake with request id or inbox
+  path;
 - no application payload contains `requested_tuple`;
 - no application payload contains provider or GPU selectors;
+- image, file, confidential input, and over-limit text use DataRef or fail
+  closed;
 - integration tests pass;
-- canary succeeded or produced only expected governance failures;
+- live canary succeeded against the configured gpucall gateway or produced only
+  expected governance failures after the request reached the gateway;
 - cold-start timeout behavior is classified correctly;
 - logs are redacted;
 - the completion report includes command outputs.
 
 No-Go when:
 
-- direct hosted AI fallback remains undocumented;
+- direct hosted AI fallback remains enabled by default;
+- direct hosted AI fallback is used when gpucall config is absent;
 - unknown workloads are sent to gpucall without preflight;
+- preflight is generated-only rather than submitted;
+- live canary is skipped;
 - caller code still chooses GPU/provider/model as route control;
+- images, files, confidential input, or over-limit text are sent inline without
+  DataRef enforcement;
 - API key or presigned URL appears in logs;
 - timeout increments provider circuit counters by default;
 - tests only cover the happy path.
+
+Do not report `Conditional Go`. If any Go condition is missing, report `No-Go`
+and list the exact blockers.
 
 ## Final Report Template
 
@@ -316,14 +381,17 @@ No-Go when:
    - total LLM/Vision/GPU paths:
    - already gpucall:
    - migrated:
-   - intentionally retained direct paths:
+   - direct hosted-AI fallbacks disabled by default:
+   - dev/test-only direct fallbacks, if any:
    - unknown workloads submitted as preflight:
+   - unknown workloads generated-only:
 
 2. Changed files
 
 3. Preflight submissions
-   - local files:
-   - remote inbox paths:
+   - submitted local inbox paths:
+   - submitted remote inbox paths:
+   - generated-only commands:
 
 4. Tests
    - command:
@@ -331,6 +399,7 @@ No-Go when:
 
 5. Canary
    - command:
+   - live gateway reached: yes/no
    - call count:
    - HTTP 200:
    - NO_AUTO_SELECTABLE_RECIPE:
@@ -344,7 +413,13 @@ No-Go when:
    - presigned URLs redacted:
    - DataRef URIs redacted:
 
-7. Remaining risk
+7. DataRef enforcement
+   - inline text byte limit:
+   - images/files/confidential use DataRef or fail closed:
 
-8. Go / No-Go
+8. Remaining risk
+
+9. Go / No-Go
+   - Go is allowed only if all strict conditions are met.
+   - Conditional Go is forbidden.
 ```

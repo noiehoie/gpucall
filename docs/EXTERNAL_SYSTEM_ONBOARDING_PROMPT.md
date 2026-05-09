@@ -29,6 +29,15 @@ Fill these values before handing the prompt to the external-system agent:
 - `<admin-inbox>`: approved local or SSH inbox for sanitized recipe requests
 - `<canary-command>`: smallest representative command for that system
 
+Strict acceptance rule:
+
+- Do not report `Go` unless live gpucall canary succeeded against the configured
+  gateway and all required preflight intake was actually submitted.
+- Do not report `Conditional Go`. Use `No-Go` with explicit blockers.
+- A generated preflight command is not a submitted preflight.
+- A skipped canary is not a successful canary.
+- Direct hosted-AI fallback is forbidden by default in production.
+
 ```text
 You are the implementation agent for this repository. Your task is to migrate
 this system's LLM / Vision / GPU inference paths to gpucall v2.0 with minimum
@@ -62,6 +71,7 @@ Application code must not choose:
 - fallback order
 - internal gpucall recipe, unless this repository already has an explicit,
   reviewed integration contract requiring one
+- direct hosted-AI fallback after gpucall is configured
 
 Application code sends workload intent and data only:
 
@@ -113,7 +123,9 @@ For each path, classify it as one of:
 - unknown-workload
 
 Do not migrate unknown workload by guessing a model. Generate a preflight intake
-instead.
+instead. If the intake cannot be submitted because the helper is unavailable,
+report `preflight command generated only` and mark the integration `No-Go` until
+submission is completed.
 
 Use these intent labels when possible:
 
@@ -132,6 +144,16 @@ Use these intent labels when possible:
 
 Before production traffic reaches gpucall for a workload that is not already
 known to be supported, submit sanitized intent.
+
+Use these words precisely:
+
+- `submitted`: the intake was written to the approved local or remote inbox and
+  the path or request id is reported.
+- `generated-only`: a command or JSON draft exists, but no approved inbox
+  received it.
+
+`generated-only` is useful progress, but it is not production-ready and must
+produce `No-Go`.
 
 Do not send raw prompt bodies, image bytes, document text, DataRef URIs,
 presigned URLs, API keys, or provider output.
@@ -160,8 +182,20 @@ Prefer the smallest stable adapter layer in this repository:
 
 - one gpucall client wrapper
 - one error-classification function
-- one DataRef helper if large files or images are used
+- one DataRef helper for images, files, confidential content, or text above the
+  explicit small-text inline limit
 - unit tests around payload construction and error handling
+
+Production default must be fail-closed:
+
+- Missing `GPUCALL_BASE_URL` or `GPUCALL_API_KEY` must fail with a configuration
+  error.
+- Do not fall back to OpenAI, Anthropic, Gemini, or any hosted AI API because
+  gpucall is missing or returns a governance error.
+- If a direct hosted-AI fallback is retained for local development or tests, it
+  must require an explicit opt-in such as `ALLOW_DIRECT_AI_FALLBACK_FOR_DEV=1`,
+  and production mode must ignore or reject that opt-in.
+- Add tests proving hosted-AI fallback is disabled by default.
 
 Correct request shape:
 
@@ -189,7 +223,11 @@ Rules:
 - Do not send OpenAI `messages` directly to `/v2/tasks/*`; convert to
   `inline_inputs.prompt.value` unless using the OpenAI-compatible facade.
 - `input_refs` must be a list.
-- Large input should use presign PUT and `DataRef`.
+- Inline payload is allowed only for small non-confidential text. Define the
+  inline byte limit in code and test it.
+- Images, files, confidential content, and payloads above the inline text limit
+  must use presign PUT and `DataRef`, or fail closed with a clear
+  `DataRef required` error.
 - Do not log API keys, prompt bodies, presigned URLs, DataRef URIs, or provider
   raw output.
 
@@ -206,6 +244,10 @@ client = OpenAI(
 
 Use `model="gpucall:chat"` or another documented gpucall facade model only as
 the facade selector. Do not use provider model names for routing.
+
+Do not use the OpenAI-compatible facade for vision or file workflows unless the
+gateway contract explicitly documents that payload shape. Prefer `/v2/tasks/*`
+with `input_refs` for vision and file inputs.
 
 ## Phase 4: Error behavior
 
@@ -225,6 +267,9 @@ Classify these correctly:
 
 Run the smallest representative pipeline path first. Do not fan out to every
 job at once.
+
+Live canary is required for `Go`. If `GPUCALL_BASE_URL`, `GPUCALL_API_KEY`, or
+gateway access is unavailable, report `No-Go: live canary skipped`.
 
 Record:
 
@@ -253,10 +298,16 @@ Add or update tests proving:
 - payload does not contain provider, GPU, or provider model selector
 - `input_refs` is a list
 - API key is required and never printed
+- missing gpucall configuration fails closed
+- direct hosted-AI fallback is disabled by default
+- dev/test fallback, if retained, requires explicit opt-in and is rejected or
+  ignored in production mode
 - `NO_AUTO_SELECTABLE_RECIPE` is classified as recipe-intake-needed
 - `NO_ELIGIBLE_TUPLE` is not treated as direct provider failure
 - timeout is not counted as provider circuit failure by default
-- large input uses DataRef / presigned upload
+- image, file, confidential input, and over-limit text use DataRef / presigned
+  upload or fail closed
+- inline input above the configured byte limit is rejected
 - raw prompt, presigned URL, DataRef URI, and Authorization header are redacted
 
 ## Completion report
@@ -274,6 +325,16 @@ Include:
 - remaining unknown workloads
 - secret/log redaction confirmation
 - final Go / No-Go
+
+Final status rules:
+
+- `Go`: live canary succeeded; all required preflight intake was submitted;
+  direct hosted-AI fallback is disabled by default; DataRef rules are enforced;
+  tests pass.
+- `No-Go`: anything else.
+- Do not use `Conditional Go`.
+- Do not write `unknown workloads submitted` unless an approved inbox actually
+  received them.
 
 Never include real API keys, Authorization headers, prompt bodies, image bytes,
 presigned URLs, or DataRef URIs in the report.
