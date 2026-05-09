@@ -308,6 +308,14 @@ gpucall readiness --config-dir config --intent translate_text
 gpucall is a deterministic governance router, not a Modal-only proxy. Recipe and provider selection rules are documented in [docs/ROUTING_POLICY.md](docs/ROUTING_POLICY.md).
 Capability catalog rules for recipe/model/engine/provider matching are documented in [docs/CAPABILITY_CATALOG.md](docs/CAPABILITY_CATALOG.md).
 RunPod Flash production validation is documented in [docs/RUNPOD_FLASH.md](docs/RUNPOD_FLASH.md).
+
+## Local Execution
+
+gpucall can route to local runtimes when local execution is sufficient and policy allows it. This is deliberate: honest routing should not lease cloud GPU capacity when a controlled local runtime can do the job.
+
+The built-in `local-openai-compatible` adapter targets local OpenAI-compatible chat servers such as ds4-server, llama.cpp server, local vLLM, or other private endpoints. A ds4 example is shipped as `gpucall/config_templates/surfaces/local-ds4.example` and `gpucall/config_templates/workers/local-ds4.example`.
+
+Local OpenAI-compatible tuples are for inline text/chat workloads. They do not dereference `DataRef` objects, because the gateway remains data-byte-less. If a caller submits large files as DataRefs, use a worker that explicitly supports DataRef fetching inside the approved execution boundary.
 RunPod Serverless catalog expansion rules are documented in [docs/RUNPOD_SERVERLESS_CATALOG.md](docs/RUNPOD_SERVERLESS_CATALOG.md).
 
 ## Zero-Trust Contracts

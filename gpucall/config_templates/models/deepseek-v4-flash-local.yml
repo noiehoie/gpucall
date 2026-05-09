@@ -1,0 +1,17 @@
+name: deepseek-v4-flash-local
+provider_model_id: deepseek-v4-flash
+capabilities:
+  - instruction_following
+max_model_len: 1000000
+min_vram_gb: 128
+supported_engines:
+  - local-openai-compatible-chat
+input_contracts: [text, chat_messages]
+output_contracts: [openai-chat-completions, plain-text]
+supports_vision: false
+supports_guided_decoding: false
+supports_streaming: true
+source: https://github.com/antirez/ds4
+evidence:
+  - https://github.com/antirez/ds4
+production_ready: false

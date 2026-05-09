@@ -9,6 +9,7 @@ __all__ = [
     "EchoTuple",
     "GCPConfidentialSpaceVMAdapter",
     "HyperstackAdapter",
+    "LocalOpenAICompatibleAdapter",
     "LocalOllamaAdapter",
     "ModalAdapter",
     "OVHCloudPublicCloudInstanceAdapter",
@@ -49,8 +50,12 @@ def __getattr__(name: str) -> Any:
         from gpucall.execution_surfaces.function_runtime import ModalAdapter
 
         return ModalAdapter
-    if name in {"EchoTuple", "LocalOllamaAdapter"}:
-        from gpucall.execution_surfaces.local_runtime import EchoTuple, LocalOllamaAdapter
+    if name in {"EchoTuple", "LocalOllamaAdapter", "LocalOpenAICompatibleAdapter"}:
+        from gpucall.execution_surfaces.local_runtime import EchoTuple, LocalOllamaAdapter, LocalOpenAICompatibleAdapter
 
-        return {"EchoTuple": EchoTuple, "LocalOllamaAdapter": LocalOllamaAdapter}[name]
+        return {
+            "EchoTuple": EchoTuple,
+            "LocalOllamaAdapter": LocalOllamaAdapter,
+            "LocalOpenAICompatibleAdapter": LocalOpenAICompatibleAdapter,
+        }[name]
     raise AttributeError(name)

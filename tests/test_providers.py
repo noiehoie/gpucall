@@ -6,16 +6,18 @@ from pathlib import Path
 import sys
 import types
 
+import httpx
 import pytest
 import yaml
 
-from gpucall.domain import ChatMessage, CompiledPlan, ExecutionMode, InlineValue, ExecutionTupleSpec
+from gpucall.domain import ChatMessage, CompiledPlan, DataRef, ExecutionMode, InlineValue, ExecutionTupleSpec, TupleError
 from gpucall.domain import ArtifactExportSpec, DataClassification
 from gpucall.execution_surfaces.iaas_vm import DEFAULT_HYPERSTACK_IMAGE, HyperstackAdapter
 from gpucall.execution import (
     AzureComputeVMAdapter,
     EchoTuple,
     GCPConfidentialSpaceVMAdapter,
+    LocalOpenAICompatibleAdapter,
     LocalOllamaAdapter,
     ModalAdapter,
     OVHCloudPublicCloudInstanceAdapter,
@@ -44,6 +46,7 @@ def test_router_core_does_not_hardcode_builtin_tuple_implementations() -> None:
         "gcp-confidential-space-vm",
         "hyperstack",
         "local-ollama",
+        "local-openai-compatible",
         "modal",
         "ovhcloud",
         "runpod",
@@ -79,6 +82,7 @@ def test_provider_contract_modules_are_separated_and_sourced() -> None:
 
     expected = {
         "local-ollama": "https://github.com/ollama/ollama/blob/main/docs/api.md#generate-a-completion",
+        "local-openai-compatible": "https://platform.openai.com/docs/api-reference/chat/create",
         "modal": "https://modal.com/docs/reference/modal.Function#from_name",
         "runpod-serverless": "https://docs.runpod.io/serverless/endpoints/send-requests",
         "runpod-vllm-serverless": "https://docs.runpod.io/serverless/vllm/openai-compatibility",
@@ -153,6 +157,19 @@ def test_factory_builds_configured_adapter_types() -> None:
                 endpoint_contract="ollama-generate",
                 output_contract="ollama-generate",
                 model="qwen2.5",
+        ),
+        "local-openai": ExecutionTupleSpec(
+            name="local-openai",
+            adapter="local-openai-compatible",
+            gpu="local",
+            vram_gb=1,
+            max_model_len=8192,
+            cost_per_second=0,
+            modes=[ExecutionMode.SYNC, ExecutionMode.ASYNC],
+            endpoint="http://127.0.0.1:8000/v1",
+            endpoint_contract="openai-chat-completions",
+            output_contract="openai-chat-completions",
+            model="deepseek-v4-flash",
         ),
         "modal": ExecutionTupleSpec(
             name="modal",
@@ -278,6 +295,7 @@ def test_factory_builds_configured_adapter_types() -> None:
 
     assert isinstance(adapters["echo"], EchoTuple)
     assert isinstance(adapters["local"], LocalOllamaAdapter)
+    assert isinstance(adapters["local-openai"], LocalOpenAICompatibleAdapter)
     assert isinstance(adapters["modal"], ModalAdapter)
     assert isinstance(adapters["hyperstack"], HyperstackAdapter)
     assert isinstance(adapters["runpod-vllm-serverless"], RunpodVllmServerlessAdapter)
@@ -289,6 +307,91 @@ def test_factory_builds_configured_adapter_types() -> None:
     assert adapters["hyperstack"].environment_name == "default-CANADA-1"
     assert adapters["hyperstack"].model == "Qwen/Qwen2.5-1.5B-Instruct"
     assert adapters["modal"].stream_function_name == "stream"
+
+
+@pytest.mark.asyncio
+async def test_local_openai_compatible_adapter_calls_chat_completions() -> None:
+    captured: dict[str, object] = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured["path"] = request.url.path
+        captured["body"] = json.loads(request.content)
+        captured["authorization"] = request.headers.get("authorization")
+        return httpx.Response(
+            200,
+            json={
+                "choices": [{"message": {"content": "local ok"}}],
+                "usage": {"prompt_tokens": 3, "completion_tokens": 2},
+            },
+        )
+
+    adapter = LocalOpenAICompatibleAdapter(
+        name="local-ds4",
+        base_url="http://127.0.0.1:8000/v1",
+        model="deepseek-v4-flash",
+        api_key="local-key",
+        transport=httpx.MockTransport(handler),
+    )
+    plan = CompiledPlan(
+        policy_version="test",
+        recipe_name="r1",
+        task="infer",
+        mode=ExecutionMode.SYNC,
+        tuple_chain=["local-ds4"],
+        timeout_seconds=2,
+        lease_ttl_seconds=10,
+        token_estimation_profile="generic_utf8",
+        token_budget=100,
+        max_tokens=64,
+        temperature=0.0,
+        input_refs=[],
+        inline_inputs={"prompt": InlineValue(value="hello")},
+        system_prompt="Answer directly.",
+    )
+
+    handle = await adapter.start(plan)
+    result = await adapter.wait(handle, plan)
+
+    assert result.value == "local ok"
+    assert result.usage["prompt_tokens"] == 3
+    assert captured["path"] == "/v1/chat/completions"
+    assert captured["authorization"] == "Bearer local-key"
+    body = captured["body"]
+    assert isinstance(body, dict)
+    assert body["model"] == "deepseek-v4-flash"
+    assert body["messages"][0] == {"role": "system", "content": "Answer directly."}
+    assert body["messages"][1] == {"role": "user", "content": "hello"}
+    assert body["stream"] is False
+
+
+@pytest.mark.asyncio
+async def test_local_openai_compatible_adapter_rejects_data_refs() -> None:
+    adapter = LocalOpenAICompatibleAdapter(
+        name="local-ds4",
+        base_url="http://127.0.0.1:8000/v1",
+        model="deepseek-v4-flash",
+        transport=httpx.MockTransport(lambda request: httpx.Response(500)),
+    )
+    plan = CompiledPlan(
+        policy_version="test",
+        recipe_name="r1",
+        task="infer",
+        mode=ExecutionMode.SYNC,
+        tuple_chain=["local-ds4"],
+        timeout_seconds=2,
+        lease_ttl_seconds=10,
+        token_estimation_profile="generic_utf8",
+        token_budget=100,
+        input_refs=[DataRef(uri="s3://bucket/object.txt", sha256="a" * 64, bytes=1024, content_type="text/plain")],
+        inline_inputs={},
+    )
+
+    handle = await adapter.start(plan)
+    with pytest.raises(TupleError) as excinfo:
+        await adapter.wait(handle, plan)
+
+    assert excinfo.value.status_code == 400
+    assert excinfo.value.retryable is False
 
 
 def test_provider_payload_contains_refs_not_dereferenced_data() -> None:

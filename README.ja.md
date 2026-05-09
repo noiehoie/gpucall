@@ -281,6 +281,14 @@ gpucall readiness --config-dir config --intent translate_text
 gpucall は deterministic governance router であり、Modal-only proxy ではありません。Recipe と provider selection rules は [docs/ROUTING_POLICY.md](docs/ROUTING_POLICY.md) にあります。
 Recipe / model / engine / provider matching の capability catalog rules は [docs/CAPABILITY_CATALOG.md](docs/CAPABILITY_CATALOG.md) にあります。
 RunPod Flash production validation は [docs/RUNPOD_FLASH.md](docs/RUNPOD_FLASH.md) にあります。
+
+## Local Execution
+
+gpucall は、local execution で十分かつ policy が許す場合、local runtime に routing できます。これは意図的な設計です。誠実な routing は、統制済み local runtime で足りる仕事に cloud GPU cost を発生させません。
+
+組み込みの `local-openai-compatible` adapter は、ds4-server、llama.cpp server、local vLLM などの local OpenAI-compatible chat server を対象にします。ds4 用の設定例は `gpucall/config_templates/surfaces/local-ds4.example` と `gpucall/config_templates/workers/local-ds4.example` にあります。
+
+Local OpenAI-compatible tuple は inline text/chat workload 用です。`DataRef` は dereference しません。gateway は data-byte-less のまま維持するためです。大きな file を DataRef として送る caller には、approved execution boundary の内部で DataRef fetching を明示的にサポートする worker を使ってください。
 RunPod Serverless catalog expansion rules は [docs/RUNPOD_SERVERLESS_CATALOG.md](docs/RUNPOD_SERVERLESS_CATALOG.md) にあります。
 
 ## Zero-Trust Contracts

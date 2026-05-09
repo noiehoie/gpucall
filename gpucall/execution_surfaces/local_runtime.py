@@ -3,10 +3,15 @@ from __future__ import annotations
 
 import asyncio
 from datetime import datetime, timezone
+from typing import Any
 from uuid import uuid4
+
+import httpx
 
 from gpucall.domain import CompiledPlan, TupleError, TupleResult
 from gpucall.execution.base import TupleAdapter, RemoteHandle
+from gpucall.execution.payloads import openai_chat_completion_result
+from gpucall.execution.payloads import ollama_generate_result
 from gpucall.execution.registry import TupleAdapterDescriptor, register_adapter
 
 
@@ -60,16 +65,6 @@ class EchoTuple(TupleAdapter):
 )
 def build_echo_adapter(spec, _credentials):
     return EchoTuple(name=spec.name)
-
-
-from uuid import uuid4
-
-import httpx
-
-from gpucall.domain import CompiledPlan, TupleError, TupleResult
-from gpucall.execution.base import TupleAdapter, RemoteHandle
-from gpucall.execution.payloads import ollama_generate_result
-from gpucall.execution.registry import TupleAdapterDescriptor, register_adapter
 
 
 class LocalOllamaAdapter(TupleAdapter):
@@ -152,4 +147,140 @@ def build_local_ollama_adapter(spec, _credentials):
         name=spec.name,
         base_url=str(spec.endpoint),
         model=spec.model,
+    )
+
+
+class LocalOpenAICompatibleAdapter(TupleAdapter):
+    def __init__(
+        self,
+        name: str = "local-openai-compatible",
+        *,
+        base_url: str,
+        model: str,
+        api_key: str = "local",
+        transport: httpx.AsyncBaseTransport | None = None,
+    ) -> None:
+        self.name = name
+        self.base_url = base_url.rstrip("/")
+        self.model = model
+        self.api_key = api_key
+        self.transport = transport
+
+    async def start(self, plan: CompiledPlan) -> RemoteHandle:
+        return RemoteHandle(
+            tuple=self.name,
+            remote_id=uuid4().hex,
+            expires_at=plan.expires_at(),
+            account_ref="local",
+            execution_surface="local_runtime",
+            resource_kind="local_openai_compatible_request",
+            cleanup_required=False,
+            reaper_eligible=False,
+        )
+
+    async def wait(self, handle: RemoteHandle, plan: CompiledPlan) -> TupleResult:
+        if plan.input_refs:
+            raise TupleError("local OpenAI-compatible adapter does not dereference DataRefs", retryable=False, status_code=400)
+        try:
+            async with httpx.AsyncClient(timeout=plan.timeout_seconds, transport=self.transport) as client:
+                response = await client.post(
+                    f"{self.base_url}/chat/completions",
+                    headers={"authorization": f"Bearer {self.api_key}"},
+                    json=self._chat_payload(plan, stream=False),
+                )
+            if response.status_code == 404:
+                raise TupleError("local OpenAI-compatible endpoint not found", retryable=False, status_code=502)
+            response.raise_for_status()
+            return openai_chat_completion_result(response.json())
+        except TupleError:
+            raise
+        except httpx.ConnectError as exc:
+            raise TupleError("local OpenAI-compatible server is unavailable", retryable=True, status_code=503) from exc
+        except httpx.HTTPStatusError as exc:
+            retryable = exc.response.status_code >= 500
+            raise TupleError(f"local OpenAI-compatible server failed: {exc.response.status_code}", retryable=retryable, status_code=502) from exc
+        except httpx.TimeoutException as exc:
+            raise TupleError("local OpenAI-compatible server timed out", retryable=True, status_code=504) from exc
+
+    async def stream(self, handle: RemoteHandle, plan: CompiledPlan):
+        if plan.input_refs:
+            raise TupleError("local OpenAI-compatible adapter does not dereference DataRefs", retryable=False, status_code=400)
+        try:
+            async with httpx.AsyncClient(timeout=plan.timeout_seconds, transport=self.transport) as client:
+                async with client.stream(
+                    "POST",
+                    f"{self.base_url}/chat/completions",
+                    headers={"authorization": f"Bearer {self.api_key}"},
+                    json=self._chat_payload(plan, stream=True),
+                ) as response:
+                    if response.status_code == 404:
+                        raise TupleError("local OpenAI-compatible endpoint not found", retryable=False, status_code=502)
+                    response.raise_for_status()
+                    async for chunk in response.aiter_text():
+                        if chunk:
+                            yield chunk
+        except TupleError:
+            raise
+        except httpx.ConnectError as exc:
+            raise TupleError("local OpenAI-compatible server is unavailable", retryable=True, status_code=503) from exc
+        except httpx.HTTPStatusError as exc:
+            retryable = exc.response.status_code >= 500
+            raise TupleError(f"local OpenAI-compatible server failed: {exc.response.status_code}", retryable=retryable, status_code=502) from exc
+        except httpx.TimeoutException as exc:
+            raise TupleError("local OpenAI-compatible server timed out", retryable=True, status_code=504) from exc
+
+    async def cancel_remote(self, handle: RemoteHandle) -> None:
+        return None
+
+    def _chat_payload(self, plan: CompiledPlan, *, stream: bool) -> dict[str, Any]:
+        payload: dict[str, Any] = {
+            "model": self.model,
+            "messages": self._messages_from_plan(plan),
+            "stream": stream,
+        }
+        if plan.max_tokens is not None:
+            payload["max_tokens"] = plan.max_tokens
+        if plan.temperature is not None:
+            payload["temperature"] = plan.temperature
+        if plan.response_format is not None:
+            payload["response_format"] = plan.response_format.model_dump(mode="json")
+        return payload
+
+    def _messages_from_plan(self, plan: CompiledPlan) -> list[dict[str, str]]:
+        messages: list[dict[str, str]] = []
+        if plan.system_prompt:
+            messages.append({"role": "system", "content": plan.system_prompt})
+        if plan.messages:
+            messages.extend({"role": message.role, "content": message.content} for message in plan.messages)
+        elif "prompt" in plan.inline_inputs:
+            messages.append({"role": "user", "content": plan.inline_inputs["prompt"].value})
+        elif plan.inline_inputs:
+            messages.append({"role": "user", "content": "\n".join(value.value for value in plan.inline_inputs.values())})
+        else:
+            messages.append({"role": "user", "content": ""})
+        return messages
+
+
+@register_adapter(
+    "local-openai-compatible",
+    aliases=("local-openai", "openai-compatible-local"),
+    descriptor=TupleAdapterDescriptor(
+        endpoint_contract="openai-chat-completions",
+        output_contract="openai-chat-completions",
+        stream_contract="sse",
+        local_execution=True,
+        official_sources=(
+            "https://platform.openai.com/docs/api-reference/chat/create",
+        ),
+    ),
+)
+def build_local_openai_compatible_adapter(spec, _credentials):
+    if not spec.endpoint or not spec.model:
+        raise ValueError("local-openai-compatible tuple requires explicit endpoint and model")
+    api_key = str(spec.provider_params.get("api_key") or "local")
+    return LocalOpenAICompatibleAdapter(
+        name=spec.name,
+        base_url=str(spec.endpoint),
+        model=spec.model,
+        api_key=api_key,
     )

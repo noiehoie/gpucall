@@ -1,0 +1,18 @@
+worker_ref: local-ds4
+account_ref: local
+adapter: local-openai-compatible
+execution_surface: local_runtime
+model_ref: deepseek-v4-flash-local
+engine_ref: local-openai-compatible-chat
+modes:
+  - async
+  - stream
+input_contracts:
+  - text
+  - chat_messages
+output_contract: openai-chat-completions
+stream_contract: sse
+target: null
+stream_target: null
+endpoint_contract: openai-chat-completions
+model: deepseek-v4-flash

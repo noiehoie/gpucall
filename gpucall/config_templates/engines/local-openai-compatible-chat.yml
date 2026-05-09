@@ -1,0 +1,12 @@
+name: local-openai-compatible-chat
+kind: openai-compatible-chat
+version: null
+input_contracts: [text, chat_messages]
+output_contracts: [openai-chat-completions, plain-text]
+supports_guided_decoding: false
+supports_streaming: true
+supports_multimodal: false
+supports_data_refs: false
+official_doc_refs:
+  - https://platform.openai.com/docs/api-reference/chat/create
+production_ready: true

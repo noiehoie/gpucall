@@ -143,3 +143,17 @@ chosen to abandon the accepted request early; that client-side abandonment is
 outside the gateway SLA. Callers that cannot wait for the advertised sync
 timeout should use `mode=async` and poll job state instead of lowering the
 client timeout.
+
+## Local Runtime Preference
+
+gpucall treats local execution as a first-class execution surface. If a local
+runtime satisfies the recipe, model, engine, data classification, and policy
+constraints, routing may prefer it over leased cloud GPU capacity because that is
+the honest low-exposure path.
+
+The built-in `local-openai-compatible` adapter is provider-neutral. It can point
+at ds4-server, llama.cpp server, local vLLM, or another OpenAI-compatible chat
+endpoint. It supports inline text/chat requests only. It intentionally rejects
+`DataRef` inputs so the gateway does not download or forward object bytes. Use a
+dedicated worker contract when DataRef fetching must happen inside an approved
+local execution boundary.
