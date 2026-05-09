@@ -122,6 +122,93 @@ def test_admin_tenant_onboard_creates_tenant_key_and_handoff_file(tmp_path, monk
     assert (config_dir / "tenants" / "external-system.yml").exists()
 
 
+def test_admin_automation_configure_trusted_bootstrap(tmp_path, capsys) -> None:
+    config_dir = tmp_path / "config"
+    init_config(config_dir)
+    capsys.readouterr()
+
+    admin_command(
+        "automation-configure",
+        config_dir,
+        name=None,
+        handoff_mode="trusted_bootstrap",
+        bootstrap_allowed_cidrs=["10.0.0.42/32"],
+        bootstrap_allowed_hosts=["macmini"],
+        bootstrap_gateway_url="https://gpucall.example.internal",
+        bootstrap_recipe_inbox="admin@gpucall.example.internal:/srv/gpucall/state/recipe_requests/inbox",
+        manifest=None,
+        gateway_url=None,
+        recipe_inbox=None,
+        output=None,
+        requests_per_minute=None,
+        daily_budget_usd=None,
+        monthly_budget_usd=None,
+        max_request_estimated_cost_usd=None,
+        object_prefix=None,
+    )
+    report = json.loads(capsys.readouterr().out)
+    admin_yml = (config_dir / "admin.yml").read_text(encoding="utf-8")
+
+    assert report["admin_automation"]["api_key_handoff_mode"] == "trusted_bootstrap"
+    assert report["admin_automation"]["trusted_bootstrap"]["allowed_cidrs"] == ["10.0.0.42/32"]
+    assert "api_key_handoff_mode: trusted_bootstrap" in admin_yml
+    assert "api_key_bootstrap_gateway_url: https://gpucall.example.internal" in admin_yml
+
+
+def test_admin_automation_configure_rejects_bootstrap_without_allowlist(tmp_path, capsys) -> None:
+    config_dir = tmp_path / "config"
+    init_config(config_dir)
+    capsys.readouterr()
+
+    try:
+        admin_command(
+            "automation-configure",
+            config_dir,
+            name=None,
+            handoff_mode="trusted_bootstrap",
+            manifest=None,
+            gateway_url=None,
+            recipe_inbox=None,
+            output=None,
+            requests_per_minute=None,
+            daily_budget_usd=None,
+            monthly_budget_usd=None,
+            max_request_estimated_cost_usd=None,
+            object_prefix=None,
+        )
+    except SystemExit as exc:
+        assert "trusted_bootstrap requires at least one allowed CIDR or host" in str(exc)
+    else:
+        raise AssertionError("trusted bootstrap should require an allowlist")
+
+
+def test_admin_automation_status_reports_non_secret_config(tmp_path, capsys) -> None:
+    config_dir = tmp_path / "config"
+    init_config(config_dir)
+    capsys.readouterr()
+
+    admin_command(
+        "automation-status",
+        config_dir,
+        name=None,
+        manifest=None,
+        gateway_url=None,
+        recipe_inbox=None,
+        output=None,
+        requests_per_minute=None,
+        daily_budget_usd=None,
+        monthly_budget_usd=None,
+        max_request_estimated_cost_usd=None,
+        object_prefix=None,
+    )
+    report = json.loads(capsys.readouterr().out)
+
+    assert report["api_key_handoff_mode"] == "manual"
+    assert report["trusted_bootstrap"]["enabled"] is False
+    assert "gpk_" not in json.dumps(report)
+    assert "credentials_path" not in report
+
+
 def test_admin_tenant_onboard_refuses_existing_key(tmp_path, monkeypatch, capsys) -> None:
     credentials = tmp_path / "credentials.yml"
     config_dir = tmp_path / "config"

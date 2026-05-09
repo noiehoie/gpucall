@@ -9,8 +9,10 @@ from pathlib import Path
 
 import yaml
 
+from gpucall.admin_automation import admin_automation_summary, configure_admin_automation
 from gpucall.configure_registry import register_configure_target
 from gpucall.credentials import save_credentials
+from gpucall.domain import ApiKeyHandoffMode
 
 
 @register_configure_target("modal", success_message=None, credential_contracts=("sdk_profile:modal",))
@@ -112,6 +114,57 @@ def configure_auth(_config_dir: Path) -> bool:
         return False
 
 
+@register_configure_target("admin-automation", label="admin automation / api key handoff")
+def configure_admin_automation_target(config_dir: Path) -> bool:
+    current = admin_automation_summary(config_dir)
+    print("\nCurrent admin automation:")
+    print(yaml.safe_dump(current, sort_keys=False).rstrip())
+    print("\nSelect API key handoff mode:")
+    print("  1. manual             - safest default; keys are issued explicitly")
+    print("  2. handoff_file       - admin command writes 0600 handoff files")
+    print("  3. trusted_bootstrap  - trusted clients can request tenant keys")
+    raw = input("> ").strip().lower()
+    modes = {
+        "1": ApiKeyHandoffMode.MANUAL,
+        "manual": ApiKeyHandoffMode.MANUAL,
+        "2": ApiKeyHandoffMode.HANDOFF_FILE,
+        "handoff_file": ApiKeyHandoffMode.HANDOFF_FILE,
+        "3": ApiKeyHandoffMode.TRUSTED_BOOTSTRAP,
+        "trusted_bootstrap": ApiKeyHandoffMode.TRUSTED_BOOTSTRAP,
+    }
+    mode = modes.get(raw)
+    if mode is None:
+        print("Unknown mode.")
+        return False
+    cidrs: list[str] | None = None
+    hosts: list[str] | None = None
+    gateway_url: str | None = None
+    recipe_inbox: str | None = None
+    if mode is ApiKeyHandoffMode.TRUSTED_BOOTSTRAP:
+        cidrs = _split_csv(input("Allowed CIDRs (comma separated, optional): "))
+        hosts = _split_csv(input("Allowed client hosts (comma separated, optional): "))
+        if not cidrs and not hosts:
+            print("trusted_bootstrap requires at least one allowed CIDR or host.")
+            return False
+        gateway_url = input("Gateway URL returned to callers: ").strip()
+        recipe_inbox = input("Recipe inbox returned to callers (optional): ").strip()
+    try:
+        configure_admin_automation(
+            config_dir,
+            handoff_mode=mode,
+            bootstrap_allowed_cidrs=cidrs,
+            bootstrap_allowed_hosts=hosts,
+            bootstrap_gateway_url=gateway_url,
+            bootstrap_recipe_inbox=recipe_inbox,
+            clear_bootstrap_allowlist=mode is not ApiKeyHandoffMode.TRUSTED_BOOTSTRAP,
+        )
+    except ValueError as exc:
+        print(str(exc), file=sys.stderr)
+        return False
+    print(f"Updated {config_dir / 'admin.yml'}")
+    return True
+
+
 def _mirror_runpod_flash_config(config_dir: Path) -> None:
     source = Path(os.path.expanduser("~/.runpod/config.toml"))
     if not source.exists():
@@ -135,3 +188,7 @@ def _write_object_store(config_dir: Path, *, bucket: str, region: str, endpoint:
     }
     path.write_text(yaml.safe_dump(data, sort_keys=False), encoding="utf-8")
     print(f"Updated {path}")
+
+
+def _split_csv(raw: str) -> list[str]:
+    return [item.strip() for item in raw.split(",") if item.strip()]

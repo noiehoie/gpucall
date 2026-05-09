@@ -23,6 +23,7 @@ if __package__ in (None, ""):
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from gpucall.app import build_runtime, create_app, plan_with_worker_refs, worker_readable_request
+from gpucall.admin_automation import admin_automation_summary, configure_admin_automation
 from gpucall.catalog import SQLiteCapabilityCatalog, dumps_snapshot
 from gpucall.handoff import handoff_payload as _handoff_payload, render_handoff as _render_handoff
 from gpucall.cli_commands.readiness import add_readiness_parser, run_readiness_command
@@ -161,6 +162,8 @@ def main() -> None:
             "tenant-onboard",
             "tenant-onboard-batch",
             "tenant-usage",
+            "automation-status",
+            "automation-configure",
         ],
     )
     admin.add_argument("--config-dir", type=Path, default=default_config_dir())
@@ -175,6 +178,14 @@ def main() -> None:
     admin.add_argument("--monthly-budget-usd", type=float, default=None)
     admin.add_argument("--max-request-estimated-cost-usd", type=float, default=None)
     admin.add_argument("--object-prefix", default=None)
+    admin.add_argument("--handoff-mode", choices=[mode.value for mode in ApiKeyHandoffMode], default=None)
+    admin.add_argument("--bootstrap-allowed-cidr", action="append", default=None)
+    admin.add_argument("--bootstrap-allowed-host", action="append", default=None)
+    admin.add_argument("--bootstrap-gateway-url", default=None)
+    admin.add_argument("--bootstrap-recipe-inbox", default=None)
+    admin.add_argument("--clear-bootstrap-allowlist", action="store_true")
+    admin.add_argument("--enable-recipe-auto-materialize", action="store_true")
+    admin.add_argument("--disable-recipe-auto-materialize", action="store_true")
     args = parser.parse_args()
 
     if args.command == "serve":
@@ -309,6 +320,14 @@ def main() -> None:
             monthly_budget_usd=args.monthly_budget_usd,
             max_request_estimated_cost_usd=args.max_request_estimated_cost_usd,
             object_prefix=args.object_prefix,
+            handoff_mode=args.handoff_mode,
+            bootstrap_allowed_cidrs=args.bootstrap_allowed_cidr,
+            bootstrap_allowed_hosts=args.bootstrap_allowed_host,
+            bootstrap_gateway_url=args.bootstrap_gateway_url,
+            bootstrap_recipe_inbox=args.bootstrap_recipe_inbox,
+            clear_bootstrap_allowlist=args.clear_bootstrap_allowlist,
+            enable_recipe_auto_materialize=args.enable_recipe_auto_materialize,
+            disable_recipe_auto_materialize=args.disable_recipe_auto_materialize,
         )
 
 
@@ -387,6 +406,14 @@ def admin_command(
     monthly_budget_usd: float | None,
     max_request_estimated_cost_usd: float | None,
     object_prefix: str | None,
+    handoff_mode: str | None = None,
+    bootstrap_allowed_cidrs: list[str] | None = None,
+    bootstrap_allowed_hosts: list[str] | None = None,
+    bootstrap_gateway_url: str | None = None,
+    bootstrap_recipe_inbox: str | None = None,
+    clear_bootstrap_allowlist: bool = False,
+    enable_recipe_auto_materialize: bool = False,
+    disable_recipe_auto_materialize: bool = False,
 ) -> None:
     if action == "tenant-create":
         if not name:
@@ -407,6 +434,42 @@ def admin_command(
         print(json.dumps({"created": name, "path": str(path), "credential_action": "add auth.tenant_keys entry outside YAML"}, indent=2))
         return
     config = load_config(config_dir)
+    if action == "automation-status":
+        print(json.dumps(admin_automation_summary(config_dir), indent=2, sort_keys=True))
+        return
+    if action == "automation-configure":
+        if enable_recipe_auto_materialize and disable_recipe_auto_materialize:
+            raise SystemExit("choose only one of --enable-recipe-auto-materialize or --disable-recipe-auto-materialize")
+        auto_materialize = None
+        if enable_recipe_auto_materialize:
+            auto_materialize = True
+        if disable_recipe_auto_materialize:
+            auto_materialize = False
+        try:
+            updated = configure_admin_automation(
+                config_dir,
+                handoff_mode=ApiKeyHandoffMode(handoff_mode) if handoff_mode else None,
+                recipe_inbox_auto_materialize=auto_materialize,
+                bootstrap_allowed_cidrs=bootstrap_allowed_cidrs,
+                bootstrap_allowed_hosts=bootstrap_allowed_hosts,
+                bootstrap_gateway_url=bootstrap_gateway_url,
+                bootstrap_recipe_inbox=bootstrap_recipe_inbox,
+                clear_bootstrap_allowlist=clear_bootstrap_allowlist,
+            )
+        except ValueError as exc:
+            raise SystemExit(str(exc)) from exc
+        print(
+            json.dumps(
+                {
+                    "updated": str(config_dir / "admin.yml"),
+                    "admin_automation": admin_automation_summary(config_dir),
+                    "safe_default": updated.api_key_handoff_mode is ApiKeyHandoffMode.MANUAL,
+                },
+                indent=2,
+                sort_keys=True,
+            )
+        )
+        return
     if action == "tenant-onboard":
         if not name:
             raise SystemExit("admin tenant-onboard requires --name")
@@ -561,6 +624,7 @@ def admin_command(
             "state_dir": str(default_state_dir()),
             "credentials_path": str(credentials_path()),
             "tenant_usage_db": str(default_state_dir() / "tenant_usage.db"),
+            "admin_automation": admin_automation_summary(config_dir),
         }
         print(json.dumps(report, indent=2, sort_keys=True))
         return

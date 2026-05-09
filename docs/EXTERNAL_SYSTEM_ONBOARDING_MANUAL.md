@@ -142,6 +142,8 @@ Rules:
   key from `POST /v2/bootstrap/tenant-key`; `403` means the system is outside
   the trusted scope, and `409` means a key already exists and must not be
   reprinted;
+- administrators can inspect or enable this mode with
+  `gpucall admin automation-status` and `gpucall admin automation-configure`;
 - never use `GPUCALL_API_KEY=dummy` for integration;
 - never commit the token;
 - never print the token in completion reports;

@@ -99,6 +99,15 @@ This route is disabled unless the operator explicitly enables it in
 api_key_handoff_mode: handoff_file
 ```
 
+Prefer the CLI over hand-editing `admin.yml`:
+
+```bash
+gpucall admin automation-status --config-dir /etc/gpucall
+gpucall admin automation-configure \
+  --config-dir /etc/gpucall \
+  --handoff-mode handoff_file
+```
+
 The default is:
 
 ```yaml
@@ -111,12 +120,13 @@ approved manual secret channel.
 
 For fully unattended internal environments, use:
 
-```yaml
-api_key_handoff_mode: trusted_bootstrap
-api_key_bootstrap_allowed_cidrs:
-  - 10.0.0.42/32
-api_key_bootstrap_gateway_url: https://gpucall.example.internal
-api_key_bootstrap_recipe_inbox: admin@gpucall.example.internal:/srv/gpucall/state/recipe_requests/inbox
+```bash
+gpucall admin automation-configure \
+  --config-dir /etc/gpucall \
+  --handoff-mode trusted_bootstrap \
+  --bootstrap-allowed-cidr 10.0.0.42/32 \
+  --bootstrap-gateway-url https://gpucall.example.internal \
+  --bootstrap-recipe-inbox admin@gpucall.example.internal:/srv/gpucall/state/recipe_requests/inbox
 ```
 
 In this mode, trusted clients can request their own tenant-scoped key:
