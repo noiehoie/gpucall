@@ -130,9 +130,36 @@ class SetupPlan(BaseModel):
 
 
 def add_setup_parser(subparsers: argparse._SubParsersAction[argparse.ArgumentParser]) -> argparse.ArgumentParser:
-    parser = subparsers.add_parser("setup")
-    parser.add_argument("action", nargs="?", choices=["status", "next", "section", "apply", "export-handoff-prompt"], default=None)
-    parser.add_argument("section_name", nargs="?", choices=["profile", "gateway", "providers", "object-store", "tenant-handoff", "launch"])
+    parser = subparsers.add_parser(
+        "setup",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        description="""First-run operator setup journey.
+
+Common commands:
+  gpucall setup
+  gpucall setup status
+  gpucall setup next
+  gpucall setup section providers
+  gpucall setup apply --file gpucall.setup.yml --dry-run
+  gpucall setup apply --file gpucall.setup.yml --yes
+  gpucall setup export-handoff-prompt --system-name example-system
+""",
+    )
+    parser.add_argument(
+        "action",
+        nargs="?",
+        metavar="action",
+        choices=["status", "next", "section", "apply", "export-handoff-prompt"],
+        default=None,
+        help="status, next, section, apply, or export-handoff-prompt",
+    )
+    parser.add_argument(
+        "section_name",
+        nargs="?",
+        metavar="section",
+        choices=["profile", "gateway", "providers", "object-store", "tenant-handoff", "launch"],
+        help="section name for 'gpucall setup section'",
+    )
     parser.add_argument("--config-dir", type=Path, default=default_config_dir())
     parser.add_argument("--file", type=Path, default=None)
     parser.add_argument("--profile", choices=["local-trial", "internal-team", "production-multitenant", "hardened-regulated"], default=None)
@@ -350,6 +377,12 @@ def apply_setup_plan(config_dir: Path, plan_path: Path, *, dry_run: bool, yes: b
     report = _setup_apply_report(plan, changes, warnings, dry_run=dry_run)
     if dry_run:
         return report + "\nNo changes written because --dry-run is set."
+    prompt_targets = _setup_plan_prompt_targets(plan)
+    if yes and prompt_targets:
+        raise SystemExit(
+            "setup apply --yes cannot use credentials.source: prompt "
+            f"({', '.join(prompt_targets)}). Use credentials.source: gpucall_credentials for unattended apply."
+        )
     if not yes and not _confirm("Apply setup plan?"):
         return report + "\nAborted."
     _ensure_config_initialized(config_dir)
@@ -358,7 +391,8 @@ def apply_setup_plan(config_dir: Path, plan_path: Path, *, dry_run: bool, yes: b
     _apply_object_store(config_dir, plan)
     _apply_tenant_onboarding(config_dir, plan)
     _write_setup_state(config_dir, plan)
-    return report + "\nApplied setup plan.\n\n" + setup_status_text(config_dir, profile=plan.profile)
+    post_checks = _post_apply_checks(config_dir, plan)
+    return report + "\nApplied setup plan.\n\n" + post_checks + "\n\n" + setup_status_text(config_dir, profile=plan.profile)
 
 
 def export_handoff_prompt(config_dir: Path, system_name: str) -> str:
@@ -604,6 +638,16 @@ def _setup_plan_warnings(config_dir: Path, plan: SetupPlan) -> list[str]:
     return warnings
 
 
+def _setup_plan_prompt_targets(plan: SetupPlan) -> list[str]:
+    targets: list[str] = []
+    for name, provider in sorted(plan.providers.items()):
+        if provider.enabled and provider.credentials and provider.credentials.source == "prompt":
+            targets.append(f"provider:{name}")
+    if plan.object_store and plan.object_store.credentials and plan.object_store.credentials.source == "prompt":
+        targets.append("object_store")
+    return targets
+
+
 def _setup_apply_report(plan: SetupPlan, changes: list[str], warnings: list[str], *, dry_run: bool) -> str:
     checks = ["[ok] setup schema valid"]
     if plan.tenant_onboarding.mode is ApiKeyHandoffMode.TRUSTED_BOOTSTRAP:
@@ -700,6 +744,46 @@ def _write_setup_state(config_dir: Path, plan: SetupPlan) -> None:
         "launch": plan.launch.model_dump(mode="json"),
     }
     (config_dir / "setup.yml").write_text(yaml.safe_dump(payload, sort_keys=False), encoding="utf-8")
+
+
+def _post_apply_checks(config_dir: Path, plan: SetupPlan) -> str:
+    checks: list[tuple[str, bool, str]] = []
+    try:
+        config = load_config(config_dir)
+        checks.append(("validate-config", True, f"{len(config.recipes)} recipes, {len(config.tuples)} tuples"))
+    except Exception as exc:
+        checks.append(("validate-config", False, f"{type(exc).__name__}: {exc}"))
+    secret_findings = _scan_secret_like_yaml(config_dir)
+    checks.append(("security scan-secrets", not secret_findings, f"{len(secret_findings)} findings"))
+    if plan.launch.run_static_check:
+        checks.append(
+            (
+                "launch-check static",
+                checks[0][1] and checks[1][1],
+                "run `gpucall launch-check --profile static` for the full report",
+            )
+        )
+    lines = ["Post-apply checks:"]
+    for name, ok, detail in checks:
+        state = "ok" if ok else "fail"
+        lines.append(f"  [{state}] {name}: {detail}")
+    if any(not ok for _, ok, _ in checks):
+        lines.append("  Next: fix failed checks before starting the gateway.")
+    return "\n".join(lines)
+
+
+def _scan_secret_like_yaml(config_dir: Path) -> list[dict[str, str]]:
+    findings: list[dict[str, str]] = []
+    secret_keys = {"api_key", "secret", "token", "authorization", "access_key", "access_key_id", "secret_access_key"}
+    for path in config_dir.rglob("*.yml"):
+        if path.name == "credentials.yml":
+            continue
+        text = path.read_text(encoding="utf-8")
+        for line_no, line in enumerate(text.splitlines(), start=1):
+            key = line.split(":", 1)[0].strip().lower()
+            if key in secret_keys or key.endswith("_api_key") or key.endswith("_secret") or key.endswith("_token"):
+                findings.append({"path": str(path), "line": str(line_no), "reason": "secret-like key in YAML"})
+    return findings
 
 
 def _update_yaml(path: Path, updates: dict[str, object]) -> None:

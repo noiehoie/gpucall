@@ -102,8 +102,9 @@ execution surfaces、object-store DataRefs、tenant handoff、launch checks、
 external-system onboarding を案内します。低レイヤーコマンドである
 `gpucall init`、`gpucall configure`、`gpucall admin ...`、
 `gpucall validate-config`、`gpucall launch-check` は automation と debug
-用に残ります。setup plan の文法は [docs/SETUP_PLAN.md](docs/SETUP_PLAN.md)
-にあります。
+用に残ります。`gpucall setup apply` は適用後チェックを表示し、`--yes`
+指定時の interactive な `credentials.source: prompt` を拒否します。setup
+plan の文法は [docs/SETUP_PLAN.md](docs/SETUP_PLAN.md) にあります。
 
 production-like runtime layout は XDG に従います。
 
@@ -191,8 +192,8 @@ gpucall は、外部システムに渡すための受容パッケージを配布
 この repository の外で動く AI CLI には、raw URL を渡します。
 
 ```text
-https://raw.githubusercontent.com/noiehoie/gpucall3/v2.0.8/docs/EXTERNAL_SYSTEM_ONBOARDING_PROMPT.md
-https://raw.githubusercontent.com/noiehoie/gpucall3/v2.0.8/docs/EXTERNAL_SYSTEM_ONBOARDING_MANUAL.md
+https://raw.githubusercontent.com/noiehoie/gpucall/v2.0.8/docs/EXTERNAL_SYSTEM_ONBOARDING_PROMPT.md
+https://raw.githubusercontent.com/noiehoie/gpucall/v2.0.8/docs/EXTERNAL_SYSTEM_ONBOARDING_MANUAL.md
 ```
 
 外部システム側の agent は、この2文書だけを読みます。operator が明示しない限り、gpucall gateway repository を clone / install / modify / vendor してはいけません。作業対象 worktree は移行対象アプリケーションだけです。
@@ -200,7 +201,7 @@ https://raw.githubusercontent.com/noiehoie/gpucall3/v2.0.8/docs/EXTERNAL_SYSTEM_
 呼び出し側補助ツールが未導入の場合は、SDK helper wheel だけを導入します。
 
 ```bash
-uv tool install https://github.com/noiehoie/gpucall3/releases/download/v2.0.8/gpucall_sdk-2.0.8-py3-none-any.whl
+uv tool install https://github.com/noiehoie/gpucall/releases/download/v2.0.8/gpucall_sdk-2.0.8-py3-none-any.whl
 gpucall-recipe-draft --help
 ```
 

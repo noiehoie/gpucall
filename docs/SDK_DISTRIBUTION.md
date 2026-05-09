@@ -38,7 +38,7 @@ uvicorn are intentionally not SDK dependencies.
 Example:
 
 ```bash
-uv tool install https://github.com/noiehoie/gpucall3/releases/download/v2.0.8/gpucall_sdk-2.0.8-py3-none-any.whl
+uv tool install https://github.com/noiehoie/gpucall/releases/download/v2.0.8/gpucall_sdk-2.0.8-py3-none-any.whl
 ```
 
 Download and verify the release `SHA256SUMS` before wiring the wheel URL into

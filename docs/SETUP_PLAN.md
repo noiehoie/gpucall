@@ -107,6 +107,9 @@ credentials:
 Ask for the secret during `gpucall setup apply`. The value is written to the
 gpucall credentials store, not to repository config YAML.
 
+This source is interactive. It is rejected with `gpucall setup apply --yes`
+because unattended setup must not block on a hidden prompt.
+
 ```yaml
 credentials:
   source: gpucall_credentials
@@ -114,6 +117,10 @@ credentials:
 
 Use credentials already present in the gpucall credentials store. This is the
 preferred source for unattended production apply.
+
+After a non-dry-run apply, gpucall reports post-apply checks for config
+loading, secret-like YAML keys, and the static launch-check handoff. Treat any
+failed post-apply check as a setup blocker before starting the gateway.
 
 Not supported in v2 setup plans:
 

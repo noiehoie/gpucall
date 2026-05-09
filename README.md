@@ -102,7 +102,9 @@ GPU execution surfaces, object-store DataRefs, tenant handoff, launch checks,
 and external-system onboarding. The underlying low-level commands remain
 available for automation and debugging: `gpucall init`, `gpucall configure`,
 `gpucall admin ...`, `gpucall validate-config`, and `gpucall launch-check`.
-Setup plan syntax is documented in [docs/SETUP_PLAN.md](docs/SETUP_PLAN.md).
+`gpucall setup apply` runs post-apply checks and rejects interactive
+`credentials.source: prompt` when `--yes` is used. Setup plan syntax is
+documented in [docs/SETUP_PLAN.md](docs/SETUP_PLAN.md).
 
 Production-like runtime layout follows XDG:
 
@@ -197,8 +199,8 @@ onboarding.
 For an AI CLI running outside this repository, use the raw URLs:
 
 ```text
-https://raw.githubusercontent.com/noiehoie/gpucall3/v2.0.8/docs/EXTERNAL_SYSTEM_ONBOARDING_PROMPT.md
-https://raw.githubusercontent.com/noiehoie/gpucall3/v2.0.8/docs/EXTERNAL_SYSTEM_ONBOARDING_MANUAL.md
+https://raw.githubusercontent.com/noiehoie/gpucall/v2.0.8/docs/EXTERNAL_SYSTEM_ONBOARDING_PROMPT.md
+https://raw.githubusercontent.com/noiehoie/gpucall/v2.0.8/docs/EXTERNAL_SYSTEM_ONBOARDING_MANUAL.md
 ```
 
 The external-system agent should read those documents only. It should not clone,
@@ -208,7 +210,7 @@ explicitly asks for that. Its worktree is the application being migrated.
 If the caller-side helper is not installed, install only the SDK helper wheel:
 
 ```bash
-uv tool install https://github.com/noiehoie/gpucall3/releases/download/v2.0.8/gpucall_sdk-2.0.8-py3-none-any.whl
+uv tool install https://github.com/noiehoie/gpucall/releases/download/v2.0.8/gpucall_sdk-2.0.8-py3-none-any.whl
 gpucall-recipe-draft --help
 ```
 

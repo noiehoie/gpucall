@@ -122,6 +122,9 @@ launch:
     surface = (config_dir / "surfaces" / "runpod-vllm-serverless.yml").read_text(encoding="utf-8")
 
     assert "Applied setup plan." in report
+    assert "Post-apply checks:" in report
+    assert "[ok] validate-config:" in report
+    assert "[ok] security scan-secrets: 0 findings" in report
     assert automation.api_key_handoff_mode is ApiKeyHandoffMode.TRUSTED_BOOTSTRAP
     assert automation.api_key_bootstrap_allowed_cidrs == ("10.0.0.42/32",)
     assert automation.api_key_bootstrap_gateway_url == "https://gpucall.example.internal"
@@ -151,6 +154,29 @@ providers:
         apply_setup_plan(tmp_path / "config", plan, dry_run=True, yes=True)
 
     assert "Extra inputs are not permitted" in str(exc.value)
+
+
+def test_setup_plan_yes_rejects_interactive_prompt_credentials(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("GPUCALL_CREDENTIALS", str(tmp_path / "credentials.yml"))
+    plan = tmp_path / "gpucall.setup.yml"
+    plan.write_text(
+        """
+setup_schema_version: 1
+profile: internal-team
+providers:
+  runpod:
+    enabled: true
+    credentials:
+      source: prompt
+    endpoint_id: rp-xxxxxxxxxxxx
+""".lstrip(),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(SystemExit) as exc:
+        apply_setup_plan(tmp_path / "config", plan, dry_run=False, yes=True)
+
+    assert "setup apply --yes cannot use credentials.source: prompt" in str(exc.value)
 
 
 def test_setup_handoff_prompt_does_not_include_api_key(tmp_path) -> None:
