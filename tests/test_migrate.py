@@ -84,3 +84,18 @@ def test_migrate_patch_apply_rewrites_openai_client_constructor(tmp_path) -> Non
     text = source.read_text(encoding="utf-8")
     assert "from gpucall_migration import gpucall_openai_client" in text
     assert "client = gpucall_openai_client()" in text
+
+
+def test_migrate_helper_fails_closed_without_gpucall_env(tmp_path) -> None:
+    project = tmp_path / "project"
+    project.mkdir()
+    source = project / "client.py"
+    source.write_text("from openai import OpenAI\nclient = OpenAI()\n", encoding="utf-8")
+
+    patch_suggestions(project, source="openai-app", apply=True)
+    helper = (project / "gpucall_migration.py").read_text(encoding="utf-8")
+
+    assert '_required_env("GPUCALL_BASE_URL")' in helper
+    assert '_required_env("GPUCALL_API_KEY")' in helper
+    assert 'os.environ.get("GPUCALL_API_KEY", "gpucall")' not in helper
+    assert 'os.environ.get("GPUCALL_BASE_URL", "http://127.0.0.1:18088")' not in helper

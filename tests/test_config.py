@@ -354,6 +354,55 @@ def test_standard_config_routes_news_sized_prompts_to_long_recipes(tmp_path) -> 
     assert "modal-h200x4-qwen25-14b-1m" in ultralong_plan.tuple_chain
 
 
+def test_standard_config_transport_matrix_is_explicit(tmp_path) -> None:
+    config = load_config(copy_config(tmp_path))
+    compiler = GovernanceCompiler(policy=config.policy, recipes=config.recipes, tuples=config.tuples, registry=ObservedRegistry())
+
+    cases = [
+        (
+            "small inline text",
+            TaskRequest(task="infer", mode=ExecutionMode.SYNC, inline_inputs={"prompt": {"kind": "text", "value": "hello"}}),
+            "text-infer-light",
+            {"modal-a10g"},
+        ),
+        (
+            "standard text dataref",
+            TaskRequest(
+                task="infer",
+                mode=ExecutionMode.SYNC,
+                input_refs=[DataRef(uri="s3://bucket/standard.txt", sha256="a" * 64, bytes=16000, content_type="text/plain")],
+            ),
+            "text-infer-standard",
+            {"modal-a10g"},
+        ),
+        (
+            "large text dataref",
+            TaskRequest(
+                task="infer",
+                mode=ExecutionMode.SYNC,
+                input_refs=[DataRef(uri="s3://bucket/large.txt", sha256="b" * 64, bytes=32000, content_type="text/plain")],
+            ),
+            "text-infer-large",
+            {"modal-h200x4-qwen25-14b-1m"},
+        ),
+        (
+            "image dataref",
+            TaskRequest(
+                task="vision",
+                mode=ExecutionMode.SYNC,
+                input_refs=[DataRef(uri="s3://bucket/image.png", sha256="c" * 64, bytes=2_000_000, content_type="image/png")],
+            ),
+            "vision-image-standard",
+            {"modal-vision-a10g", "modal-h100-florence-2-large-ft"},
+        ),
+    ]
+
+    for label, request, recipe_name, required_tuples in cases:
+        plan = compiler.compile(request)
+        assert plan.recipe_name == recipe_name, label
+        assert required_tuples.issubset(set(plan.tuple_chain)), label
+
+
 def test_provider_smoke_uses_chat_messages_for_chat_only_provider(tmp_path) -> None:
     config = load_config(copy_config(tmp_path))
     recipe = config.recipes["text-infer-light"]
