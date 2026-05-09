@@ -283,6 +283,10 @@ Production default must be fail-closed:
 - If a direct hosted-AI fallback is retained for local development or tests, it
   must require an explicit opt-in such as `ALLOW_DIRECT_AI_FALLBACK_FOR_DEV=1`,
   and production mode must ignore or reject that opt-in.
+- Do not use direct hosted-AI fallback for quality failures after gpucall returns
+  `200 OK`, including JSON parse failures, empty output, schema failures, or
+  business-validator rejection. Treat those as quality feedback and submit
+  `gpucall-recipe-draft quality`.
 - Add tests proving hosted-AI fallback is disabled by default.
 
 Correct request shape:
@@ -382,6 +386,9 @@ Classify these correctly:
   failure. Prefer async mode or longer caller timeout for long cold starts.
 - provider runtime 5xx with no gpucall governance code: retry/circuit behavior
   may be appropriate.
+- malformed output, empty output, schema failure, or business-validator failure
+  after `200 OK`: do not fall back to direct hosted AI in production. Record a
+  quality failure and submit `gpucall-recipe-draft quality`.
 
 For any gateway 5xx, the completion report must include only verified facts:
 HTTP status, response body if available, endpoint, request class, whether
@@ -395,6 +402,16 @@ job at once.
 
 Live canary is required for `Go`. If `GPUCALL_BASE_URL`, `GPUCALL_API_KEY`, or
 gateway access is unavailable, report `No-Go: live canary skipped`.
+
+Canary must cover every transport class used by the integration:
+
+- small inline text through the OpenAI-compatible facade or `/v2/tasks/sync`;
+- over-limit/confidential text through presign PUT + `DataRef` + `/v2/tasks/sync`
+  when such a path exists;
+- image/file workflow through presign PUT + `DataRef` + `/v2/tasks/sync` when
+  such a path exists.
+
+If any required transport class is untested, report `No-Go`.
 
 Record:
 
@@ -425,6 +442,8 @@ Add or update tests proving:
 - API key is required and never printed
 - missing gpucall configuration fails closed
 - direct hosted-AI fallback is disabled by default
+- quality failures after gpucall `200 OK` do not trigger direct hosted-AI
+  fallback in production
 - dev/test fallback, if retained, requires explicit opt-in and is rejected or
   ignored in production mode
 - `NO_AUTO_SELECTABLE_RECIPE` is classified as recipe-intake-needed

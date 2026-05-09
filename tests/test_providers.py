@@ -1302,6 +1302,43 @@ def test_hyperstack_adapter_rejects_all_open_ssh_cidr(tmp_path) -> None:
     assert "must not allow all addresses" in str(exc_info.value)
 
 
+def test_hyperstack_missing_known_hosts_is_fallback_eligible(monkeypatch, tmp_path) -> None:
+    class FakeParamiko:
+        class RejectPolicy:
+            pass
+
+        class SSHClient:
+            def load_host_keys(self, _path: str) -> None:
+                return None
+
+            def set_missing_host_key_policy(self, _policy: object) -> None:
+                return None
+
+            def connect(self, *_args, **_kwargs) -> None:
+                return None
+
+    class FakeSocket:
+        def __enter__(self) -> "FakeSocket":
+            return self
+
+        def __exit__(self, *_args) -> None:
+            return None
+
+    monkeypatch.setitem(sys.modules, "paramiko", FakeParamiko)
+    monkeypatch.delenv("GPUCALL_HYPERSTACK_KNOWN_HOSTS", raising=False)
+    monkeypatch.setattr("gpucall.execution_surfaces.hyperstack_vm.socket.create_connection", lambda *_args, **_kwargs: FakeSocket())
+    adapter = HyperstackAdapter(
+        api_key="test", lease_manifest_path=str(tmp_path / "leases.jsonl"), ssh_remote_cidr="203.0.113.0/24"
+    )
+
+    with pytest.raises(Exception) as exc_info:
+        adapter._connect_ssh("203.0.113.10")
+
+    assert getattr(exc_info.value, "code", None) == "PROVIDER_CONFIG_UNAVAILABLE"
+    assert getattr(exc_info.value, "retryable", None) is True
+    assert getattr(exc_info.value, "status_code", None) == 503
+
+
 def test_hyperstack_wait_active_ignores_private_fixed_ip(monkeypatch, tmp_path) -> None:
     calls = 0
 

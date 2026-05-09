@@ -30,3 +30,5 @@ output_validation_attempts: 2
 required_model_capabilities:
 - instruction_following
 output_contract: plain-text
+cost_policy:
+  max_estimated_cost_usd: 10.0

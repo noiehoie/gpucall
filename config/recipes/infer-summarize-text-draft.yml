@@ -34,3 +34,5 @@ required_model_capabilities:
 - summarization
 output_contract: plain-text
 expected_cold_start_seconds: 600
+cost_policy:
+  max_estimated_cost_usd: 10.0

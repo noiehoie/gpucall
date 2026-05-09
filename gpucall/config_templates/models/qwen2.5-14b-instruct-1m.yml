@@ -4,7 +4,7 @@ capabilities: [chat, instruction_following, summarization, translation, classifi
 max_model_len: 1048576
 min_vram_gb: 320
 supported_engines: [hyperstack-vllm, modal-vllm, runpod-vllm-openai]
-input_contracts: [text, chat_messages]
+input_contracts: [text, chat_messages, data_refs]
 output_contracts: [plain-text, json_object]
 supports_vision: false
 supports_guided_decoding: true

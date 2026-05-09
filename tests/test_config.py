@@ -344,12 +344,14 @@ def test_standard_config_routes_news_sized_prompts_to_long_recipes(tmp_path) -> 
 
     assert large_plan.recipe_name == "text-infer-large"
     assert large_plan.tuple_chain[0] == "hyperstack-qwen-1m"
+    assert "modal-h200x4-qwen25-14b-1m" in large_plan.tuple_chain
     artifact = large_plan.attestations["compile_artifact"]
     assert artifact["selected_tuple"]["tuple"] == "hyperstack-qwen-1m"
     assert artifact["selected_tuple"]["execution_surface"] == "iaas_vm"
     assert artifact["selected_tuple_hash"]
     assert ultralong_plan.recipe_name == "text-infer-ultralong"
     assert ultralong_plan.tuple_chain[0] == "hyperstack-qwen-1m"
+    assert "modal-h200x4-qwen25-14b-1m" in ultralong_plan.tuple_chain
 
 
 def test_provider_smoke_uses_chat_messages_for_chat_only_provider(tmp_path) -> None:

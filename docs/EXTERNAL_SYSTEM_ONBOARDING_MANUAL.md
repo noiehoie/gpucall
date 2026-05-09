@@ -280,6 +280,9 @@ Production default must be fail-closed:
 - if fallback is retained for local development or tests, it requires an
   explicit opt-in environment variable and is rejected or ignored in production
   mode.
+- JSON parse failures, empty output, schema failures, and business-validator
+  failures after gpucall returns `200 OK` do not trigger direct hosted-AI
+  fallback in production. Submit `gpucall-recipe-draft quality` instead.
 
 Images and files must use DataRef / presigned upload in the production path.
 Confidential inputs and text above the configured small-text inline limit must
@@ -465,6 +468,13 @@ If canary receives a gateway 500, stop the canary fanout. Do not continue to
 bulk workloads and do not retry with direct hosted-AI fallback. Record `No-Go:
 gateway internal error` and hand the verified facts to the gpucall operator.
 
+Canary coverage must match the integration's transport classes. A text-only
+system must prove small text. A system with over-limit or confidential text must
+also prove presign PUT + text `DataRef` + `/v2/tasks/sync`. A system with image
+or file workflows must prove presign PUT + image/file `DataRef` +
+`/v2/tasks/sync`. If any used transport class is not live-tested, the status is
+`No-Go`.
+
 If available:
 
 ```bash
@@ -484,6 +494,8 @@ Go only when:
 - all direct hosted-AI production fallbacks are removed or disabled by default;
 - any retained hosted-AI fallback is dev/test-only, explicit opt-in, and blocked
   in production;
+- quality failures after gpucall `200 OK` are handled as quality feedback, not
+  direct hosted-AI fallback;
 - all unknown workloads have submitted preflight intake with request id or inbox
   path;
 - no application payload contains `requested_tuple`;
@@ -501,9 +513,12 @@ No-Go when:
 
 - direct hosted AI fallback remains enabled by default;
 - direct hosted AI fallback is used when gpucall config is absent;
+- direct hosted AI fallback is used after gpucall returns `200 OK` but local
+  output validation fails;
 - unknown workloads are sent to gpucall without preflight;
 - preflight is generated-only rather than submitted;
 - live canary is skipped;
+- live canary does not cover a transport class used by the integration;
 - caller code still chooses GPU/provider/model as route control;
 - any image/file workflow lacks a DataRef production path;
 - images or files are sent through OpenAI-facade base64 inline payloads as the

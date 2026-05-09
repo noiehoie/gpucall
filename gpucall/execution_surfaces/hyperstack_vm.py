@@ -281,7 +281,12 @@ class HyperstackAdapter(TupleAdapter):
             ssh.load_host_keys(known_hosts)
             ssh.set_missing_host_key_policy(paramiko.RejectPolicy())
         else:
-            raise TupleError("Hyperstack SSH requires GPUCALL_HYPERSTACK_KNOWN_HOSTS", retryable=False, status_code=500)
+            raise TupleError(
+                "Hyperstack SSH requires GPUCALL_HYPERSTACK_KNOWN_HOSTS",
+                retryable=True,
+                status_code=503,
+                code="PROVIDER_CONFIG_UNAVAILABLE",
+            )
         ssh.connect(ip_address, username="ubuntu", key_filename=self.ssh_key_path, timeout=10)
         return ssh
 
