@@ -103,7 +103,7 @@ def test_admin_materializer_uses_catalog_cold_start_to_force_async() -> None:
         "sanitized_request": {
             "task": "infer",
             "mode": "sync",
-            "intent": "topic_ranking",
+            "intent": "rank_text_items",
             "classification": "confidential",
             "desired_capabilities": ["summarization", "instruction_following"],
             "error": {"context": {"context_budget_tokens": 46000}},
@@ -118,6 +118,25 @@ def test_admin_materializer_uses_catalog_cold_start_to_force_async() -> None:
     assert recipe["context_budget_tokens"] == 65536
     assert recipe["resource_class"] == "large"
     assert recipe["auto_select"] is False
+
+
+def test_admin_materializer_normalizes_legacy_topic_ranking_intent() -> None:
+    intake = {
+        "sanitized_request": {
+            "task": "infer",
+            "mode": "sync",
+            "intent": "topic_ranking",
+            "classification": "confidential",
+            "error": {"context": {"context_budget_tokens": 46000}},
+        },
+        "redaction_report": {"prompt_body_forwarded": False, "data_ref_uri_forwarded": False, "presigned_url_forwarded": False},
+    }
+
+    recipe = canonical_recipe_from_artifact(intake, catalog=load_config(Path("gpucall/config_templates")))
+
+    assert recipe["name"] == "infer-rank-text-items-draft"
+    assert recipe["intent"] == "rank_text_items"
+    assert recipe["allowed_modes"] == ["async"]
 
 
 def test_admin_process_inbox_materializes_submission(tmp_path) -> None:

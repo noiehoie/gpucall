@@ -6,7 +6,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any
 
-from gpucall_recipe_draft.recipe_intents import TASK_DEFAULT_CAPABILITIES, capabilities_for
+from gpucall_recipe_draft.recipe_intents import TASK_DEFAULT_CAPABILITIES, capabilities_for, normalize_intent
 
 
 SENSITIVE_KEYS = {
@@ -84,11 +84,12 @@ def intake_from_error(inputs: DraftInputs) -> dict[str, Any]:
     rejections = _extract_rejections(error, context)
     input_summary = _input_summary_from_failure_artifact(safe_summary) or _input_summary(error)
     llm_safe_business_need = _sanitize_free_text(inputs.business_need or "")
-    desired_capabilities = _capabilities_for(task=task, intent=inputs.intent)
+    intent = normalize_intent(inputs.intent)
+    desired_capabilities = _capabilities_for(task=task, intent=intent)
     sanitized_request = {
         "task": task,
         "mode": mode,
-        "intent": inputs.intent,
+        "intent": intent,
         "business_need": llm_safe_business_need,
         "classification": _str_or_none(safe_summary.get("classification")) or inputs.classification,
         "expected_output": inputs.expected_output or _expected_output_from_error(error),
@@ -127,7 +128,8 @@ def intake_from_error(inputs: DraftInputs) -> dict[str, Any]:
 
 
 def intake_from_preflight(inputs: PreflightInputs) -> dict[str, Any]:
-    desired_capabilities = _capabilities_for(task=inputs.task, intent=inputs.intent)
+    intent = normalize_intent(inputs.intent)
+    desired_capabilities = _capabilities_for(task=inputs.task, intent=intent)
     max_bytes = max(inputs.byte_values) if inputs.byte_values else None
     context_budget = inputs.context_budget_tokens if inputs.context_budget_tokens is not None else inputs.required_model_len
     return {
@@ -137,7 +139,7 @@ def intake_from_preflight(inputs: PreflightInputs) -> dict[str, Any]:
         "sanitized_request": {
             "task": inputs.task,
             "mode": inputs.mode,
-            "intent": inputs.intent,
+            "intent": intent,
             "business_need": _sanitize_free_text(inputs.business_need or ""),
             "classification": inputs.classification,
             "expected_output": inputs.expected_output,
@@ -170,7 +172,8 @@ def intake_from_preflight(inputs: PreflightInputs) -> dict[str, Any]:
 
 
 def intake_from_quality_feedback(inputs: QualityFeedbackInputs) -> dict[str, Any]:
-    desired_capabilities = _capabilities_for(task=inputs.task, intent=inputs.intent)
+    intent = normalize_intent(inputs.intent)
+    desired_capabilities = _capabilities_for(task=inputs.task, intent=intent)
     max_bytes = max(inputs.byte_values) if inputs.byte_values else None
     context_budget = inputs.context_budget_tokens if inputs.context_budget_tokens is not None else inputs.required_model_len
     return {
@@ -180,7 +183,7 @@ def intake_from_quality_feedback(inputs: QualityFeedbackInputs) -> dict[str, Any
         "sanitized_request": {
             "task": inputs.task,
             "mode": inputs.mode,
-            "intent": inputs.intent,
+            "intent": intent,
             "business_need": _sanitize_free_text(inputs.business_need or ""),
             "classification": inputs.classification,
             "expected_output": inputs.expected_output,
@@ -274,7 +277,7 @@ def compare_preflight_to_failure(preflight: Mapping[str, Any], failure_intake: M
 def draft_from_intake(intake: Mapping[str, Any]) -> dict[str, Any]:
     sanitized = _as_mapping(intake.get("sanitized_request"))
     task = _str_or_none(sanitized.get("task")) or "infer"
-    intent = _str_or_none(sanitized.get("intent")) or task
+    intent = normalize_intent(_str_or_none(sanitized.get("intent"))) or task
     capabilities = [str(item) for item in sanitized.get("desired_capabilities") or TASK_DEFAULT_CAPABILITIES.get(task, [])]
     classification = _str_or_none(sanitized.get("classification")) or "confidential"
     context_budget_tokens = _round_context_budget(_context_budget_from_context(_as_mapping(_as_mapping(sanitized.get("error")).get("context"))))

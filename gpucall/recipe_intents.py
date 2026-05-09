@@ -8,6 +8,7 @@ CAPABILITY_BY_INTENT: dict[str, tuple[str, ...]] = {
     "extract_json": ("structured_output",),
     "fine_tune_lora": ("lora_training",),
     "large_context_text_inference": ("instruction_following",),
+    "rank_text_items": ("instruction_following",),
     "short_text_inference": ("instruction_following",),
     "smoke_test": ("instruction_following",),
     "split_infer_activation": ("split_inference",),
@@ -23,6 +24,11 @@ CAPABILITY_BY_INTENT: dict[str, tuple[str, ...]] = {
     "understand_image": ("visual_question_answering", "image_captioning"),
 }
 
+INTENT_ALIASES: dict[str, str] = {
+    "topic_ranking": "rank_text_items",
+    "rank_topics": "rank_text_items",
+}
+
 TASK_DEFAULT_CAPABILITIES: dict[str, tuple[str, ...]] = {
     "infer": ("instruction_following",),
     "vision": ("visual_question_answering", "instruction_following"),
@@ -31,7 +37,17 @@ TASK_DEFAULT_CAPABILITIES: dict[str, tuple[str, ...]] = {
 }
 
 
+def normalize_intent(intent: str | None) -> str | None:
+    if intent is None:
+        return None
+    normalized = intent.strip().lower()
+    if not normalized:
+        return None
+    return INTENT_ALIASES.get(normalized, normalized)
+
+
 def capabilities_for(*, task: str, intent: str | None) -> list[str]:
-    if intent and intent in CAPABILITY_BY_INTENT:
-        return list(CAPABILITY_BY_INTENT[intent])
+    normalized = normalize_intent(intent)
+    if normalized and normalized in CAPABILITY_BY_INTENT:
+        return list(CAPABILITY_BY_INTENT[normalized])
     return list(TASK_DEFAULT_CAPABILITIES.get(task, ("instruction_following",)))

@@ -203,6 +203,7 @@ Callers should describe intent at a high level. They should not specify GPU name
 Examples:
 
 - `summarize_text`
+- `rank_text_items`
 - `translate_text`
 - `extract_json`
 - `caption_image`

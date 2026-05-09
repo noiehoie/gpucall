@@ -8,7 +8,7 @@ from typing import Any
 import yaml
 
 from gpucall.domain import ExecutionMode
-from gpucall.recipe_intents import capabilities_for
+from gpucall.recipe_intents import capabilities_for, normalize_intent
 
 TEXT_STOP_TOKENS = ["<|im_end|>", "<|endoftext|>"]
 ASYNC_ONLY_RESOURCE_CLASSES = {"large", "exlarge", "ultralong"}
@@ -26,11 +26,12 @@ def canonical_recipe_from_artifact(artifact: Mapping[str, Any], *, catalog: Any 
         proposed.get("latency_class")
         or ("long_running" if context_budget_tokens >= 524288 else ("batch" if context_budget_tokens >= 65536 else "standard"))
     )
+    intent = normalize_intent(str(proposed.get("intent") or f"{task}_draft")) or f"{task}_draft"
     recipe: dict[str, Any] = {
         "name": name,
         "recipe_schema_version": 3,
         "task": task,
-        "intent": str(proposed.get("intent") or f"{task}_draft"),
+        "intent": intent,
         "auto_select": bool(proposed.get("auto_select", False)),
         "data_classification": str(proposed.get("data_classification") or "confidential"),
         "allowed_modes": _allowed_modes(
@@ -117,7 +118,7 @@ def _proposed_recipe_from_artifact(artifact: Mapping[str, Any]) -> Mapping[str, 
 
 def _proposed_recipe_from_sanitized(sanitized: Mapping[str, Any]) -> dict[str, Any]:
     task = str(sanitized.get("task") or "infer")
-    intent = str(sanitized.get("intent") or task)
+    intent = normalize_intent(str(sanitized.get("intent") or task)) or task
     capabilities = sanitized.get("desired_capabilities")
     if not isinstance(capabilities, list) or not capabilities:
         capabilities = capabilities_for(task=task, intent=intent)

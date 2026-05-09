@@ -1,0 +1,38 @@
+name: infer-rank-text-items-draft
+recipe_schema_version: 3
+task: infer
+intent: rank_text_items
+auto_select: false
+data_classification: confidential
+allowed_modes:
+- async
+context_budget_tokens: 65536
+resource_class: large
+latency_class: batch
+quality_floor: draft
+timeout_seconds: 600
+lease_ttl_seconds: 900
+token_estimation_profile: generic_utf8
+max_input_bytes: 67108864
+allowed_mime_prefixes:
+- text/
+allowed_inline_mime_prefixes: []
+default_temperature: 0.2
+structured_temperature: 0.0
+structured_system_prompt: Return only valid JSON when response_format requests JSON.
+  Do not include markdown fences or prose.
+system_prompt: Compare the provided text items, apply the caller's ranking criteria, and return the ranked result directly.
+stop_tokens:
+- <|im_end|>
+- <|endoftext|>
+repetition_penalty: 1.05
+guided_decoding: true
+output_validation_attempts: 1
+artifact_export: false
+requires_key_release: false
+required_model_capabilities:
+- instruction_following
+output_contract: plain-text
+expected_cold_start_seconds: 600
+cost_policy:
+  max_estimated_cost_usd: 10.0

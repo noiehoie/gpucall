@@ -44,7 +44,7 @@ def test_migrate_cli_writes_reports(tmp_path) -> None:
 
     data = json.loads((out / "migration-report.json").read_text(encoding="utf-8"))
     assert data["phase"] == "migration-assessment"
-    assert data["preflight_requests"][0]["intent"] == "summarize_text"
+    assert data["preflight_requests"][0]["intent"] == "rank_text_items"
     assert (out / "migration-report.md").exists()
 
 

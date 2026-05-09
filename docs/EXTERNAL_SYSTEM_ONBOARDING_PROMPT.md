@@ -217,6 +217,7 @@ submission is completed.
 Use these intent labels when possible:
 
 - `summarize_text`
+- `rank_text_items`
 - `translate_text`
 - `extract_json`
 - `chat_answer`

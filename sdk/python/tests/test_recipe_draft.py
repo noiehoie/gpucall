@@ -346,6 +346,17 @@ def test_compare_preflight_to_failure_matches() -> None:
     assert report["differences"] == []
 
 
+def test_preflight_normalizes_legacy_topic_ranking_intent() -> None:
+    intake = intake_from_preflight(
+        PreflightInputs(task="infer", intent="topic_ranking", content_types=("text/plain",), context_budget_tokens=46000)
+    )
+    draft = draft_from_intake(intake)
+
+    assert intake["sanitized_request"]["intent"] == "rank_text_items"
+    assert intake["sanitized_request"]["desired_capabilities"] == ["instruction_following"]
+    assert draft["proposed_recipe"]["name"] == "infer-rank-text-items-draft"
+
+
 def test_recipe_draft_cli_preflight_and_compare(tmp_path, capsys) -> None:
     preflight_path = tmp_path / "preflight.json"
     failure_path = tmp_path / "failure.json"

@@ -348,8 +348,10 @@ def _workload_guess(path: str, symbol: str, detail: str) -> tuple[str, str | Non
         return "infer", "translate_text", 32768
     if "vision" in text or "image" in text or "ocr" in text:
         return "vision", "understand_document_image", 8192
-    if "summary" in text or "summarize" in text or "topic" in text:
-        return "infer", "summarize_text", 1_048_576 if "topic" in text else 65536
+    if "rank" in text or "ranking" in text or "score" in text or "topic" in text:
+        return "infer", "rank_text_items", 65536
+    if "summary" in text or "summarize" in text:
+        return "infer", "summarize_text", 65536
     return "infer", None, 32768
 
 
