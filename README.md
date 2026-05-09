@@ -185,7 +185,9 @@ or coding agent that owns the application being migrated:
 The onboarding package is strict by design: direct hosted-AI fallback must be
 disabled by default, generated-only preflight is not the same as submitted
 preflight, skipped live canary means `No-Go`, and `Conditional Go` is not an
-allowed final status.
+allowed final status. Image and file workflows must have DataRef production
+paths; OpenAI-facade base64 image/file payloads are not accepted as production
+onboarding.
 
 For an AI CLI running outside this repository, use the raw URLs:
 

@@ -35,6 +35,12 @@ state. If live canary is skipped, required preflight intake is only generated bu
 not submitted, direct hosted-AI fallback remains enabled by default, or DataRef
 rules are not enforced, the result is `No-Go`.
 
+For image and file workflows, DataRef support is not optional. A system with
+vision or file inputs is not considered migrated until those inputs have a
+production path through `/v2/tasks/*` with `input_refs` or an explicitly
+documented gpucall SDK DataRef path. OpenAI-facade base64 image/file payloads
+are dev-only experiments and do not satisfy production onboarding.
+
 ## Product Contract
 
 gpucall has three product components:
@@ -196,9 +202,12 @@ Production default must be fail-closed:
   explicit opt-in environment variable and is rejected or ignored in production
   mode.
 
-Images, files, confidential inputs, and text above the configured small-text
-inline limit must use DataRef / presigned upload, or fail closed with a clear
-`DataRef required` error. Inline input is for small non-confidential text only.
+Images and files must use DataRef / presigned upload in the production path.
+Confidential inputs and text above the configured small-text inline limit must
+also use DataRef / presigned upload. Inline input is for small
+non-confidential text only. If a required DataRef helper cannot be implemented,
+the path must remain unmigrated, fail closed with a clear `DataRef required`
+error, and the final status must be `No-Go`.
 
 Correct direct task payload:
 
@@ -227,9 +236,11 @@ client = OpenAI(
 )
 ```
 
-Use the OpenAI-compatible facade for simple text/chat compatibility. Do not use
-it for vision or file workflows unless gpucall explicitly documents that payload
-shape. For images and files, prefer `/v2/tasks/*` with `input_refs`.
+Use the OpenAI-compatible facade for simple text/chat compatibility only. Do not
+use it for production vision or file workflows. For images and files, use
+`/v2/tasks/*` with `input_refs` or an explicitly documented gpucall SDK DataRef
+path. A base64 `data:image/...` OpenAI-facade request is dev-only and cannot be
+reported as a migrated production path.
 
 ### 5. Decide sync, async, or stream
 
@@ -303,6 +314,8 @@ Every integration should leave tests for:
 - large input uses DataRef / presigned upload;
 - image, file, confidential input, and over-limit text use DataRef or fail
   closed;
+- every image/file caller path has a DataRef production path;
+- OpenAI-facade base64 image/file payloads are rejected or dev-only opt-in;
 - missing gpucall configuration fails closed;
 - direct hosted-AI fallback is disabled by default;
 - dev/test fallback, if retained, requires explicit opt-in and cannot run in
@@ -348,8 +361,8 @@ Go only when:
   path;
 - no application payload contains `requested_tuple`;
 - no application payload contains provider or GPU selectors;
-- image, file, confidential input, and over-limit text use DataRef or fail
-  closed;
+- image and file workflows have DataRef production paths;
+- confidential input and over-limit text use DataRef or fail closed;
 - integration tests pass;
 - live canary succeeded against the configured gpucall gateway or produced only
   expected governance failures after the request reached the gateway;
@@ -365,8 +378,11 @@ No-Go when:
 - preflight is generated-only rather than submitted;
 - live canary is skipped;
 - caller code still chooses GPU/provider/model as route control;
-- images, files, confidential input, or over-limit text are sent inline without
-  DataRef enforcement;
+- any image/file workflow lacks a DataRef production path;
+- images or files are sent through OpenAI-facade base64 inline payloads as the
+  only production implementation;
+- confidential input or over-limit text is sent inline without DataRef
+  enforcement;
 - API key or presigned URL appears in logs;
 - timeout increments provider circuit counters by default;
 - tests only cover the happy path.
@@ -415,7 +431,9 @@ and list the exact blockers.
 
 7. DataRef enforcement
    - inline text byte limit:
-   - images/files/confidential use DataRef or fail closed:
+   - image/file production paths use DataRef:
+   - OpenAI-facade base64 image/file is absent or dev-only:
+   - confidential/over-limit text uses DataRef or fails closed:
 
 8. Remaining risk
 

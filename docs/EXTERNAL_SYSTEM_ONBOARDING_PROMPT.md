@@ -37,6 +37,11 @@ Strict acceptance rule:
 - A generated preflight command is not a submitted preflight.
 - A skipped canary is not a successful canary.
 - Direct hosted-AI fallback is forbidden by default in production.
+- If any image or file workflow exists, DataRef upload support is mandatory for
+  `Go`. Inline image/file transport is not an acceptable migrated production
+  path.
+- Do not mark a vision/file path as `migrated` until it uses `/v2/tasks/*` with
+  `input_refs` or an explicitly documented gpucall SDK DataRef path.
 
 ```text
 You are the implementation agent for this repository. Your task is to migrate
@@ -182,8 +187,9 @@ Prefer the smallest stable adapter layer in this repository:
 
 - one gpucall client wrapper
 - one error-classification function
-- one DataRef helper for images, files, confidential content, or text above the
-  explicit small-text inline limit
+- one DataRef helper if the repository has any image workflow, file workflow,
+  confidential-content workflow, or text above the explicit small-text inline
+  limit
 - unit tests around payload construction and error handling
 
 Production default must be fail-closed:
@@ -225,9 +231,12 @@ Rules:
 - `input_refs` must be a list.
 - Inline payload is allowed only for small non-confidential text. Define the
   inline byte limit in code and test it.
-- Images, files, confidential content, and payloads above the inline text limit
-  must use presign PUT and `DataRef`, or fail closed with a clear
-  `DataRef required` error.
+- Images and files must use presign PUT and `DataRef`. Do not implement
+  production vision/file transport as OpenAI-facade base64 inline content.
+- Confidential content and payloads above the inline text limit must use presign
+  PUT and `DataRef`.
+- If a required DataRef helper cannot be implemented in this turn, leave the
+  path unmigrated, fail closed with `DataRef required`, and report `No-Go`.
 - Do not log API keys, prompt bodies, presigned URLs, DataRef URIs, or provider
   raw output.
 
@@ -245,9 +254,11 @@ client = OpenAI(
 Use `model="gpucall:chat"` or another documented gpucall facade model only as
 the facade selector. Do not use provider model names for routing.
 
-Do not use the OpenAI-compatible facade for vision or file workflows unless the
-gateway contract explicitly documents that payload shape. Prefer `/v2/tasks/*`
-with `input_refs` for vision and file inputs.
+Do not use the OpenAI-compatible facade for vision or file workflows. Use
+`/v2/tasks/*` with `input_refs` or an explicitly documented gpucall SDK DataRef
+path. A base64 `data:image/...` OpenAI-facade request is a dev-only experiment,
+not a migrated production path, and must produce `No-Go` if it is the only
+vision implementation.
 
 ## Phase 4: Error behavior
 
@@ -307,6 +318,8 @@ Add or update tests proving:
 - timeout is not counted as provider circuit failure by default
 - image, file, confidential input, and over-limit text use DataRef / presigned
   upload or fail closed
+- every image/file caller path has a DataRef production path
+- OpenAI-facade base64 image/file payloads are rejected or dev-only opt-in
 - inline input above the configured byte limit is rejected
 - raw prompt, presigned URL, DataRef URI, and Authorization header are redacted
 
@@ -329,8 +342,8 @@ Include:
 Final status rules:
 
 - `Go`: live canary succeeded; all required preflight intake was submitted;
-  direct hosted-AI fallback is disabled by default; DataRef rules are enforced;
-  tests pass.
+  direct hosted-AI fallback is disabled by default; image/file workflows use
+  DataRef production paths; DataRef rules are enforced; tests pass.
 - `No-Go`: anything else.
 - Do not use `Conditional Go`.
 - Do not write `unknown workloads submitted` unless an approved inbox actually
