@@ -308,7 +308,7 @@ class GovernanceCompiler:
     ) -> list[str]:
         ordered = self._fit_ordered_tuples(tuples, request, recipe)
         ranked: list[str] = []
-        current_key: tuple[int, int, float] | None = None
+        current_key: tuple[int, int, int, float] | None = None
         current_group: list[str] = []
         for tuple in ordered:
             fit_key = self._tuple_fit_key(tuple, request, recipe)
@@ -324,10 +324,12 @@ class GovernanceCompiler:
     def _fit_ordered_tuples(self, tuples: list[str], request: TaskRequest, recipe: Recipe) -> list[str]:
         return sorted(tuples, key=lambda name: (*self._tuple_fit_key(name, request, recipe), name))
 
-    def _tuple_fit_key(self, name: str, request: TaskRequest, recipe: Recipe) -> tuple[int, int, float]:
+    def _tuple_fit_key(self, name: str, request: TaskRequest, recipe: Recipe) -> tuple[int, int, int, float]:
         compiled_required_model_len = self._required_model_len(request, recipe)
         spec = self.tuples[name]
+        local_preference = 0 if spec.execution_surface and spec.execution_surface.value == "local_runtime" else 1
         return (
+            local_preference,
             spec.vram_gb,
             spec.max_model_len - compiled_required_model_len,
             float(spec.cost_per_second),

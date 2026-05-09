@@ -248,7 +248,8 @@ class LocalOpenAICompatibleAdapter(TupleAdapter):
 
     def _messages_from_plan(self, plan: CompiledPlan) -> list[dict[str, str]]:
         messages: list[dict[str, str]] = []
-        if plan.system_prompt:
+        has_system_message = any(message.role == "system" for message in plan.messages)
+        if plan.system_prompt and not has_system_message:
             messages.append({"role": "system", "content": plan.system_prompt})
         if plan.messages:
             messages.extend({"role": message.role, "content": message.content} for message in plan.messages)

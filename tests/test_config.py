@@ -16,7 +16,7 @@ import yaml
 from gpucall.config import ConfigError, load_config
 from gpucall.cli import _provider_smoke_request
 from gpucall.compiler import GovernanceCompiler, GovernanceError
-from gpucall.domain import DataRef, ExecutionMode, ExecutionTupleSpec, ObjectStoreConfig, Recipe, SecurityTier, TaskRequest, recipe_requirements
+from gpucall.domain import DataRef, ExecutionMode, ExecutionTupleSpec, InlineValue, ObjectStoreConfig, Recipe, SecurityTier, TaskRequest, recipe_requirements
 from gpucall.registry import ObservedRegistry
 
 
@@ -369,6 +369,69 @@ def test_standard_config_rejects_sync_for_long_context_text(tmp_path) -> None:
             )
         )
     assert excinfo.value.code == "NO_AUTO_SELECTABLE_RECIPE"
+
+
+def test_local_runtime_is_preferred_when_it_satisfies_policy(tmp_path) -> None:
+    root = copy_config(tmp_path)
+    (root / "surfaces" / "local-openai-test.yml").write_text(
+        """
+surface_ref: local-openai-test
+worker_ref: local-openai-test
+account_ref: local
+adapter: local-openai-compatible
+execution_surface: local_runtime
+gpu: local
+vram_gb: 256
+max_model_len: 8192
+region: local
+zone: local
+cost_per_second: 0
+configured_price_source: local-free
+configured_price_observed_at: '2026-05-10T00:00:00+00:00'
+configured_price_ttl_seconds: 315360000
+stock_state: configured
+expected_cold_start_seconds: 1
+billing_granularity_seconds: 0
+max_data_classification: confidential
+scaledown_window_seconds: 0
+min_billable_seconds: 0
+trust_profile:
+  security_tier: local
+  sovereign_jurisdiction: local
+  dedicated_gpu: true
+  requires_attestation: false
+  supports_key_release: false
+  allows_worker_s3_credentials: false
+endpoint: http://127.0.0.1:18180/v1
+""",
+        encoding="utf-8",
+    )
+    (root / "workers" / "local-openai-test.yml").write_text(
+        """
+worker_ref: local-openai-test
+account_ref: local
+adapter: local-openai-compatible
+execution_surface: local_runtime
+model_ref: deepseek-v4-flash-local
+engine_ref: local-openai-compatible-chat
+modes: [sync, async, stream]
+input_contracts: [text, chat_messages]
+output_contract: openai-chat-completions
+stream_contract: sse
+target: null
+stream_target: null
+endpoint_contract: openai-chat-completions
+model: deepseek-v4-flash
+""",
+        encoding="utf-8",
+    )
+    config = load_config(root)
+    compiler = GovernanceCompiler(policy=config.policy, recipes=config.recipes, tuples=config.tuples, models=config.models, engines=config.engines, registry=ObservedRegistry())
+
+    plan = compiler.compile(TaskRequest(task="infer", mode=ExecutionMode.SYNC, inline_inputs={"prompt": InlineValue(value="hello local")}))
+
+    assert plan.recipe_name == "text-infer-light"
+    assert plan.tuple_chain[0] == "local-openai-test"
 
 
 def test_standard_config_transport_matrix_is_explicit(tmp_path) -> None:
