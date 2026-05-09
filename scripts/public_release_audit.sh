@@ -16,7 +16,7 @@ if git ls-files | while IFS= read -r path; do
     scripts/public_release_audit.sh|docs/PUBLIC_RELEASE_CHECKLIST.md|tests/test_public_release_audit.py) continue ;;
   esac
   [ -f "$path" ] && printf '%s\0' "$path"
-done | xargs -0 rg -n '100\.91\.94\.11|152\.53\.228\.117|vllm-[a-z0-9]{12,}|RUNPOD_ENDPOINT_ID_PLACEHOLDER|RUNPOD_ENDPOINT_ID_PLACEHOLDER|root@100\.91\.94\.11|root@|news-system|/Users/tamotsu|PRIVATE KEY|sk-[A-Za-z0-9]|AKIA[0-9A-Z]{16}'
+done | xargs -0 rg -n '100\.([6-9][0-9]|1[01][0-9]|12[0-7])\.[0-9]{1,3}\.[0-9]{1,3}|api\.runpod\.ai/v2/[a-z0-9]{12,}|vllm-[a-z0-9]{12,}|^\s*ssh_remote_cidr:\s+(?!(203\.0\.113\.|198\.51\.100\.|192\.0\.2\.|""|null))([0-9]{1,3}\.){3}[0-9]{1,3}|\broot@|news-system|/Users/tamotsu|PRIVATE KEY|sk-[A-Za-z0-9]|AKIA[0-9A-Z]{16}'
 then
   echo "private artifact patterns found" >&2
   exit 1

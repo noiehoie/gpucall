@@ -14,12 +14,10 @@ def test_tracked_files_do_not_contain_private_operator_artifacts() -> None:
         "tests/test_public_release_audit.py",
     }
     patterns = [
-        r"100" + r"\.91" + r"\.94" + r"\.11",
-        r"152" + r"\.53" + r"\.228" + r"\.117",
+        r"100\.([6-9][0-9]|1[01][0-9]|12[0-7])\.[0-9]{1,3}\.[0-9]{1,3}",
+        r"api\.runpod\.ai/v2/[a-z0-9]{12,}",
         r"vllm-[a-z0-9]{12,}",
-        "RUNPOD_ENDPOINT_ID_PLACEHOLDER",
-        "RUNPOD_ENDPOINT_ID_PLACEHOLDER",
-        "root@" + "gpucall.example.internal",
+        r"^\s*ssh_remote_cidr:\s+(?!(203\.0\.113\.|198\.51\.100\.|192\.0\.2\.|\"\"|null))([0-9]{1,3}\.){3}[0-9]{1,3}",
         r"\broot@",
         "news-" + "system",
         "/Users/" + "tamotsu",
