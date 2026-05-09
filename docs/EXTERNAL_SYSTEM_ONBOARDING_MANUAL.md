@@ -48,6 +48,12 @@ state. If live canary is skipped, required preflight intake is only generated bu
 not submitted, direct hosted-AI fallback remains enabled by default, or DataRef
 rules are not enforced, the result is `No-Go`.
 
+Do not use HTTP 500 as a proxy for a missing recipe or missing provider. If a
+recipe is absent, the gateway should return `422 NO_AUTO_SELECTABLE_RECIPE`; if
+no eligible production tuple exists, it should return `503 NO_ELIGIBLE_TUPLE`.
+An opaque `500 Internal Server Error` is a gateway-side internal error until a
+gateway operator or gateway logs prove a more specific cause.
+
 For image and file workflows, DataRef support is not optional. A system with
 vision or file inputs is not considered migrated until those inputs have a
 production path through `/v2/tasks/*` with `input_refs` or an explicitly
@@ -361,10 +367,18 @@ default.
 | `401` | missing or wrong API key | fail with configuration error |
 | `422 NO_AUTO_SELECTABLE_RECIPE` | gateway cannot honestly describe this workload with installed recipes | submit `gpucall-recipe-draft intake` or preflight |
 | `503 NO_ELIGIBLE_TUPLE` | recipe exists, but no eligible production tuple is currently available | treat as governance/capacity state, not direct provider failure |
+| `500 Internal Server Error` | gateway-side internal error unless proven otherwise | record endpoint/status/body and report `No-Go`; do not speculate about recipe materialization, tuple activation, or provider absence |
 | timeout during cold start | caller did not wait long enough or should use async | do not open provider circuit by default |
 | malformed output / business validator failure after `200 OK` | quality feedback, not necessarily routing failure | submit `gpucall-recipe-draft quality` |
 | provider 5xx without governance code | provider/runtime failure | retry/circuit according to local policy |
 | gpucall not configured | application not ready for gpucall production | fail closed; do not call hosted AI by default |
+
+For any gateway 5xx, completion reports must separate verified facts from
+unknowns. Include HTTP status, response body if any, endpoint, request class,
+whether bootstrap/auth/presign/preflight succeeded, and whether secrets were
+redacted. Do not write "likely recipe missing", "probably tuple not activated",
+or similar root-cause speculation unless the gateway logs or operator response
+prove it. If unverified, write `root_cause=unverified`.
 
 ### 7. Redaction rules
 
@@ -428,6 +442,10 @@ Do not switch the whole production pipeline at once.
 3. Confirm no prompt, secret, DataRef URI, or presigned URL appears in logs.
 4. Confirm circuit-breaker counters changed only for true provider failures.
 5. Expand to the next workload class.
+
+If canary receives a gateway 500, stop the canary fanout. Do not continue to
+bulk workloads and do not retry with direct hosted-AI fallback. Record `No-Go:
+gateway internal error` and hand the verified facts to the gpucall operator.
 
 If available:
 

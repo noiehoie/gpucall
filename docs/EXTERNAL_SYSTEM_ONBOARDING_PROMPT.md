@@ -54,6 +54,8 @@ Strict acceptance rule:
 - Do not report `Conditional Go`. Use `No-Go` with explicit blockers.
 - A generated preflight command is not a submitted preflight.
 - A skipped canary is not a successful canary.
+- HTTP 500 is not a recipe-missing signal. Do not guess the root cause of a
+  gateway 500. Record it as a gateway-side internal error and report `No-Go`.
 - Direct hosted-AI fallback is forbidden by default in production.
 - If any image or file workflow exists, DataRef upload support is mandatory for
   `Go`. Inline image/file transport is not an acceptable migrated production
@@ -345,10 +347,20 @@ Classify these correctly:
   provider circuit breaker. Submit recipe-draft intake.
 - `503 NO_ELIGIBLE_TUPLE`: recipe may exist, but no currently eligible tuple.
   Treat as governance/capacity state, not direct provider failure.
+- `500 Internal Server Error`: gateway-side internal error. Do not infer
+  "recipe not materialized", "tuple not activated", or "provider missing"
+  unless the response body or gateway operator explicitly says so. Recipe
+  absence should be reported by `422 NO_AUTO_SELECTABLE_RECIPE`; eligible tuple
+  absence should be reported by `503 NO_ELIGIBLE_TUPLE`.
 - HTTP timeout during cold start: do not automatically count as provider
   failure. Prefer async mode or longer caller timeout for long cold starts.
 - provider runtime 5xx with no gpucall governance code: retry/circuit behavior
   may be appropriate.
+
+For any gateway 5xx, the completion report must include only verified facts:
+HTTP status, response body if available, endpoint, request class, whether
+bootstrap/auth/presign/preflight succeeded, and whether the caller exposed any
+secret. Do not write speculative root causes.
 
 ## Phase 5: Canary
 
@@ -424,6 +436,8 @@ Final status rules:
 - Do not use `Conditional Go`.
 - Do not write `unknown workloads submitted` unless an approved inbox actually
   received them.
+- Do not write "likely cause" for gateway 5xx. If root cause was not verified
+  from gateway logs or an operator response, write `root_cause=unverified`.
 
 Never include real API keys, Authorization headers, prompt bodies, image bytes,
 presigned URLs, or DataRef URIs in the report.
