@@ -114,8 +114,8 @@ For fully unattended internal environments, use:
 ```yaml
 api_key_handoff_mode: trusted_bootstrap
 api_key_bootstrap_allowed_cidrs:
-  - 100.64.0.0/10
-api_key_bootstrap_gateway_url: http://gpucall.example.internal:18088
+  - 10.0.0.0/24
+api_key_bootstrap_gateway_url: https://gpucall.example.internal
 api_key_bootstrap_recipe_inbox: admin@gpucall.example.internal:/srv/gpucall/state/recipe_requests/inbox
 ```
 
@@ -186,10 +186,10 @@ Example manifest:
 
 ```yaml
 systems:
-  - name: news-system
+  - name: example-news
     daily_budget_usd: 25
     monthly_budget_usd: 500
-  - name: llm-brain
+  - name: example-analysis
     requests_per_minute: 30
     daily_budget_usd: 10
 ```
@@ -245,7 +245,7 @@ export GPUCALL_TENANT_API_KEYS='example-system:gpk_...'
 Multiple systems are comma-separated:
 
 ```bash
-export GPUCALL_TENANT_API_KEYS='news-system:gpk_...,llm-brain:gpk_...'
+export GPUCALL_TENANT_API_KEYS='example-news:gpk_...,example-analysis:gpk_...'
 ```
 
 Do not store gateway API keys in tenant YAML, provider YAML, recipe YAML, tuple
