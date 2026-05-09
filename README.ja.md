@@ -280,15 +280,27 @@ gpucall readiness --config-dir config --intent translate_text
 
 gpucall は deterministic governance router であり、Modal-only proxy ではありません。Recipe と provider selection rules は [docs/ROUTING_POLICY.md](docs/ROUTING_POLICY.md) にあります。
 Recipe / model / engine / provider matching の capability catalog rules は [docs/CAPABILITY_CATALOG.md](docs/CAPABILITY_CATALOG.md) にあります。
+Controlled Runtime configuration は [docs/CONTROLLED_RUNTIMES.md](docs/CONTROLLED_RUNTIMES.md) にあります。
 RunPod Flash production validation は [docs/RUNPOD_FLASH.md](docs/RUNPOD_FLASH.md) にあります。
 
-## Local Execution
+## Controlled Runtimes
 
-gpucall は、local execution で十分かつ policy が許す場合、local runtime に routing できます。これは意図的な設計です。誠実な routing は、統制済み local runtime で足りる仕事に cloud GPU cost を発生させません。
+gpucall は、operator-controlled runtime で十分かつ policy が許す場合、private execution に routing できます。これは意図的な設計です。誠実な routing は、gateway host、VPN/LAN 内の host、site-local GPU で足りる仕事に cloud GPU cost を発生させません。
 
-組み込みの `local-openai-compatible` adapter は、ds4-server、llama.cpp server、local vLLM などの local OpenAI-compatible chat server を対象にします。ds4 用の設定例は `gpucall/config_templates/surfaces/local-ds4.example` と `gpucall/config_templates/workers/local-ds4.example` にあります。
+製品概念は **Controlled Runtime** です。「caller がたまたま動いている machine」ではありません。Controlled Runtime は gpucall operator が `config/runtimes/*.yml` に宣言し、surface/worker tuple から `controlled_runtime_ref` で参照し、validation evidence 後に production routing へ昇格する実行面です。境界は `gateway_host`、`private_network`、`site_network` として明示します。
 
-Local OpenAI-compatible tuple は inline text/chat workload 用です。`DataRef` は dereference しません。gateway は data-byte-less のまま維持するためです。大きな file を DataRef として送る caller には、approved execution boundary の内部で DataRef fetching を明示的にサポートする worker を使ってください。
+既存の OpenAI-compatible endpoint は、ds4 を gpucall が自動 install しなくても登録できます。
+
+```bash
+gpucall runtime add-openai \
+  --name macstudio-ds4 \
+  --endpoint http://macstudio.tailnet:18181 \
+  --dataref-worker
+gpucall runtime validate --name macstudio-ds4
+gpucall validate-config
+```
+
+組み込みの `local-openai-compatible` adapter は、ds4-server、llama.cpp server、local vLLM など、operator が管理下と認めた OpenAI-compatible chat server を対象にします。inline text/chat workload 用で、`DataRef` は dereference しません。gateway は data-byte-less のまま維持するためです。
 
 local text `DataRef` workload には、別アダプタ `local-dataref-openai-worker` と `gpucall.local_dataref_worker` の worker process を使います。gateway adapter は worker-readable plan と DataRef metadata だけを local worker endpoint に渡します。実バイトの fetch、size/SHA256 検証、local OpenAI-compatible server 呼び出し、`TupleResult` 返却は worker 側の責任です。設定例は `gpucall/config_templates/surfaces/local-dataref-openai.example` と `gpucall/config_templates/workers/local-dataref-openai.example` にあります。
 

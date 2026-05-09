@@ -8,6 +8,7 @@ import yaml
 from pydantic import BaseModel, ValidationError
 
 from gpucall.domain import (
+    ControlledRuntimeSpec,
     EngineSpec,
     ExecutionTupleSpec,
     ModelSpec,
@@ -37,6 +38,7 @@ class GpucallConfig(BaseModel):
     object_store: ObjectStoreConfig | None = None
     tenants: dict[str, TenantSpec] = {}
     admin_automation: RecipeAdminAutomationConfig = RecipeAdminAutomationConfig()
+    runtimes: dict[str, ControlledRuntimeSpec] = {}
 
 
 def default_config_dir() -> Path:
@@ -237,6 +239,7 @@ def load_config(config_dir: Path | None = None) -> GpucallConfig:
         object_store=load_object_store(root),
         tenants=load_tenants(root),
         admin_automation=load_admin_automation(root),
+        runtimes=load_runtimes(root),
     )
     validate_config(config)
     return config
@@ -270,6 +273,20 @@ def load_tenants(config_dir: Path | None = None) -> dict[str, TenantSpec]:
             raise ConfigError(f"duplicate tenant name {tenant.name!r} in {path}")
         tenants[tenant.name] = tenant
     return tenants
+
+
+def load_runtimes(config_dir: Path | None = None) -> dict[str, ControlledRuntimeSpec]:
+    root = config_dir or default_config_dir()
+    directory = root / "runtimes"
+    if not directory.exists():
+        return {}
+    runtimes: dict[str, ControlledRuntimeSpec] = {}
+    for path in sorted(directory.glob("*.yml")):
+        runtime = load_model(path, ControlledRuntimeSpec)
+        if runtime.name in runtimes:
+            raise ConfigError(f"duplicate controlled runtime name {runtime.name!r} in {path}")
+        runtimes[runtime.name] = runtime
+    return runtimes
 
 
 def validate_config(config: GpucallConfig) -> None:
@@ -310,6 +327,13 @@ def validate_config(config: GpucallConfig) -> None:
             if not has_capable_tuple:
                 raise ConfigError(f"recipe {recipe.name!r} has no tuple satisfying its declared requirements")
     for tuple_spec in config.tuples.values():
+        if tuple_spec.controlled_runtime_ref:
+            runtime = config.runtimes.get(tuple_spec.controlled_runtime_ref)
+            if runtime is None:
+                raise ConfigError(
+                    f"tuple {tuple_spec.name!r} references unknown controlled runtime {tuple_spec.controlled_runtime_ref!r}"
+                )
+            _validate_controlled_runtime_tuple(tuple_spec, runtime)
         if tuple_spec.model_ref:
             model = config.models.get(tuple_spec.model_ref)
             if model is None:
@@ -371,3 +395,26 @@ def validate_config(config: GpucallConfig) -> None:
             findings = descriptor.config_validator(tuple_spec)
             if findings:
                 raise ConfigError("; ".join(findings))
+
+
+def _validate_controlled_runtime_tuple(tuple_spec: ExecutionTupleSpec, runtime: ControlledRuntimeSpec) -> None:
+    if tuple_spec.execution_surface is None or tuple_spec.execution_surface.value != "local_runtime":
+        raise ConfigError(f"tuple {tuple_spec.name!r} controlled_runtime_ref requires execution_surface 'local_runtime'")
+    if not runtime.operator_controlled:
+        raise ConfigError(f"controlled runtime {runtime.name!r} is not operator_controlled")
+    if runtime.adapter and tuple_spec.adapter != runtime.adapter:
+        raise ConfigError(f"tuple {tuple_spec.name!r} adapter does not match controlled runtime {runtime.name!r}")
+    if runtime.endpoint and tuple_spec.endpoint and str(tuple_spec.endpoint).rstrip("/") != str(runtime.endpoint).rstrip("/"):
+        raise ConfigError(f"tuple {tuple_spec.name!r} endpoint does not match controlled runtime {runtime.name!r}")
+    if runtime.model and tuple_spec.model and tuple_spec.model != runtime.model:
+        raise ConfigError(f"tuple {tuple_spec.name!r} model does not match controlled runtime {runtime.name!r}")
+    if runtime.max_model_len is not None and tuple_spec.max_model_len > runtime.max_model_len:
+        raise ConfigError(f"tuple {tuple_spec.name!r} max_model_len exceeds controlled runtime {runtime.name!r}")
+    missing_contracts = set(tuple_spec.input_contracts) - set(runtime.input_contracts)
+    if missing_contracts:
+        raise ConfigError(
+            f"tuple {tuple_spec.name!r} declares input contracts not supported by controlled runtime "
+            f"{runtime.name!r}: {', '.join(sorted(missing_contracts))}"
+        )
+    if not runtime.max_data_classification.permits(tuple_spec.max_data_classification):
+        raise ConfigError(f"tuple {tuple_spec.name!r} exceeds controlled runtime {runtime.name!r} classification ceiling")

@@ -78,6 +78,19 @@ def main() -> None:
     doctor.add_argument("--live-tuple-catalog", action="store_true")
     validate = sub.add_parser("validate-config")
     validate.add_argument("--config-dir", type=Path, default=default_config_dir())
+    runtime = sub.add_parser("runtime")
+    runtime.add_argument("action", choices=["add-openai", "validate", "show"])
+    runtime.add_argument("--config-dir", type=Path, default=default_config_dir())
+    runtime.add_argument("--name", default=None)
+    runtime.add_argument("--endpoint", default=None)
+    runtime.add_argument("--model", default="deepseek-v4-flash")
+    runtime.add_argument("--model-ref", default="deepseek-v4-flash-local")
+    runtime.add_argument("--dataref-worker", action="store_true")
+    runtime.add_argument("--runtime-boundary", choices=["gateway_host", "private_network", "site_network"], default="private_network")
+    runtime.add_argument("--network-scope", choices=["localhost", "lan", "vpn", "tailscale", "private_subnet", "manual"], default="tailscale")
+    runtime.add_argument("--max-model-len", type=int, default=1000000)
+    runtime.add_argument("--max-data-classification", choices=["public", "internal", "confidential", "restricted"], default="restricted")
+    runtime.add_argument("--force", action="store_true")
     seed = sub.add_parser("seed-liveness")
     seed.add_argument("recipe_name")
     seed.add_argument("--config-dir", type=Path, default=default_config_dir())
@@ -244,6 +257,8 @@ def main() -> None:
         doctor_config(args.config_dir, live_tuple_catalog=args.live_tuple_catalog)
     elif args.command == "validate-config":
         validate_config_command(args.config_dir)
+    elif args.command == "runtime":
+        runtime_command(args)
     elif args.command == "seed-liveness":
         asyncio.run(
             seed_liveness(
@@ -368,6 +383,7 @@ def doctor_config(config_dir: Path, *, live_tuple_catalog: bool = False) -> None
         "policy_version": config.policy.version,
         "recipes": sorted(config.recipes),
         "tuples": sorted(config.tuples),
+        "runtimes": sorted(config.runtimes),
         "models": sorted(config.models),
         "engines": sorted(config.engines),
         "object_store": config.object_store.model_dump(mode="json") if config.object_store else None,
@@ -388,11 +404,200 @@ def validate_config_command(config_dir: Path) -> None:
     config = load_config(config_dir)
     print(
         json.dumps(
-            {"valid": True, "recipes": sorted(config.recipes), "tuples": sorted(config.tuples), "tenants": sorted(config.tenants)},
+            {
+                "valid": True,
+                "recipes": sorted(config.recipes),
+                "runtimes": sorted(config.runtimes),
+                "tuples": sorted(config.tuples),
+                "tenants": sorted(config.tenants),
+            },
             indent=2,
             sort_keys=True,
         )
     )
+
+
+def runtime_command(args) -> None:
+    if args.action == "show":
+        config = load_config(args.config_dir)
+        print(json.dumps({name: runtime.model_dump(mode="json") for name, runtime in sorted(config.runtimes.items())}, indent=2, sort_keys=True))
+        return
+    if args.action == "add-openai":
+        if not args.name or not args.endpoint:
+            raise SystemExit("runtime add-openai requires --name and --endpoint")
+        result = add_openai_runtime(
+            config_dir=args.config_dir,
+            name=args.name,
+            endpoint=args.endpoint,
+            model=args.model,
+            model_ref=args.model_ref,
+            max_model_len=args.max_model_len,
+            dataref_worker=bool(args.dataref_worker),
+            runtime_boundary=args.runtime_boundary,
+            network_scope=args.network_scope,
+            max_data_classification=args.max_data_classification,
+            force=bool(args.force),
+        )
+        print(json.dumps(result, indent=2, sort_keys=True))
+        return
+    if args.action == "validate":
+        if not args.name:
+            raise SystemExit("runtime validate requires --name")
+        print(json.dumps(validate_runtime(args.config_dir, args.name), indent=2, sort_keys=True))
+        return
+    raise SystemExit(f"unknown runtime action: {args.action}")
+
+
+def add_openai_runtime(
+    *,
+    config_dir: Path,
+    name: str,
+    endpoint: str,
+    model: str,
+    model_ref: str,
+    max_model_len: int,
+    dataref_worker: bool,
+    runtime_boundary: str,
+    network_scope: str,
+    max_data_classification: str,
+    force: bool,
+) -> dict[str, object]:
+    adapter = "local-dataref-openai-worker" if dataref_worker else "local-openai-compatible"
+    engine_ref = "local-dataref-openai-worker-chat" if dataref_worker else "local-openai-compatible-chat"
+    input_contracts = ["text", "chat_messages", "data_refs"] if dataref_worker else ["text", "chat_messages"]
+    output_contract = "gpucall-tuple-result" if dataref_worker else "openai-chat-completions"
+    stream_contract = "none" if dataref_worker else "sse"
+    endpoint_contract = "local-dataref-openai-worker" if dataref_worker else "openai-chat-completions"
+    modes = ["async"] if dataref_worker else ["async", "stream"]
+    health_url = f"{endpoint.rstrip('/')}/healthz" if dataref_worker else f"{endpoint.rstrip('/')}/models"
+    trust_profile = {
+        "security_tier": "local",
+        "sovereign_jurisdiction": "local",
+        "dedicated_gpu": True,
+        "requires_attestation": False,
+        "supports_key_release": False,
+        "allows_worker_s3_credentials": False,
+    }
+    now = datetime.now(timezone.utc).isoformat()
+    runtime_payload = {
+        "name": name,
+        "kind": "controlled_runtime",
+        "runtime_boundary": runtime_boundary,
+        "network_scope": network_scope,
+        "operator_controlled": True,
+        "endpoint": endpoint,
+        "adapter": adapter,
+        "model": model,
+        "max_model_len": max_model_len,
+        "input_contracts": input_contracts,
+        "max_data_classification": max_data_classification,
+        "trust_profile": trust_profile,
+        "routing": {
+            "enabled": True,
+            "preference": "prefer_when_eligible",
+            "allowed_tasks": ["infer"],
+            "allowed_modes": modes,
+            "require_validation_evidence": True,
+        },
+        "health": {
+            "check_url": health_url,
+            "timeout_seconds": 2,
+            "failure_policy": "disable_runtime",
+        },
+        "discovery": {
+            "source": "manual",
+            "last_verified_at": now,
+        },
+    }
+    surface_payload = {
+        "surface_ref": name,
+        "worker_ref": name,
+        "controlled_runtime_ref": name,
+        "account_ref": "local",
+        "adapter": adapter,
+        "execution_surface": "local_runtime",
+        "gpu": "local",
+        "vram_gb": 1,
+        "max_model_len": max_model_len,
+        "region": "local",
+        "zone": "local",
+        "cost_per_second": 0,
+        "configured_price_source": "local-free",
+        "configured_price_observed_at": now,
+        "configured_price_ttl_seconds": 315360000,
+        "stock_state": "configured",
+        "expected_cold_start_seconds": 10,
+        "billing_granularity_seconds": 0,
+        "max_data_classification": max_data_classification,
+        "scaledown_window_seconds": 0,
+        "min_billable_seconds": 0,
+        "trust_profile": trust_profile,
+        "endpoint": endpoint,
+    }
+    worker_payload = {
+        "worker_ref": name,
+        "account_ref": "local",
+        "adapter": adapter,
+        "execution_surface": "local_runtime",
+        "model_ref": model_ref,
+        "engine_ref": engine_ref,
+        "modes": modes,
+        "input_contracts": input_contracts,
+        "output_contract": output_contract,
+        "stream_contract": stream_contract,
+        "target": None,
+        "stream_target": None,
+        "endpoint_contract": endpoint_contract,
+        "model": model,
+    }
+    if dataref_worker:
+        worker_payload["provider_params"] = {"worker_api_key_env": "GPUCALL_LOCAL_DATAREF_WORKER_API_KEY"}
+    paths = {
+        "runtime": config_dir / "runtimes" / f"{name}.yml",
+        "surface": config_dir / "surfaces" / f"{name}.yml",
+        "worker": config_dir / "workers" / f"{name}.yml",
+    }
+    for path, payload in (
+        (paths["runtime"], runtime_payload),
+        (paths["surface"], surface_payload),
+        (paths["worker"], worker_payload),
+    ):
+        _write_yaml(path, payload, force=force)
+    config = load_config(config_dir)
+    return {"created": {key: str(path) for key, path in paths.items()}, "valid": name in config.runtimes and name in config.tuples}
+
+
+def validate_runtime(config_dir: Path, name: str) -> dict[str, object]:
+    config = load_config(config_dir)
+    runtime = config.runtimes.get(name)
+    if runtime is None:
+        raise SystemExit(f"unknown controlled runtime: {name}")
+    health_url = str(runtime.health.check_url or "").strip()
+    if not health_url and runtime.endpoint:
+        health_url = f"{str(runtime.endpoint).rstrip('/')}/healthz"
+    if not health_url:
+        raise SystemExit(f"controlled runtime {name!r} has no endpoint or health check")
+    try:
+        with httpx.Client(timeout=runtime.health.timeout_seconds) as client:
+            response = client.get(health_url)
+        ok = response.status_code < 500 and response.status_code != 404
+    except httpx.HTTPError as exc:
+        return {"name": name, "ok": False, "health_url": health_url, "error": type(exc).__name__}
+    return {
+        "name": name,
+        "ok": ok,
+        "health_url": health_url,
+        "status_code": response.status_code,
+        "routing_enabled": runtime.routing.enabled,
+        "preference": runtime.routing.preference,
+    }
+
+
+def _write_yaml(path: Path, payload: dict[str, object], *, force: bool) -> None:
+    if path.exists() and not force:
+        raise SystemExit(f"refusing to overwrite existing file without --force: {path}")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(yaml.safe_dump(payload, sort_keys=False), encoding="utf-8")
 
 
 def admin_command(

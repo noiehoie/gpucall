@@ -465,6 +465,51 @@ class EngineSpec(BaseModel):
         return self.supports_multimodal
 
 
+class ControlledRuntimeRoutingConfig(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    enabled: bool = False
+    preference: Literal["prefer_when_eligible", "neutral", "last_resort"] = "prefer_when_eligible"
+    allowed_tasks: list[str] = Field(default_factory=list)
+    allowed_modes: list[ExecutionMode] = Field(default_factory=lambda: [ExecutionMode.ASYNC])
+    require_validation_evidence: bool = True
+
+
+class ControlledRuntimeHealthConfig(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    check_url: AnyHttpUrl | None = None
+    timeout_seconds: PositiveInt = 2
+    failure_policy: Literal["disable_runtime", "warn_only"] = "disable_runtime"
+
+
+class ControlledRuntimeDiscoveryConfig(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    source: Literal["manual", "localhost_probe", "operator_declared_private_network"] = "manual"
+    last_verified_at: datetime | None = None
+
+
+class ControlledRuntimeSpec(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    name: str
+    kind: Literal["controlled_runtime"] = "controlled_runtime"
+    runtime_boundary: Literal["gateway_host", "private_network", "site_network"]
+    network_scope: Literal["localhost", "lan", "vpn", "tailscale", "private_subnet", "manual"]
+    operator_controlled: bool
+    endpoint: AnyHttpUrl | None = None
+    adapter: str | None = None
+    model: str | None = None
+    max_model_len: PositiveInt | None = None
+    input_contracts: list[InputContract] = Field(default_factory=list)
+    max_data_classification: DataClassification = DataClassification.CONFIDENTIAL
+    trust_profile: TupleTrustProfile = Field(default_factory=TupleTrustProfile)
+    routing: ControlledRuntimeRoutingConfig = Field(default_factory=ControlledRuntimeRoutingConfig)
+    health: ControlledRuntimeHealthConfig = Field(default_factory=ControlledRuntimeHealthConfig)
+    discovery: ControlledRuntimeDiscoveryConfig = Field(default_factory=ControlledRuntimeDiscoveryConfig)
+
+
 class ExecutionTupleSpec(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -517,6 +562,7 @@ class ExecutionTupleSpec(BaseModel):
     declared_model_max_len: PositiveInt | None = None
     model_ref: str | None = None
     engine_ref: str | None = None
+    controlled_runtime_ref: str | None = None
 
 
 class ObjectStoreConfig(BaseModel):

@@ -1,5 +1,6 @@
 surface_ref: local-echo
 worker_ref: local-echo
+controlled_runtime_ref: local-echo
 account_ref: local
 adapter: echo
 execution_surface: local_runtime

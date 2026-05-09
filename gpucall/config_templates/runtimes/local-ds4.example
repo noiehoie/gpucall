@@ -1,0 +1,36 @@
+name: local-ds4
+kind: controlled_runtime
+runtime_boundary: private_network
+network_scope: tailscale
+operator_controlled: true
+endpoint: http://127.0.0.1:18181
+adapter: local-dataref-openai-worker
+model: deepseek-v4-flash
+max_model_len: 1000000
+input_contracts:
+  - text
+  - chat_messages
+  - data_refs
+max_data_classification: restricted
+trust_profile:
+  security_tier: local
+  sovereign_jurisdiction: jp
+  dedicated_gpu: true
+  requires_attestation: false
+  supports_key_release: false
+  allows_worker_s3_credentials: false
+routing:
+  enabled: true
+  preference: prefer_when_eligible
+  allowed_tasks:
+    - infer
+  allowed_modes:
+    - async
+  require_validation_evidence: true
+health:
+  check_url: http://127.0.0.1:18181/healthz
+  timeout_seconds: 2
+  failure_policy: disable_runtime
+discovery:
+  source: manual
+  last_verified_at: null

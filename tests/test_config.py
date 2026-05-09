@@ -531,6 +531,51 @@ def test_validate_config_cli(tmp_path) -> None:
     )
 
     assert '"valid": true' in result.stdout
+    assert '"runtimes":' in result.stdout
+
+
+def test_controlled_runtime_registry_is_loaded(tmp_path) -> None:
+    config = load_config(copy_config(tmp_path))
+
+    assert "local-echo" in config.runtimes
+    runtime = config.runtimes["local-echo"]
+    assert runtime.kind == "controlled_runtime"
+    assert runtime.runtime_boundary == "gateway_host"
+    assert runtime.operator_controlled is True
+    assert config.tuples["local-echo"].controlled_runtime_ref == "local-echo"
+
+
+def test_runtime_add_openai_generates_runtime_surface_and_worker(tmp_path) -> None:
+    root = copy_config(tmp_path)
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            str(Path(__file__).resolve().parents[1] / "gpucall" / "cli.py"),
+            "runtime",
+            "add-openai",
+            "--config-dir",
+            str(root),
+            "--name",
+            "test-ds4",
+            "--endpoint",
+            "http://127.0.0.1:18181",
+            "--dataref-worker",
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+
+    payload = json.loads(result.stdout)
+    assert payload["valid"] is True
+    config = load_config(root)
+    assert "test-ds4" in config.runtimes
+    tuple = config.tuples["test-ds4"]
+    assert tuple.controlled_runtime_ref == "test-ds4"
+    assert tuple.adapter == "local-dataref-openai-worker"
+    assert tuple.input_contracts == ["text", "chat_messages", "data_refs"]
+    assert tuple.output_contract == "gpucall-tuple-result"
 
 
 def test_readiness_cli(tmp_path) -> None:

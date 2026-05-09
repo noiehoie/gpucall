@@ -1,5 +1,6 @@
 surface_ref: local-ds4
 worker_ref: local-ds4
+controlled_runtime_ref: local-ds4
 account_ref: local
 adapter: local-openai-compatible
 execution_surface: local_runtime

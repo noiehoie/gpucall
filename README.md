@@ -307,15 +307,27 @@ gpucall readiness --config-dir config --intent translate_text
 
 gpucall is a deterministic governance router, not a Modal-only proxy. Recipe and provider selection rules are documented in [docs/ROUTING_POLICY.md](docs/ROUTING_POLICY.md).
 Capability catalog rules for recipe/model/engine/provider matching are documented in [docs/CAPABILITY_CATALOG.md](docs/CAPABILITY_CATALOG.md).
+Controlled Runtime configuration is documented in [docs/CONTROLLED_RUNTIMES.md](docs/CONTROLLED_RUNTIMES.md).
 RunPod Flash production validation is documented in [docs/RUNPOD_FLASH.md](docs/RUNPOD_FLASH.md).
 
-## Local Execution
+## Controlled Runtimes
 
-gpucall can route to local runtimes when local execution is sufficient and policy allows it. This is deliberate: honest routing should not lease cloud GPU capacity when a controlled local runtime can do the job.
+gpucall can route to operator-controlled runtimes when private execution is sufficient and policy allows it. This is deliberate: honest routing should not lease cloud GPU capacity when a gateway host, VPN/LAN host, or site-local GPU can do the job.
 
-The built-in `local-openai-compatible` adapter targets local OpenAI-compatible chat servers such as ds4-server, llama.cpp server, local vLLM, or other private endpoints. A ds4 example is shipped as `gpucall/config_templates/surfaces/local-ds4.example` and `gpucall/config_templates/workers/local-ds4.example`.
+The product concept is **Controlled Runtime**, not "whatever machine the caller happens to run on." A controlled runtime is declared by the gpucall operator in `config/runtimes/*.yml`, tied to a surface/worker tuple by `controlled_runtime_ref`, and promoted only after validation evidence. Boundaries are explicit: `gateway_host`, `private_network`, or `site_network`.
 
-Local OpenAI-compatible tuples are for inline text/chat workloads. They do not dereference `DataRef` objects, because the gateway remains data-byte-less. If a caller submits large files as DataRefs, use a worker that explicitly supports DataRef fetching inside the approved execution boundary.
+Existing OpenAI-compatible endpoints can be registered without installing ds4 automatically:
+
+```bash
+gpucall runtime add-openai \
+  --name macstudio-ds4 \
+  --endpoint http://macstudio.tailnet:18181 \
+  --dataref-worker
+gpucall runtime validate --name macstudio-ds4
+gpucall validate-config
+```
+
+The built-in `local-openai-compatible` adapter targets controlled OpenAI-compatible chat servers such as ds4-server, llama.cpp server, local vLLM, or other private endpoints. It supports inline text/chat requests only and intentionally rejects `DataRef` inputs so the gateway does not download or forward object bytes.
 
 For local text `DataRef` workloads, use the separate `local-dataref-openai-worker` adapter and run the worker process from `gpucall.local_dataref_worker`. The gateway adapter forwards only the worker-readable plan and DataRef metadata to that local worker endpoint; the worker fetches bytes, validates size and SHA256, calls the local OpenAI-compatible server, and returns a `TupleResult`. Example templates are shipped as `gpucall/config_templates/surfaces/local-dataref-openai.example` and `gpucall/config_templates/workers/local-dataref-openai.example`.
 

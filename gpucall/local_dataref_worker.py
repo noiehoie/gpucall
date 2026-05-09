@@ -37,6 +37,10 @@ def create_app(
     configured_worker_api_key = worker_api_key if worker_api_key is not None else os.environ.get("GPUCALL_LOCAL_DATAREF_WORKER_API_KEY", "")
     configured_max_dataref_bytes = max_dataref_bytes or int(os.environ.get("GPUCALL_LOCAL_DATAREF_MAX_BYTES", DEFAULT_MAX_DATAREF_BYTES))
 
+    @app.get("/healthz")
+    async def healthz() -> dict[str, str]:
+        return {"status": "ok"}
+
     @app.post(DEFAULT_WORKER_PATH)
     async def chat(payload: dict[str, Any], authorization: str | None = Header(default=None)) -> dict[str, Any]:
         if configured_worker_api_key and authorization != f"Bearer {configured_worker_api_key}":

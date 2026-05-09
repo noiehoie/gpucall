@@ -144,12 +144,18 @@ outside the gateway SLA. Callers that cannot wait for the advertised sync
 timeout should use `mode=async` and poll job state instead of lowering the
 client timeout.
 
-## Local Runtime Preference
+## Controlled Runtime Preference
 
-gpucall treats local execution as a first-class execution surface. If a local
-runtime satisfies the recipe, model, engine, data classification, and policy
-constraints, routing may prefer it over leased cloud GPU capacity because that is
-the honest low-exposure path.
+gpucall treats operator-controlled execution as a first-class execution surface.
+This is not "the caller's local machine." A controlled runtime is an execution
+endpoint the gpucall operator declares in `config/runtimes/*.yml`, ties to a
+surface/worker tuple with `controlled_runtime_ref`, and validates before
+production routing. Boundaries are explicit: `gateway_host`, `private_network`,
+or `site_network`.
+
+If a controlled runtime satisfies the recipe, model, engine, data
+classification, and policy constraints, routing may prefer it over leased cloud
+GPU capacity because that is the honest low-exposure path.
 
 The built-in `local-openai-compatible` adapter is provider-neutral. It can point
 at ds4-server, llama.cpp server, local vLLM, or another OpenAI-compatible chat
@@ -166,3 +172,15 @@ length and SHA256, rejects non-text inputs, calls its configured local
 OpenAI-compatible `/v1/chat/completions` server, and returns a gpucall
 `TupleResult`. This keeps the gateway data-byte-less while allowing controlled
 local runtimes to handle large text inputs without leasing cloud GPU capacity.
+
+The registration path for an existing ds4/OpenAI-compatible endpoint is:
+
+```bash
+gpucall runtime add-openai --name macstudio-ds4 --endpoint http://macstudio.tailnet:18181 --dataref-worker
+gpucall runtime validate --name macstudio-ds4
+gpucall validate-config
+```
+
+Discovery may find candidates, but discovery alone never makes a runtime
+production-routable. Operator declaration, config validation, and validation
+evidence remain required.
