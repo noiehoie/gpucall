@@ -195,9 +195,9 @@ def test_admin_tenant_onboard_batch_creates_isolated_handoffs(tmp_path, monkeypa
     manifest.write_text(
         """
 systems:
-  - name: news-system
+  - name: example-news
     daily_budget_usd: 10
-  - name: llm-brain
+  - name: example-analysis
     requests_per_minute: 30
 """.lstrip(),
         encoding="utf-8",
@@ -224,12 +224,12 @@ systems:
     credentials_payload = load_credentials()["auth"]["tenant_keys"]
 
     assert report["count"] == 2
-    assert (handoff_dir / "news-system.gpucall.env").exists()
-    assert (handoff_dir / "llm-brain.gpucall.env").exists()
+    assert (handoff_dir / "example-news.gpucall.env").exists()
+    assert (handoff_dir / "example-analysis.gpucall.env").exists()
     assert oct(handoff_dir.stat().st_mode & 0o777) == "0o700"
-    assert oct((handoff_dir / "news-system.gpucall.env").stat().st_mode & 0o777) == "0o600"
-    assert "news-system:gpk_" in credentials_payload
-    assert "llm-brain:gpk_" in credentials_payload
+    assert oct((handoff_dir / "example-news.gpucall.env").stat().st_mode & 0o777) == "0o600"
+    assert "example-news:gpk_" in credentials_payload
+    assert "example-analysis:gpk_" in credentials_payload
     for item in credentials_payload.split(","):
         _tenant, token = item.split(":", 1)
         assert token not in report_raw

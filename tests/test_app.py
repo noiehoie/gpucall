@@ -346,7 +346,7 @@ def test_trusted_bootstrap_issues_tenant_key_without_existing_auth(tmp_path, mon
                 "api_key_handoff_mode: trusted_bootstrap",
                 "api_key_bootstrap_allowed_hosts: [testclient]",
                 "api_key_bootstrap_gateway_url: http://gpucall.internal:18088",
-                "api_key_bootstrap_recipe_inbox: root@gpucall.internal:/opt/gpucall/state/recipe_requests/inbox",
+                "api_key_bootstrap_recipe_inbox: admin@gpucall.internal:/opt/gpucall/state/recipe_requests/inbox",
             ]
         )
         + "\n",
@@ -362,7 +362,7 @@ def test_trusted_bootstrap_issues_tenant_key_without_existing_auth(tmp_path, mon
     assert issued["api_key"].startswith("gpk_")
     assert issued["handoff"]["GPUCALL_TENANT"] == "new-system"
     assert issued["handoff"]["GPUCALL_BASE_URL"] == "http://gpucall.internal:18088"
-    assert issued["handoff"]["GPUCALL_RECIPE_INBOX"] == "root@gpucall.internal:/opt/gpucall/state/recipe_requests/inbox"
+    assert issued["handoff"]["GPUCALL_RECIPE_INBOX"] == "admin@gpucall.internal:/opt/gpucall/state/recipe_requests/inbox"
     assert "api_key" not in second.text
     assert second.status_code == 409
 
