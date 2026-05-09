@@ -175,7 +175,7 @@ const result = await client.infer({ prompt: "hello" });
 
 ## External System Migration
 
-他の product / service を gpucall に適応させるときは、[docs/EXTERNAL_SYSTEM_ADAPTATION_PROMPT.md](docs/EXTERNAL_SYSTEM_ADAPTATION_PROMPT.md) の one-shot migration prompt を使ってください。外部システムは通常、`task`、`mode`、input data または `DataRef` だけを送ります。recipe と provider selection は gateway の責任です。
+他の product / service を gpucall に適応させるときは、[docs/EXTERNAL_SYSTEM_ONBOARDING_MANUAL.md](docs/EXTERNAL_SYSTEM_ONBOARDING_MANUAL.md) と [docs/EXTERNAL_SYSTEM_ONBOARDING_PROMPT.md](docs/EXTERNAL_SYSTEM_ONBOARDING_PROMPT.md) の onboarding manual / reusable prompt を使ってください。従来の compact な one-shot prompt は [docs/EXTERNAL_SYSTEM_ADAPTATION_PROMPT.md](docs/EXTERNAL_SYSTEM_ADAPTATION_PROMPT.md) に残しています。外部システムは通常、`task`、`mode`、input data または `DataRef` だけを送ります。recipe と provider selection は gateway の責任です。
 
 productized migration には deterministic migration kit を使います。
 

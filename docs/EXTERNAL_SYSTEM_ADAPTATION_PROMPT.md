@@ -1,5 +1,13 @@
 # External System Adaptation Prompt
 
+For new integrations, prefer the fuller onboarding package:
+
+- [EXTERNAL_SYSTEM_ONBOARDING_PROMPT.md](EXTERNAL_SYSTEM_ONBOARDING_PROMPT.md)
+- [EXTERNAL_SYSTEM_ONBOARDING_MANUAL.md](EXTERNAL_SYSTEM_ONBOARDING_MANUAL.md)
+
+This legacy prompt remains useful when a single code agent needs one compact
+instruction block.
+
 Use this prompt when asking another code agent to migrate an existing system to gpucall v2.0. It is intentionally prescriptive: external systems should send task intent and data references, while gpucall owns recipe selection, tuple routing, governance, fallback, lease handling, and audit.
 
 ```text
