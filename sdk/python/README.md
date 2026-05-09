@@ -51,6 +51,17 @@ The SDK automatically uploads large prompts through the gpucall object-store
 DataRef path. It does not depend on provider libraries such as Modal, RunPod, or
 boto3.
 
+For manual DataRef integrations, use the live gateway OpenAPI schema. The v2
+wire format is:
+
+1. `POST /v2/objects/presign-put` with `name`, `bytes`, `sha256`, and
+   `content_type`;
+2. `PUT` the bytes to the returned `upload_url`;
+3. pass the returned `data_ref` object unchanged in `input_refs`.
+
+`input_refs` is a list of DataRef objects with a `uri` field. It is not a list
+of strings, and task requests do not use a single `data_ref` string field.
+
 ## Recipe Draft Helper
 
 The SDK distribution also includes `gpucall-recipe-draft`, the caller-side helper in the three-part gpucall product. The other two parts are the gateway runtime and the administrator-side `gpucall-recipe-admin` helper.

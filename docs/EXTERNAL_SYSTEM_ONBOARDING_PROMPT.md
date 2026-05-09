@@ -60,6 +60,9 @@ Strict acceptance rule:
   path.
 - Do not mark a vision/file path as `migrated` until it uses `/v2/tasks/*` with
   `input_refs` or an explicitly documented gpucall SDK DataRef path.
+- For DataRef wire format, prefer the live gateway OpenAPI schema over memory
+  or old examples. The v2 presign endpoint is `/v2/objects/presign-put`, not
+  `/v2/upload/presign`.
 
 ```text
 You are the implementation agent for this repository. Your task is to migrate
@@ -280,6 +283,28 @@ Rules:
 - Do not send OpenAI `messages` directly to `/v2/tasks/*`; convert to
   `inline_inputs.prompt.value` unless using the OpenAI-compatible facade.
 - `input_refs` must be a list.
+- `input_refs` items must be DataRef objects, not strings. A DataRef uses a
+  `uri` field:
+
+  ```json
+  {"uri": "s3://bucket/key", "sha256": "<64 hex chars>", "bytes": 1234, "content_type": "image/png"}
+  ```
+
+- To create a DataRef for caller-uploaded bytes, call
+  `POST /v2/objects/presign-put` with this exact request shape:
+
+  ```json
+  {
+    "name": "input.png",
+    "bytes": 1234,
+    "sha256": "<64 hex chars>",
+    "content_type": "image/png"
+  }
+  ```
+
+  Upload the bytes with `PUT` to the returned `upload_url`, then pass the
+  returned `data_ref` object unchanged in `input_refs`. Do not invent a
+  `data_ref` string field and do not use `/v2/upload/presign`.
 - Inline payload is allowed only for small non-confidential text. Define the
   inline byte limit in code and test it.
 - Images and files must use presign PUT and `DataRef`. Do not implement

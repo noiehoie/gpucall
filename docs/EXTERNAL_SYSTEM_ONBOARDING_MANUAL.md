@@ -54,6 +54,31 @@ production path through `/v2/tasks/*` with `input_refs` or an explicitly
 documented gpucall SDK DataRef path. OpenAI-facade base64 image/file payloads
 are dev-only experiments and do not satisfy production onboarding.
 
+When implementing DataRef manually, use the live gateway OpenAPI schema as the
+source of truth. The v2 upload handshake is:
+
+1. compute the file byte length and SHA-256 digest;
+2. `POST /v2/objects/presign-put` with `name`, `bytes`, `sha256`, and
+   `content_type`;
+3. `PUT` the exact bytes to the returned `upload_url`;
+4. pass the returned `data_ref` object unchanged in `input_refs`.
+
+`input_refs` is a list of DataRef objects. It is not a list of strings, and
+there is no caller request field named `data_ref` for task input. A DataRef uses
+the `uri` field:
+
+```json
+{
+  "uri": "s3://bucket/key",
+  "sha256": "<64 hex chars>",
+  "bytes": 1234,
+  "content_type": "image/png"
+}
+```
+
+Do not use obsolete examples such as `/v2/upload/presign` or
+`{"data_ref": "..."}` for task input.
+
 ## Product Contract
 
 gpucall has three product components:
@@ -255,6 +280,40 @@ Correct direct task payload:
 }
 ```
 
+Correct manual DataRef upload payload:
+
+```json
+POST /v2/objects/presign-put
+{
+  "name": "page.png",
+  "bytes": 2000000,
+  "sha256": "<64 hex chars>",
+  "content_type": "image/png"
+}
+```
+
+The response contains `upload_url`, `method`, and `data_ref`. Upload the bytes
+to `upload_url`, then submit the task with the returned object:
+
+```json
+{
+  "task": "vision",
+  "mode": "sync",
+  "input_refs": [
+    {
+      "uri": "s3://bucket/gpucall/tenants/example/page.png",
+      "sha256": "<64 hex chars>",
+      "bytes": 2000000,
+      "content_type": "image/png"
+    }
+  ],
+  "max_tokens": 512
+}
+```
+
+Do not transform the returned DataRef into a string. Keep `uri`, `sha256`,
+`bytes`, `content_type`, and any other returned DataRef fields intact.
+
 Correct OpenAI facade setup:
 
 ```python
@@ -340,7 +399,9 @@ Every integration should leave tests for:
 - payload excludes `requested_tuple`;
 - payload excludes provider, GPU, tuple, and provider model selectors;
 - OpenAI messages are converted correctly when using `/v2/tasks/*`;
-- `input_refs` is a list;
+- `input_refs` is a list of DataRef objects with a `uri` field;
+- manual upload uses `/v2/objects/presign-put` with `name`, `bytes`, `sha256`,
+  and `content_type`;
 - large input uses DataRef / presigned upload;
 - image, file, confidential input, and over-limit text use DataRef or fail
   closed;

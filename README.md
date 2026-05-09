@@ -215,6 +215,12 @@ Wheel checksums are published at
 
 External systems should normally send only `task`, `mode`, and input data or `DataRef`; recipe and provider selection belong to the gateway.
 
+Manual DataRef integrations should follow the live OpenAPI schema. The v2
+upload handshake is `POST /v2/objects/presign-put` with `name`, `bytes`,
+`sha256`, and `content_type`, then `PUT` to the returned `upload_url`, then pass
+the returned `data_ref` object unchanged in `input_refs`. `input_refs` is a list
+of objects with a `uri` field, not a list of strings.
+
 For productized migration, use the deterministic migration kit:
 
 ```bash
