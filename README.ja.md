@@ -82,25 +82,28 @@ LLM inference が許されるのは、deterministic routing が production tuple
 
 ## Quickstart
 
+初回導入では、まず operator setup journey を起動します。
+
 ```bash
-gpucall init
-gpucall configure
-gpucall validate-config
-gpucall doctor
-gpucall tuple-audit
-gpucall execution-catalog candidates --recipe text-infer-standard
-gpucall lease-reaper
-gpucall cost-audit
-gpucall cleanup-audit
-gpucall launch-check --profile static
-gpucall release-check
-docker compose -p gpucall up -d --build
-gpucall smoke
-gpucall cost-audit --live
-gpucall cleanup-audit
-gpucall launch-check --profile production --url http://127.0.0.1:18088
-gpucall audit verify
+gpucall setup
+gpucall setup status
+gpucall setup next
 ```
+
+setup-as-code で導入する場合:
+
+```bash
+gpucall setup apply --file gpucall.setup.yml --dry-run
+gpucall setup apply --file gpucall.setup.yml --yes
+```
+
+setup layer は最初に運用 profile を聞き、その後 gateway auth、GPU
+execution surfaces、object-store DataRefs、tenant handoff、launch checks、
+external-system onboarding を案内します。低レイヤーコマンドである
+`gpucall init`、`gpucall configure`、`gpucall admin ...`、
+`gpucall validate-config`、`gpucall launch-check` は automation と debug
+用に残ります。setup plan の文法は [docs/SETUP_PLAN.md](docs/SETUP_PLAN.md)
+にあります。
 
 production-like runtime layout は XDG に従います。
 

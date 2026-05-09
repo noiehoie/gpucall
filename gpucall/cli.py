@@ -27,6 +27,7 @@ from gpucall.admin_automation import admin_automation_summary, configure_admin_a
 from gpucall.catalog import SQLiteCapabilityCatalog, dumps_snapshot
 from gpucall.handoff import handoff_payload as _handoff_payload, render_handoff as _render_handoff
 from gpucall.cli_commands.readiness import add_readiness_parser, run_readiness_command
+from gpucall.cli_commands.setup import add_setup_parser, run_setup_command
 from gpucall.compiler import GovernanceCompiler
 from gpucall.config import ConfigError, default_config_dir, default_state_dir, load_config
 from gpucall.configure import configure_command
@@ -148,6 +149,7 @@ def main() -> None:
     release_check.add_argument("--config-dir", type=Path, default=default_config_dir())
     release_check.add_argument("--output-dir", type=Path, default=default_state_dir() / "release")
     add_readiness_parser(sub)
+    add_setup_parser(sub)
     configure = sub.add_parser("configure")
     configure.add_argument("--config-dir", type=Path, default=default_config_dir())
     admin = sub.add_parser("admin")
@@ -303,6 +305,8 @@ def main() -> None:
         release_check_command(args.config_dir, args.output_dir)
     elif args.command == "readiness":
         run_readiness_command(args)
+    elif args.command == "setup":
+        run_setup_command(args)
     elif args.command == "configure":
         configure_command(args.config_dir)
     elif args.command == "admin":

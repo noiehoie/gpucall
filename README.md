@@ -82,25 +82,27 @@ The caller-side and administrator-side helpers are boundary tools. The caller-si
 
 ## Quickstart
 
+For a first install, start with the operator setup journey:
+
 ```bash
-gpucall init
-gpucall configure
-gpucall validate-config
-gpucall doctor
-gpucall tuple-audit
-gpucall execution-catalog candidates --recipe text-infer-standard
-gpucall lease-reaper
-gpucall cost-audit
-gpucall cleanup-audit
-gpucall launch-check --profile static
-gpucall release-check
-docker compose -p gpucall up -d --build
-gpucall smoke
-gpucall cost-audit --live
-gpucall cleanup-audit
-gpucall launch-check --profile production --url http://127.0.0.1:18088
-gpucall audit verify
+gpucall setup
+gpucall setup status
+gpucall setup next
 ```
+
+For setup-as-code:
+
+```bash
+gpucall setup apply --file gpucall.setup.yml --dry-run
+gpucall setup apply --file gpucall.setup.yml --yes
+```
+
+The setup layer asks for the operating profile first, then guides gateway auth,
+GPU execution surfaces, object-store DataRefs, tenant handoff, launch checks,
+and external-system onboarding. The underlying low-level commands remain
+available for automation and debugging: `gpucall init`, `gpucall configure`,
+`gpucall admin ...`, `gpucall validate-config`, and `gpucall launch-check`.
+Setup plan syntax is documented in [docs/SETUP_PLAN.md](docs/SETUP_PLAN.md).
 
 Production-like runtime layout follows XDG:
 
