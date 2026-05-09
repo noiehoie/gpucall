@@ -59,6 +59,11 @@ async def enforce_request_budget(runtime: Runtime, request: Request, plan: Any) 
     )
 
 
+def refund_request_budget(runtime: Runtime, plan: Any | None) -> None:
+    if plan is not None:
+        runtime.tenant_usage.release_plan(getattr(plan, "plan_id", None))
+
+
 def object_tenant_prefix(runtime: Runtime, request: Request) -> str | None:
     api_key = getattr(request.state, "api_key", None)
     tenant_id = getattr(request.state, "tenant_id", None)
@@ -106,6 +111,8 @@ def tenant_budget_error_response(exc: TenantBudgetError, *, request: TaskRequest
 
 
 def enforce_gateway_owned_routing(request: TaskRequest) -> None:
+    if request.bypass_circuit_for_validation:
+        raise GovernanceError("caller-controlled circuit bypass is disabled; omit bypass_circuit_for_validation")
     if _allow_caller_routing():
         return
     forbidden: list[str] = []
@@ -119,7 +126,12 @@ def enforce_gateway_owned_routing(request: TaskRequest) -> None:
 
 
 def _allow_caller_routing() -> bool:
-    return os.getenv("GPUCALL_ALLOW_CALLER_ROUTING", "").strip().lower() in {"1", "true", "yes", "on"}
+    return not _production_auth_required() and os.getenv("GPUCALL_ALLOW_CALLER_ROUTING", "").strip().lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
 
 
 def _public_metrics_enabled() -> bool:
@@ -537,4 +549,3 @@ def openai_error_response(
     if gpucall_failure_artifact is not None:
         error["gpucall_failure_artifact"] = gpucall_failure_artifact
     return JSONResponse(status_code=status_code, content={"error": error}, headers=headers)
-

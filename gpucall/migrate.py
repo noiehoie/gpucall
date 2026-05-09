@@ -128,7 +128,7 @@ def canary_project(project: Path, *, command: str | None, source: str | None = N
     started = time.time()
     if not command:
         return {"schema_version": 1, "phase": "migration-canary", "source": source, "project": str(project.resolve()), "ran": False, "reason": "no command supplied"}
-    result = subprocess.run(command, cwd=project, shell=True, capture_output=True, text=True, timeout=None)
+    result = subprocess.run(shlex.split(command), cwd=project, shell=False, capture_output=True, text=True, timeout=1800)
     output = result.stdout + "\n" + result.stderr
     return {
         "schema_version": 1,

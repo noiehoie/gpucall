@@ -1,3 +1,4 @@
+# v3 lifecycle-only adapter example; not production-routable until execution validation is implemented.
 name: gcp-confidential-space
 adapter: gcp-confidential-space-vm
 max_data_classification: restricted

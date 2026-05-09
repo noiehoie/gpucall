@@ -1,3 +1,4 @@
+# v3 lifecycle-only adapter example; not production-routable until execution validation is implemented.
 name: azure-h100-confidential
 adapter: azure-compute-vm
 max_data_classification: restricted

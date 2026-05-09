@@ -15,7 +15,7 @@ from uuid import uuid4
 from gpucall.domain import ArtifactManifest, CompiledPlan, TupleError, TupleResult
 from gpucall.execution_surfaces.managed_endpoint import RUNPOD_API_BASE, json_or_error, requests_session
 from gpucall.execution.base import TupleAdapter, RemoteHandle
-from gpucall.execution.payloads import plan_payload, plain_text_result
+from gpucall.execution.payloads import gpucall_tuple_result, plan_payload, plain_text_result
 from gpucall.execution.registry import TupleAdapterDescriptor, register_adapter
 from gpucall.live_catalog import live_error, live_info, price_per_second_from_pricing_text
 
@@ -422,18 +422,6 @@ def build_modal_adapter(spec, _credentials):
         provider_params=spec.provider_params,
         allow_ephemeral=False,
     )
-
-
-import asyncio
-import inspect
-import os
-import time
-from typing import Any
-
-from gpucall.domain import CompiledPlan, TupleError, TupleResult
-from gpucall.execution.base import TupleAdapter, RemoteHandle
-from gpucall.execution.payloads import gpucall_tuple_result, plan_payload
-from gpucall.execution.registry import TupleAdapterDescriptor, register_adapter
 
 
 class RunpodVllmFlashBootAdapter(TupleAdapter):

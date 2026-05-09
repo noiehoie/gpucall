@@ -1,6 +1,8 @@
 # gpucall SDK Distribution
 
-The Python SDK is distributed privately during the v2.0 alpha.
+The Python SDK is distributed separately from the gateway. Public releases use
+GitHub Release assets; private deployments may mirror the same files in an
+internal artifact store.
 
 ## Artifact
 
@@ -19,7 +21,7 @@ from gpucall_sdk import GPUCallClient
 Compatibility:
 
 ```text
-gpucall-sdk 2.0.0a2 -> gpucall Gateway 2.0.x
+gpucall-sdk 2.0.8 -> gpucall Gateway 2.0.x
 ```
 
 Runtime dependency:
@@ -31,19 +33,30 @@ httpx
 Provider libraries such as Modal, RunPod, Hyperstack, boto3, FastAPI, and
 uvicorn are intentionally not SDK dependencies.
 
-## Install From Private Wheel
+## Install From Public Release Asset
 
 Example:
 
 ```bash
-uv add "gpucall-sdk @ file:///opt/gpucall/artifacts/sdk/python/gpucall_sdk-2.0.0a2-py3-none-any.whl"
+uv tool install https://github.com/noiehoie/gpucall3/releases/download/v2.0.8/gpucall_sdk-2.0.8-py3-none-any.whl
+```
+
+Download and verify the release `SHA256SUMS` before wiring the wheel URL into
+production automation.
+
+## Install From Private Mirror
+
+Example:
+
+```bash
+uv add "gpucall-sdk @ file:///opt/gpucall/artifacts/sdk/python/gpucall_sdk-2.0.8-py3-none-any.whl"
 ```
 
 For another host, copy the wheel first:
 
 ```bash
-scp gateway.example.internal:/opt/gpucall/artifacts/sdk/python/gpucall_sdk-2.0.0a2-py3-none-any.whl ./vendor/
-uv add "gpucall-sdk @ file://${PWD}/vendor/gpucall_sdk-2.0.0a2-py3-none-any.whl"
+scp gateway.example.internal:/opt/gpucall/artifacts/sdk/python/gpucall_sdk-2.0.8-py3-none-any.whl ./vendor/
+uv add "gpucall-sdk @ file://${PWD}/vendor/gpucall_sdk-2.0.8-py3-none-any.whl"
 ```
 
 ## Configure

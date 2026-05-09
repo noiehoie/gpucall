@@ -27,7 +27,7 @@ The boundary is strict: external callers may use human judgment or their own AI 
 Use this tool before a new workload class reaches production, after gpucall returns a structured governance failure, and after a `200 OK` result that the caller's own business validator rejects.
 
 - `NO_AUTO_SELECTABLE_RECIPE`
-- `no eligible provider after policy, recipe, and circuit constraints`
+- `no eligible tuple after policy, recipe, and circuit constraints`
 - context length, media type, mode, or capability mismatch
 - low-quality success, where gpucall executed a recipe but the selected model or recipe did not satisfy the caller's declared capability
 
@@ -50,7 +50,7 @@ In normal operation, unknown workloads are handled as follows:
 1. Before production, caller runs `preflight` for the planned workload metadata.
 2. Caller submits the sanitized preflight intake to the gpucall administrator.
 3. Administrator materializes or rejects the workload class.
-4. If production still fails, gpucall returns `422 NO_AUTO_SELECTABLE_RECIPE` or `503 no eligible provider after policy, recipe, and circuit constraints`.
+4. If production still fails, gpucall returns `422 NO_AUTO_SELECTABLE_RECIPE` or `503 no eligible tuple after policy, recipe, and circuit constraints`.
 5. Caller runs post-failure `intake` and `compare` to distinguish workload drift from admin/catalog/runtime failure.
 6. If gpucall returns `200 OK` but caller-side validation fails, caller runs `quality` and submits that sanitized feedback to the same admin inbox.
 

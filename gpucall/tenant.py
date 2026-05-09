@@ -71,6 +71,12 @@ class TenantUsageLedger:
                 (tenant_id, estimated_cost_usd, tuple, recipe, plan_id, datetime.now(timezone.utc).isoformat()),
             )
 
+    def release_plan(self, plan_id: str | None) -> None:
+        if not plan_id:
+            return
+        with self._connect() as conn:
+            conn.execute("DELETE FROM tenant_usage WHERE plan_id = ?", (plan_id,))
+
     def spend_since(self, tenant_id: str, since: datetime) -> float:
         with self._connect() as conn:
             row = conn.execute(

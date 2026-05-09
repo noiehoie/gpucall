@@ -1,0 +1,4 @@
+account_ref: runpod
+provider_family: runpod
+credential_ref: runpod
+billing_scope: null

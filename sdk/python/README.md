@@ -5,8 +5,8 @@ Public evaluation package for gpucall v2.0 integrations.
 Install the caller SDK helper without cloning the gateway repository:
 
 ```bash
-uv tool install https://raw.githubusercontent.com/noiehoie/gpucall3/main/sdk/python/dist/gpucall_sdk-2.0.0a2-py3-none-any.whl
-uv tool run --from https://raw.githubusercontent.com/noiehoie/gpucall3/main/sdk/python/dist/gpucall_sdk-2.0.0a2-py3-none-any.whl gpucall-recipe-draft --help
+uv tool install https://github.com/noiehoie/gpucall3/releases/download/v2.0.8/gpucall_sdk-2.0.8-py3-none-any.whl
+uv tool run --from https://github.com/noiehoie/gpucall3/releases/download/v2.0.8/gpucall_sdk-2.0.8-py3-none-any.whl gpucall-recipe-draft --help
 ```
 
 Verify that the SDK console script is installed:

@@ -34,7 +34,7 @@ External systems do not need to clone the gpucall gateway repository. The
 caller-side helper is distributed as the SDK wheel:
 
 ```bash
-uv tool install https://raw.githubusercontent.com/noiehoie/gpucall3/main/sdk/python/dist/gpucall_sdk-2.0.0a2-py3-none-any.whl
+uv tool install https://github.com/noiehoie/gpucall3/releases/download/v2.0.8/gpucall_sdk-2.0.8-py3-none-any.whl
 gpucall-recipe-draft --help
 ```
 

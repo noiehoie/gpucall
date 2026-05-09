@@ -7,8 +7,8 @@ gpucall adoption harder than it should be.
 Public reference URLs for agents that are not running inside the gpucall
 repository:
 
-- Prompt: https://raw.githubusercontent.com/noiehoie/gpucall3/main/docs/EXTERNAL_SYSTEM_ONBOARDING_PROMPT.md
-- Manual: https://raw.githubusercontent.com/noiehoie/gpucall3/main/docs/EXTERNAL_SYSTEM_ONBOARDING_MANUAL.md
+- Prompt: https://raw.githubusercontent.com/noiehoie/gpucall3/v2.0.8/docs/EXTERNAL_SYSTEM_ONBOARDING_PROMPT.md
+- Manual: https://raw.githubusercontent.com/noiehoie/gpucall3/v2.0.8/docs/EXTERNAL_SYSTEM_ONBOARDING_MANUAL.md
 - Repository: https://github.com/noiehoie/gpucall3
 
 Important boundary for external-system agents:
@@ -27,7 +27,7 @@ Important boundary for external-system agents:
 Caller SDK helper wheel:
 
 ```bash
-uv tool install https://raw.githubusercontent.com/noiehoie/gpucall3/main/sdk/python/dist/gpucall_sdk-2.0.0a2-py3-none-any.whl
+uv tool install https://github.com/noiehoie/gpucall3/releases/download/v2.0.8/gpucall_sdk-2.0.8-py3-none-any.whl
 gpucall-recipe-draft --help
 ```
 
@@ -40,7 +40,7 @@ Fill these values before handing the prompt to the external-system agent:
 - `<admin-inbox>`: approved local or SSH inbox for sanitized recipe requests
 - `<canary-command>`: smallest representative command for that system
 - `<gpucall-sdk-wheel-url>`: caller SDK helper wheel URL; default is
-  `https://raw.githubusercontent.com/noiehoie/gpucall3/main/sdk/python/dist/gpucall_sdk-2.0.0a2-py3-none-any.whl`
+  `https://github.com/noiehoie/gpucall3/releases/download/v2.0.8/gpucall_sdk-2.0.8-py3-none-any.whl`
 
 Strict acceptance rule:
 
@@ -73,8 +73,8 @@ behavioral disruption and maximum determinism.
 
 Before editing, read the current gpucall onboarding documents:
 
-- https://raw.githubusercontent.com/noiehoie/gpucall3/main/docs/EXTERNAL_SYSTEM_ONBOARDING_PROMPT.md
-- https://raw.githubusercontent.com/noiehoie/gpucall3/main/docs/EXTERNAL_SYSTEM_ONBOARDING_MANUAL.md
+- https://raw.githubusercontent.com/noiehoie/gpucall3/v2.0.8/docs/EXTERNAL_SYSTEM_ONBOARDING_PROMPT.md
+- https://raw.githubusercontent.com/noiehoie/gpucall3/v2.0.8/docs/EXTERNAL_SYSTEM_ONBOARDING_MANUAL.md
 
 If network access is unavailable and the gpucall repository is checked out
 locally, read the same files from that checkout instead.

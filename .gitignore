@@ -30,9 +30,4 @@ sdk/typescript/node_modules/
 _tmp_*
 AUDIT_EVIDENCE.md
 0508fullaudit/
-
-!sdk/python/dist/
-!sdk/python/dist/**
-!sdk/python/dist/SHA256SUMS
-!sdk/python/dist/gpucall_sdk-*.whl
-!sdk/python/dist/gpucall_sdk-*.tar.gz
+0509githubfullaudit/

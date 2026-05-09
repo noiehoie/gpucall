@@ -38,7 +38,7 @@ routes. A text-only worker that hex-encodes image bytes is not a vision tuple.
 
 Recipe system prompts are gateway policy transforms. The compiled plan exposes an audit-safe `system_prompt_transform` with the recipe, source field, byte count, and hash so callers can see that the provider-facing messages were governed by recipe policy.
 
-Long-form `infer` traffic is split by deterministic recipe capacity. The standard profile includes `text-infer-large` at 65K, `text-infer-exlarge` at 131K, and `text-infer-ultralong` at 524K model length. These recipes require a provider that declares a matching context window; if they disappear from `/readyz`, the gateway is misconfigured rather than merely capacity constrained.
+Long-form `infer` traffic is split by deterministic recipe capacity. The standard profile includes `text-infer-large` at 65K, `text-infer-exlarge` at 131K, and `text-infer-ultralong` at 524K model length. These recipes require a provider that declares a matching context window; if they disappear from authenticated `/readyz/details`, the gateway is misconfigured rather than merely capacity constrained.
 
 `vision` workers must not pass gateway system prompts as user image prompts. System prompts are governance transforms and may be audited, but the model-facing vision question must come from the caller's inline prompt or non-system chat messages.
 

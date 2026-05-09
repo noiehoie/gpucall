@@ -312,7 +312,9 @@ B. readyz:
 
 期待:
 
-  {"status":"ready","object_store":true}
+  {"status":"ready"}
+
+詳細な readiness は gateway 管理者向けの `/readyz/details` で確認する。外部システム側の smoke は `/readyz` の最小応答だけを期待する。
 
 C. recipe 省略 sync infer:
 

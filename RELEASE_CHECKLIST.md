@@ -1,4 +1,8 @@
-# Release Checklist
+# Public-Safe Operator Release Checklist
+
+This checklist contains only placeholder commands and public-safe operational
+steps. Keep live endpoint IDs, private hostnames, and local audit transcripts
+out of this file.
 
 ## Build
 
@@ -16,11 +20,11 @@
 Run only when credentials and cost guardrails are ready:
 
 ```bash
-gpucall provider-smoke modal-a10g --recipe text-infer-standard
-gpucall provider-smoke runpod-serverless --recipe text-infer-standard
-gpucall provider-smoke runpod-flash --recipe text-infer-standard
-gpucall provider-smoke local-ollama --recipe text-infer-standard
-gpucall provider-smoke hyperstack-a100 --recipe text-infer-standard
+gpucall tuple-smoke modal-a10g --recipe text-infer-standard
+gpucall tuple-smoke runpod-serverless --recipe text-infer-standard
+gpucall tuple-smoke runpod-flash --recipe text-infer-standard
+gpucall tuple-smoke local-ollama --recipe text-infer-standard
+gpucall tuple-smoke hyperstack-a100 --recipe text-infer-standard
 ```
 
 ## Launch

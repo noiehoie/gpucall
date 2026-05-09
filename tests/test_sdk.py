@@ -287,7 +287,7 @@ def test_python_sdk_governance_errors_map_to_recipe_helpers() -> None:
 
 def test_python_sdk_no_eligible_tuple_is_not_generic_provider_error() -> None:
     def handler(request: httpx.Request) -> httpx.Response:
-        return httpx.Response(503, json={"detail": "no eligible provider after policy, recipe, and circuit constraints", "code": "NO_ELIGIBLE_TUPLE"})
+        return httpx.Response(503, json={"detail": "no eligible tuple after policy, recipe, and circuit constraints", "code": "NO_ELIGIBLE_TUPLE"})
 
     client = GPUCallClient("http://gpucall.test", transport=httpx.MockTransport(handler))
 

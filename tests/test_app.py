@@ -188,12 +188,18 @@ def test_sync_endpoint_returns_structured_context_overflow(tmp_path) -> None:
     assert "text-infer-standard" in artifact["rejection_matrix"]["recipes"]
 
 
-def test_readyz_reports_recipe_and_provider_capacity(tmp_path) -> None:
+def test_readyz_is_minimal_and_details_report_recipe_and_provider_capacity(tmp_path) -> None:
     with TestClient(create_app(copy_config(tmp_path))) as client:
         response = client.get("/readyz")
+        details = client.get("/readyz/details")
 
     payload = response.json()
     assert response.status_code == 200
+    assert payload == {"status": "ready"}
+    payload = details.json()
+    assert details.status_code == 200
+    assert "credentials_path" not in str(payload)
+    assert "tenants_dir" not in payload["trusted_bootstrap"]
     assert payload["recipes"]["text-infer-standard"]["context_budget_tokens"] == 32768
     assert payload["tuples"]["local-echo"]["max_model_len"] == 32768
 
@@ -400,7 +406,7 @@ def test_readyz_reports_trusted_bootstrap_writable_state(tmp_path, monkeypatch) 
     )
 
     with TestClient(create_app(root)) as client:
-        response = client.get("/readyz")
+        response = client.get("/readyz/details")
 
     payload = response.json()["trusted_bootstrap"]
     assert payload["enabled"] is True
@@ -459,6 +465,34 @@ def test_tenant_budget_rejects_before_provider_execution(tmp_path, monkeypatch) 
 
     assert response.status_code == 402
     assert response.json()["code"] == "TENANT_BUDGET_EXCEEDED"
+
+
+def test_tenant_budget_reservation_is_refunded_on_tuple_error(tmp_path, monkeypatch) -> None:
+    async def fake_execute_sync(_plan):
+        from gpucall.domain import TupleError
+
+        raise TupleError("provider failed", retryable=True, status_code=503, code="PROVIDER_ERROR")
+
+    monkeypatch.setenv("GPUCALL_TENANT_API_KEYS", "tenant-a:secret-a")
+    root = copy_config(tmp_path)
+    surface_path = root / "surfaces" / "local-echo.yml"
+    surface = yaml.safe_load(surface_path.read_text(encoding="utf-8"))
+    surface["cost_per_second"] = 1
+    surface_path.write_text(yaml.safe_dump(surface, sort_keys=False), encoding="utf-8")
+    tenant_path = root / "tenants" / "tenant-a.yml"
+    tenant_path.write_text("name: tenant-a\nrequests_per_minute: 120\ndaily_budget_usd: 10\nobject_prefix: tenant-a\n", encoding="utf-8")
+
+    with TestClient(create_app(root)) as client:
+        monkeypatch.setattr(client.app.state.runtime.dispatcher, "execute_sync", fake_execute_sync)
+        response = client.post(
+            "/v2/tasks/sync",
+            json={"task": "infer", "mode": "sync"},
+            headers={"authorization": "Bearer secret-a"},
+        )
+        usage = client.app.state.runtime.tenant_usage.summary(client.app.state.runtime.tenants)
+
+    assert response.status_code == 503
+    assert usage["tenant-a"]["daily_estimated_spend_usd"] == 0.0
 
 
 def test_tenant_object_prefix_is_applied_to_presign_put(tmp_path, monkeypatch) -> None:
@@ -854,6 +888,42 @@ def test_debug_flag_allows_caller_routing(tmp_path, monkeypatch) -> None:
         )
 
     assert response.status_code == 200
+
+
+def test_debug_flag_does_not_allow_public_circuit_bypass(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("GPUCALL_ALLOW_CALLER_ROUTING", "1")
+    with TestClient(create_app(copy_config(tmp_path))) as client:
+        response = client.post(
+            "/v2/tasks/sync",
+            json={
+                "task": "infer",
+                "mode": "sync",
+                "recipe": "text-infer-standard",
+                "requested_tuple": "local-echo",
+                "bypass_circuit_for_validation": True,
+            },
+        )
+
+    assert response.status_code == 400
+    assert "bypass_circuit_for_validation" in response.json()["detail"]
+
+
+def test_production_ignores_debug_auth_and_routing_flags(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("GPUCALL_ENV", "production")
+    monkeypatch.setenv("GPUCALL_ALLOW_UNAUTHENTICATED", "1")
+    monkeypatch.setenv("GPUCALL_ALLOW_CALLER_ROUTING", "1")
+    monkeypatch.setenv("GPUCALL_TENANT_API_KEYS", "test:gpk_prod")
+    with TestClient(create_app(copy_config(tmp_path))) as client:
+        unauthenticated = client.post("/v2/tasks/sync", json={"task": "infer", "mode": "sync"})
+        routed = client.post(
+            "/v2/tasks/sync",
+            headers={"authorization": "Bearer gpk_prod"},
+            json={"task": "infer", "mode": "sync", "recipe": "text-infer-standard"},
+        )
+
+    assert unauthenticated.status_code == 401
+    assert routed.status_code == 400
+    assert "caller-controlled routing is disabled" in routed.json()["detail"]
 
 
 def test_openai_chat_completions_facade_returns_compatible_shape(tmp_path) -> None:

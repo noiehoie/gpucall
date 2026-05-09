@@ -92,7 +92,7 @@ with GPUCallClient("http://127.0.0.1:18088") as client:
 TypeScript:
 
 ```ts
-import { GPUCallClient } from "gpucall-sdk";
+import { GPUCallClient } from "@gpucall/sdk";
 
 const client = GPUCallClient.fromEnv("http://127.0.0.1:18088");
 console.log(await client.infer({ prompt: "hello" }));

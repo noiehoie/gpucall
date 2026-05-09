@@ -4,6 +4,10 @@ import re
 import subprocess
 from pathlib import Path
 
+import yaml
+
+from gpucall.recipe_intents import CAPABILITY_BY_INTENT
+
 
 def test_tracked_files_do_not_contain_private_operator_artifacts() -> None:
     root = Path(__file__).resolve().parents[1]
@@ -24,6 +28,10 @@ def test_tracked_files_do_not_contain_private_operator_artifacts() -> None:
         "PRIVATE KEY",
         r"sk-[A-Za-z0-9]",
         r"AKIA[0-9A-Z]{16}",
+        r"no eligible provider after policy, recipe, and circuit constraints",
+        r"provider-smoke",
+        r"https://raw\.githubusercontent\.com/noiehoie/gpucall3/main/",
+        r"sdk/python/dist/.*\.whl",
     ]
     compiled = re.compile("|".join(patterns))
 
@@ -43,3 +51,32 @@ def test_tracked_files_do_not_contain_private_operator_artifacts() -> None:
                 findings.append(f"{relative}:{lineno}:{line}")
 
     assert findings == []
+
+
+def test_recipe_intents_are_registered() -> None:
+    root = Path(__file__).resolve().parents[1]
+    intents: set[str] = set()
+    for directory in (root / "config" / "recipes", root / "gpucall" / "config_templates" / "recipes"):
+        for path in directory.glob("*.yml"):
+            data = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+            intent = data.get("intent")
+            if intent:
+                intents.add(str(intent))
+
+    assert sorted(intent for intent in intents if intent not in CAPABILITY_BY_INTENT) == []
+
+
+def test_admin_automation_defaults_are_closed() -> None:
+    root = Path(__file__).resolve().parents[1]
+    for relative in ("config/admin.yml", "config/admin.yml.example", "gpucall/config_templates/admin.yml.example"):
+        data = yaml.safe_load((root / relative).read_text(encoding="utf-8")) or {}
+        assert data.get("recipe_inbox_auto_materialize") is False
+        assert data.get("api_key_handoff_mode") == "manual"
+
+
+def test_runpod_flash_is_optional_provider_dependency() -> None:
+    root = Path(__file__).resolve().parents[1]
+    text = (root / "pyproject.toml").read_text(encoding="utf-8")
+    project_deps = text.split("[project.optional-dependencies]", 1)[0]
+    assert "runpod-flash" not in project_deps
+    assert "runpod-flash" in text

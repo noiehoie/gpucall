@@ -1,6 +1,6 @@
 [project]
 name = "gpucall-sdk"
-version = "2.0.0a2"
+version = "2.0.8"
 description = "Lightweight Python SDK for gpucall v2.0 Gateway"
 readme = "README.md"
 requires-python = ">=3.11"

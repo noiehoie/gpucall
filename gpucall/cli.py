@@ -24,6 +24,7 @@ if __package__ in (None, ""):
 
 from gpucall.app import build_runtime, create_app, plan_with_worker_refs, worker_readable_request
 from gpucall.catalog import SQLiteCapabilityCatalog, dumps_snapshot
+from gpucall.handoff import handoff_payload as _handoff_payload, render_handoff as _render_handoff
 from gpucall.cli_commands.readiness import add_readiness_parser, run_readiness_command
 from gpucall.compiler import GovernanceCompiler
 from gpucall.config import ConfigError, default_config_dir, default_state_dir, load_config
@@ -624,30 +625,6 @@ def _create_tenant_key(name: str) -> str:
 
     save_credentials("auth", auth)
     return token
-
-
-def _handoff_payload(*, tenant: str, token: str, gateway_url: str, recipe_inbox: str) -> dict[str, str]:
-    return {
-        "GPUCALL_TENANT": tenant,
-        "GPUCALL_BASE_URL": gateway_url,
-        "GPUCALL_API_KEY": token,
-        "GPUCALL_RECIPE_INBOX": recipe_inbox,
-        "GPUCALL_ONBOARDING_PROMPT_URL": "https://raw.githubusercontent.com/noiehoie/gpucall3/main/docs/EXTERNAL_SYSTEM_ONBOARDING_PROMPT.md",
-        "GPUCALL_ONBOARDING_MANUAL_URL": "https://raw.githubusercontent.com/noiehoie/gpucall3/main/docs/EXTERNAL_SYSTEM_ONBOARDING_MANUAL.md",
-        "GPUCALL_SDK_WHEEL_URL": "https://raw.githubusercontent.com/noiehoie/gpucall3/main/sdk/python/dist/gpucall_sdk-2.0.0a2-py3-none-any.whl",
-    }
-
-
-def _render_handoff(payload: dict[str, str], output_format: str) -> str:
-    if output_format == "json":
-        return json.dumps(payload, indent=2, sort_keys=True) + "\n"
-    if output_format == "env":
-        return "".join(f"{key}={_shell_quote(value)}\n" for key, value in payload.items())
-    raise SystemExit(f"unknown handoff format: {output_format}")
-
-
-def _shell_quote(value: str) -> str:
-    return "'" + value.replace("'", "'\"'\"'") + "'"
 
 
 def _write_secret_file(path: Path, payload: str) -> None:

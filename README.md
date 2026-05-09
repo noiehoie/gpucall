@@ -164,7 +164,10 @@ async with AsyncGPUCallClient("http://127.0.0.1:18088") as client:
 
 Files are uploaded to the configured object store with presigned PUT and sent to the gateway as `DataRef`. The SDK is distributed as the separate `gpucall-sdk` package; the gateway wheel does not include the SDK package.
 
-## TypeScript SDK
+## TypeScript SDK (source-only, not published to npm)
+
+The TypeScript client lives in this repository for source builds and API
+review. It is not published as `@gpucall/sdk` yet.
 
 ```ts
 import { GPUCallClient } from "@gpucall/sdk";
@@ -192,8 +195,8 @@ onboarding.
 For an AI CLI running outside this repository, use the raw URLs:
 
 ```text
-https://raw.githubusercontent.com/noiehoie/gpucall3/main/docs/EXTERNAL_SYSTEM_ONBOARDING_PROMPT.md
-https://raw.githubusercontent.com/noiehoie/gpucall3/main/docs/EXTERNAL_SYSTEM_ONBOARDING_MANUAL.md
+https://raw.githubusercontent.com/noiehoie/gpucall3/v2.0.8/docs/EXTERNAL_SYSTEM_ONBOARDING_PROMPT.md
+https://raw.githubusercontent.com/noiehoie/gpucall3/v2.0.8/docs/EXTERNAL_SYSTEM_ONBOARDING_MANUAL.md
 ```
 
 The external-system agent should read those documents only. It should not clone,
@@ -203,15 +206,16 @@ explicitly asks for that. Its worktree is the application being migrated.
 If the caller-side helper is not installed, install only the SDK helper wheel:
 
 ```bash
-uv tool install https://raw.githubusercontent.com/noiehoie/gpucall3/main/sdk/python/dist/gpucall_sdk-2.0.0a2-py3-none-any.whl
+uv tool install https://github.com/noiehoie/gpucall3/releases/download/v2.0.8/gpucall_sdk-2.0.8-py3-none-any.whl
 gpucall-recipe-draft --help
 ```
 
 This installs `gpucall-recipe-draft` and `gpucall_sdk`; it does not install the
 gateway router. `gpucall-migrate` is optional and should be used only when it is
 already available.
-Wheel checksums are published at
-[sdk/python/dist/SHA256SUMS](sdk/python/dist/SHA256SUMS).
+Wheel checksums are published with the GitHub Release assets. Verify the
+downloaded wheel against the matching release checksum before installing it in
+production automation.
 
 External systems should normally send only `task`, `mode`, and input data or `DataRef`; recipe and provider selection belong to the gateway.
 
@@ -241,7 +245,7 @@ If a caller's workload is unknown to the installed recipe catalog and production
 Unknown workloads return a structured governance error instead of being silently routed:
 
 - `422 NO_AUTO_SELECTABLE_RECIPE`: no installed recipe honestly describes the request.
-- `503 no eligible provider after policy, recipe, and circuit constraints`: a recipe exists, but no currently eligible provider can execute it.
+- `503 no eligible tuple after policy, recipe, and circuit constraints`: a recipe exists, but no currently eligible provider can execute it.
 
 The response includes a `failure_artifact` with redacted request metadata, rejection reasons, `caller_action`, and a redaction guarantee.
 

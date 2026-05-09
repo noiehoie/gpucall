@@ -26,6 +26,7 @@ from gpucall.app_helpers import (
     compiled_plan_hash,
     enforce_gateway_owned_routing,
     enforce_request_budget,
+    refund_request_budget,
     error_response,
     build_governance_failure_artifact,
     build_provider_failure_artifact,
@@ -58,11 +59,12 @@ from gpucall.audit import AuditTrail
 from gpucall.compiler import GovernanceCompiler, GovernanceError
 from gpucall.config import ConfigError, default_config_dir, default_state_dir, load_config
 from gpucall.credentials import credentials_path, load_credentials, save_credentials
-from gpucall.dispatcher import Dispatcher, LeaseReaper, TupleReconciler
+from gpucall.dispatcher import Dispatcher, JobStore, LeaseReaper, TupleReconciler
 from gpucall.domain import ApiKeyHandoffMode, ChatMessage, DataRef, ExecutionMode, InlineValue, JobRecord, JobState, TenantSpec, TupleError, ResponseFormat, TaskRequest, recipe_requirements
 from gpucall.domain import PresignGetRequest, PresignGetResponse, PresignPutRequest, PresignPutResponse
 from gpucall.object_store import ObjectStore
 from gpucall.execution.factory import build_adapters
+from gpucall.handoff import handoff_payload as _bootstrap_handoff_payload
 from gpucall.postgres_store import PostgresIdempotencyStore, PostgresJobStore
 from gpucall.registry import ObservedRegistry
 from gpucall.routing import route_warning_tags
@@ -84,13 +86,13 @@ class Runtime(BaseModel):
 
     compiler: GovernanceCompiler
     dispatcher: Dispatcher
-    jobs: Any
+    jobs: JobStore
     reaper: LeaseReaper
     reconciler: TupleReconciler
     artifact_registry: SQLiteArtifactRegistry
     object_store: ObjectStore | None = None
-    tenants: dict[str, Any] = {}
-    tenant_usage: Any = None
+    tenants: dict[str, TenantSpec] = {}
+    tenant_usage: TenantUsageLedger
     metrics: dict[str, Any] = {}
 
 
@@ -200,9 +202,7 @@ def _bootstrap_writable_status(config_dir: Path) -> dict[str, object]:
     tenants_dir = config_dir / "tenants"
     creds = credentials_path()
     return {
-        "tenants_dir": str(tenants_dir),
         "tenants_dir_writable": tenants_dir.exists() and os.access(tenants_dir, os.W_OK),
-        "credentials_path": str(creds),
         "credentials_writable": creds.exists() and os.access(creds, os.W_OK),
     }
 
@@ -236,18 +236,6 @@ def _parse_bootstrap_tenant_keys(raw: str) -> dict[str, str]:
         if sep and tenant and key:
             pairs[tenant] = key
     return pairs
-
-
-def _bootstrap_handoff_payload(*, tenant: str, token: str, gateway_url: str, recipe_inbox: str) -> dict[str, str]:
-    return {
-        "GPUCALL_TENANT": tenant,
-        "GPUCALL_BASE_URL": gateway_url,
-        "GPUCALL_API_KEY": token,
-        "GPUCALL_RECIPE_INBOX": recipe_inbox,
-        "GPUCALL_ONBOARDING_PROMPT_URL": "https://raw.githubusercontent.com/noiehoie/gpucall3/main/docs/EXTERNAL_SYSTEM_ONBOARDING_PROMPT.md",
-        "GPUCALL_ONBOARDING_MANUAL_URL": "https://raw.githubusercontent.com/noiehoie/gpucall3/main/docs/EXTERNAL_SYSTEM_ONBOARDING_MANUAL.md",
-        "GPUCALL_SDK_WHEEL_URL": "https://raw.githubusercontent.com/noiehoie/gpucall3/main/sdk/python/dist/gpucall_sdk-2.0.0a2-py3-none-any.whl",
-    }
 
 
 def build_runtime(config_dir: Path) -> Runtime:
@@ -329,6 +317,7 @@ def create_app(config_dir: Path | None = None) -> FastAPI:
     idempotency_locks: dict[str, asyncio.Lock] = {}
     idempotency_locks_guard = asyncio.Lock()
     rate_limit: dict[str, list[float]] = {}
+    rate_limit_prune_next = 0.0
     requests_per_minute = int(os.getenv("GPUCALL_RATE_LIMIT_PER_MINUTE", "120"))
     idempotency_ttl_seconds = float(os.getenv("GPUCALL_IDEMPOTENCY_TTL_SECONDS", "3600"))
     idempotency_cache_max = int(os.getenv("GPUCALL_IDEMPOTENCY_CACHE_MAX", "10000"))
@@ -414,6 +403,7 @@ def create_app(config_dir: Path | None = None) -> FastAPI:
 
     @app.middleware("http")
     async def basic_rate_limit(request: Request, call_next):
+        nonlocal rate_limit_prune_next
         if request.url.path in {"/healthz", "/readyz"}:
             return await call_next(request)
         tenant_id = getattr(request.state, "tenant_id", None)
@@ -427,7 +417,9 @@ def create_app(config_dir: Path | None = None) -> FastAPI:
             return error_response(429, "rate limit exceeded")
         window.append(now)
         rate_limit[identity] = window
-        prune_rate_limit(rate_limit, now, max_identities=rate_limit_identity_max)
+        if len(rate_limit) > rate_limit_identity_max or now >= rate_limit_prune_next:
+            prune_rate_limit(rate_limit, now, max_identities=rate_limit_identity_max)
+            rate_limit_prune_next = now + 10.0
         started = time.monotonic()
         response = await call_next(request)
         runtime = getattr(app.state, "runtime", None)
@@ -449,8 +441,7 @@ def create_app(config_dir: Path | None = None) -> FastAPI:
     async def healthz() -> dict[str, str]:
         return {"status": "ok"}
 
-    @app.get("/readyz")
-    async def readyz(runtime: Runtime = Depends(runtime_dep)) -> dict[str, object]:
+    def _readyz_details(runtime: Runtime) -> dict[str, object]:
         return {
             "status": "ready",
             "object_store": runtime.object_store is not None,
@@ -479,6 +470,14 @@ def create_app(config_dir: Path | None = None) -> FastAPI:
                 for name, tuple in sorted(runtime.compiler.tuples.items())
             },
         }
+
+    @app.get("/readyz")
+    async def readyz() -> dict[str, str]:
+        return {"status": "ready"}
+
+    @app.get("/readyz/details")
+    async def readyz_details(runtime: Runtime = Depends(runtime_dep)) -> dict[str, object]:
+        return _readyz_details(runtime)
 
     def _metrics_payload(runtime: Runtime) -> dict[str, object]:
         latencies = runtime.metrics.get("latency_ms", [])
@@ -531,7 +530,6 @@ def create_app(config_dir: Path | None = None) -> FastAPI:
                 "tenant": tenant_name,
                 "api_key": token,
                 "api_key_fingerprint": hashlib.sha256(token.encode("utf-8")).hexdigest()[:16],
-                "credentials_path": str(credentials_path()),
                 "handoff": payload,
                 "secret_handling": "store this response in the caller system secret manager; do not log it",
             }
@@ -543,6 +541,7 @@ def create_app(config_dir: Path | None = None) -> FastAPI:
     ) -> JSONResponse:
         if request.mode is not ExecutionMode.SYNC:
             raise HTTPException(status_code=400, detail="use /v2/tasks/sync with mode=sync")
+        plan = None
         try:
             enforce_gateway_owned_routing(request)
             plan = runtime.compiler.compile(request)
@@ -591,6 +590,7 @@ def create_app(config_dir: Path | None = None) -> FastAPI:
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         except TupleError as exc:
+            refund_request_budget(runtime, plan)
             record_error_code(runtime, exc.code or "TUPLE_ERROR")
             return tuple_error_response(exc, request=request)
         except TenantBudgetError as exc:
@@ -627,6 +627,7 @@ def create_app(config_dir: Path | None = None) -> FastAPI:
             response_format=request.response_format,
             metadata=request.metadata,
         )
+        plan = None
         try:
             plan = runtime.compiler.compile(task_request)
             await enforce_request_budget(runtime, http_request, plan)
@@ -639,6 +640,7 @@ def create_app(config_dir: Path | None = None) -> FastAPI:
                                 yielded = True
                                 yield chunk
                     except TupleError as exc:
+                        refund_request_budget(runtime, plan)
                         record_error_code(runtime, exc.code or "TUPLE_ERROR")
                         yield "data: " + json.dumps({"error": {"message": public_tuple_error(exc), "code": exc.code or "tuple_error"}}, separators=(",", ":")) + "\n\n"
                     yield "data: " + json.dumps(_openai_stream_chunk(request.model, "", finish_reason="stop"), separators=(",", ":")) + "\n\n"
@@ -676,6 +678,7 @@ def create_app(config_dir: Path | None = None) -> FastAPI:
                 gpucall_failure_artifact=build_governance_failure_artifact(exc, task_request),
             )
         except TupleError as exc:
+            refund_request_budget(runtime, plan)
             record_error_code(runtime, exc.code or "TUPLE_ERROR")
             headers: dict[str, str] = {}
             if exc.raw_output is not None:
@@ -697,6 +700,7 @@ def create_app(config_dir: Path | None = None) -> FastAPI:
     ) -> JSONResponse:
         if request.mode is not ExecutionMode.ASYNC:
             raise HTTPException(status_code=400, detail="use /v2/tasks/async with mode=async")
+        plan = None
         try:
             enforce_gateway_owned_routing(request)
             plan = runtime.compiler.compile(request)
@@ -749,6 +753,10 @@ def create_app(config_dir: Path | None = None) -> FastAPI:
             return governance_error_response(exc, request=request)
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
+        except TupleError as exc:
+            refund_request_budget(runtime, plan)
+            record_error_code(runtime, exc.code or "TUPLE_ERROR")
+            return tuple_error_response(exc, request=request)
         except TenantBudgetError as exc:
             record_error_code(runtime, exc.code)
             return tenant_budget_error_response(exc, request=request)
@@ -757,6 +765,7 @@ def create_app(config_dir: Path | None = None) -> FastAPI:
     async def task_stream(request: TaskRequest, http_request: Request, runtime: Runtime = Depends(runtime_dep)) -> StreamingResponse:
         if request.mode is not ExecutionMode.STREAM:
             raise HTTPException(status_code=400, detail="use /v2/tasks/stream with mode=stream")
+        plan = None
         try:
             enforce_gateway_owned_routing(request)
             plan = runtime.compiler.compile(request)
@@ -775,6 +784,7 @@ def create_app(config_dir: Path | None = None) -> FastAPI:
                 async for event in runtime.dispatcher.execute_stream(plan):
                     yield event
             except TupleError as exc:
+                refund_request_budget(runtime, plan)
                 record_error_code(runtime, exc.code or "TUPLE_ERROR")
                 yield "event: error\n"
                 yield "data: " + json.dumps({"code": exc.code or "TUPLE_ERROR", "message": public_tuple_error(exc)}, separators=(",", ":")) + "\n\n"
@@ -798,6 +808,7 @@ def create_app(config_dir: Path | None = None) -> FastAPI:
                     break
                 continue
             try:
+                plan = None
                 enforce_gateway_owned_routing(item)
                 plan = runtime.compiler.compile(item)
                 await enforce_request_budget(runtime, http_request, plan)
@@ -822,6 +833,7 @@ def create_app(config_dir: Path | None = None) -> FastAPI:
                 if not request.continue_on_error:
                     break
             except TupleError as exc:
+                refund_request_budget(runtime, plan)
                 record_error_code(runtime, exc.code or "TUPLE_ERROR")
                 status_code = 207
                 results.append({"index": index, "ok": False, "status_code": exc.status_code, "code": exc.code or "TUPLE_ERROR", "error": public_tuple_error(exc)})

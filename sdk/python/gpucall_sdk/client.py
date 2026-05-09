@@ -627,7 +627,7 @@ def _raise_typed_http_error(response: httpx.Response, exc: httpx.HTTPStatusError
     detail_text = str(detail or "")
     if code == "NO_AUTO_SELECTABLE_RECIPE":
         error_class = GPUCallNoRecipeError
-    elif code == "NO_ELIGIBLE_TUPLE" or "NO_ELIGIBLE_TUPLE" in detail_text or "no eligible provider" in detail_text:
+    elif code == "NO_ELIGIBLE_TUPLE" or "NO_ELIGIBLE_TUPLE" in detail_text:
         error_class = GPUCallNoEligibleTupleError
     elif response.status_code >= 500:
         error_class = GPUCallProviderRuntimeError

@@ -114,7 +114,7 @@ For fully unattended internal environments, use:
 ```yaml
 api_key_handoff_mode: trusted_bootstrap
 api_key_bootstrap_allowed_cidrs:
-  - 10.0.0.0/24
+  - 10.0.0.42/32
 api_key_bootstrap_gateway_url: https://gpucall.example.internal
 api_key_bootstrap_recipe_inbox: admin@gpucall.example.internal:/srv/gpucall/state/recipe_requests/inbox
 ```
@@ -154,9 +154,9 @@ GPUCALL_TENANT='example-system'
 GPUCALL_BASE_URL='https://gpucall-gateway.example.internal'
 GPUCALL_API_KEY='gpk_...'
 GPUCALL_RECIPE_INBOX='admin@gateway.example.internal:/opt/gpucall/state/recipe_requests/inbox'
-GPUCALL_ONBOARDING_PROMPT_URL='https://raw.githubusercontent.com/noiehoie/gpucall3/main/docs/EXTERNAL_SYSTEM_ONBOARDING_PROMPT.md'
-GPUCALL_ONBOARDING_MANUAL_URL='https://raw.githubusercontent.com/noiehoie/gpucall3/main/docs/EXTERNAL_SYSTEM_ONBOARDING_MANUAL.md'
-GPUCALL_SDK_WHEEL_URL='https://raw.githubusercontent.com/noiehoie/gpucall3/main/sdk/python/dist/gpucall_sdk-2.0.0a2-py3-none-any.whl'
+GPUCALL_ONBOARDING_PROMPT_URL='https://raw.githubusercontent.com/noiehoie/gpucall3/v2.0.8/docs/EXTERNAL_SYSTEM_ONBOARDING_PROMPT.md'
+GPUCALL_ONBOARDING_MANUAL_URL='https://raw.githubusercontent.com/noiehoie/gpucall3/v2.0.8/docs/EXTERNAL_SYSTEM_ONBOARDING_MANUAL.md'
+GPUCALL_SDK_WHEEL_URL='https://github.com/noiehoie/gpucall3/releases/download/v2.0.8/gpucall_sdk-2.0.8-py3-none-any.whl'
 ```
 
 For machine-to-machine provisioning, use JSON:
@@ -260,9 +260,9 @@ facts, not provider credentials:
 GPUCALL_BASE_URL=https://gpucall-gateway.example.internal
 GPUCALL_API_KEY=<gateway key generated for this system>
 GPUCALL_RECIPE_INBOX=admin@gateway.example.internal:/opt/gpucall/state/recipe_requests/inbox
-ONBOARDING_PROMPT=https://raw.githubusercontent.com/noiehoie/gpucall3/main/docs/EXTERNAL_SYSTEM_ONBOARDING_PROMPT.md
-ONBOARDING_MANUAL=https://raw.githubusercontent.com/noiehoie/gpucall3/main/docs/EXTERNAL_SYSTEM_ONBOARDING_MANUAL.md
-CALLER_HELPER_INSTALL=https://raw.githubusercontent.com/noiehoie/gpucall3/main/sdk/python/dist/gpucall_sdk-2.0.0a2-py3-none-any.whl
+ONBOARDING_PROMPT=https://raw.githubusercontent.com/noiehoie/gpucall3/v2.0.8/docs/EXTERNAL_SYSTEM_ONBOARDING_PROMPT.md
+ONBOARDING_MANUAL=https://raw.githubusercontent.com/noiehoie/gpucall3/v2.0.8/docs/EXTERNAL_SYSTEM_ONBOARDING_MANUAL.md
+CALLER_HELPER_INSTALL=https://github.com/noiehoie/gpucall3/releases/download/v2.0.8/gpucall_sdk-2.0.8-py3-none-any.whl
 ```
 
 Only `GPUCALL_API_KEY` is secret. The other values may still be operationally
