@@ -4,7 +4,6 @@ task: infer
 intent: extra_large_context_text_inference
 data_classification: confidential
 allowed_modes:
-- sync
 - async
 context_budget_tokens: 131072
 resource_class: exlarge

@@ -15,7 +15,7 @@ import yaml
 
 from gpucall.config import ConfigError, load_config
 from gpucall.cli import _provider_smoke_request
-from gpucall.compiler import GovernanceCompiler
+from gpucall.compiler import GovernanceCompiler, GovernanceError
 from gpucall.domain import DataRef, ExecutionMode, ExecutionTupleSpec, ObjectStoreConfig, Recipe, SecurityTier, TaskRequest, recipe_requirements
 from gpucall.registry import ObservedRegistry
 
@@ -330,18 +330,20 @@ def test_standard_config_routes_news_sized_prompts_to_long_recipes(tmp_path) -> 
     large_plan = compiler.compile(
         TaskRequest(
             task="infer",
-            mode=ExecutionMode.SYNC,
+            mode=ExecutionMode.ASYNC,
             input_refs=[DataRef(uri="s3://bucket/chosun.txt", sha256="a" * 64, bytes=32000, content_type="text/plain")],
         )
     )
     ultralong_plan = compiler.compile(
         TaskRequest(
             task="infer",
-            mode=ExecutionMode.SYNC,
+            mode=ExecutionMode.ASYNC,
             input_refs=[DataRef(uri="s3://bucket/integrated.txt", sha256="b" * 64, bytes=220000, content_type="text/plain")],
         )
     )
 
+    assert config.recipes["text-infer-large"].allowed_modes == [ExecutionMode.ASYNC]
+    assert config.recipes["text-infer-ultralong"].allowed_modes == [ExecutionMode.ASYNC]
     assert large_plan.recipe_name == "text-infer-large"
     assert large_plan.tuple_chain[0] == "hyperstack-qwen-1m"
     assert "modal-h200x4-qwen25-14b-1m" in large_plan.tuple_chain
@@ -352,6 +354,21 @@ def test_standard_config_routes_news_sized_prompts_to_long_recipes(tmp_path) -> 
     assert ultralong_plan.recipe_name == "text-infer-ultralong"
     assert ultralong_plan.tuple_chain[0] == "hyperstack-qwen-1m"
     assert "modal-h200x4-qwen25-14b-1m" in ultralong_plan.tuple_chain
+
+
+def test_standard_config_rejects_sync_for_long_context_text(tmp_path) -> None:
+    config = load_config(copy_config(tmp_path))
+    compiler = GovernanceCompiler(policy=config.policy, recipes=config.recipes, tuples=config.tuples, registry=ObservedRegistry())
+
+    with pytest.raises(GovernanceError) as excinfo:
+        compiler.compile(
+            TaskRequest(
+                task="infer",
+                mode=ExecutionMode.SYNC,
+                input_refs=[DataRef(uri="s3://bucket/large.txt", sha256="b" * 64, bytes=32000, content_type="text/plain")],
+            )
+        )
+    assert excinfo.value.code == "NO_AUTO_SELECTABLE_RECIPE"
 
 
 def test_standard_config_transport_matrix_is_explicit(tmp_path) -> None:
@@ -379,7 +396,7 @@ def test_standard_config_transport_matrix_is_explicit(tmp_path) -> None:
             "large text dataref",
             TaskRequest(
                 task="infer",
-                mode=ExecutionMode.SYNC,
+                mode=ExecutionMode.ASYNC,
                 input_refs=[DataRef(uri="s3://bucket/large.txt", sha256="b" * 64, bytes=32000, content_type="text/plain")],
             ),
             "text-infer-large",

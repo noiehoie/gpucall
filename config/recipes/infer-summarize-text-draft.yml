@@ -5,7 +5,7 @@ intent: summarize_text
 auto_select: true
 data_classification: confidential
 allowed_modes:
-- sync
+- async
 context_budget_tokens: 1010000
 resource_class: ultralong
 latency_class: long_running

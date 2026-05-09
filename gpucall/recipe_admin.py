@@ -30,6 +30,7 @@ def main(argv: list[str] | None = None) -> int:
 
     materialize = subcommands.add_parser("materialize", help="materialize caller intake/draft into canonical gpucall recipe YAML")
     materialize.add_argument("--input", "-i", required=True, help="path to caller intake/draft JSON, or '-' for stdin")
+    materialize.add_argument("--config-dir", help="gpucall config directory whose catalog should guide materialization")
     materialize.add_argument("--output-dir", help="directory to write recipe YAML")
     materialize.add_argument("--report", help="write materialization report JSON")
     materialize.add_argument("--accept-all", action="store_true", help="explicitly accept caller artifact into a recipe intent candidate")
@@ -100,8 +101,9 @@ def main(argv: list[str] | None = None) -> int:
         if not args.accept_all:
             raise SystemExit("refusing to materialize without --accept-all")
         artifact = _load_json(args.input)
-        recipe = canonical_recipe_from_artifact(artifact)
-        report = materialization_report(artifact, recipe)
+        catalog = _materialization_catalog(args.config_dir)
+        recipe = canonical_recipe_from_artifact(artifact, catalog=catalog)
+        report = materialization_report(artifact, recipe, catalog=catalog)
         if args.dry_run or not args.output_dir:
             sys.stdout.write(to_yaml(recipe))
         else:
@@ -220,7 +222,8 @@ def review_artifact(
         report["submission_kind"] = artifact_or_submission.get("kind") if isinstance(artifact_or_submission, Mapping) else None
         report["intake_phase"] = artifact.get("phase")
         _review_redaction(artifact, report)
-        recipe_dict = canonical_recipe_from_artifact(artifact)
+        catalog = _materialization_catalog(config_dir)
+        recipe_dict = canonical_recipe_from_artifact(artifact, catalog=catalog)
         recipe = Recipe.model_validate(recipe_dict)
         report["canonical_recipe"] = recipe.model_dump(mode="json")
         report["required_execution_contract"] = tuple_contract_requirements(artifact, recipe)
@@ -263,6 +266,7 @@ def process_inbox(
     index = RecipeRequestIndex(index_db or default_recipe_request_index_path(inbox))
     output = Path(output_dir)
     output.mkdir(parents=True, exist_ok=True)
+    catalog = _materialization_catalog(config_dir)
     results: list[dict[str, Any]] = []
     for path in sorted(inbox.glob("*.json")):
         if path.parent != inbox:
@@ -275,10 +279,15 @@ def process_inbox(
             if review.get("decision") == "REJECT":
                 raise ValueError("admin review rejected submission: " + "; ".join(_finding_reasons(review.get("blockers"))))
             artifact = _artifact_from_submission(submission)
-            recipe = canonical_recipe_from_artifact(artifact)
-            report = materialization_report(artifact, recipe)
+            recipe = canonical_recipe_from_artifact(artifact, catalog=catalog)
+            report = materialization_report(artifact, recipe, catalog=catalog)
             report["admin_review"] = review
-            recipe_path = write_recipe_yaml(recipe, output, force=force)
+            recipe_path = output / f"{recipe['name']}.yml"
+            if recipe_path.exists() and not force:
+                report["processing_action"] = "existing_recipe_linked"
+            else:
+                recipe_path = write_recipe_yaml(recipe, output, force=force)
+                report["processing_action"] = "recipe_written"
             report["recipe_path"] = str(recipe_path)
             report["submission_path"] = str(path)
             report["catalog_readiness"] = _recipe_readiness_from_review(review, config_dir=config_dir)
@@ -294,6 +303,12 @@ def process_inbox(
             index.mark_failed(request_id, original_path=destination, error=str(exc))
             results.append({"submission": str(destination), "ok": False, "error": str(exc)})
     return results
+
+
+def _materialization_catalog(config_dir: str | Path | None) -> Any | None:
+    if config_dir is None:
+        return None
+    return load_config(Path(config_dir).expanduser())
 
 
 def _recipe_readiness_from_review(review: Mapping[str, Any], *, config_dir: str | Path | None) -> dict[str, Any]:

@@ -4,7 +4,6 @@ task: infer
 intent: ultralong_text_inference
 data_classification: confidential
 allowed_modes:
-- sync
 - async
 context_budget_tokens: 524288
 resource_class: ultralong

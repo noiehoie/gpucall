@@ -2,10 +2,12 @@ from __future__ import annotations
 
 import json
 import shutil
+from pathlib import Path
 
 import pytest
 import yaml
 
+from gpucall.config import load_config
 from gpucall.recipe_admin import canonical_recipe_from_artifact, main, process_inbox, promote_production_tuple, recipe_request_status, review_artifact
 from gpucall.recipe_request_index import RecipeRequestIndex
 
@@ -89,8 +91,33 @@ def test_admin_materialize_writes_yaml_and_report(tmp_path) -> None:
     assert recipe["name"] == "infer-summarize-text-draft"
     assert recipe["recipe_schema_version"] == 3
     assert recipe["context_budget_tokens"] == 65536
+    assert recipe["allowed_modes"] == ["async"]
+    assert recipe["auto_select"] is False
+    assert report["catalog_policy"]["requires_async"] is True
     assert report["policy"] == "accept-all"
     assert report["human_review_bypassed"] is True
+
+
+def test_admin_materializer_uses_catalog_cold_start_to_force_async() -> None:
+    intake = {
+        "sanitized_request": {
+            "task": "infer",
+            "mode": "sync",
+            "intent": "topic_ranking",
+            "classification": "confidential",
+            "desired_capabilities": ["summarization", "instruction_following"],
+            "error": {"context": {"context_budget_tokens": 46000}},
+        },
+        "redaction_report": {"prompt_body_forwarded": False, "data_ref_uri_forwarded": False, "presigned_url_forwarded": False},
+    }
+
+    catalog = load_config(Path("gpucall/config_templates"))
+    recipe = canonical_recipe_from_artifact(intake, catalog=catalog)
+
+    assert recipe["allowed_modes"] == ["async"]
+    assert recipe["context_budget_tokens"] == 65536
+    assert recipe["resource_class"] == "large"
+    assert recipe["auto_select"] is False
 
 
 def test_admin_process_inbox_materializes_submission(tmp_path) -> None:
@@ -210,6 +237,49 @@ def test_admin_process_inbox_reports_catalog_readiness_without_smoke(tmp_path) -
     assert report["catalog_readiness"]["phase"] == "recipe-catalog-readiness"
     assert report["catalog_readiness"]["static_config_valid"] is True
     assert report["catalog_readiness"]["eligible_tuples"]
+
+
+def test_admin_process_inbox_links_existing_recipe_without_overwrite(tmp_path) -> None:
+    config_dir = tmp_path / "config"
+    shutil.copytree("gpucall/config_templates", config_dir)
+    (config_dir / "admin.yml").write_text("recipe_inbox_auto_materialize: true\n", encoding="utf-8")
+    inbox = tmp_path / "inbox"
+    output_dir = config_dir / "recipes"
+    inbox.mkdir()
+    recipe_path = output_dir / "infer-summarize-text-draft.yml"
+    recipe_path.write_text(
+        yaml.safe_dump(
+            canonical_recipe_from_artifact(
+                {
+                    "sanitized_request": {"task": "infer", "mode": "sync", "intent": "summarize_text"},
+                    "redaction_report": {"prompt_body_forwarded": False, "data_ref_uri_forwarded": False, "presigned_url_forwarded": False},
+                }
+            ),
+            sort_keys=False,
+        ),
+        encoding="utf-8",
+    )
+    before = recipe_path.read_text(encoding="utf-8")
+    (inbox / "rr-test.json").write_text(
+        json.dumps(
+            {
+                "kind": "gpucall.recipe_request_submission",
+                "request_id": "rr-test",
+                "intake": {
+                    "sanitized_request": {"task": "infer", "mode": "sync", "intent": "summarize_text"},
+                    "redaction_report": {"prompt_body_forwarded": False, "data_ref_uri_forwarded": False, "presigned_url_forwarded": False},
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    results = process_inbox(inbox_dir=inbox, output_dir=output_dir, config_dir=config_dir)
+
+    assert results[0]["ok"] is True
+    report = json.loads((inbox / "reports" / "rr-test.report.json").read_text(encoding="utf-8"))
+    assert report["processing_action"] == "existing_recipe_linked"
+    assert recipe_path.read_text(encoding="utf-8") == before
 
 
 def test_admin_process_inbox_indexes_failed_submission(tmp_path) -> None:

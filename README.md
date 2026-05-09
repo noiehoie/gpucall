@@ -264,12 +264,12 @@ gpucall-recipe-draft draft --input intake.json --output recipe-draft.json
 gpucall-recipe-draft submit --intake intake.json --draft recipe-draft.json --remote-inbox admin@gateway.example.internal:/opt/gpucall/state/recipe_requests/inbox
 ```
 
-The caller-side helper is deterministic and does not call an LLM. It prepares sanitized intake and an optional local draft summary so gpucall administrators can decide whether the workload class should become a supported recipe. With `--inbox-dir` or `--remote-inbox`, the helper submits sanitized intake directly to the approved operator inbox. Remote submission uses SSH and does not call the gateway API. If the administrator adopts an accept-all policy, the gateway-side `gpucall-recipe-admin materialize --accept-all` helper can turn sanitized intake into canonical recipe YAML. Any draft or materialized recipe still requires `validate-config`, tests, launch checks, and deployment before subsequent requests can use it.
+The caller-side helper is deterministic and does not call an LLM. It prepares sanitized intake and an optional local draft summary so gpucall administrators can decide whether the workload class should become a supported recipe. With `--inbox-dir` or `--remote-inbox`, the helper submits sanitized intake directly to the approved operator inbox. Remote submission uses SSH and does not call the gateway API. If the administrator adopts an accept-all policy, the gateway-side `gpucall-recipe-admin materialize --accept-all --config-dir <config>` helper can turn sanitized intake into canonical recipe YAML. Materialization consults the installed catalog and deterministic policy: long-context, batch/long-running, and high-cold-start tuple candidates become async-only recipes instead of inheriting a caller's sync request. Any draft or materialized recipe still requires `validate-config`, tests, launch checks, and deployment before subsequent requests can use it.
 
 For fully file-based automation without adding a gateway API, administrators can run:
 
 ```bash
-gpucall-recipe-admin watch --inbox-dir /path/to/inbox --output-dir config/recipes --accept-all
+gpucall-recipe-admin watch --inbox-dir /path/to/inbox --output-dir config/recipes --config-dir config --accept-all
 ```
 
 For a persistent operator host, the same route can be opened by config instead
@@ -298,7 +298,7 @@ validation:
 ```bash
 gpucall-recipe-admin inbox list --inbox-dir /path/to/inbox
 gpucall-recipe-admin inbox status --inbox-dir /path/to/inbox --request-id rr-...
-gpucall-recipe-admin inbox materialize --inbox-dir /path/to/inbox --output-dir config/recipes --accept-all
+gpucall-recipe-admin inbox materialize --inbox-dir /path/to/inbox --output-dir config/recipes --config-dir config --accept-all
 gpucall-recipe-admin inbox readiness --inbox-dir /path/to/inbox --config-dir config
 gpucall readiness --config-dir config --intent translate_text
 ```

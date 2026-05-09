@@ -258,11 +258,12 @@ For low-friction operations, a gpucall administrator may choose an explicit acce
 gpucall-recipe-admin materialize \
   --input intake.json \
   --output-dir config/recipes \
+  --config-dir config \
   --report materialization-report.json \
   --accept-all
 ```
 
-`--accept-all` is required so accidental materialization fails closed. This command writes canonical recipe YAML for the current gpucall schema. It does not create a capable provider, does not edit policy, and does not deploy anything.
+`--accept-all` is required so accidental materialization fails closed. This command writes canonical recipe YAML for the current gpucall schema. With `--config-dir`, materialization consults the installed recipe/model/engine/tuple catalog before writing YAML. Long-context, batch or long-running workloads, and workloads whose satisfying tuple candidates declare `expected_cold_start_seconds` above the sync-safe threshold are materialized as async-only recipes. The caller's requested mode is treated as intake evidence, not as routing authority. The command does not create a capable provider, does not edit policy, and does not deploy anything.
 
 After materialization:
 
@@ -281,6 +282,7 @@ For operators who choose to accept every submitted sanitized request, the admin 
 gpucall-recipe-admin process-inbox \
   --inbox-dir /path/to/gpucall-recipe-requests/inbox \
   --output-dir config/recipes \
+  --config-dir config \
   --accept-all
 ```
 
@@ -297,8 +299,9 @@ recipe_inbox_auto_materialize: true
 When this flag is absent or false, `process-inbox` and `watch` fail closed unless
 `--accept-all` is present. When it is true, sanitized caller submissions can be
 automatically reviewed and materialized into draft recipe YAML with a static
-catalog-readiness report. This route does not run billable validation and does
-not activate production routing. Use `gpucall-recipe-admin promote` explicitly
+catalog-readiness report. Existing recipe names are linked in the report instead
+of overwritten unless `--force` is explicit. This route does not run billable
+validation and does not activate production routing. Use `gpucall-recipe-admin promote` explicitly
 when a recipe should be elevated to production.
 
 To poll continuously:
@@ -307,6 +310,7 @@ To poll continuously:
 gpucall-recipe-admin watch \
   --inbox-dir /path/to/gpucall-recipe-requests/inbox \
   --output-dir config/recipes \
+  --config-dir config \
   --accept-all \
   --interval-seconds 10
 ```

@@ -251,12 +251,11 @@ Administrator-side materialization is separate:
 
 ```bash
 gpucall-recipe-admin inbox list --inbox-dir /path/to/inbox
-gpucall-recipe-admin inbox materialize --inbox-dir /path/to/inbox --output-dir config/recipes --accept-all
+gpucall-recipe-admin inbox materialize --inbox-dir /path/to/inbox --output-dir config/recipes --config-dir config --accept-all
 gpucall-recipe-admin inbox readiness --inbox-dir /path/to/inbox --config-dir config
 ```
 
-Billable validation and production activation remain explicit promotion steps.
-Do not hide provider spend inside recipe creation.
+Materialization consults the installed catalog and deterministic policy. If the submitted workload is long-context, batch/long-running, or maps to high-cold-start tuple candidates, the resulting draft recipe is async-only even when the caller submitted `mode=sync`. Billable validation and production activation remain explicit promotion steps. Do not hide provider spend inside recipe creation.
 
 ### 4. Implement the application adapter
 
