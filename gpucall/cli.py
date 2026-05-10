@@ -1667,7 +1667,12 @@ def _gateway_smoke_summary(url: str, *, api_key: str | None, recipe: str | None 
         sync_payload = {
             "task": "infer",
             "mode": "sync",
-            "messages": [{"role": "user", "content": "Reply with exactly: gpucall smoke"}],
+            "inline_inputs": {
+                "prompt": {
+                    "value": "Reply with exactly: gpucall smoke",
+                    "content_type": "text/plain",
+                }
+            },
             "max_tokens": 16,
             "metadata": {"smoke": "true"},
         }

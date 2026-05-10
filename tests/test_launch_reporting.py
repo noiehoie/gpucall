@@ -86,6 +86,68 @@ def test_production_launch_report_blocks_without_live_requirements(tmp_path, mon
     assert "managed_endpoint:openai-chat-completions:qwen2.5-1.5b-instruct:runpod-vllm-openai" not in labels
 
 
+def test_gateway_smoke_uses_v2_inline_inputs(monkeypatch) -> None:
+    from gpucall.cli import _gateway_smoke_summary
+
+    requests: list[dict[str, object]] = []
+
+    class Response:
+        def __init__(self, status_code: int, body: dict[str, object]) -> None:
+            self.status_code = status_code
+            self._body = body
+
+        def raise_for_status(self) -> None:
+            if self.status_code >= 400:
+                raise AssertionError(f"unexpected status {self.status_code}")
+
+        def json(self) -> dict[str, object]:
+            return self._body
+
+    class Client:
+        def __init__(self, *args, **kwargs) -> None:
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args) -> None:
+            return None
+
+        def get(self, path: str) -> Response:
+            if path == "/healthz":
+                return Response(200, {"status": "ok"})
+            if path == "/readyz":
+                return Response(200, {"status": "ready", "object_store": False})
+            raise AssertionError(path)
+
+        def post(self, path: str, *, json: dict[str, object]) -> Response:
+            requests.append({"path": path, "json": json})
+            assert path == "/v2/tasks/sync"
+            assert "messages" not in json
+            assert json["inline_inputs"] == {
+                "prompt": {
+                    "value": "Reply with exactly: gpucall smoke",
+                    "content_type": "text/plain",
+                }
+            }
+            return Response(
+                200,
+                {
+                    "plan": {"selected_tuple": "modal-a10g", "recipe_name": "text-infer-light"},
+                    "result": {"kind": "inline", "value": "gpucall smoke"},
+                },
+            )
+
+    monkeypatch.setattr("gpucall.cli.httpx.Client", Client)
+    monkeypatch.setattr("gpucall.cli.httpx.post", lambda *args, **kwargs: Response(401, {}))
+
+    summary = _gateway_smoke_summary("http://gateway.example.internal", api_key="gpk_test")
+
+    assert summary["ok"] is True
+    assert summary["auth_required"] is True
+    assert requests[0]["json"]["task"] == "infer"
+
+
 def test_required_live_validation_tuples_respects_policy_deny(tmp_path, monkeypatch) -> None:
     from gpucall.cli import _required_live_validation_tuples
     from gpucall.config import load_config
