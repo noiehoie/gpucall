@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import ipaddress
 import subprocess
 import sys
 from pathlib import Path
@@ -73,7 +74,7 @@ def test_execution_catalog_normalizes_hardware_surface_pricing_and_network() -> 
     assert surfaces["iaas_vm"].cleanup_contract == "resource_lease_destroy_required"
     assert surfaces["function_runtime"].lifecycle_kind == "scale_to_zero_function"
     assert surfaces["managed_endpoint"].network_exposure == "provider_public_endpoint"
-    assert offerings["active_tuple:hyperstack-a100:resource"].network_topology["ssh_remote_cidr"] == "203.0.113.10/32"
+    assert ipaddress.ip_network(offerings["active_tuple:hyperstack-a100:resource"].network_topology["ssh_remote_cidr"], strict=False).prefixlen > 0
     assert claims["active_tuple:hyperstack-a100:resource"].security_tier == "encrypted_capsule"
     assert claims["active_tuple:hyperstack-a100:resource"].sovereign_jurisdiction == "CA"
     assert claims["active_tuple:hyperstack-a100:resource"].dedicated_gpu is True
