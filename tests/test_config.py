@@ -397,6 +397,12 @@ def test_standard_config_rejects_sync_for_long_context_text(tmp_path) -> None:
 
 def test_local_runtime_is_preferred_when_it_satisfies_policy(tmp_path) -> None:
     root = copy_config(tmp_path)
+    for rel_path in (
+        "runtimes/local-author-ollama.yml",
+        "surfaces/local-author-ollama.yml",
+        "workers/local-author-ollama.yml",
+    ):
+        (root / rel_path).unlink(missing_ok=True)
     (root / "surfaces" / "local-openai-test.yml").write_text(
         """
 surface_ref: local-openai-test
@@ -600,6 +606,43 @@ def test_runtime_add_openai_generates_runtime_surface_and_worker(tmp_path) -> No
     assert tuple.adapter == "local-dataref-openai-worker"
     assert tuple.input_contracts == ["text", "chat_messages", "data_refs"]
     assert tuple.output_contract == "gpucall-tuple-result"
+
+
+def test_runtime_add_ollama_generates_runtime_surface_and_worker(tmp_path) -> None:
+    root = copy_config(tmp_path)
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            str(Path(__file__).resolve().parents[1] / "gpucall" / "cli.py"),
+            "runtime",
+            "add-ollama",
+            "--config-dir",
+            str(root),
+            "--name",
+            "test-ollama",
+            "--endpoint",
+            "http://127.0.0.1:11434",
+            "--model",
+            "qwen2.5-32b:latest",
+            "--max-model-len",
+            "32768",
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+
+    payload = json.loads(result.stdout)
+    assert payload["valid"] is True
+    config = load_config(root)
+    assert "test-ollama" in config.runtimes
+    tuple = config.tuples["test-ollama"]
+    assert tuple.controlled_runtime_ref == "test-ollama"
+    assert tuple.adapter == "local-ollama"
+    assert tuple.model == "qwen2.5-32b:latest"
+    assert tuple.model_ref == "qwen2.5-32b-ollama-local"
+    assert tuple.output_contract == "ollama-generate"
 
 
 def test_readiness_cli(tmp_path) -> None:

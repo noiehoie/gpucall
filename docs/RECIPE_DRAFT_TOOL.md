@@ -358,6 +358,54 @@ gpucall-recipe-admin watch \
 
 This still only writes recipe YAML. It does not deploy, does not edit provider specs, and does not bypass `validate-config` or launch checks.
 
+### Administrator LLM-assisted refinement
+
+The deterministic materializer intentionally writes a conservative first draft.
+When the first draft has validation errors, low-quality success evidence, or
+operator review notes, an administrator can ask gpucall itself to produce a
+proposal patch:
+
+```bash
+gpucall-recipe-admin author \
+  --report /path/to/inbox/reports/rr-....report.json \
+  --config-dir config \
+  --output /path/to/inbox/reports/rr-....authoring.json
+```
+
+This is the only designed LLM-assisted part of the recipe lifecycle. The helper
+builds a sanitized bundle from the materialization report, admin review,
+readiness, validation attempts, and catalog summary, then runs the admin-only
+`admin-author-recipe-draft` recipe. The output is a proposal artifact containing
+a JSON Patch-style `patch`, a `validation_plan`, and `risk_notes`.
+
+The command never writes production config. It rejects guarded patch targets
+such as `/auto_select`, `/name`, and `/task`. Applying the proposal, validating
+it, running billable smoke, and activating it remain deterministic
+administrator-side steps.
+
+For private operations, configure a controlled local OpenAI-compatible runtime
+and keep the authoring recipe as an explicit admin recipe. The compiler prefers
+eligible `local_runtime` tuples before remote GPU tuples, so recipe authoring can
+dogfood gpucall without sending operator evidence to a hosted provider.
+
+Until a DeepSeek V4 Flash ds4 host is available, operators can register a
+smaller local Ollama model as the interim authoring runtime:
+
+```bash
+gpucall runtime add-ollama \
+  --name local-author-ollama \
+  --endpoint http://127.0.0.1:11434 \
+  --model qwen2.5-32b:latest \
+  --max-model-len 32768
+gpucall runtime validate --name local-author-ollama
+gpucall validate-config
+```
+
+This is an operator-controlled local fallback, not a replacement for ds4. When a
+proper ds4 host is later available, register it with `gpucall runtime
+add-openai --name local-ds4 --endpoint http://127.0.0.1:8000/v1 --model
+deepseek-v4-flash` and keep the same `admin-author-recipe-draft` workflow.
+
 To inspect a submitted request:
 
 ```bash

@@ -23,6 +23,7 @@ def plan_payload(plan: CompiledPlan) -> dict[str, Any]:
         "inline_inputs": {key: value.model_dump(mode="json") for key, value in plan.inline_inputs.items()},
         "messages": [message.model_dump(mode="json") for message in plan.messages],
         "response_format": plan.response_format.model_dump(mode="json") if plan.response_format is not None else None,
+        "metadata": dict(plan.metadata),
         "artifact_export": plan.artifact_export.model_dump(mode="json") if plan.artifact_export is not None else None,
         "split_learning": plan.split_learning.model_dump(mode="json") if plan.split_learning is not None else None,
         "system_prompt": plan.system_prompt,

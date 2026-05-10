@@ -76,6 +76,41 @@ def test_compiler_auto_selects_recipe_when_omitted() -> None:
     assert plan.tuple_chain == ["p1", "p2"]
 
 
+def test_compiler_auto_selects_matching_intent_when_provided() -> None:
+    compiler = build_compiler()
+    extract = compiler.recipes["r1"].model_copy(update={"name": "extract", "intent": "extract_json"})
+    translate = compiler.recipes["r1"].model_copy(update={"name": "translate", "intent": "translate_text"})
+    compiler.recipes = {"extract": extract, "translate": translate}
+
+    plan = compiler.compile(TaskRequest(task="infer", mode="sync", intent="translate_text"))
+
+    assert plan.recipe_name == "translate"
+
+
+def test_compiler_ignores_intent_specific_recipes_without_request_intent() -> None:
+    compiler = build_compiler()
+    generic = compiler.recipes["r1"].model_copy(
+        update={"name": "generic", "intent": "standard_text_inference", "context_budget_tokens": 1000}
+    )
+    specific = compiler.recipes["r1"].model_copy(update={"name": "specific", "intent": "extract_json"})
+    compiler.recipes = {"generic": generic, "specific": specific}
+
+    plan = compiler.compile(TaskRequest(task="infer", mode="sync"))
+
+    assert plan.recipe_name == "generic"
+
+
+def test_compiler_fails_closed_when_intent_has_no_auto_recipe() -> None:
+    compiler = build_compiler()
+    compiler.recipes["r1"] = compiler.recipes["r1"].model_copy(update={"intent": "extract_json"})
+
+    with pytest.raises(GovernanceError) as exc_info:
+        compiler.compile(TaskRequest(task="infer", mode="sync", intent="translate_text"))
+
+    assert exc_info.value.code == "NO_AUTO_SELECTABLE_RECIPE"
+    assert "intent is 'extract_json'" in str(exc_info.value)
+
+
 def test_compiler_preserves_chat_messages_and_recipe_generation_contract() -> None:
     compiler = build_compiler()
     compiler.recipes["r1"] = compiler.recipes["r1"].model_copy(

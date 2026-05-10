@@ -1,0 +1,36 @@
+name: admin-author-recipe-draft
+recipe_schema_version: 3
+task: infer
+intent: author_recipe
+auto_select: false
+data_classification: confidential
+allowed_modes:
+- sync
+- async
+context_budget_tokens: 32768
+resource_class: standard
+latency_class: standard
+quality_floor: draft
+timeout_seconds: 600
+lease_ttl_seconds: 900
+token_estimation_profile: generic_utf8
+max_input_bytes: 33554432
+allowed_mime_prefixes:
+- application/json
+allowed_inline_mime_prefixes:
+- text/
+default_temperature: 0.1
+structured_temperature: 0.0
+structured_system_prompt: Return only valid JSON. Do not include markdown fences or prose.
+system_prompt: Produce administrator-side gpucall recipe improvement proposals from sanitized evidence only.
+stop_tokens:
+- <|im_end|>
+- <|endoftext|>
+repetition_penalty: 1.0
+guided_decoding: false
+output_validation_attempts: 1
+artifact_export: false
+requires_key_release: false
+required_model_capabilities:
+- instruction_following
+output_contract: plain-text

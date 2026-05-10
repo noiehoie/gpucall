@@ -1,0 +1,16 @@
+name: qwen2.5-32b-ollama-local
+provider_model_id: qwen2.5-32b:latest
+capabilities: [chat, instruction_following, summarization, translation, classification, reasoning]
+max_model_len: 32768
+min_vram_gb: 1
+supported_engines: [local-ollama]
+input_contracts: [text, chat_messages]
+output_contracts: [ollama-generate, plain-text]
+supports_vision: false
+supports_guided_decoding: false
+supports_streaming: false
+trust_remote_code: false
+source: https://ollama.com/library/qwen2.5
+evidence:
+  - Local Ollama model catalog entry for operator-controlled qwen2.5-32b authoring workloads.
+production_ready: false

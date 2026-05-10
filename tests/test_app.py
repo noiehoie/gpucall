@@ -135,6 +135,22 @@ def test_sync_endpoint_auto_selects_recipe(tmp_path) -> None:
     assert response.json()["result"]["kind"] == "inline"
 
 
+def test_sync_endpoint_accepts_intent_without_caller_routing(tmp_path) -> None:
+    with TestClient(create_app(copy_config(tmp_path))) as client:
+        response = client.post(
+            "/v2/tasks/sync",
+            json={
+                "task": "infer",
+                "mode": "sync",
+                "intent": "standard_text_inference",
+                "inline_inputs": {"prompt": {"value": "hello", "content_type": "text/plain"}},
+            },
+    )
+
+    assert response.status_code == 200
+    assert response.json()["result"]["kind"] == "inline"
+
+
 def test_batch_endpoint_executes_sync_requests(tmp_path) -> None:
     with TestClient(create_app(copy_config(tmp_path))) as client:
         response = client.post(
@@ -985,18 +1001,53 @@ def test_openai_chat_completions_facade_accepts_gpucall_chat_alias(tmp_path) -> 
     assert payload["gpucall"]["recipe_name"] == "text-infer-standard"
 
 
-def test_openai_chat_completions_facade_rejects_non_auto_model(tmp_path) -> None:
+def test_openai_chat_completions_facade_accepts_external_model_as_hint(tmp_path) -> None:
     with TestClient(create_app(copy_config(tmp_path))) as client:
         response = client.post(
             "/v1/chat/completions",
             json={
-                "model": "tuple:model",
+                "model": "gpt-4o-mini",
                 "messages": [{"role": "user", "content": "hello"}],
             },
         )
 
-    assert response.status_code == 400
-    assert response.json()["error"]["code"] == "unsupported_model"
+    assert response.status_code == 200
+    assert response.json()["model"] == "gpt-4o-mini"
+
+
+def test_openai_chat_completions_promotes_metadata_intent_and_preserves_hints(tmp_path, monkeypatch) -> None:
+    captured = {}
+
+    async def fake_execute_sync(plan):
+        captured["recipe"] = plan.recipe_name
+        captured["metadata"] = plan.metadata
+        return TupleResult(kind="inline", value='{"ok": true}', output_validated=True)
+
+    with TestClient(create_app(copy_config(tmp_path))) as client:
+        monkeypatch.setattr(client.app.state.runtime.dispatcher, "execute_sync", fake_execute_sync)
+        response = client.post(
+            "/v1/chat/completions",
+            json={
+                "model": "gpt-4o-mini",
+                "messages": [{"role": "user", "content": "return json"}],
+                "response_format": {"type": "json_object"},
+                "metadata": {"task_family": "standard_text_inference", "caller": "editorial_checker"},
+                "top_p": 0.9,
+                "seed": 7,
+                "tools": [{"type": "function", "function": {"name": "noop"}}],
+                "ignored_by_gpucall": "kept-as-extra-key",
+            },
+        )
+
+    assert response.status_code == 200
+    assert captured["recipe"] == "text-infer-standard"
+    assert captured["metadata"]["task_family"] == "standard_text_inference"
+    assert captured["metadata"]["intent"] == "standard_text_inference"
+    assert captured["metadata"]["openai.model"] == "gpt-4o-mini"
+    assert captured["metadata"]["openai.top_p"] == "0.9"
+    assert captured["metadata"]["openai.seed"] == "7"
+    assert "openai.tools" in captured["metadata"]
+    assert captured["metadata"]["openai.extra_keys"] == "ignored_by_gpucall"
 
 
 def test_openai_facade_prompt_does_not_add_user_prefix(tmp_path, monkeypatch) -> None:

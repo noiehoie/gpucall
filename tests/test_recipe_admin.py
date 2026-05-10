@@ -8,8 +8,22 @@ import pytest
 import yaml
 
 from gpucall.config import load_config
+from gpucall.compiler import GovernanceCompiler
+from gpucall.domain import ChatMessage, ExecutionMode, RecipeAdminAutomationConfig, ResponseFormat, ResponseFormatType, TaskRequest
 from gpucall.execution.contracts import official_contract
-from gpucall.recipe_admin import _config_hash, _git_commit, canonical_recipe_from_artifact, main, process_inbox, promote_production_tuple, recipe_request_status, review_artifact
+from gpucall.recipe_admin import (
+    _auto_existing_tuple_report,
+    _config_hash,
+    _git_commit,
+    author_recipe_proposal,
+    canonical_recipe_from_artifact,
+    main,
+    process_inbox,
+    promote_production_tuple,
+    recipe_request_status,
+    review_artifact,
+)
+from gpucall.registry import ObservedRegistry
 from gpucall.tuple_promotion import _validation_mode
 from gpucall.recipe_request_index import RecipeRequestIndex
 
@@ -120,6 +134,25 @@ def test_admin_materializer_uses_catalog_cold_start_to_force_async() -> None:
     assert recipe["context_budget_tokens"] == 65536
     assert recipe["resource_class"] == "large"
     assert recipe["auto_select"] is False
+
+
+def test_admin_materializer_keeps_sync_when_catalog_has_sync_safe_tuple() -> None:
+    intake = {
+        "sanitized_request": {
+            "task": "infer",
+            "mode": "sync",
+            "intent": "translate_text",
+            "classification": "confidential",
+            "desired_capabilities": ["translation"],
+        },
+        "redaction_report": {"prompt_body_forwarded": False, "data_ref_uri_forwarded": False, "presigned_url_forwarded": False},
+    }
+
+    catalog = load_config(Path("gpucall/config_templates"))
+    recipe = canonical_recipe_from_artifact(intake, catalog=catalog)
+
+    assert recipe["allowed_modes"] == ["sync"]
+    assert recipe["context_budget_tokens"] == 8192
 
 
 def test_admin_materializer_normalizes_legacy_topic_ranking_intent() -> None:
@@ -353,6 +386,158 @@ def test_admin_process_inbox_existing_tuple_waits_for_validation_when_not_billab
     assert results[0]["ok"] is True
     report = json.loads((inbox / "reports" / "rr-wait.report.json").read_text(encoding="utf-8"))
     assert report["existing_tuple_activation"]["decision"] == "READY_FOR_BILLABLE_VALIDATION"
+
+
+def test_admin_process_inbox_existing_tuple_validation_tries_next_eligible(tmp_path, monkeypatch) -> None:
+    config_dir = tmp_path / "config"
+    shutil.copytree("gpucall/config_templates", config_dir)
+    report_dir = tmp_path / "reports"
+    report_dir.mkdir()
+    attempts = []
+
+    def fake_validation(*, tuple_name, recipe_name, config_dir, validation_dir):
+        attempts.append(tuple_name)
+        if tuple_name == "modal-a10g":
+            return {"returncode": 1, "passed": False, "stderr": "not eligible"}
+        return {"returncode": 0, "passed": True, "artifact_path": f"/tmp/{tuple_name}.json"}
+
+    monkeypatch.setattr("gpucall.recipe_admin._run_existing_tuple_validation", fake_validation)
+
+    activation = _auto_existing_tuple_report(
+        {
+            "canonical_recipe": {"name": "infer-rank-text-items-draft"},
+            "eligible_tuples": ["modal-a10g", "modal-h200x4-qwen25-14b-1m"],
+            "live_validation": {"matched": []},
+        },
+        request_id="rr-retry",
+        automation=RecipeAdminAutomationConfig(
+            recipe_inbox_auto_materialize=True,
+            recipe_inbox_auto_validate_existing_tuples=True,
+            recipe_inbox_auto_billable_validation=True,
+        ),
+        report_dir=report_dir,
+        config_dir=config_dir,
+        validation_dir=tmp_path / "tuple-validation",
+        force=False,
+    )
+
+    assert attempts == ["modal-a10g", "modal-h200x4-qwen25-14b-1m"]
+    assert activation["decision"] == "VALIDATED_READY_TO_ACTIVATE"
+    assert activation["matched_validation"][0]["tuple"] == "modal-h200x4-qwen25-14b-1m"
+    assert [item["tuple"] for item in activation["validation_attempts"]] == attempts
+
+
+def test_admin_author_dry_run_bundle_redacts_prompt_text(tmp_path) -> None:
+    config_dir = tmp_path / "config"
+    shutil.copytree("gpucall/config_templates", config_dir)
+    report = {
+        "recipe_path": "/config/recipes/infer-example-draft.yml",
+        "canonical_recipe": {
+            "name": "infer-example-draft",
+            "task": "infer",
+            "intent": "example",
+            "system_prompt": "sensitive operator prompt body",
+            "allowed_modes": ["sync"],
+        },
+        "admin_review": {"decision": "READY_FOR_VALIDATION", "canonical_recipe": {"name": "infer-example-draft", "task": "infer"}},
+    }
+    report_path = tmp_path / "report.json"
+    report_path.write_text(json.dumps(report), encoding="utf-8")
+
+    artifact = author_recipe_proposal(report_path=report_path, config_dir=config_dir, dry_run_bundle=True)
+
+    recipe = artifact["bundle"]["materialization"]["canonical_recipe"]
+    assert artifact["phase"] == "recipe-authoring-bundle"
+    assert recipe["system_prompt"]["chars"] == len("sensitive operator prompt body")
+    assert "sensitive operator prompt body" not in json.dumps(artifact, ensure_ascii=False)
+
+
+def test_admin_author_returns_proposal_without_writing_config(tmp_path, monkeypatch) -> None:
+    config_dir = tmp_path / "config"
+    shutil.copytree("gpucall/config_templates", config_dir)
+    report = {
+        "recipe_path": str(config_dir / "recipes" / "infer-example-draft.yml"),
+        "canonical_recipe": {"name": "infer-example-draft", "task": "infer", "intent": "example", "allowed_modes": ["sync"]},
+        "admin_review": {"decision": "READY_FOR_VALIDATION", "canonical_recipe": {"name": "infer-example-draft", "task": "infer"}},
+    }
+    report_path = tmp_path / "report.json"
+    report_path.write_text(json.dumps(report), encoding="utf-8")
+
+    def fake_run_authoring_recipe(*, config_dir, authoring_recipe, bundle):
+        return json.dumps(
+            {
+                "proposal_kind": "recipe_patch",
+                "target_recipe": "infer-example-draft",
+                "summary": "tighten JSON behavior",
+                "patch": [{"op": "replace", "path": "/output_validation_attempts", "value": 2}],
+                "validation_plan": ["gpucall validate-config --config-dir /config"],
+                "risk_notes": ["requires smoke validation"],
+            }
+        )
+
+    monkeypatch.setattr("gpucall.recipe_admin._run_authoring_recipe", fake_run_authoring_recipe)
+
+    artifact = author_recipe_proposal(report_path=report_path, config_dir=config_dir)
+
+    assert artifact["phase"] == "recipe-authoring-proposal"
+    assert artifact["production_config_written"] is False
+    assert artifact["proposal"]["patch"][0]["path"] == "/output_validation_attempts"
+    assert not (config_dir / "recipes" / "infer-example-draft.yml").exists()
+
+
+def test_admin_author_rejects_guarded_auto_select_patch(tmp_path, monkeypatch) -> None:
+    config_dir = tmp_path / "config"
+    shutil.copytree("gpucall/config_templates", config_dir)
+    report_path = tmp_path / "report.json"
+    report_path.write_text(
+        json.dumps({"canonical_recipe": {"name": "infer-example-draft", "task": "infer"}, "admin_review": {}}),
+        encoding="utf-8",
+    )
+
+    monkeypatch.setattr(
+        "gpucall.recipe_admin._run_authoring_recipe",
+        lambda **_: json.dumps(
+            {
+                "proposal_kind": "recipe_patch",
+                "target_recipe": "infer-example-draft",
+                "summary": "unsafe",
+                "patch": [{"op": "replace", "path": "/auto_select", "value": True}],
+                "validation_plan": [],
+                "risk_notes": [],
+            }
+        ),
+    )
+
+    with pytest.raises(ValueError, match="guarded field /auto_select"):
+        author_recipe_proposal(report_path=report_path, config_dir=config_dir)
+
+
+def test_admin_author_recipe_prefers_configured_local_ds4_runtime(tmp_path) -> None:
+    config_dir = tmp_path / "config"
+    shutil.copytree("gpucall/config_templates", config_dir)
+    for kind in ("runtimes", "surfaces", "workers"):
+        (config_dir / kind / "local-ds4.example").rename(config_dir / kind / "local-ds4.yml")
+    config = load_config(config_dir)
+    compiler = GovernanceCompiler(
+        policy=config.policy,
+        recipes=config.recipes,
+        tuples=config.tuples,
+        models=config.models,
+        engines=config.engines,
+        registry=ObservedRegistry(),
+    )
+
+    plan = compiler.compile(
+        TaskRequest(
+            task="infer",
+            mode=ExecutionMode.ASYNC,
+            recipe="admin-author-recipe-draft",
+            messages=[ChatMessage(role="user", content="{}")],
+            response_format=ResponseFormat(type=ResponseFormatType.JSON_OBJECT),
+        )
+    )
+
+    assert plan.tuple_chain[0] == "local-ds4"
 
 
 def test_admin_process_inbox_can_auto_promote_candidate_without_validation(tmp_path) -> None:

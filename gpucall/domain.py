@@ -312,6 +312,7 @@ class TaskRequest(BaseModel):
     task: str
     mode: ExecutionMode
     recipe: str | None = None
+    intent: str | None = None
     input_refs: list[DataRef] = Field(default_factory=list)
     inline_inputs: dict[str, InlineValue] = Field(default_factory=dict)
     messages: list[ChatMessage] = Field(default_factory=list)
@@ -701,6 +702,7 @@ class CompiledPlan(BaseModel):
     inline_inputs: dict[str, InlineValue]
     messages: list[ChatMessage] = Field(default_factory=list)
     response_format: ResponseFormat | None = None
+    metadata: dict[str, str] = Field(default_factory=dict)
     artifact_export: ArtifactExportSpec | None = None
     split_learning: SplitLearningSpec | None = None
     system_prompt: str | None = None

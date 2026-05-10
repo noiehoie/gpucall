@@ -99,6 +99,23 @@ def test_python_sdk_sends_response_format() -> None:
     assert sent_payload["temperature"] == 0.0
 
 
+def test_python_sdk_sends_intent_without_recipe_or_tuple() -> None:
+    sent_payload = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal sent_payload
+        sent_payload = json.loads(request.read())
+        return httpx.Response(200, json={"result": {"kind": "inline", "value": "ok"}})
+
+    client = GPUCallClient("http://gpucall.test", transport=httpx.MockTransport(handler))
+
+    client.infer(prompt="translate", task_family="translate_text")
+
+    assert sent_payload["intent"] == "translate_text"
+    assert "recipe" not in sent_payload
+    assert "requested_tuple" not in sent_payload
+
+
 def test_python_sdk_chat_completions_create_returns_openai_like_shape() -> None:
     sent_payload = {}
 

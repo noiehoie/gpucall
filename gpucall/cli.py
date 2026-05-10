@@ -81,12 +81,13 @@ def main() -> None:
     validate = sub.add_parser("validate-config")
     validate.add_argument("--config-dir", type=Path, default=default_config_dir())
     runtime = sub.add_parser("runtime")
-    runtime.add_argument("action", choices=["add-openai", "validate", "show"])
+    runtime.add_argument("action", choices=["add-openai", "add-ollama", "validate", "show"])
     runtime.add_argument("--config-dir", type=Path, default=default_config_dir())
     runtime.add_argument("--name", default=None)
     runtime.add_argument("--endpoint", default=None)
     runtime.add_argument("--model", default="deepseek-v4-flash")
     runtime.add_argument("--model-ref", default="deepseek-v4-flash-local")
+    runtime.add_argument("--ollama-model-ref", default="qwen2.5-32b-ollama-local")
     runtime.add_argument("--dataref-worker", action="store_true")
     runtime.add_argument("--runtime-boundary", choices=["gateway_host", "private_network", "site_network"], default="private_network")
     runtime.add_argument("--network-scope", choices=["localhost", "lan", "vpn", "tailscale", "private_subnet", "manual"], default="tailscale")
@@ -486,6 +487,23 @@ def runtime_command(args) -> None:
         )
         print(json.dumps(result, indent=2, sort_keys=True))
         return
+    if args.action == "add-ollama":
+        if not args.name or not args.endpoint:
+            raise SystemExit("runtime add-ollama requires --name and --endpoint")
+        result = add_ollama_runtime(
+            config_dir=args.config_dir,
+            name=args.name,
+            endpoint=args.endpoint,
+            model=args.model,
+            model_ref=args.ollama_model_ref,
+            max_model_len=args.max_model_len,
+            runtime_boundary=args.runtime_boundary,
+            network_scope=args.network_scope,
+            max_data_classification=args.max_data_classification,
+            force=bool(args.force),
+        )
+        print(json.dumps(result, indent=2, sort_keys=True))
+        return
     if args.action == "validate":
         if not args.name:
             raise SystemExit("runtime validate requires --name")
@@ -598,6 +616,114 @@ def add_openai_runtime(
     }
     if dataref_worker:
         worker_payload["provider_params"] = {"worker_api_key_env": "GPUCALL_LOCAL_DATAREF_WORKER_API_KEY"}
+    paths = {
+        "runtime": config_dir / "runtimes" / f"{name}.yml",
+        "surface": config_dir / "surfaces" / f"{name}.yml",
+        "worker": config_dir / "workers" / f"{name}.yml",
+    }
+    for path, payload in (
+        (paths["runtime"], runtime_payload),
+        (paths["surface"], surface_payload),
+        (paths["worker"], worker_payload),
+    ):
+        _write_yaml(path, payload, force=force)
+    config = load_config(config_dir)
+    return {"created": {key: str(path) for key, path in paths.items()}, "valid": name in config.runtimes and name in config.tuples}
+
+
+def add_ollama_runtime(
+    *,
+    config_dir: Path,
+    name: str,
+    endpoint: str,
+    model: str,
+    model_ref: str,
+    max_model_len: int,
+    runtime_boundary: str,
+    network_scope: str,
+    max_data_classification: str,
+    force: bool,
+) -> dict[str, object]:
+    trust_profile = {
+        "security_tier": "local",
+        "sovereign_jurisdiction": "local",
+        "dedicated_gpu": True,
+        "requires_attestation": False,
+        "supports_key_release": False,
+        "allows_worker_s3_credentials": False,
+    }
+    now = datetime.now(timezone.utc).isoformat()
+    runtime_payload = {
+        "name": name,
+        "kind": "controlled_runtime",
+        "runtime_boundary": runtime_boundary,
+        "network_scope": network_scope,
+        "operator_controlled": True,
+        "endpoint": endpoint,
+        "adapter": "local-ollama",
+        "model": model,
+        "max_model_len": max_model_len,
+        "input_contracts": ["text", "chat_messages"],
+        "max_data_classification": max_data_classification,
+        "trust_profile": trust_profile,
+        "routing": {
+            "enabled": True,
+            "preference": "prefer_when_eligible",
+            "allowed_tasks": ["infer"],
+            "allowed_modes": ["sync", "async"],
+            "require_validation_evidence": True,
+        },
+        "health": {
+            "check_url": f"{endpoint.rstrip('/')}/api/tags",
+            "timeout_seconds": 2,
+            "failure_policy": "disable_runtime",
+        },
+        "discovery": {
+            "source": "manual",
+            "last_verified_at": now,
+        },
+    }
+    surface_payload = {
+        "surface_ref": name,
+        "worker_ref": name,
+        "controlled_runtime_ref": name,
+        "account_ref": "local",
+        "adapter": "local-ollama",
+        "execution_surface": "local_runtime",
+        "gpu": "local",
+        "vram_gb": 24,
+        "max_model_len": max_model_len,
+        "region": "local",
+        "zone": "local",
+        "cost_per_second": 0,
+        "configured_price_source": "local-free",
+        "configured_price_observed_at": now,
+        "configured_price_ttl_seconds": 315360000,
+        "stock_state": "configured",
+        "expected_cold_start_seconds": 2,
+        "billing_granularity_seconds": 0,
+        "max_data_classification": max_data_classification,
+        "scaledown_window_seconds": 0,
+        "min_billable_seconds": 0,
+        "trust_profile": trust_profile,
+        "endpoint": endpoint,
+    }
+    worker_payload = {
+        "worker_ref": name,
+        "account_ref": "local",
+        "adapter": "local-ollama",
+        "execution_surface": "local_runtime",
+        "model_ref": model_ref,
+        "engine_ref": "local-ollama",
+        "modes": ["sync", "async"],
+        "input_contracts": ["text", "chat_messages"],
+        "output_contract": "ollama-generate",
+        "stream_contract": "none",
+        "target": None,
+        "stream_target": None,
+        "endpoint_contract": "ollama-generate",
+        "model": model,
+    }
     paths = {
         "runtime": config_dir / "runtimes" / f"{name}.yml",
         "surface": config_dir / "surfaces" / f"{name}.yml",

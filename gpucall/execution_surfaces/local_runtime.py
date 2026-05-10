@@ -97,10 +97,17 @@ class LocalOllamaAdapter(TupleAdapter):
     async def wait(self, handle: RemoteHandle, plan: CompiledPlan) -> TupleResult:
         prompt = self._prompt_from_plan(plan)
         try:
+            payload: dict[str, Any] = {"model": self.model, "prompt": prompt, "stream": False}
+            if plan.max_tokens is not None:
+                payload["options"] = {"num_predict": int(plan.max_tokens)}
+            if plan.temperature is not None:
+                payload.setdefault("options", {})["temperature"] = float(plan.temperature)
+            if plan.response_format is not None and plan.response_format.type.value == "json_object":
+                payload["format"] = "json"
             async with httpx.AsyncClient(timeout=plan.timeout_seconds) as client:
                 response = await client.post(
                     f"{self.base_url}/api/generate",
-                    json={"model": self.model, "prompt": prompt, "stream": False},
+                    json=payload,
                 )
             if response.status_code == 404:
                 raise TupleError("local Ollama model or endpoint not found", retryable=False, status_code=502)

@@ -2,13 +2,14 @@ from __future__ import annotations
 
 CAPABILITY_BY_INTENT: dict[str, tuple[str, ...]] = {
     "answer_question_about_image": ("visual_question_answering", "instruction_following"),
+    "author_recipe": ("instruction_following",),
     "caption_image": ("image_captioning",),
     "convert_document": ("document_conversion",),
     "extra_large_context_text_inference": ("instruction_following",),
     "extract_json": ("structured_output",),
     "fine_tune_lora": ("lora_training",),
     "large_context_text_inference": ("instruction_following",),
-    "rank_text_items": ("instruction_following",),
+    "rank_text_items": ("instruction_following", "reasoning"),
     "short_text_inference": ("instruction_following",),
     "smoke_test": ("instruction_following",),
     "split_infer_activation": ("split_inference",),

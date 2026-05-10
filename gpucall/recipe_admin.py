@@ -19,6 +19,13 @@ from gpucall.domain import ExecutionMode, ExecutionTupleSpec, Recipe, RecipeAdmi
 from gpucall.execution.contracts import artifact_tuple_evidence_key, tuple_evidence_key
 from gpucall.execution.registry import adapter_descriptor
 from gpucall.recipe_intents import capabilities_for
+from gpucall.recipe_authoring import (
+    AUTHORING_SYSTEM_PROMPT,
+    authoring_artifact,
+    authoring_prompt,
+    build_authoring_bundle,
+    parse_authoring_proposal,
+)
 from gpucall.recipe_materialize import canonical_recipe_from_artifact, materialization_report, to_yaml, write_recipe_yaml
 from gpucall.recipe_request_index import RecipeRequestIndex, default_recipe_request_index_path
 from gpucall.readiness import build_readiness_report
@@ -55,6 +62,13 @@ def main(argv: list[str] | None = None) -> int:
     promote.add_argument("--activate", action="store_true", help="copy validated recipe/tuple into the active config directory")
     promote.add_argument("--force", action="store_true", help="overwrite generated or active recipe/tuple files")
     promote.add_argument("--output", "-o", help="write promotion report JSON")
+
+    author = subcommands.add_parser("author", help="use an admin-only gpucall recipe to draft a recipe patch proposal")
+    author.add_argument("--report", required=True, help="materialization/admin report JSON to refine")
+    author.add_argument("--config-dir", required=True, help="gpucall config directory whose admin authoring recipe should run")
+    author.add_argument("--recipe", default="admin-author-recipe-draft", help="admin-only authoring recipe")
+    author.add_argument("--output", "-o", help="write proposal artifact JSON")
+    author.add_argument("--dry-run-bundle", action="store_true", help="print the sanitized authoring bundle without calling an LLM")
 
     process = subcommands.add_parser("process-inbox", help="process file-based recipe request submissions once")
     process.add_argument("--inbox-dir", required=True)
@@ -134,6 +148,15 @@ def main(argv: list[str] | None = None) -> int:
             force=args.force,
         )
         _write_json(report, args.output)
+        return 0
+    if args.command == "author":
+        result = author_recipe_proposal(
+            report_path=args.report,
+            config_dir=args.config_dir,
+            authoring_recipe=args.recipe,
+            dry_run_bundle=args.dry_run_bundle,
+        )
+        _write_json(result, args.output)
         return 0
     if args.command == "process-inbox":
         if not _accept_all_allowed(args.accept_all, args.config_dir):
@@ -330,6 +353,150 @@ def process_inbox(
     return results
 
 
+def author_recipe_proposal(
+    *,
+    report_path: str | Path,
+    config_dir: str | Path,
+    authoring_recipe: str = "admin-author-recipe-draft",
+    dry_run_bundle: bool = False,
+) -> dict[str, Any]:
+    report_file = Path(report_path)
+    report = _load_json(str(report_file))
+    bundle = build_authoring_bundle(report, config_summary=_author_config_summary(config_dir))
+    if dry_run_bundle:
+        return {"schema_version": 1, "phase": "recipe-authoring-bundle", "report_path": str(report_file), "bundle": bundle}
+    target_recipe = _authoring_target_recipe(report)
+    target_recipe_payload = _authoring_target_recipe_payload(report)
+    active_bundle = bundle
+    raw_output = ""
+    proposal: dict[str, Any] | None = None
+    for attempt in range(3):
+        raw_output = _run_authoring_recipe(config_dir=Path(config_dir), authoring_recipe=authoring_recipe, bundle=active_bundle)
+        try:
+            proposal = parse_authoring_proposal(raw_output, target_recipe=target_recipe)
+            _validate_authoring_patch_against_recipe(proposal, target_recipe_payload)
+            break
+        except ValueError as exc:
+            if attempt >= 2 or not _retryable_authoring_rejection(str(exc)):
+                raise
+            retry_bundle = dict(bundle)
+            retry_bundle["previous_authoring_rejection"] = {
+                "reason": str(exc),
+                "instruction": "Return only schema-valid recipe patch entries. Put guarded-field or unsupported-field recommendations in risk_notes only.",
+            }
+            active_bundle = retry_bundle
+    if proposal is None:
+        raise ValueError("authoring proposal was not produced")
+    bundle = active_bundle
+    return authoring_artifact(
+        report_path=report_file,
+        authoring_recipe=authoring_recipe,
+        bundle=bundle,
+        raw_output=raw_output,
+        proposal=proposal,
+    )
+
+
+def _retryable_authoring_rejection(message: str) -> bool:
+    return any(
+        fragment in message
+        for fragment in (
+            "guarded field",
+            "unknown recipe field",
+            "does not validate against recipe schema",
+        )
+    )
+
+
+def _validate_authoring_patch_against_recipe(proposal: Mapping[str, Any], recipe: Mapping[str, Any]) -> None:
+    if not recipe:
+        return
+    patched = dict(recipe)
+    for item in proposal.get("patch", []) if isinstance(proposal.get("patch"), list) else []:
+        if not isinstance(item, Mapping):
+            raise ValueError("authoring proposal patch entries must be objects")
+        key = str(item["path"]).lstrip("/")
+        op = item.get("op")
+        if op in {"add", "replace"}:
+            patched[key] = item.get("value")
+        elif op == "remove":
+            patched.pop(key, None)
+    try:
+        Recipe.model_validate(patched)
+    except Exception as exc:
+        raise ValueError(f"authoring proposal patch does not validate against recipe schema: {exc}") from exc
+
+
+def _run_authoring_recipe(*, config_dir: Path, authoring_recipe: str, bundle: Mapping[str, Any]) -> str:
+    from gpucall.app import build_runtime
+    from gpucall.domain import ChatMessage, ExecutionMode, JobState, ResponseFormat, ResponseFormatType, TaskRequest
+
+    runtime = build_runtime(config_dir)
+    recipe = runtime.compiler.recipes.get(authoring_recipe)
+    if recipe is None:
+        raise ValueError(f"unknown authoring recipe: {authoring_recipe}")
+    mode = ExecutionMode.SYNC if ExecutionMode.SYNC in recipe.allowed_modes else recipe.allowed_modes[0]
+    request = TaskRequest(
+        task=recipe.task,
+        mode=mode,
+        recipe=recipe.name,
+        messages=[
+            ChatMessage(role="system", content=AUTHORING_SYSTEM_PROMPT),
+            ChatMessage(role="user", content=authoring_prompt(bundle)),
+        ],
+        response_format=ResponseFormat(type=ResponseFormatType.JSON_OBJECT),
+        temperature=0.1,
+        max_tokens=2048,
+    )
+    plan = runtime.compiler.compile(request)
+    import asyncio
+
+    async def run_authoring() -> str:
+        if mode is ExecutionMode.ASYNC:
+            job = await runtime.dispatcher.submit_async(plan)
+            deadline = time.monotonic() + plan.timeout_seconds
+            current = job
+            while time.monotonic() < deadline:
+                loaded = await runtime.jobs.get(job.job_id)
+                if loaded is not None:
+                    current = loaded
+                    if loaded.state in {JobState.COMPLETED, JobState.FAILED, JobState.CANCELLED, JobState.EXPIRED}:
+                        break
+                await asyncio.sleep(1.0)
+            if current.state is not JobState.COMPLETED or current.result is None:
+                raise ValueError(f"authoring recipe async job did not complete: {current.state.value}")
+            return current.result.value or ""
+        result = await runtime.dispatcher.execute_sync(plan)
+        return result.value or ""
+
+    return asyncio.run(run_authoring())
+
+
+def _author_config_summary(config_dir: str | Path) -> dict[str, Any]:
+    config = load_config(Path(config_dir).expanduser())
+    return {
+        "recipes": sorted(config.recipes),
+        "tuples": sorted(config.tuples),
+        "models": sorted(config.models),
+        "engines": sorted(config.engines),
+    }
+
+
+def _authoring_target_recipe(report: Mapping[str, Any]) -> str | None:
+    recipe = _mapping(report.get("canonical_recipe")).get("name")
+    if isinstance(recipe, str) and recipe:
+        return recipe
+    review_recipe = _mapping(_mapping(report.get("admin_review")).get("canonical_recipe")).get("name")
+    return review_recipe if isinstance(review_recipe, str) and review_recipe else None
+
+
+def _authoring_target_recipe_payload(report: Mapping[str, Any]) -> Mapping[str, Any]:
+    recipe = _mapping(report.get("canonical_recipe"))
+    if recipe:
+        return recipe
+    return _mapping(_mapping(report.get("admin_review")).get("canonical_recipe"))
+
+
 def _auto_promotion_report(
     review: Mapping[str, Any],
     *,
@@ -411,18 +578,27 @@ def _auto_existing_tuple_report(
         if not automation.recipe_inbox_auto_billable_validation:
             report["decision"] = "READY_FOR_BILLABLE_VALIDATION"
             return report
-        validation = _run_existing_tuple_validation(
-            tuple_name=eligible[0],
-            recipe_name=str(recipe["name"]),
-            config_dir=Path(config_dir).expanduser(),
-            validation_dir=Path(validation_dir).expanduser() if validation_dir else None,
-        )
+        attempts = []
+        validation = None
+        matched_tuple = None
+        for tuple_name in eligible:
+            validation = _run_existing_tuple_validation(
+                tuple_name=tuple_name,
+                recipe_name=str(recipe["name"]),
+                config_dir=Path(config_dir).expanduser(),
+                validation_dir=Path(validation_dir).expanduser() if validation_dir else None,
+            )
+            attempts.append({"tuple": tuple_name, "validation": validation})
+            if validation.get("returncode") == 0 and validation.get("passed") is True:
+                matched_tuple = tuple_name
+                break
+        report["validation_attempts"] = attempts
         report["validation"] = validation
-        if validation.get("returncode") != 0 or validation.get("passed") is not True:
+        if validation is None or matched_tuple is None:
             report["decision"] = "VALIDATION_FAILED"
             _write_auto_existing_report(report_dir, request_id, report)
             return report
-        matched = [{"tuple": eligible[0], "recipe": recipe["name"], "path": validation.get("artifact_path")}]
+        matched = [{"tuple": matched_tuple, "recipe": recipe["name"], "path": validation.get("artifact_path")}]
     report["matched_validation"] = matched
     if not automation.recipe_inbox_auto_activate_existing_validated_recipe:
         report["decision"] = "VALIDATED_READY_TO_ACTIVATE"

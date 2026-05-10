@@ -32,6 +32,7 @@ artifact_export: false
 requires_key_release: false
 required_model_capabilities:
 - instruction_following
+- reasoning
 output_contract: plain-text
 expected_cold_start_seconds: 600
 cost_policy:

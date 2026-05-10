@@ -132,6 +132,9 @@ class GPUCallClient:
         max_tokens: int | None = None,
         temperature: float | None = None,
         messages: list[dict[str, Any]] | None = None,
+        intent: str | None = None,
+        task_family: str | None = None,
+        metadata: dict[str, Any] | None = None,
         auto_upload: bool = True,
         poll: bool = True,
         poll_interval: float = 1.0,
@@ -145,6 +148,9 @@ class GPUCallClient:
             max_tokens=max_tokens,
             temperature=temperature,
             messages=messages,
+            intent=intent,
+            task_family=task_family,
+            metadata=metadata,
             auto_upload=auto_upload,
         )
         try:
@@ -223,6 +229,9 @@ class GPUCallClient:
         max_tokens: int | None,
         temperature: float | None,
         messages: list[dict[str, Any]] | None = None,
+        intent: str | None = None,
+        task_family: str | None = None,
+        metadata: dict[str, Any] | None = None,
         auto_upload: bool = True,
     ) -> dict[str, Any]:
         refs = [self.upload_file(path) for path in files or []]
@@ -234,6 +243,11 @@ class GPUCallClient:
             else:
                 inline["prompt"] = {"value": prompt, "content_type": "text/plain"}
         payload: dict[str, Any] = {"task": task, "mode": mode, "input_refs": refs, "inline_inputs": inline}
+        selected_intent = intent or task_family
+        if selected_intent is not None:
+            payload["intent"] = selected_intent
+        if metadata:
+            payload["metadata"] = {str(key): _metadata_value(value) for key, value in metadata.items() if value is not None}
         if messages is not None:
             payload["messages"] = _normalize_messages(messages)
         if response_format is not None:
@@ -298,6 +312,9 @@ class AsyncGPUCallClient:
         max_tokens: int | None = None,
         temperature: float | None = None,
         messages: list[dict[str, Any]] | None = None,
+        intent: str | None = None,
+        task_family: str | None = None,
+        metadata: dict[str, Any] | None = None,
         auto_upload: bool = True,
         poll: bool = True,
         poll_interval: float = 1.0,
@@ -311,6 +328,9 @@ class AsyncGPUCallClient:
             max_tokens=max_tokens,
             temperature=temperature,
             messages=messages,
+            intent=intent,
+            task_family=task_family,
+            metadata=metadata,
             auto_upload=auto_upload,
         )
         try:
@@ -408,6 +428,9 @@ class AsyncGPUCallClient:
         max_tokens: int | None,
         temperature: float | None,
         messages: list[dict[str, Any]] | None = None,
+        intent: str | None = None,
+        task_family: str | None = None,
+        metadata: dict[str, Any] | None = None,
         auto_upload: bool = True,
     ) -> dict[str, Any]:
         refs = [await self.upload_file(path) for path in files or []]
@@ -419,6 +442,11 @@ class AsyncGPUCallClient:
             else:
                 inline["prompt"] = {"value": prompt, "content_type": "text/plain"}
         payload: dict[str, Any] = {"task": task, "mode": mode, "input_refs": refs, "inline_inputs": inline}
+        selected_intent = intent or task_family
+        if selected_intent is not None:
+            payload["intent"] = selected_intent
+        if metadata:
+            payload["metadata"] = {str(key): _metadata_value(value) for key, value in metadata.items() if value is not None}
         if messages is not None:
             payload["messages"] = _normalize_messages(messages)
         if response_format is not None:
@@ -449,12 +477,41 @@ class _ChatCompletionsResource:
         response_format: dict[str, Any] | None = None,
         max_tokens: int | None = None,
         temperature: float | None = None,
+        intent: str | None = None,
+        task_family: str | None = None,
+        metadata: dict[str, Any] | None = None,
+        top_p: float | None = None,
+        stop: str | list[str] | None = None,
+        seed: int | None = None,
+        tools: list[dict[str, Any]] | None = None,
+        tool_choice: str | dict[str, Any] | None = None,
+        user: str | None = None,
+        presence_penalty: float | None = None,
+        frequency_penalty: float | None = None,
+        n: int | None = None,
         mode: str = "sync",
         auto_upload: bool = True,
         parse_json: bool = False,
         poll_interval: float = 1.0,
+        **extra: Any,
     ) -> dict[str, Any]:
         message_payload = _normalize_messages(messages)
+        request_metadata = _openai_metadata(
+            metadata=metadata,
+            model=model,
+            intent=intent,
+            task_family=task_family,
+            top_p=top_p,
+            stop=stop,
+            seed=seed,
+            tools=tools,
+            tool_choice=tool_choice,
+            user=user,
+            presence_penalty=presence_penalty,
+            frequency_penalty=frequency_penalty,
+            n=n,
+            extra=extra,
+        )
         result = self._root.infer(
             prompt=None,
             messages=message_payload,
@@ -463,6 +520,9 @@ class _ChatCompletionsResource:
             max_tokens=max_tokens,
             auto_upload=auto_upload,
             temperature=temperature,
+            intent=intent,
+            task_family=task_family,
+            metadata=request_metadata,
             poll=True,
             poll_interval=poll_interval,
         )
@@ -497,12 +557,41 @@ class _AsyncChatCompletionsResource:
         response_format: dict[str, Any] | None = None,
         max_tokens: int | None = None,
         temperature: float | None = None,
+        intent: str | None = None,
+        task_family: str | None = None,
+        metadata: dict[str, Any] | None = None,
+        top_p: float | None = None,
+        stop: str | list[str] | None = None,
+        seed: int | None = None,
+        tools: list[dict[str, Any]] | None = None,
+        tool_choice: str | dict[str, Any] | None = None,
+        user: str | None = None,
+        presence_penalty: float | None = None,
+        frequency_penalty: float | None = None,
+        n: int | None = None,
         mode: str = "sync",
         auto_upload: bool = True,
         parse_json: bool = False,
         poll_interval: float = 1.0,
+        **extra: Any,
     ) -> dict[str, Any]:
         message_payload = _normalize_messages(messages)
+        request_metadata = _openai_metadata(
+            metadata=metadata,
+            model=model,
+            intent=intent,
+            task_family=task_family,
+            top_p=top_p,
+            stop=stop,
+            seed=seed,
+            tools=tools,
+            tool_choice=tool_choice,
+            user=user,
+            presence_penalty=presence_penalty,
+            frequency_penalty=frequency_penalty,
+            n=n,
+            extra=extra,
+        )
         result = await self._root.infer(
             prompt=None,
             messages=message_payload,
@@ -511,6 +600,9 @@ class _AsyncChatCompletionsResource:
             max_tokens=max_tokens,
             auto_upload=auto_upload,
             temperature=temperature,
+            intent=intent,
+            task_family=task_family,
+            metadata=request_metadata,
             poll=True,
             poll_interval=poll_interval,
         )
@@ -542,6 +634,54 @@ def _normalize_messages(messages: list[dict[str, Any]]) -> list[dict[str, str]]:
         if text:
             normalized.append({"role": role, "content": text})
     return normalized
+
+
+def _openai_metadata(
+    *,
+    metadata: dict[str, Any] | None,
+    model: str,
+    intent: str | None,
+    task_family: str | None,
+    top_p: float | None,
+    stop: str | list[str] | None,
+    seed: int | None,
+    tools: list[dict[str, Any]] | None,
+    tool_choice: str | dict[str, Any] | None,
+    user: str | None,
+    presence_penalty: float | None,
+    frequency_penalty: float | None,
+    n: int | None,
+    extra: dict[str, Any],
+) -> dict[str, str]:
+    result = {str(key): _metadata_value(value) for key, value in (metadata or {}).items() if value is not None}
+    result["openai.model"] = model
+    if intent:
+        result.setdefault("intent", intent)
+    if task_family:
+        result.setdefault("task_family", task_family)
+    optional = {
+        "openai.top_p": top_p,
+        "openai.stop": stop,
+        "openai.seed": seed,
+        "openai.tools": tools,
+        "openai.tool_choice": tool_choice,
+        "openai.user": user,
+        "openai.presence_penalty": presence_penalty,
+        "openai.frequency_penalty": frequency_penalty,
+        "openai.n": n,
+    }
+    for key, value in optional.items():
+        if value is not None:
+            result[key] = _metadata_value(value)
+    if extra:
+        result["openai.extra_keys"] = ",".join(sorted(extra))
+    return result
+
+
+def _metadata_value(value: Any) -> str:
+    if isinstance(value, str):
+        return value
+    return json.dumps(value, sort_keys=True, separators=(",", ":"))
 
 
 def _messages_to_prompt(messages: list[dict[str, Any]]) -> str:

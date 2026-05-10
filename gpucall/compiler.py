@@ -38,6 +38,14 @@ class GovernanceError(ValueError):
 
 class GovernanceCompiler:
     SUPPORTED_TASKS = {"infer", "vision", "transcribe", "convert", "train", "fine-tune", "split-infer"}
+    DEFAULT_AUTO_INTENTS = {
+        "short_text_inference",
+        "standard_text_inference",
+        "large_context_text_inference",
+        "extra_large_context_text_inference",
+        "ultralong_text_inference",
+        "understand_image",
+    }
     def __init__(
         self,
         *,
@@ -106,6 +114,7 @@ class GovernanceCompiler:
             inline_inputs=request.inline_inputs,
             messages=compiled_messages,
             response_format=request.response_format,
+            metadata=dict(request.metadata),
             artifact_export=request.artifact_export,
             split_learning=request.split_learning,
             system_prompt=effective_system_prompt,
@@ -192,6 +201,10 @@ class GovernanceCompiler:
             return "auto_select is false"
         if recipe.task != request.task:
             return f"task is {recipe.task!r}"
+        if request.intent is None and recipe.intent is not None and recipe.intent not in self.DEFAULT_AUTO_INTENTS:
+            return f"intent-specific recipe {recipe.intent!r} requires request intent"
+        if request.intent is not None and recipe.intent != request.intent:
+            return f"intent is {recipe.intent!r}"
         if request.mode not in recipe.allowed_modes:
             return f"mode {request.mode} is not allowed"
         if request.max_tokens is not None:

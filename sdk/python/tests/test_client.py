@@ -42,6 +42,38 @@ def test_chat_completions_sends_no_recipe_or_provider() -> None:
     assert response["parsed"] == {"answer": 2}
 
 
+def test_chat_completions_sends_intent_and_openai_hints_as_metadata() -> None:
+    sent_payload = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal sent_payload
+        sent_payload = json.loads(request.read())
+        return httpx.Response(200, json={"result": {"kind": "inline", "value": "ok"}})
+
+    client = GPUCallClient("http://gpucall.test", transport=httpx.MockTransport(handler))
+
+    client.chat.completions.create(
+        model="gpt-4o-mini",
+        messages=[{"role": "user", "content": "return json"}],
+        task_family="extract_json",
+        top_p=0.9,
+        seed=7,
+        tools=[{"type": "function", "function": {"name": "noop"}}],
+        custom_openai_field=True,
+    )
+
+    assert sent_payload["task"] == "infer"
+    assert sent_payload["intent"] == "extract_json"
+    assert "recipe" not in sent_payload
+    assert "requested_tuple" not in sent_payload
+    assert sent_payload["metadata"]["task_family"] == "extract_json"
+    assert sent_payload["metadata"]["openai.model"] == "gpt-4o-mini"
+    assert sent_payload["metadata"]["openai.top_p"] == "0.9"
+    assert sent_payload["metadata"]["openai.seed"] == "7"
+    assert "openai.tools" in sent_payload["metadata"]
+    assert sent_payload["metadata"]["openai.extra_keys"] == "custom_openai_field"
+
+
 def test_chat_completions_rejects_structured_message_content_without_flattening() -> None:
     client = GPUCallClient("http://gpucall.test", transport=httpx.MockTransport(lambda request: httpx.Response(500)))
 

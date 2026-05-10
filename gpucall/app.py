@@ -18,7 +18,7 @@ import yaml
 from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse, PlainTextResponse, StreamingResponse
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 from gpucall.app_helpers import (
     _allow_unauthenticated_gateway,
@@ -102,13 +102,27 @@ class OpenAIChatMessage(BaseModel):
 
 
 class OpenAIChatCompletionRequest(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
     model: str = "gpucall:auto"
     messages: list[OpenAIChatMessage] = Field(min_length=1)
     response_format: ResponseFormat | None = None
     temperature: float | None = None
     max_tokens: int | None = Field(default=None, gt=0)
+    max_completion_tokens: int | None = Field(default=None, gt=0)
+    top_p: float | None = None
+    stop: str | list[str] | None = None
+    seed: int | None = None
+    tools: list[dict[str, Any]] | None = None
+    tool_choice: str | dict[str, Any] | None = None
+    user: str | None = None
+    presence_penalty: float | None = None
+    frequency_penalty: float | None = None
+    n: int | None = Field(default=None, gt=0)
     stream: bool = False
-    metadata: dict[str, str] = Field(default_factory=dict)
+    metadata: dict[str, Any] = Field(default_factory=dict)
+    intent: str | None = None
+    task_family: str | None = None
 
 
 class BatchTaskRequest(BaseModel):
@@ -602,13 +616,6 @@ def create_app(config_dir: Path | None = None) -> FastAPI:
         http_request: Request,
         runtime: Runtime = Depends(runtime_dep),
     ) -> Any:
-        allowed_models = {"gpucall:auto", "gpucall:chat"}
-        if request.model not in allowed_models:
-            return openai_error_response(
-                400,
-                "OpenAI facade model must be one of: gpucall:auto, gpucall:chat",
-                code="unsupported_model",
-            )
         messages = [_openai_message_to_chat_message(message) for message in request.messages]
         message_bytes = sum(len(message.content.encode("utf-8")) for message in messages)
         if message_bytes > runtime.compiler.policy.inline_bytes_limit:
@@ -620,11 +627,12 @@ def create_app(config_dir: Path | None = None) -> FastAPI:
         task_request = TaskRequest(
             task="infer",
             mode=ExecutionMode.STREAM if request.stream else ExecutionMode.SYNC,
+            intent=_openai_request_intent(request),
             messages=messages,
-            max_tokens=request.max_tokens,
+            max_tokens=request.max_tokens or request.max_completion_tokens,
             temperature=request.temperature,
             response_format=request.response_format,
-            metadata=request.metadata,
+            metadata=_openai_request_metadata(request),
         )
         plan = None
         try:
@@ -893,6 +901,57 @@ async def recover_interrupted_jobs(runtime: Runtime) -> None:
 
 def _openai_message_to_chat_message(message: OpenAIChatMessage) -> ChatMessage:
     return ChatMessage(role=message.role, content=_message_content_to_text(message.content))
+
+
+def _openai_request_intent(request: OpenAIChatCompletionRequest) -> str | None:
+    for value in (
+        request.intent,
+        request.task_family,
+        request.metadata.get("intent"),
+        request.metadata.get("task_family"),
+        request.metadata.get("gpucall_intent"),
+        request.metadata.get("gpucall_task_family"),
+    ):
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    return None
+
+
+def _openai_request_metadata(request: OpenAIChatCompletionRequest) -> dict[str, str]:
+    metadata: dict[str, str] = {}
+    for key, value in request.metadata.items():
+        if value is None:
+            continue
+        metadata[str(key)] = _metadata_value(value)
+    metadata["openai.model"] = request.model
+    optional_fields = {
+        "openai.user": request.user,
+        "openai.top_p": request.top_p,
+        "openai.stop": request.stop,
+        "openai.seed": request.seed,
+        "openai.tools": request.tools,
+        "openai.tool_choice": request.tool_choice,
+        "openai.presence_penalty": request.presence_penalty,
+        "openai.frequency_penalty": request.frequency_penalty,
+        "openai.n": request.n,
+        "openai.max_completion_tokens": request.max_completion_tokens,
+    }
+    for key, value in optional_fields.items():
+        if value is not None:
+            metadata[key] = _metadata_value(value)
+    extra = sorted((request.model_extra or {}).keys())
+    if extra:
+        metadata["openai.extra_keys"] = ",".join(extra)
+    intent = _openai_request_intent(request)
+    if intent:
+        metadata.setdefault("intent", intent)
+    return metadata
+
+
+def _metadata_value(value: Any) -> str:
+    if isinstance(value, str):
+        return value
+    return json.dumps(value, sort_keys=True, separators=(",", ":"))
 
 
 def _message_content_to_text(content: str | list[dict[str, Any]]) -> str:

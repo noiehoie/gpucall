@@ -246,29 +246,36 @@ def _catalog_mode_policy(
         reasons.append(f"resource_class {resource_class} is async-preferred")
     if latency_class in ASYNC_ONLY_LATENCY_CLASSES:
         reasons.append(f"latency_class {latency_class} is async-preferred")
-    high_cold_start_tuples = _high_cold_start_tuple_names(task=task, context_budget_tokens=context_budget_tokens, catalog=catalog)
-    if high_cold_start_tuples:
-        reasons.append("catalog candidate tuple expected_cold_start_seconds exceeds sync-safe threshold")
+    tuple_latency = _tuple_latency_buckets(task=task, context_budget_tokens=context_budget_tokens, catalog=catalog)
+    high_cold_start_tuples = tuple_latency["high_cold_start_tuples"]
+    sync_safe_tuples = tuple_latency["sync_safe_tuples"]
+    if high_cold_start_tuples and not sync_safe_tuples:
+        reasons.append("all catalog candidate tuples exceed sync-safe cold-start threshold")
     return {
         "catalog_consulted": catalog is not None,
         "requires_async": bool(reasons),
         "sync_safe_context_budget_tokens": 32768,
         "high_cold_start_threshold_seconds": HIGH_COLD_START_SECONDS,
         "high_cold_start_tuples": high_cold_start_tuples,
+        "sync_safe_tuples": sync_safe_tuples,
         "reasons": reasons,
     }
 
 
-def _high_cold_start_tuple_names(*, task: str, context_budget_tokens: int, catalog: Any | None) -> list[str]:
+def _tuple_latency_buckets(*, task: str, context_budget_tokens: int, catalog: Any | None) -> dict[str, list[str]]:
     if catalog is None:
-        return []
+        return {"high_cold_start_tuples": [], "sync_safe_tuples": []}
     tuples = getattr(catalog, "tuples", {})
     if not isinstance(tuples, Mapping):
-        return []
-    names: list[str] = []
+        return {"high_cold_start_tuples": [], "sync_safe_tuples": []}
+    high_cold_start: list[str] = []
+    sync_safe: list[str] = []
     for name, tuple_spec in tuples.items():
         max_model_len = _positive_int(getattr(tuple_spec, "max_model_len", None), default=0)
         if max_model_len < context_budget_tokens:
+            continue
+        modes = [str(item) for item in getattr(tuple_spec, "modes", [])]
+        if "sync" not in modes:
             continue
         if task == "vision" and not bool(getattr(tuple_spec, "supports_vision", False)):
             continue
@@ -276,8 +283,10 @@ def _high_cold_start_tuple_names(*, task: str, context_budget_tokens: int, catal
             continue
         cold_start = _positive_int(getattr(tuple_spec, "expected_cold_start_seconds", None), default=0)
         if cold_start > HIGH_COLD_START_SECONDS:
-            names.append(str(name))
-    return sorted(names)
+            high_cold_start.append(str(name))
+        else:
+            sync_safe.append(str(name))
+    return {"high_cold_start_tuples": sorted(high_cold_start), "sync_safe_tuples": sorted(sync_safe)}
 
 
 def _resource_class_for(task: str, context_budget_tokens: int) -> str:
