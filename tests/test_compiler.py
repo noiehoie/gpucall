@@ -463,7 +463,7 @@ def test_tuple_chain_prefers_smallest_capable_tuple_before_observations() -> Non
     assert plan.tuple_chain == ["p2", "p1"]
 
 
-def test_provider_fit_dominates_observed_score_across_different_fit_classes() -> None:
+def test_provider_fit_dominates_observed_score_across_reliable_fit_classes() -> None:
     compiler = build_compiler()
     compiler.tuples["p1"] = compiler.tuples["p1"].model_copy(update={"vram_gb": 80, "max_model_len": 32768})
     compiler.tuples["p2"] = compiler.tuples["p2"].model_copy(update={"vram_gb": 24, "max_model_len": 100})
@@ -474,6 +474,19 @@ def test_provider_fit_dominates_observed_score_across_different_fit_classes() ->
     plan = compiler.compile(request)
 
     assert plan.tuple_chain == ["p2", "p1"]
+
+
+def test_poor_observed_reliability_loses_to_larger_reliable_tuple() -> None:
+    compiler = build_compiler()
+    compiler.tuples["p1"] = compiler.tuples["p1"].model_copy(update={"vram_gb": 80, "max_model_len": 32768})
+    compiler.tuples["p2"] = compiler.tuples["p2"].model_copy(update={"vram_gb": 24, "max_model_len": 100})
+    compiler.registry.record(TupleObservation(tuple="p1", latency_ms=1000, success=True, cost=1))
+    compiler.registry.record(TupleObservation(tuple="p2", latency_ms=1, success=False, cost=1))
+    request = TaskRequest(task="infer", mode="sync", recipe="r1")
+
+    plan = compiler.compile(request)
+
+    assert plan.tuple_chain == ["p1", "p2"]
 
 
 def test_tuple_chain_filters_by_request_weight() -> None:

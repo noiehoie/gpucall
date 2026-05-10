@@ -325,16 +325,25 @@ class GovernanceCompiler:
     def _fit_ordered_tuples(self, tuples: list[str], request: TaskRequest, recipe: Recipe) -> list[str]:
         return sorted(tuples, key=lambda name: (*self._tuple_fit_key(name, request, recipe), name))
 
-    def _tuple_fit_key(self, name: str, request: TaskRequest, recipe: Recipe) -> tuple[int, int, int, float]:
+    def _tuple_fit_key(self, name: str, request: TaskRequest, recipe: Recipe) -> tuple[int, int, int, int, float]:
         compiled_required_model_len = self._required_model_len(request, recipe)
         spec = self.tuples[name]
         local_preference = 0 if spec.execution_surface and spec.execution_surface.value == "local_runtime" else 1
         return (
             local_preference,
+            self._observed_reliability_tier(name),
             spec.vram_gb,
             spec.max_model_len - compiled_required_model_len,
             float(spec.cost_per_second),
         )
+
+    def _observed_reliability_tier(self, name: str) -> int:
+        score = self.registry.score(name)
+        if not score.samples:
+            return 1
+        if score.success_rate >= 0.5:
+            return 0
+        return 2
 
     def _eligible_tuples(
         self,
