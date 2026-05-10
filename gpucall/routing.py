@@ -8,6 +8,7 @@ from gpucall.domain import (
     DataClassification,
     EngineSpec,
     ExecutionMode,
+    ExecutionSurface,
     ModelSpec,
     Policy,
     ExecutionTupleSpec,
@@ -17,7 +18,7 @@ from gpucall.domain import (
     recipe_requirements,
 )
 from gpucall.execution.registry import adapter_descriptor
-from gpucall.targeting import is_configured_target
+from gpucall.targeting import is_configured_cidr, is_configured_target
 
 
 def classification_rank(value: DataClassification) -> int:
@@ -49,11 +50,15 @@ def required_model_len(request: TaskRequest, recipe: Recipe, policy: Policy) -> 
     return max(1, estimated_input_tokens + output_budget)
 
 
-def is_production_route_candidate(tuple: ExecutionTupleSpec, *, allow_fake: bool | None = None) -> bool:
-    return production_route_rejection_reason(tuple, allow_fake=allow_fake) is None
+def is_production_route_candidate(
+    tuple: ExecutionTupleSpec, *, allow_fake: bool | None = None, require_configured_runtime: bool = True
+) -> bool:
+    return production_route_rejection_reason(tuple, allow_fake=allow_fake, require_configured_runtime=require_configured_runtime) is None
 
 
-def production_route_rejection_reason(tuple: ExecutionTupleSpec, *, allow_fake: bool | None = None) -> str | None:
+def production_route_rejection_reason(
+    tuple: ExecutionTupleSpec, *, allow_fake: bool | None = None, require_configured_runtime: bool = True
+) -> str | None:
     if allow_fake is None:
         allow_fake = os.getenv("GPUCALL_ALLOW_FAKE_AUTO_TUPLES", "").strip().lower() in {"1", "true", "yes", "on"}
     if allow_fake:
@@ -67,6 +72,14 @@ def production_route_rejection_reason(tuple: ExecutionTupleSpec, *, allow_fake: 
     requires_model = descriptor.requires_model_for_auto if descriptor is not None else True
     if requires_model and not tuple.model:
         return "tuple model is not configured"
+    if (
+        require_configured_runtime
+        and descriptor is not None
+        and descriptor.execution_surface is ExecutionSurface.IAAS_VM
+        and tuple.ssh_remote_cidr is not None
+        and not is_configured_cidr(tuple.ssh_remote_cidr)
+    ):
+        return "IaaS ssh_remote_cidr is not configured for live execution"
     required_fields = descriptor.required_auto_fields if descriptor is not None else {}
     for field, reason in required_fields.items():
         value = getattr(tuple, field, None)
@@ -91,11 +104,12 @@ def tuple_route_rejection_reason(
     auto_selected: bool = True,
     require_auto_select: bool = False,
     allow_fake: bool | None = None,
+    require_configured_runtime: bool = True,
 ) -> str | None:
     if require_auto_select and not recipe.auto_select:
         return "recipe is not auto-selected"
     if auto_selected:
-        route_reason = production_route_rejection_reason(tuple, allow_fake=allow_fake)
+        route_reason = production_route_rejection_reason(tuple, allow_fake=allow_fake, require_configured_runtime=require_configured_runtime)
         if route_reason is not None:
             return route_reason
     input_contracts = set(tuple.input_contracts)

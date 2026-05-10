@@ -319,6 +319,7 @@ def validate_config(config: GpucallConfig) -> None:
                     engine=config.engines.get(tuple_spec.engine_ref) if tuple_spec.engine_ref else None,
                     required_len=recipe_requirements(recipe).context_budget_tokens,
                     auto_selected=True,
+                    require_configured_runtime=False,
                 )
                 if reason is not None:
                     continue

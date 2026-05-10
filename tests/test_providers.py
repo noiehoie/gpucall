@@ -217,7 +217,7 @@ def test_factory_builds_configured_adapter_types() -> None:
             instance="n3-A100x1",
             image=DEFAULT_HYPERSTACK_IMAGE,
             key_name="gpucall-key",
-            ssh_remote_cidr="203.0.113.0/24",
+            ssh_remote_cidr="10.0.0.42/32",
         ),
         "runpod-vllm-serverless": ExecutionTupleSpec(
             name="runpod-vllm-serverless",
@@ -1136,7 +1136,7 @@ async def test_lifecycle_only_adapters_do_not_fake_provider_success() -> None:
 
 def test_hyperstack_manifest_tracks_active_and_destroyed_leases(tmp_path) -> None:
     adapter = HyperstackAdapter(
-        api_key="test", lease_manifest_path=str(tmp_path / "leases.jsonl"), ssh_remote_cidr="203.0.113.0/24"
+        api_key="test", lease_manifest_path=str(tmp_path / "leases.jsonl"), ssh_remote_cidr="10.0.0.42/32"
     )
 
     adapter._record_lease(
@@ -1170,7 +1170,7 @@ def test_hyperstack_destroy_records_pending_after_accepted_delete(monkeypatch, t
             return FakeDeleteResponse()
 
     adapter = HyperstackAdapter(
-        api_key="test", lease_manifest_path=str(tmp_path / "leases.jsonl"), ssh_remote_cidr="203.0.113.0/24"
+        api_key="test", lease_manifest_path=str(tmp_path / "leases.jsonl"), ssh_remote_cidr="10.0.0.42/32"
     )
     monkeypatch.setattr(adapter, "_session", lambda: FakeSession())
     monkeypatch.setattr(adapter, "_wait_vm_absent", lambda *_args, **_kwargs: False)
@@ -1202,7 +1202,7 @@ def test_hyperstack_create_payload_uses_official_fields(monkeypatch, tmp_path) -
             return FakeResponse()
 
     adapter = HyperstackAdapter(
-        api_key="test", lease_manifest_path=str(tmp_path / "leases.jsonl"), ssh_remote_cidr="203.0.113.0/24"
+        api_key="test", lease_manifest_path=str(tmp_path / "leases.jsonl"), ssh_remote_cidr="10.0.0.42/32"
     )
     monkeypatch.setattr(adapter, "_session", lambda: FakeSession())
     monkeypatch.setattr(adapter, "_wait_active", lambda _session, _vm_id: "203.0.113.10")
@@ -1220,7 +1220,7 @@ def test_hyperstack_create_payload_uses_official_fields(monkeypatch, tmp_path) -
             "direction": "ingress",
             "ethertype": "IPv4",
             "protocol": "tcp",
-            "remote_ip_prefix": "203.0.113.0/24",
+            "remote_ip_prefix": "10.0.0.42/32",
             "port_range_min": 22,
             "port_range_max": 22,
         }
@@ -1249,7 +1249,7 @@ def test_hyperstack_create_payload_uses_configured_image_without_aliasing(monkey
         api_key="test",
         image_name="Ubuntu 22.04 LTS",
         lease_manifest_path=str(tmp_path / "leases.jsonl"),
-        ssh_remote_cidr="203.0.113.0/24",
+        ssh_remote_cidr="10.0.0.42/32",
     )
     monkeypatch.setattr(adapter, "_session", lambda: FakeSession())
     monkeypatch.setattr(adapter, "_wait_active", lambda _session, _vm_id: "203.0.113.10")
@@ -1276,7 +1276,7 @@ def test_hyperstack_provision_404_is_retryable_for_fallback(monkeypatch, tmp_pat
             return FakeResponse()
 
     adapter = HyperstackAdapter(
-        api_key="test", lease_manifest_path=str(tmp_path / "leases.jsonl"), ssh_remote_cidr="203.0.113.0/24"
+        api_key="test", lease_manifest_path=str(tmp_path / "leases.jsonl"), ssh_remote_cidr="10.0.0.42/32"
     )
     monkeypatch.setattr(adapter, "_session", lambda: FakeSession())
 
@@ -1313,7 +1313,7 @@ def test_hyperstack_provision_400_preserves_redacted_error_body(monkeypatch, tmp
             return FakeResponse()
 
     adapter = HyperstackAdapter(
-        api_key="test", lease_manifest_path=str(tmp_path / "leases.jsonl"), ssh_remote_cidr="203.0.113.0/24"
+        api_key="test", lease_manifest_path=str(tmp_path / "leases.jsonl"), ssh_remote_cidr="10.0.0.42/32"
     )
     monkeypatch.setattr(adapter, "_session", lambda: FakeSession())
 
@@ -1352,7 +1352,7 @@ def test_hyperstack_stock_400_is_retryable_capacity_unavailable(monkeypatch, tmp
             return FakeResponse()
 
     adapter = HyperstackAdapter(
-        api_key="test", lease_manifest_path=str(tmp_path / "leases.jsonl"), ssh_remote_cidr="203.0.113.0/24"
+        api_key="test", lease_manifest_path=str(tmp_path / "leases.jsonl"), ssh_remote_cidr="10.0.0.42/32"
     )
     monkeypatch.setattr(adapter, "_session", lambda: FakeSession())
 
@@ -1432,7 +1432,7 @@ def test_hyperstack_worker_script_invokes_vllm_not_smoke_output(monkeypatch, tmp
     adapter = HyperstackAdapter(
         api_key="test",
         lease_manifest_path=str(tmp_path / "leases.jsonl"),
-        ssh_remote_cidr="203.0.113.0/24",
+        ssh_remote_cidr="10.0.0.42/32",
         model="Qwen/Qwen2.5-1.5B-Instruct",
         max_model_len=32768,
     )
@@ -1479,7 +1479,7 @@ def test_hyperstack_wait_parses_artifact_manifest(tmp_path) -> None:
         def exec_command(self, _cmd: str):
             return None, FakeStdout(), None
 
-    adapter = HyperstackAdapter(api_key="test", lease_manifest_path=str(tmp_path / "leases.jsonl"), ssh_remote_cidr="203.0.113.0/24")
+    adapter = HyperstackAdapter(api_key="test", lease_manifest_path=str(tmp_path / "leases.jsonl"), ssh_remote_cidr="10.0.0.42/32")
     plan = plan_payload_plan().model_copy(
         update={
             "task": "fine-tune",
@@ -1517,7 +1517,7 @@ def test_hyperstack_adds_ssh_security_rule_after_active(tmp_path) -> None:
             return FakeResponse()
 
     adapter = HyperstackAdapter(
-        api_key="test", lease_manifest_path=str(tmp_path / "leases.jsonl"), ssh_remote_cidr="203.0.113.0/24"
+        api_key="test", lease_manifest_path=str(tmp_path / "leases.jsonl"), ssh_remote_cidr="10.0.0.42/32"
     )
     adapter._ensure_ssh_rule(FakeSession(), "123")
 
@@ -1526,7 +1526,7 @@ def test_hyperstack_adds_ssh_security_rule_after_active(tmp_path) -> None:
         "direction": "ingress",
         "ethertype": "IPv4",
         "protocol": "tcp",
-        "remote_ip_prefix": "203.0.113.0/24",
+        "remote_ip_prefix": "10.0.0.42/32",
         "port_range_min": 22,
         "port_range_max": 22,
     }
@@ -1569,7 +1569,7 @@ def test_hyperstack_missing_known_hosts_is_fallback_eligible(monkeypatch, tmp_pa
     monkeypatch.delenv("GPUCALL_HYPERSTACK_KNOWN_HOSTS", raising=False)
     monkeypatch.setattr("gpucall.execution_surfaces.hyperstack_vm.socket.create_connection", lambda *_args, **_kwargs: FakeSocket())
     adapter = HyperstackAdapter(
-        api_key="test", lease_manifest_path=str(tmp_path / "leases.jsonl"), ssh_remote_cidr="203.0.113.0/24"
+        api_key="test", lease_manifest_path=str(tmp_path / "leases.jsonl"), ssh_remote_cidr="10.0.0.42/32"
     )
 
     with pytest.raises(Exception) as exc_info:
@@ -1599,7 +1599,7 @@ def test_hyperstack_wait_active_ignores_private_fixed_ip(monkeypatch, tmp_path) 
 
     monkeypatch.setattr("gpucall.execution_surfaces.hyperstack_vm.time.sleep", lambda _seconds: None)
     adapter = HyperstackAdapter(
-        api_key="test", lease_manifest_path=str(tmp_path / "leases.jsonl"), ssh_remote_cidr="203.0.113.0/24"
+        api_key="test", lease_manifest_path=str(tmp_path / "leases.jsonl"), ssh_remote_cidr="10.0.0.42/32"
     )
 
     assert adapter._wait_active(FakeSession(), "vm-1") == "203.0.113.10"
@@ -1625,7 +1625,7 @@ def test_hyperstack_wait_active_retries_transient_api_timeout(monkeypatch, tmp_p
 
     monkeypatch.setattr("gpucall.execution_surfaces.hyperstack_vm.time.sleep", lambda _seconds: None)
     adapter = HyperstackAdapter(
-        api_key="test", lease_manifest_path=str(tmp_path / "leases.jsonl"), ssh_remote_cidr="203.0.113.0/24"
+        api_key="test", lease_manifest_path=str(tmp_path / "leases.jsonl"), ssh_remote_cidr="10.0.0.42/32"
     )
 
     assert adapter._wait_active(FakeSession(), "vm-1") == "203.0.113.10"

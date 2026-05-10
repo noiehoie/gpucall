@@ -51,7 +51,7 @@ from gpucall.execution.registry import adapter_descriptor, vendor_family_for_ada
 from gpucall.registry import ObservedRegistry
 from gpucall.audit import AuditTrail
 from gpucall.routing import tuple_route_rejection_reason
-from gpucall.targeting import has_configured_endpoint_or_target
+from gpucall.targeting import has_configured_endpoint_or_target, is_configured_cidr
 from gpucall.sqlite_store import SQLiteJobStore
 from gpucall.tenant import TenantUsageLedger
 from gpucall.validator_plan import build_validator_plan, dumps_validator_plan
@@ -1762,6 +1762,8 @@ def _required_live_validation_tuples(config) -> list[dict[str, object]]:
         if descriptor.local_execution or not descriptor.production_eligible:
             continue
         if not has_configured_endpoint_or_target(tuple.endpoint, tuple.target):
+            continue
+        if descriptor.execution_surface and descriptor.execution_surface.value == "iaas_vm" and tuple.ssh_remote_cidr is not None and not is_configured_cidr(tuple.ssh_remote_cidr):
             continue
         key = tuple_evidence_key(tuple)
         tuples[key] = {

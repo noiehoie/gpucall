@@ -215,6 +215,33 @@ def test_runpod_provider_with_placeholder_endpoint_is_not_auto_routed() -> None:
     )
 
 
+def test_hyperstack_provider_with_documentation_cidr_is_not_auto_routed() -> None:
+    compiler = build_compiler()
+    compiler.policy.tuples.allow.append("hyperstack-doc")
+    compiler.tuples["hyperstack-doc"] = ExecutionTupleSpec(
+        name="hyperstack-doc",
+        adapter="hyperstack",
+        gpu="A100",
+        vram_gb=80,
+        max_model_len=32768,
+        cost_per_second=0.001,
+        modes=[ExecutionMode.SYNC, ExecutionMode.ASYNC],
+        target="default-CANADA-1",
+        model="Qwen/Qwen2.5-1.5B-Instruct",
+        instance="n3-A100x1",
+        image="Ubuntu Server 22.04 LTS R570 CUDA 12.8 with Docker",
+        key_name="gpucall-key",
+        ssh_remote_cidr="203.0.113.10/32",
+    )
+
+    plan = compiler.compile(TaskRequest(task="infer", mode="sync", max_tokens=10))
+
+    assert "hyperstack-doc" not in plan.tuple_chain
+    assert compiler._tuple_rejections(TaskRequest(task="infer", mode="sync", max_tokens=10), compiler.recipes["r1"], auto_selected=True)[
+        "hyperstack-doc"
+    ] == "IaaS ssh_remote_cidr is not configured for live execution"
+
+
 def test_modal_stream_requires_explicit_stream_target() -> None:
     compiler = build_compiler()
     compiler.recipes["r1"] = compiler.recipes["r1"].model_copy(update={"allowed_modes": [ExecutionMode.STREAM]})

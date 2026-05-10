@@ -18,6 +18,7 @@ from gpucall.execution.base import TupleAdapter, RemoteHandle
 from gpucall.execution.payloads import plan_payload
 from gpucall.execution.registry import TupleAdapterDescriptor, register_adapter
 from gpucall.live_catalog import live_error, live_info, price_per_second_from_mapping, price_per_second_from_pricing_text
+from gpucall.targeting import is_configured_cidr
 
 HYPERSTACK_API_BASE = "https://infrahub-api.nexgencloud.com/v1"
 DEFAULT_HYPERSTACK_IMAGE = "Ubuntu Server 22.04 LTS R570 CUDA 12.8 with Docker"
@@ -102,6 +103,8 @@ class HyperstackAdapter(TupleAdapter):
             raise TupleError("Hyperstack ssh_remote_cidr is invalid", retryable=False, status_code=400) from exc
         if network.prefixlen == 0:
             raise TupleError("Hyperstack ssh_remote_cidr must not allow all addresses", retryable=False, status_code=400)
+        if not is_configured_cidr(self.ssh_remote_cidr):
+            raise TupleError("Hyperstack ssh_remote_cidr must be a live operator CIDR, not a documentation range", retryable=False, status_code=400)
         session = self._session()
         vm_name = f"gpucall-managed-{plan.plan_id[:12]}-{uuid4().hex[:8]}"
         self._record_lease({"event": "provision.requested", "vm_name": vm_name, "plan_id": plan.plan_id, "expires_at": plan.expires_at().isoformat()})
