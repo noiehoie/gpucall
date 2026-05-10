@@ -71,6 +71,8 @@ def test_recipe_intents_are_registered() -> None:
 
 def test_admin_automation_defaults_are_closed() -> None:
     root = Path(__file__).resolve().parents[1]
+    if not (root / ".git").exists():
+        pytest.skip("public release tracked-file audit requires a git checkout")
     for relative in ("config/admin.yml", "config/admin.yml.example", "gpucall/config_templates/admin.yml.example"):
         data = yaml.safe_load((root / relative).read_text(encoding="utf-8")) or {}
         assert data.get("recipe_inbox_auto_materialize") is False
