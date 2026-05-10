@@ -33,7 +33,6 @@ def test_tracked_files_do_not_contain_private_operator_artifacts() -> None:
         r"AKIA[0-9A-Z]{16}",
         r"no eligible provider after policy, recipe, and circuit constraints",
         r"provider-smoke",
-        r"https://raw\.githubusercontent\.com/noiehoie/gpucall/main/",
         r"sdk/python/dist/.*\.whl",
     ]
     compiled = re.compile("|".join(patterns))

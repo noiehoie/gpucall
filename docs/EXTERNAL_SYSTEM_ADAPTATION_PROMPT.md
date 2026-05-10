@@ -19,8 +19,8 @@ LLM / Vision / GPU inference paths to gpucall v2.0.
 Read the operator-provided values first. Then read the public onboarding docs as
 generic references:
 
-- https://raw.githubusercontent.com/noiehoie/gpucall/v2.0.8/docs/EXTERNAL_SYSTEM_ONBOARDING_PROMPT.md
-- https://raw.githubusercontent.com/noiehoie/gpucall/v2.0.8/docs/EXTERNAL_SYSTEM_ONBOARDING_MANUAL.md
+- https://raw.githubusercontent.com/noiehoie/gpucall/main/docs/EXTERNAL_SYSTEM_ONBOARDING_PROMPT.md
+- https://raw.githubusercontent.com/noiehoie/gpucall/main/docs/EXTERNAL_SYSTEM_ONBOARDING_MANUAL.md
 
 Do not clone, install, modify, or vendor the gpucall gateway repository. Your
 worktree is this external system only. If helper tools are missing, install only

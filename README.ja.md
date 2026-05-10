@@ -194,8 +194,8 @@ GitHub 上の文書は汎用テンプレートです。各環境の gateway base
 この repository の外で動く AI CLI には、汎用 reference / template として raw URL を渡せます。
 
 ```text
-https://raw.githubusercontent.com/noiehoie/gpucall/v2.0.8/docs/EXTERNAL_SYSTEM_ONBOARDING_PROMPT.md
-https://raw.githubusercontent.com/noiehoie/gpucall/v2.0.8/docs/EXTERNAL_SYSTEM_ONBOARDING_MANUAL.md
+https://raw.githubusercontent.com/noiehoie/gpucall/main/docs/EXTERNAL_SYSTEM_ONBOARDING_PROMPT.md
+https://raw.githubusercontent.com/noiehoie/gpucall/main/docs/EXTERNAL_SYSTEM_ONBOARDING_MANUAL.md
 ```
 
 外部システム側の agent は、operator が明示しない限り、gpucall gateway repository を clone / install / modify / vendor してはいけません。作業対象 worktree は移行対象アプリケーションだけです。受容開始前に、operator-provided handoff には実際の `GPUCALL_BASE_URL`、`GPUCALL_RECIPE_INBOX`、API key delivery route、SDK/helper wheel URL が含まれていなければいけません。

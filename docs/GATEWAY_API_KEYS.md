@@ -164,8 +164,8 @@ GPUCALL_TENANT='example-system'
 GPUCALL_BASE_URL='https://gpucall-gateway.example.internal'
 GPUCALL_API_KEY='gpk_...'
 GPUCALL_RECIPE_INBOX='admin@gateway.example.internal:/opt/gpucall/state/recipe_requests/inbox'
-GPUCALL_ONBOARDING_PROMPT_URL='https://raw.githubusercontent.com/noiehoie/gpucall/v2.0.8/docs/EXTERNAL_SYSTEM_ONBOARDING_PROMPT.md'
-GPUCALL_ONBOARDING_MANUAL_URL='https://raw.githubusercontent.com/noiehoie/gpucall/v2.0.8/docs/EXTERNAL_SYSTEM_ONBOARDING_MANUAL.md'
+GPUCALL_ONBOARDING_PROMPT_URL='https://raw.githubusercontent.com/noiehoie/gpucall/main/docs/EXTERNAL_SYSTEM_ONBOARDING_PROMPT.md'
+GPUCALL_ONBOARDING_MANUAL_URL='https://raw.githubusercontent.com/noiehoie/gpucall/main/docs/EXTERNAL_SYSTEM_ONBOARDING_MANUAL.md'
 GPUCALL_SDK_WHEEL_URL='https://github.com/noiehoie/gpucall/releases/download/v2.0.8/gpucall_sdk-2.0.8-py3-none-any.whl'
 ```
 
@@ -270,8 +270,8 @@ facts, not provider credentials:
 GPUCALL_BASE_URL=https://gpucall-gateway.example.internal
 GPUCALL_API_KEY=<gateway key generated for this system>
 GPUCALL_RECIPE_INBOX=admin@gateway.example.internal:/opt/gpucall/state/recipe_requests/inbox
-ONBOARDING_PROMPT=https://raw.githubusercontent.com/noiehoie/gpucall/v2.0.8/docs/EXTERNAL_SYSTEM_ONBOARDING_PROMPT.md
-ONBOARDING_MANUAL=https://raw.githubusercontent.com/noiehoie/gpucall/v2.0.8/docs/EXTERNAL_SYSTEM_ONBOARDING_MANUAL.md
+ONBOARDING_PROMPT=https://raw.githubusercontent.com/noiehoie/gpucall/main/docs/EXTERNAL_SYSTEM_ONBOARDING_PROMPT.md
+ONBOARDING_MANUAL=https://raw.githubusercontent.com/noiehoie/gpucall/main/docs/EXTERNAL_SYSTEM_ONBOARDING_MANUAL.md
 CALLER_HELPER_INSTALL=https://github.com/noiehoie/gpucall/releases/download/v2.0.8/gpucall_sdk-2.0.8-py3-none-any.whl
 ```
 

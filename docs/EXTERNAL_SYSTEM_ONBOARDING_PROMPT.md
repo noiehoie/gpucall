@@ -7,8 +7,8 @@ gpucall adoption harder than it should be.
 Public reference/template URLs for agents that are not running inside the
 gpucall repository:
 
-- Prompt: https://raw.githubusercontent.com/noiehoie/gpucall/v2.0.8/docs/EXTERNAL_SYSTEM_ONBOARDING_PROMPT.md
-- Manual: https://raw.githubusercontent.com/noiehoie/gpucall/v2.0.8/docs/EXTERNAL_SYSTEM_ONBOARDING_MANUAL.md
+- Prompt: https://raw.githubusercontent.com/noiehoie/gpucall/main/docs/EXTERNAL_SYSTEM_ONBOARDING_PROMPT.md
+- Manual: https://raw.githubusercontent.com/noiehoie/gpucall/main/docs/EXTERNAL_SYSTEM_ONBOARDING_MANUAL.md
 - Repository: https://github.com/noiehoie/gpucall
 
 Important boundary for external-system agents:
@@ -91,8 +91,8 @@ behavioral disruption and maximum determinism.
 Before editing, read the operator-provided handoff values and the live gateway
 OpenAPI schema. Use public onboarding documents only as generic references:
 
-- https://raw.githubusercontent.com/noiehoie/gpucall/v2.0.8/docs/EXTERNAL_SYSTEM_ONBOARDING_PROMPT.md
-- https://raw.githubusercontent.com/noiehoie/gpucall/v2.0.8/docs/EXTERNAL_SYSTEM_ONBOARDING_MANUAL.md
+- https://raw.githubusercontent.com/noiehoie/gpucall/main/docs/EXTERNAL_SYSTEM_ONBOARDING_PROMPT.md
+- https://raw.githubusercontent.com/noiehoie/gpucall/main/docs/EXTERNAL_SYSTEM_ONBOARDING_MANUAL.md
 
 If the public URLs are unavailable, do not treat that alone as a failed
 onboarding. Continue from the operator-provided handoff and
