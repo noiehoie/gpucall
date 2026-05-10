@@ -99,7 +99,7 @@ gpucall setup apply --file gpucall.setup.yml --yes
 
 The setup layer asks for the operating profile first, then guides gateway auth,
 GPU execution surfaces, object-store DataRefs, tenant handoff, launch checks,
-and external-system onboarding. The underlying low-level commands remain
+recipe inbox automation, and external-system onboarding. The underlying low-level commands remain
 available for automation and debugging: `gpucall init`, `gpucall configure`,
 `gpucall admin ...`, `gpucall validate-config`, and `gpucall launch-check`.
 `gpucall setup apply` runs post-apply checks and rejects interactive
@@ -320,10 +320,10 @@ Existing OpenAI-compatible endpoints can be registered without installing ds4 au
 
 ```bash
 gpucall runtime add-openai \
-  --name macstudio-ds4 \
-  --endpoint http://macstudio.tailnet:18181 \
+  --name site-gpu-ds4 \
+  --endpoint http://site-gpu-01.internal:18181 \
   --dataref-worker
-gpucall runtime validate --name macstudio-ds4
+gpucall runtime validate --name site-gpu-ds4
 gpucall validate-config
 ```
 

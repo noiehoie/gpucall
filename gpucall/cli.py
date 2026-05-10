@@ -210,6 +210,9 @@ def main() -> None:
     admin.add_argument("--enable-recipe-auto-activate", action="store_true")
     admin.add_argument("--disable-recipe-auto-activate", action="store_true")
     admin.add_argument("--recipe-promotion-work-dir", default=None)
+    admin.add_argument("--onboarding-prompt-url", default=None)
+    admin.add_argument("--onboarding-manual-url", default=None)
+    admin.add_argument("--caller-sdk-wheel-url", default=None)
     args = parser.parse_args()
 
     if args.command == "serve":
@@ -363,6 +366,9 @@ def main() -> None:
             enable_recipe_auto_activate=args.enable_recipe_auto_activate,
             disable_recipe_auto_activate=args.disable_recipe_auto_activate,
             recipe_promotion_work_dir=args.recipe_promotion_work_dir,
+            onboarding_prompt_url=args.onboarding_prompt_url,
+            onboarding_manual_url=args.onboarding_manual_url,
+            caller_sdk_wheel_url=args.caller_sdk_wheel_url,
         )
 
 
@@ -646,6 +652,9 @@ def admin_command(
     enable_recipe_auto_activate: bool = False,
     disable_recipe_auto_activate: bool = False,
     recipe_promotion_work_dir: str | None = None,
+    onboarding_prompt_url: str | None = None,
+    onboarding_manual_url: str | None = None,
+    caller_sdk_wheel_url: str | None = None,
 ) -> None:
     if action == "tenant-create":
         if not name:
@@ -711,6 +720,9 @@ def admin_command(
                 bootstrap_allowed_hosts=bootstrap_allowed_hosts,
                 bootstrap_gateway_url=bootstrap_gateway_url,
                 bootstrap_recipe_inbox=bootstrap_recipe_inbox,
+                onboarding_prompt_url=onboarding_prompt_url,
+                onboarding_manual_url=onboarding_manual_url,
+                caller_sdk_wheel_url=caller_sdk_wheel_url,
                 clear_bootstrap_allowlist=clear_bootstrap_allowlist,
             )
         except (ValueError, ValidationError) as exc:

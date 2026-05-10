@@ -307,6 +307,63 @@ def test_admin_process_inbox_can_auto_promote_candidate_without_validation(tmp_p
     assert (inbox / "promotions" / "rr-test" / "config" / "tuples" / f"{promotion['candidate']['name']}.yml").exists()
 
 
+def test_admin_process_inbox_can_auto_promote_long_text_candidate_without_validation(tmp_path) -> None:
+    config_dir = tmp_path / "config"
+    shutil.copytree("gpucall/config_templates", config_dir)
+    (config_dir / "admin.yml").write_text(
+        "recipe_inbox_auto_materialize: true\nrecipe_inbox_auto_promote_candidates: true\n",
+        encoding="utf-8",
+    )
+    inbox = tmp_path / "inbox"
+    output_dir = config_dir / "recipes"
+    inbox.mkdir()
+    (inbox / "rr-rank.json").write_text(
+        json.dumps(
+            {
+                "kind": "gpucall.recipe_request_submission",
+                "request_id": "rr-rank",
+                "intake": {
+                    "phase": "deterministic-intake",
+                    "sanitized_request": {
+                        "task": "infer",
+                        "mode": "sync",
+                        "intent": "rank_text_items",
+                        "classification": "confidential",
+                        "desired_capabilities": ["summarization", "instruction_following"],
+                        "error": {"context": {"context_budget_tokens": 46000}},
+                    },
+                    "redaction_report": {
+                        "prompt_body_forwarded": False,
+                        "data_ref_uri_forwarded": False,
+                        "presigned_url_forwarded": False,
+                    },
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    results = process_inbox(inbox_dir=inbox, output_dir=output_dir, config_dir=config_dir, force=True)
+
+    assert results[0]["ok"] is True
+    recipe = yaml.safe_load((output_dir / "infer-rank-text-items-draft.yml").read_text(encoding="utf-8"))
+    promotion = json.loads((inbox / "reports" / "rr-rank.promotion.json").read_text(encoding="utf-8"))
+    worker = yaml.safe_load(
+        (inbox / "promotions" / "rr-rank" / "config" / "workers" / f"{promotion['candidate']['name']}.yml").read_text(
+            encoding="utf-8"
+        )
+    )
+    surface = yaml.safe_load(
+        (inbox / "promotions" / "rr-rank" / "config" / "surfaces" / f"{promotion['candidate']['name']}.yml").read_text(
+            encoding="utf-8"
+        )
+    )
+    assert recipe["allowed_modes"] == ["async"]
+    assert promotion["decision"] == "READY_FOR_BILLABLE_VALIDATION"
+    assert worker["target"] == "gpucall-worker-json:run_inference_on_modal"
+    assert surface["configured_price_ttl_seconds"] == 604800
+
+
 def test_admin_process_inbox_links_existing_recipe_without_overwrite(tmp_path) -> None:
     config_dir = tmp_path / "config"
     shutil.copytree("gpucall/config_templates", config_dir)

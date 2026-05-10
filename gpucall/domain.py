@@ -89,6 +89,9 @@ class RecipeAdminAutomationConfig(BaseModel):
     api_key_bootstrap_allowed_hosts: tuple[str, ...] = ()
     api_key_bootstrap_gateway_url: str | None = None
     api_key_bootstrap_recipe_inbox: str | None = None
+    onboarding_prompt_url: str | None = None
+    onboarding_manual_url: str | None = None
+    caller_sdk_wheel_url: str | None = None
 
     @model_validator(mode="after")
     def validate_admin_automation_chain(self) -> "RecipeAdminAutomationConfig":

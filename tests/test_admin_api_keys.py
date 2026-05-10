@@ -133,7 +133,7 @@ def test_admin_automation_configure_trusted_bootstrap(tmp_path, capsys) -> None:
         name=None,
         handoff_mode="trusted_bootstrap",
         bootstrap_allowed_cidrs=["10.0.0.42/32"],
-        bootstrap_allowed_hosts=["macmini"],
+        bootstrap_allowed_hosts=["trusted-host"],
         bootstrap_gateway_url="https://gpucall.example.internal",
         bootstrap_recipe_inbox="admin@gpucall.example.internal:/srv/gpucall/state/recipe_requests/inbox",
         enable_recipe_auto_materialize=True,
@@ -145,6 +145,9 @@ def test_admin_automation_configure_trusted_bootstrap(tmp_path, capsys) -> None:
         enable_recipe_auto_activate=False,
         disable_recipe_auto_activate=False,
         recipe_promotion_work_dir="/srv/gpucall/state/recipe_requests/promotions",
+        onboarding_prompt_url="https://assets.example/docs/prompt.md",
+        onboarding_manual_url="https://assets.example/docs/manual.md",
+        caller_sdk_wheel_url="https://assets.example/sdk/gpucall_sdk-2.0.8-py3-none-any.whl",
         manifest=None,
         gateway_url=None,
         recipe_inbox=None,
@@ -165,6 +168,10 @@ def test_admin_automation_configure_trusted_bootstrap(tmp_path, capsys) -> None:
     assert report["admin_automation"]["recipe_inbox_auto_activate_validated"] is False
     assert report["admin_automation"]["recipe_inbox_promotion_work_dir"] == "/srv/gpucall/state/recipe_requests/promotions"
     assert report["admin_automation"]["trusted_bootstrap"]["allowed_cidrs"] == ["10.0.0.42/32"]
+    assert report["admin_automation"]["trusted_bootstrap"]["allowed_hosts"] == ["trusted-host"]
+    assert report["admin_automation"]["handoff_assets"]["onboarding_prompt_url"] == "https://assets.example/docs/prompt.md"
+    assert report["admin_automation"]["handoff_assets"]["onboarding_manual_url"] == "https://assets.example/docs/manual.md"
+    assert report["admin_automation"]["handoff_assets"]["caller_sdk_wheel_url"] == "https://assets.example/sdk/gpucall_sdk-2.0.8-py3-none-any.whl"
     assert "api_key_handoff_mode: trusted_bootstrap" in admin_yml
     assert "recipe_inbox_auto_promote_candidates: true" in admin_yml
     assert "recipe_inbox_auto_billable_validation: true" in admin_yml

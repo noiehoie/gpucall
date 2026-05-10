@@ -98,8 +98,8 @@ gpucall setup apply --file gpucall.setup.yml --yes
 ```
 
 setup layer は最初に運用 profile を聞き、その後 gateway auth、GPU
-execution surfaces、object-store DataRefs、tenant handoff、launch checks、
-external-system onboarding を案内します。低レイヤーコマンドである
+execution surfaces、object-store DataRefs、tenant handoff、recipe inbox
+automation、launch checks、external-system onboarding を案内します。低レイヤーコマンドである
 `gpucall init`、`gpucall configure`、`gpucall admin ...`、
 `gpucall validate-config`、`gpucall launch-check` は automation と debug
 用に残ります。`gpucall setup apply` は適用後チェックを表示し、`--yes`
@@ -293,10 +293,10 @@ gpucall は、operator-controlled runtime で十分かつ policy が許す場合
 
 ```bash
 gpucall runtime add-openai \
-  --name macstudio-ds4 \
-  --endpoint http://macstudio.tailnet:18181 \
+  --name site-gpu-ds4 \
+  --endpoint http://site-gpu-01.internal:18181 \
   --dataref-worker
-gpucall runtime validate --name macstudio-ds4
+gpucall runtime validate --name site-gpu-ds4
 gpucall validate-config
 ```
 

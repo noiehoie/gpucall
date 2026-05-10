@@ -1,7 +1,14 @@
 # Public default. Keep operator-specific automation values out of git.
 recipe_inbox_auto_materialize: false
+recipe_inbox_auto_promote_candidates: false
+recipe_inbox_auto_billable_validation: false
+recipe_inbox_auto_activate_validated: false
+recipe_inbox_promotion_work_dir:
 api_key_handoff_mode: manual
 api_key_bootstrap_allowed_cidrs: []
 api_key_bootstrap_allowed_hosts: []
 api_key_bootstrap_gateway_url:
 api_key_bootstrap_recipe_inbox:
+onboarding_prompt_url:
+onboarding_manual_url:
+caller_sdk_wheel_url:

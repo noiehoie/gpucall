@@ -60,6 +60,18 @@ tenant_onboarding:
   allowed_hosts: []
   recipe_inbox: operator@gpucall.example.internal:/opt/gpucall/state/recipe_requests/inbox
 
+recipe_automation:
+  auto_materialize: true
+  auto_promote_candidates: false
+  auto_billable_validation: false
+  auto_activate_validated: false
+  promotion_work_dir: /opt/gpucall/state/recipe_requests/promotions
+
+handoff_assets:
+  onboarding_prompt_url: https://assets.example/gpucall/EXTERNAL_SYSTEM_ONBOARDING_PROMPT.md
+  onboarding_manual_url: https://assets.example/gpucall/EXTERNAL_SYSTEM_ONBOARDING_MANUAL.md
+  caller_sdk_wheel_url: https://assets.example/gpucall/gpucall_sdk-2.0.8-py3-none-any.whl
+
 external_systems:
   - name: example-system
     expected_workloads:
@@ -81,6 +93,10 @@ launch:
 - `providers`: GPU execution surfaces to enable.
 - `object_store`: DataRef object store configuration.
 - `tenant_onboarding`: how external systems receive tenant-scoped API keys.
+- `recipe_automation`: optional gateway-side automation for sanitized recipe
+  request inbox processing.
+- `handoff_assets`: optional operator-hosted onboarding documents and caller
+  SDK wheel for private deployments or pre-release installations.
 - `external_systems`: named systems for handoff prompt generation.
 - `launch`: launch-check expectations.
 
@@ -216,6 +232,51 @@ tenant_onboarding:
 Trusted internal systems may request their own tenant key through
 `POST /v2/bootstrap/tenant-key`. This mode requires at least one CIDR or host
 allowlist entry.
+
+## Recipe Automation
+
+Recipe automation is gateway-side only. It starts after an external system has
+submitted sanitized preflight or quality-feedback intake to the approved inbox.
+
+```yaml
+recipe_automation:
+  auto_materialize: true
+  auto_promote_candidates: true
+  auto_billable_validation: false
+  auto_activate_validated: false
+  promotion_work_dir: /opt/gpucall/state/recipe_requests/promotions
+```
+
+The chain is ordered and fail-closed:
+
+- `auto_materialize`: convert sanitized intake into canonical recipe YAML and
+  move the original submission to `processed/` or `failed/`.
+- `auto_promote_candidates`: prepare an isolated candidate tuple promotion
+  workspace when the catalog has matching candidate contracts.
+- `auto_billable_validation`: run billable tuple validation from that isolated
+  workspace.
+- `auto_activate_validated`: copy only successfully validated recipes/tuples
+  into active production config.
+
+Each step requires the previous one. Setup plan validation rejects impossible
+chains such as billable validation without candidate promotion. The automation
+does not invent provider credentials, endpoint IDs, or provider targets.
+
+## Handoff Assets
+
+Public releases use the built-in GitHub URLs. Private or pre-public
+deployments can point handoff prompts at operator-hosted copies instead:
+
+```yaml
+handoff_assets:
+  onboarding_prompt_url: https://assets.example/gpucall/EXTERNAL_SYSTEM_ONBOARDING_PROMPT.md
+  onboarding_manual_url: https://assets.example/gpucall/EXTERNAL_SYSTEM_ONBOARDING_MANUAL.md
+  caller_sdk_wheel_url: https://assets.example/gpucall/gpucall_sdk-2.0.8-py3-none-any.whl
+```
+
+`gpucall setup export-handoff-prompt` uses these values when present. This
+prevents external systems from depending on a public GitHub tag before the
+operator has actually published it.
 
 ## Handoff Prompt
 

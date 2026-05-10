@@ -17,12 +17,12 @@ promote the resulting tuple through the normal validation evidence path.
 Controlled runtimes live in `config/runtimes/*.yml`.
 
 ```yaml
-name: macstudio-ds4
+name: site-gpu-ds4
 kind: controlled_runtime
 runtime_boundary: private_network
 network_scope: tailscale
 operator_controlled: true
-endpoint: http://macstudio.tailnet:18181
+endpoint: http://site-gpu-01.internal:18181
 adapter: local-dataref-openai-worker
 model: deepseek-v4-flash
 max_model_len: 1000000
@@ -42,7 +42,7 @@ routing:
   allowed_modes: [async]
   require_validation_evidence: true
 health:
-  check_url: http://macstudio.tailnet:18181/healthz
+  check_url: http://site-gpu-01.internal:18181/healthz
   timeout_seconds: 2
   failure_policy: disable_runtime
 discovery:
@@ -58,15 +58,15 @@ Register an existing OpenAI-compatible endpoint:
 
 ```bash
 gpucall runtime add-openai \
-  --name macstudio-ds4 \
-  --endpoint http://macstudio.tailnet:18181 \
+  --name site-gpu-ds4 \
+  --endpoint http://site-gpu-01.internal:18181 \
   --dataref-worker
 ```
 
 Validate its health from the gateway host:
 
 ```bash
-gpucall runtime validate --name macstudio-ds4
+gpucall runtime validate --name site-gpu-ds4
 gpucall validate-config
 ```
 

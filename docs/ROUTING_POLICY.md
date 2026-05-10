@@ -176,8 +176,8 @@ local runtimes to handle large text inputs without leasing cloud GPU capacity.
 The registration path for an existing ds4/OpenAI-compatible endpoint is:
 
 ```bash
-gpucall runtime add-openai --name macstudio-ds4 --endpoint http://macstudio.tailnet:18181 --dataref-worker
-gpucall runtime validate --name macstudio-ds4
+gpucall runtime add-openai --name site-gpu-ds4 --endpoint http://site-gpu-01.internal:18181 --dataref-worker
+gpucall runtime validate --name site-gpu-ds4
 gpucall validate-config
 ```
 

@@ -72,6 +72,34 @@ class SetupTenantOnboarding(BaseModel):
     recipe_inbox: str | None = None
 
 
+class SetupRecipeAutomation(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    auto_materialize: bool = False
+    auto_promote_candidates: bool = False
+    auto_billable_validation: bool = False
+    auto_activate_validated: bool = False
+    promotion_work_dir: str | None = None
+
+    @model_validator(mode="after")
+    def validate_recipe_automation_chain(self) -> "SetupRecipeAutomation":
+        if self.auto_promote_candidates and not self.auto_materialize:
+            raise ValueError("auto_promote_candidates requires auto_materialize")
+        if self.auto_billable_validation and not self.auto_promote_candidates:
+            raise ValueError("auto_billable_validation requires auto_promote_candidates")
+        if self.auto_activate_validated and not self.auto_billable_validation:
+            raise ValueError("auto_activate_validated requires auto_billable_validation")
+        return self
+
+
+class SetupHandoffAssets(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    onboarding_prompt_url: str | None = None
+    onboarding_manual_url: str | None = None
+    caller_sdk_wheel_url: str | None = None
+
+
 class SetupExternalSystem(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -96,6 +124,8 @@ class SetupPlan(BaseModel):
     providers: dict[str, SetupProvider] = Field(default_factory=dict)
     object_store: SetupObjectStore | None = None
     tenant_onboarding: SetupTenantOnboarding = Field(default_factory=SetupTenantOnboarding)
+    recipe_automation: SetupRecipeAutomation = Field(default_factory=SetupRecipeAutomation)
+    handoff_assets: SetupHandoffAssets = Field(default_factory=SetupHandoffAssets)
     external_systems: tuple[SetupExternalSystem, ...] = ()
     launch: SetupLaunch = Field(default_factory=SetupLaunch)
 
@@ -157,7 +187,7 @@ Common commands:
         "section_name",
         nargs="?",
         metavar="section",
-        choices=["profile", "gateway", "providers", "object-store", "tenant-handoff", "launch"],
+        choices=["profile", "gateway", "providers", "object-store", "tenant-handoff", "recipe-inbox", "external-system", "launch"],
         help="section name for 'gpucall setup section'",
     )
     parser.add_argument("--config-dir", type=Path, default=default_config_dir())
@@ -330,7 +360,8 @@ def setup_section_text(config_dir: Path, section: str, *, profile: str | None = 
             "  1. Configure Modal\n"
             "  2. Configure RunPod\n"
             "  3. Configure Hyperstack\n"
-            "  4. Back to setup overview\n"
+            "  4. Register controlled runtime / local GPU endpoint\n"
+            "  5. Back to setup overview\n"
             "  q. Quit"
         )
     if section == "object-store":
@@ -357,6 +388,32 @@ def setup_section_text(config_dir: Path, section: str, *, profile: str | None = 
             "  3. Trusted bootstrap\n"
             "     Systems inside configured CIDRs/hosts can request their own tenant key.\n\n"
             f"Current mode: {automation['api_key_handoff_mode']}"
+        )
+    if section == "recipe-inbox":
+        automation = admin_automation_summary(config_dir)
+        return (
+            "Recipe request inbox\n\n"
+            "This controls what happens after an external system submits sanitized\n"
+            "preflight or quality-feedback intake. It is gateway-side automation,\n"
+            "not caller-side routing.\n\n"
+            f"Current inbox: {automation['trusted_bootstrap']['recipe_inbox'] or '<unset>'}\n"
+            f"Auto materialize recipes: {automation['recipe_inbox_auto_materialize']}\n"
+            f"Auto prepare tuple promotion workspace: {automation['recipe_inbox_auto_promote_candidates']}\n"
+            f"Auto run billable validation: {automation['recipe_inbox_auto_billable_validation']}\n"
+            f"Auto activate validated tuples: {automation['recipe_inbox_auto_activate_validated']}\n"
+            f"Promotion work dir: {automation['recipe_inbox_promotion_work_dir'] or '<default inbox/promotions>'}\n\n"
+            "For setup-as-code, set recipe_automation in gpucall.setup.yml.\n"
+            "For one-shot operation, run:\n"
+            "  gpucall-recipe-admin process-inbox --inbox-dir <inbox> --output-dir <config>/recipes --config-dir <config>\n"
+        )
+    if section == "external-system":
+        return (
+            "External-system onboarding prompt\n\n"
+            "After the gateway is configured, export a system-specific prompt that\n"
+            "contains the gateway URL, bootstrap endpoint, recipe inbox, and SDK\n"
+            "helper location without embedding any API key.\n\n"
+            "Run:\n"
+            "  gpucall setup export-handoff-prompt --system-name <external-system>\n"
         )
     if section == "launch":
         return (
@@ -399,19 +456,22 @@ def export_handoff_prompt(config_dir: Path, system_name: str) -> str:
     automation = load_admin_automation(config_dir)
     gateway_url = automation.api_key_bootstrap_gateway_url or "<GPUCALL_BASE_URL>"
     recipe_inbox = automation.api_key_bootstrap_recipe_inbox or "<GPUCALL_RECIPE_INBOX>"
+    onboarding_prompt_url = automation.onboarding_prompt_url or ONBOARDING_PROMPT_URL
+    onboarding_manual_url = automation.onboarding_manual_url or ONBOARDING_MANUAL_URL
+    sdk_wheel_url = automation.caller_sdk_wheel_url or SDK_WHEEL_URL
     return f"""You are adapting this system to gpucall.
 
 System name: {system_name}
 
 Use the gpucall onboarding documents:
-  {ONBOARDING_PROMPT_URL}
-  {ONBOARDING_MANUAL_URL}
+  {onboarding_prompt_url}
+  {onboarding_manual_url}
 
 Gateway:
   GPUCALL_BASE_URL={gateway_url}
   Bootstrap endpoint={gateway_url}/v2/bootstrap/tenant-key
   Recipe inbox={recipe_inbox}
-  SDK helper wheel={SDK_WHEEL_URL}
+  SDK helper wheel={sdk_wheel_url}
 
 Rules:
   - Do not clone, install, modify, or vendor the gpucall gateway repository.
@@ -569,12 +629,14 @@ def _section_from_choice(raw: str) -> str | None:
         "object-store": "object-store",
         "5": "tenant-handoff",
         "tenant-handoff": "tenant-handoff",
-        "6": "tenant-handoff",
-        "recipe-inbox": "tenant-handoff",
+        "6": "recipe-inbox",
+        "recipe-inbox": "recipe-inbox",
+        "recipe-request-inbox": "recipe-inbox",
         "7": "launch",
         "launch": "launch",
-        "8": "gateway",
-        "external-system": "gateway",
+        "8": "external-system",
+        "external-system": "external-system",
+        "external-system-onboarding": "external-system",
     }.get(raw)
 
 
@@ -602,6 +664,10 @@ def _planned_changes(config_dir: Path, plan: SetupPlan) -> list[str]:
         changes.append(f"{config_dir}/*")
     if plan.object_store is not None:
         changes.append(str(config_dir / "object_store.yml"))
+    if plan.recipe_automation != SetupRecipeAutomation():
+        changes.append(str(config_dir / "admin.yml") + " recipe_automation")
+    if plan.handoff_assets != SetupHandoffAssets():
+        changes.append(str(config_dir / "admin.yml") + " handoff_assets")
     if plan.providers.get("runpod", SetupProvider()).enabled:
         changes.append(str(config_dir / "surfaces" / "runpod-vllm-serverless.yml"))
     credential_targets: list[str] = []
@@ -730,7 +796,14 @@ def _apply_tenant_onboarding(config_dir: Path, plan: SetupPlan) -> None:
         bootstrap_allowed_hosts=plan.tenant_onboarding.allowed_hosts,
         bootstrap_gateway_url=plan.gateway.base_url,
         bootstrap_recipe_inbox=plan.tenant_onboarding.recipe_inbox,
-        recipe_inbox_auto_materialize=None,
+        recipe_inbox_auto_materialize=plan.recipe_automation.auto_materialize,
+        recipe_inbox_auto_promote_candidates=plan.recipe_automation.auto_promote_candidates,
+        recipe_inbox_auto_billable_validation=plan.recipe_automation.auto_billable_validation,
+        recipe_inbox_auto_activate_validated=plan.recipe_automation.auto_activate_validated,
+        recipe_inbox_promotion_work_dir=plan.recipe_automation.promotion_work_dir,
+        onboarding_prompt_url=plan.handoff_assets.onboarding_prompt_url,
+        onboarding_manual_url=plan.handoff_assets.onboarding_manual_url,
+        caller_sdk_wheel_url=plan.handoff_assets.caller_sdk_wheel_url,
         clear_bootstrap_allowlist=plan.tenant_onboarding.mode is not ApiKeyHandoffMode.TRUSTED_BOOTSTRAP,
     )
 
@@ -740,6 +813,8 @@ def _write_setup_state(config_dir: Path, plan: SetupPlan) -> None:
         "setup_schema_version": plan.setup_schema_version,
         "profile": plan.profile,
         "gateway_base_url": plan.gateway.base_url,
+        "recipe_automation": plan.recipe_automation.model_dump(mode="json"),
+        "handoff_assets": plan.handoff_assets.model_dump(mode="json"),
         "external_systems": [system.model_dump(mode="json") for system in plan.external_systems],
         "launch": plan.launch.model_dump(mode="json"),
     }

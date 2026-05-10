@@ -26,6 +26,11 @@ def admin_automation_summary(config_dir: Path) -> dict[str, object]:
             "gateway_url": config.api_key_bootstrap_gateway_url,
             "recipe_inbox": config.api_key_bootstrap_recipe_inbox,
         },
+        "handoff_assets": {
+            "onboarding_prompt_url": config.onboarding_prompt_url,
+            "onboarding_manual_url": config.onboarding_manual_url,
+            "caller_sdk_wheel_url": config.caller_sdk_wheel_url,
+        },
         "handoff_file_enabled": config.api_key_handoff_mode is ApiKeyHandoffMode.HANDOFF_FILE,
     }
 
@@ -43,6 +48,9 @@ def configure_admin_automation(
     bootstrap_allowed_hosts: Iterable[str] | None = None,
     bootstrap_gateway_url: str | None = None,
     bootstrap_recipe_inbox: str | None = None,
+    onboarding_prompt_url: str | None = None,
+    onboarding_manual_url: str | None = None,
+    caller_sdk_wheel_url: str | None = None,
     clear_bootstrap_allowlist: bool = False,
 ) -> RecipeAdminAutomationConfig:
     current = load_admin_automation(config_dir)
@@ -88,6 +96,9 @@ def configure_admin_automation(
         api_key_bootstrap_allowed_hosts=hosts,
         api_key_bootstrap_gateway_url=_clean_optional(bootstrap_gateway_url, current.api_key_bootstrap_gateway_url),
         api_key_bootstrap_recipe_inbox=_clean_optional(bootstrap_recipe_inbox, current.api_key_bootstrap_recipe_inbox),
+        onboarding_prompt_url=_clean_optional(onboarding_prompt_url, current.onboarding_prompt_url),
+        onboarding_manual_url=_clean_optional(onboarding_manual_url, current.onboarding_manual_url),
+        caller_sdk_wheel_url=_clean_optional(caller_sdk_wheel_url, current.caller_sdk_wheel_url),
     )
     if updated.api_key_handoff_mode is ApiKeyHandoffMode.TRUSTED_BOOTSTRAP and not (
         updated.api_key_bootstrap_allowed_cidrs or updated.api_key_bootstrap_allowed_hosts

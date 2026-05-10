@@ -17,6 +17,7 @@ endpoint_contract: modal-function
 input_contracts: [text, chat_messages, data_refs]
 output_contract: plain-text
 stream_contract: none
+target: gpucall-worker-json:run_inference_on_modal
 official_doc_refs:
   - https://modal.com/docs/guide/gpu
   - https://modal.com/pricing
