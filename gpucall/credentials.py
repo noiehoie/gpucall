@@ -43,8 +43,11 @@ def load_credentials() -> dict[str, dict[str, str]]:
 def save_credentials(provider: str, values: dict[str, str]) -> None:
     path = credentials_path()
     path.parent.mkdir(parents=True, exist_ok=True)
+    existing_owner: tuple[int, int] | None = None
     data: dict[str, Any] = {"version": 1, "providers": {}}
     if path.exists():
+        stat_result = path.stat()
+        existing_owner = (stat_result.st_uid, stat_result.st_gid)
         try:
             loaded = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
             if isinstance(loaded, dict):
@@ -57,6 +60,8 @@ def save_credentials(provider: str, values: dict[str, str]) -> None:
     fd, tmp_name = tempfile.mkstemp(prefix=f".{path.name}.", suffix=".tmp", dir=path.parent)
     try:
         os.fchmod(fd, 0o600)
+        if existing_owner is not None and os.geteuid() == 0:
+            os.fchown(fd, existing_owner[0], existing_owner[1])
         with os.fdopen(fd, "w", encoding="utf-8") as handle:
             handle.write(payload)
             handle.flush()

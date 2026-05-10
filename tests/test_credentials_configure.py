@@ -21,6 +21,21 @@ def test_credentials_save_uses_0600_and_env_override(tmp_path, monkeypatch) -> N
     assert creds["runpod"]["api_key"] == "from-env"
 
 
+def test_credentials_save_preserves_existing_owner_when_root(tmp_path, monkeypatch) -> None:
+    path = tmp_path / "credentials.yml"
+    monkeypatch.setenv("GPUCALL_CREDENTIALS", str(path))
+    path.write_text("version: 1\nproviders: {}\n", encoding="utf-8")
+    original = path.stat()
+    calls: list[tuple[int, int]] = []
+
+    monkeypatch.setattr(os, "geteuid", lambda: 0)
+    monkeypatch.setattr(os, "fchown", lambda fd, uid, gid: calls.append((uid, gid)))
+
+    save_credentials("auth", {"api_keys": "secret"})
+
+    assert calls == [(original.st_uid, original.st_gid)]
+
+
 def test_configure_runpod_interactive_flow(tmp_path, monkeypatch, capsys) -> None:
     path = tmp_path / "credentials.yml"
     monkeypatch.setenv("GPUCALL_CREDENTIALS", str(path))
