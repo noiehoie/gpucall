@@ -275,6 +275,13 @@ ONBOARDING_MANUAL=https://raw.githubusercontent.com/noiehoie/gpucall/v2.0.8/docs
 CALLER_HELPER_INSTALL=https://github.com/noiehoie/gpucall/releases/download/v2.0.8/gpucall_sdk-2.0.8-py3-none-any.whl
 ```
 
+The GitHub URLs in this package are references or default distribution
+locations. They are not a substitute for the environment-specific handoff. The
+administrator must set the real gateway base URL, recipe inbox, key delivery
+route, and any private SDK/helper mirror used by the installed router. External
+systems should treat this handoff and the live gateway OpenAPI schema as
+authoritative.
+
 Only `GPUCALL_API_KEY` is secret. The other values may still be operationally
 sensitive, but they are not provider credentials.
 

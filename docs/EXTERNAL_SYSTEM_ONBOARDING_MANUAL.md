@@ -17,6 +17,11 @@ The goal is not merely "make an API call succeed." The goal is:
 
 Use [EXTERNAL_SYSTEM_ONBOARDING_PROMPT.md](EXTERNAL_SYSTEM_ONBOARDING_PROMPT.md)
 as the copy-paste prompt for the code agent working inside the external system.
+That prompt is a template until the gpucall administrator fills in the installed
+gateway URL, recipe inbox, API-key delivery route, SDK/helper wheel location,
+and any trusted-bootstrap policy. Public GitHub documents are reference
+materials; the operator-provided handoff and the live gateway OpenAPI schema are
+authoritative for a real environment.
 
 The fastest happy path is:
 
@@ -123,6 +128,10 @@ The gpucall administrator controls caller-facing gateway API key delivery.
 External systems do not perform unauthorized self-registration, scrape keys
 from the gateway repository, or reuse provider credentials. See
 [GATEWAY_API_KEYS.md](GATEWAY_API_KEYS.md) for the operator procedure.
+The administrator should hand the external system a per-environment package,
+not only a GitHub URL. At minimum it must contain `GPUCALL_BASE_URL`,
+`GPUCALL_RECIPE_INBOX`, the API-key delivery route, and the SDK/helper wheel URL
+or local mirror approved for that installation.
 
 There are exactly two valid key-delivery routes:
 

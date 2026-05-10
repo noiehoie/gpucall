@@ -187,16 +187,18 @@ gpucall は、外部システムに渡すための受容パッケージを配布
 - [docs/EXTERNAL_SYSTEM_ONBOARDING_MANUAL.md](docs/EXTERNAL_SYSTEM_ONBOARDING_MANUAL.md): operator / implementer 向けの詳細 migration manual です。
 - [docs/EXTERNAL_SYSTEM_ADAPTATION_PROMPT.md](docs/EXTERNAL_SYSTEM_ADAPTATION_PROMPT.md): 小規模移行向けの compact な one-shot prompt です。
 
+GitHub 上の文書は汎用テンプレートです。各環境の gateway base URL、tenant key delivery policy、recipe inbox、private SDK mirror、trusted bootstrap scope は知りません。実際の受容作業では、gpucall 管理者がその環境の値を入れた prompt / handoff を生成または編集して渡します。外部システム側は、operator-provided handoff と稼働中 gateway の OpenAPI schema を authoritative とし、public GitHub URL は参考資料として扱います。
+
 この onboarding package は意図的に厳格です。direct hosted-AI fallback はデフォルト無効、generated-only preflight は submitted preflight ではない、live canary skipped は `No-Go`、`Conditional Go` は最終判定として禁止です。画像・ファイル workflow には DataRef production path が必須で、OpenAI-facade base64 画像/ファイル payload は production onboarding として認めません。
 
-この repository の外で動く AI CLI には、raw URL を渡します。
+この repository の外で動く AI CLI には、汎用 reference / template として raw URL を渡せます。
 
 ```text
 https://raw.githubusercontent.com/noiehoie/gpucall/v2.0.8/docs/EXTERNAL_SYSTEM_ONBOARDING_PROMPT.md
 https://raw.githubusercontent.com/noiehoie/gpucall/v2.0.8/docs/EXTERNAL_SYSTEM_ONBOARDING_MANUAL.md
 ```
 
-外部システム側の agent は、この2文書だけを読みます。operator が明示しない限り、gpucall gateway repository を clone / install / modify / vendor してはいけません。作業対象 worktree は移行対象アプリケーションだけです。
+外部システム側の agent は、operator が明示しない限り、gpucall gateway repository を clone / install / modify / vendor してはいけません。作業対象 worktree は移行対象アプリケーションだけです。受容開始前に、operator-provided handoff には実際の `GPUCALL_BASE_URL`、`GPUCALL_RECIPE_INBOX`、API key delivery route、SDK/helper wheel URL が含まれていなければいけません。
 
 呼び出し側補助ツールが未導入の場合は、SDK helper wheel だけを導入します。
 

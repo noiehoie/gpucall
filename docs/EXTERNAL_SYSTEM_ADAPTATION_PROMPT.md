@@ -8,12 +8,16 @@ integrations, prefer the fuller onboarding package:
 
 Paste the following block into the coding agent that owns the external system.
 Replace every placeholder before sending it.
+The filled operator-provided values and the live gateway OpenAPI schema are
+authoritative for the target environment; public GitHub URLs are generic
+references only.
 
 ```text
 You are the implementation agent for this repository. Migrate this system's
 LLM / Vision / GPU inference paths to gpucall v2.0.
 
-Read the public onboarding docs first:
+Read the operator-provided values first. Then read the public onboarding docs as
+generic references:
 
 - https://raw.githubusercontent.com/noiehoie/gpucall/v2.0.8/docs/EXTERNAL_SYSTEM_ONBOARDING_PROMPT.md
 - https://raw.githubusercontent.com/noiehoie/gpucall/v2.0.8/docs/EXTERNAL_SYSTEM_ONBOARDING_MANUAL.md
@@ -30,6 +34,12 @@ Operator-provided values:
   GPUCALL_BASE_URL=<gpucall-base-url>
   GPUCALL_API_KEY=<gpucall-api-key-or-use-trusted-bootstrap>
   GPUCALL_RECIPE_INBOX=<approved-local-or-ssh-inbox>
+
+Verify the installed gateway contract before coding:
+
+  curl -fsS "$GPUCALL_BASE_URL/healthz"
+  curl -fsS "$GPUCALL_BASE_URL/readyz"
+  curl -fsS "$GPUCALL_BASE_URL/openapi.json" -o /tmp/gpucall-openapi.json
 
 `GPUCALL_API_KEY` is a tenant-scoped gpucall gateway key. It is not a provider
 API key. Never scrape gpucall config files or provider credentials.

@@ -189,6 +189,13 @@ or coding agent that owns the application being migrated:
 - [docs/EXTERNAL_SYSTEM_ONBOARDING_MANUAL.md](docs/EXTERNAL_SYSTEM_ONBOARDING_MANUAL.md): the detailed migration manual for operators and implementers.
 - [docs/EXTERNAL_SYSTEM_ADAPTATION_PROMPT.md](docs/EXTERNAL_SYSTEM_ADAPTATION_PROMPT.md): a compact one-shot prompt for smaller migrations.
 
+The GitHub documents are generic templates. They do not know your gateway base
+URL, tenant key delivery policy, recipe inbox, private SDK mirror, or trusted
+bootstrap scope. For real onboarding, the gpucall administrator should generate
+or edit a per-environment prompt/handoff that includes those values. The
+external system should treat the operator-provided handoff and the live gateway
+OpenAPI schema as authoritative; public GitHub URLs are reference material.
+
 The onboarding package is strict by design: direct hosted-AI fallback must be
 disabled by default, generated-only preflight is not the same as submitted
 preflight, skipped live canary means `No-Go`, and `Conditional Go` is not an
@@ -196,16 +203,19 @@ allowed final status. Image and file workflows must have DataRef production
 paths; OpenAI-facade base64 image/file payloads are not accepted as production
 onboarding.
 
-For an AI CLI running outside this repository, use the raw URLs:
+For an AI CLI running outside this repository, the operator may include these
+raw URLs as generic references or templates:
 
 ```text
 https://raw.githubusercontent.com/noiehoie/gpucall/v2.0.8/docs/EXTERNAL_SYSTEM_ONBOARDING_PROMPT.md
 https://raw.githubusercontent.com/noiehoie/gpucall/v2.0.8/docs/EXTERNAL_SYSTEM_ONBOARDING_MANUAL.md
 ```
 
-The external-system agent should read those documents only. It should not clone,
-install, modify, or vendor the gpucall gateway repository unless the operator
-explicitly asks for that. Its worktree is the application being migrated.
+The external-system agent should not clone, install, modify, or vendor the
+gpucall gateway repository unless the operator explicitly asks for that. Its
+worktree is the application being migrated. The operator-provided handoff must
+include the real `GPUCALL_BASE_URL`, `GPUCALL_RECIPE_INBOX`, API-key delivery
+route, and SDK/helper wheel URL before the migration agent starts.
 
 If the caller-side helper is not installed, install only the SDK helper wheel:
 

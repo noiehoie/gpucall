@@ -4,8 +4,8 @@ Use this prompt when asking a coding agent inside another product to make that
 product accept gpucall. It is written to avoid the migration mistakes that make
 gpucall adoption harder than it should be.
 
-Public reference URLs for agents that are not running inside the gpucall
-repository:
+Public reference/template URLs for agents that are not running inside the
+gpucall repository:
 
 - Prompt: https://raw.githubusercontent.com/noiehoie/gpucall/v2.0.8/docs/EXTERNAL_SYSTEM_ONBOARDING_PROMPT.md
 - Manual: https://raw.githubusercontent.com/noiehoie/gpucall/v2.0.8/docs/EXTERNAL_SYSTEM_ONBOARDING_MANUAL.md
@@ -14,6 +14,10 @@ repository:
 Important boundary for external-system agents:
 
 - Do not clone, install, modify, or vendor the gpucall gateway repository.
+- Treat the operator-provided prompt/handoff and the live gateway OpenAPI schema
+  as authoritative for environment-specific facts. Public GitHub documents are
+  generic references; they do not define the installed gateway URL, recipe
+  inbox, API key policy, trusted bootstrap scope, or private SDK mirror.
 - Read only the raw onboarding documents above unless the operator explicitly
   provides a local gpucall checkout for reference.
 - Make code changes only in the external system being migrated.
@@ -31,7 +35,9 @@ uv tool install https://github.com/noiehoie/gpucall/releases/download/v2.0.8/gpu
 gpucall-recipe-draft --help
 ```
 
-Fill these values before handing the prompt to the external-system agent:
+Fill these values before handing the prompt to the external-system agent. Until
+these placeholders are filled, this file is a template, not a complete
+deployment instruction:
 
 - `<system-name>`: stable name of the external system
 - `<gpucall-base-url>`: gateway base URL
@@ -42,7 +48,8 @@ Fill these values before handing the prompt to the external-system agent:
 - `<admin-inbox>`: approved local or SSH inbox for sanitized recipe requests
 - `<canary-command>`: smallest representative command for that system
 - `<gpucall-sdk-wheel-url>`: caller SDK helper wheel URL; default is
-  `https://github.com/noiehoie/gpucall/releases/download/v2.0.8/gpucall_sdk-2.0.8-py3-none-any.whl`
+  `https://github.com/noiehoie/gpucall/releases/download/v2.0.8/gpucall_sdk-2.0.8-py3-none-any.whl`, or an operator-hosted
+  mirror for the installed environment
 
 Strict acceptance rule:
 
@@ -81,13 +88,17 @@ You are the implementation agent for this repository. Your task is to migrate
 this system's LLM / Vision / GPU inference paths to gpucall v2.0 with minimum
 behavioral disruption and maximum determinism.
 
-Before editing, read the current gpucall onboarding documents:
+Before editing, read the operator-provided handoff values and the live gateway
+OpenAPI schema. Use public onboarding documents only as generic references:
 
 - https://raw.githubusercontent.com/noiehoie/gpucall/v2.0.8/docs/EXTERNAL_SYSTEM_ONBOARDING_PROMPT.md
 - https://raw.githubusercontent.com/noiehoie/gpucall/v2.0.8/docs/EXTERNAL_SYSTEM_ONBOARDING_MANUAL.md
 
-If network access is unavailable and the gpucall repository is checked out
-locally, read the same files from that checkout instead.
+If the public URLs are unavailable, do not treat that alone as a failed
+onboarding. Continue from the operator-provided handoff and
+`$GPUCALL_BASE_URL/openapi.json`. If network access is unavailable and the
+operator provided a local gpucall checkout for reference, read the same files
+from that checkout instead.
 
 Do not clone, install, modify, or vendor the gpucall gateway repository. Your
 worktree is the external system only. If gpucall helper commands or SDK packages
@@ -110,6 +121,14 @@ Use these operator-provided values:
 export GPUCALL_BASE_URL="<gpucall-base-url>"
 export GPUCALL_API_KEY="<gpucall-api-key>"
 export GPUCALL_RECIPE_INBOX="<admin-inbox>"
+```
+
+Validate the installed gateway before implementation:
+
+```bash
+curl -fsS "$GPUCALL_BASE_URL/healthz"
+curl -fsS "$GPUCALL_BASE_URL/readyz"
+curl -fsS "$GPUCALL_BASE_URL/openapi.json" -o /tmp/gpucall-openapi.json
 ```
 
 `GPUCALL_API_KEY` is a caller-facing gateway API key. It is not a provider API
