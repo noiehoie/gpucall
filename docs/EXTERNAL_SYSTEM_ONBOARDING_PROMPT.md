@@ -209,6 +209,12 @@ For each path, classify it as one of:
 - local-only
 - unknown-workload
 
+`local-only` means the work is intentionally handled by a local runtime under
+the application's own control, such as an embedding model or a private local
+OpenAI-compatible server. Keep those paths local when they do not cross the
+hosted-AI boundary and do not need gpucall governance. Do not turn honest local
+work into a remote GPU call just to increase gpucall usage.
+
 Do not migrate unknown workload by guessing a model. Generate a preflight intake
 instead. If the intake cannot be submitted because the helper is unavailable,
 report `preflight command generated only` and mark the integration `No-Go` until
@@ -348,6 +354,19 @@ Rules:
   path unmigrated, fail closed with `DataRef required`, and report `No-Go`.
 - Do not log API keys, prompt bodies, presigned URLs, DataRef URIs, or provider
   raw output.
+
+Mode and timeout rules:
+
+- Small interactive text may use sync.
+- Long-context, batch/long-running, high-cold-start, image/file, and large
+  DataRef workloads should use async or must have a timeout budget that honestly
+  covers cold start and queueing.
+- Do not encode provider-specific cold-start assumptions in application code.
+  Submit intent, size, mode preference, and timeout preference. The installed
+  catalog and gateway recipes decide the execution surface.
+- If a sync canary times out on a long-context or high-cold-start workload, do
+  not retry by falling back to direct hosted AI. Convert that path to async or
+  submit/update preflight so the gateway can materialize the correct recipe.
 
 If using the OpenAI SDK facade, configure only:
 
