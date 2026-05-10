@@ -36,7 +36,7 @@ Record for each provider:
 - cost observed on provider dashboard
 - audit trail validity after execution
 
-Production `launch-check --profile production` requires one valid JSON artifact per required production tuple under `$XDG_STATE_HOME/gpucall/provider-validation/`. The tuple key is derived from account, execution surface, endpoint contract, output contract, stream contract, model ref, engine ref, and endpoint/lifecycle configuration state. Artifacts are bound to the current git HEAD and active config directory; stale artifacts do not satisfy the gate.
+Production `launch-check --profile production` requires one valid JSON artifact per required production tuple under `$XDG_STATE_HOME/gpucall/tuple-validation/`. The tuple key is derived from account, execution surface, endpoint contract, output contract, stream contract, model ref, engine ref, and endpoint/lifecycle configuration state. Artifacts are bound to the current git HEAD and the official tuple evidence key. Policy-only config changes, such as denying a failed tuple, do not invalidate already collected evidence for unchanged tuple contracts. Set `GPUCALL_STRICT_VALIDATION_CONFIG_HASH=1` to require the artifact `config_hash` to match the active config hash exactly.
 
 Required top-level fields:
 
@@ -73,7 +73,7 @@ Required top-level fields:
 - `expected_stream_contract`
 - `official_sources`
 
-The observed `endpoint_contract`, `output_contract`, and `stream_contract` must equal their expected values. `official_sources` must name the official provider documentation or official repository material used for the contract. `official_contract_hash` is the SHA-256 of the canonical JSON encoding of `official_contract` with sorted keys and compact separators.
+The observed `endpoint_contract` and `output_contract` must equal their expected values. `stream_contract` must equal `expected_stream_contract` when the adapter declares a fixed expected stream contract; adapters that allow per-tuple stream declarations use `expected_stream_contract: null`. `official_sources` must name the official provider documentation or official repository material used for the contract. `official_contract_hash` is the SHA-256 of the canonical JSON encoding of `official_contract` with sorted keys and compact separators.
 
 `cleanup` must be an object. If cleanup is required, set `{"required": true, "completed": true, ...}` only after the provider-side resource is actually absent. `gpucall cleanup-audit` rejects missing cleanup objects and rejects artifacts where cleanup is required but not completed.
 
