@@ -14,7 +14,7 @@ import pytest
 import yaml
 
 from gpucall.config import ConfigError, load_config
-from gpucall.cli import _provider_smoke_request
+from gpucall.cli import _managed_endpoint_live_cost_audit, _provider_smoke_request
 from gpucall.compiler import GovernanceCompiler, GovernanceError
 from gpucall.domain import DataRef, ExecutionMode, ExecutionTupleSpec, InlineValue, ObjectStoreConfig, Recipe, SecurityTier, TaskRequest, recipe_requirements
 from gpucall.registry import ObservedRegistry
@@ -100,6 +100,27 @@ def test_runpod_vllm_tuple_examples_include_official_worker_env() -> None:
                 errors.append(f"{path.relative_to(root)} worker_env.MAX_MODEL_LEN is below tuple max_model_len")
 
     assert errors == []
+
+
+def test_live_cost_audit_ignores_placeholder_runpod_endpoint(monkeypatch: pytest.MonkeyPatch) -> None:
+    def fail_http_json(*args: object, **kwargs: object) -> dict[str, object]:
+        raise AssertionError("placeholder RunPod endpoint must not be queried")
+
+    monkeypatch.setattr("gpucall.cli._http_json", fail_http_json)
+    report = _managed_endpoint_live_cost_audit(
+        {
+            "runpod": SimpleNamespace(
+                name="runpod-vllm-serverless",
+                adapter="runpod-vllm-serverless",
+                execution_surface=SimpleNamespace(value="managed_endpoint"),
+                endpoint="https://api.runpod.ai/v2",
+                target="RUNPOD_ENDPOINT_ID_PLACEHOLDER",
+            )
+        },
+        {"runpod": {"api_key": "secret"}},
+    )
+
+    assert report == {"configured": False}
 
 
 def test_recipe_v3_rejects_provider_resource_fields() -> None:

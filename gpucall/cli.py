@@ -51,7 +51,7 @@ from gpucall.execution.registry import adapter_descriptor, vendor_family_for_ada
 from gpucall.registry import ObservedRegistry
 from gpucall.audit import AuditTrail
 from gpucall.routing import tuple_route_rejection_reason
-from gpucall.targeting import has_configured_endpoint_or_target, is_configured_cidr
+from gpucall.targeting import has_configured_endpoint_or_target, is_configured_cidr, is_configured_target
 from gpucall.sqlite_store import SQLiteJobStore
 from gpucall.tenant import TenantUsageLedger
 from gpucall.validator_plan import build_validator_plan, dumps_validator_plan
@@ -2180,7 +2180,7 @@ def _managed_endpoint_live_cost_audit(tuples: dict[str, object], creds: dict[str
         tuple_spec
         for tuple_spec in tuples.values()
         if str(getattr(getattr(tuple_spec, "execution_surface", None), "value", "")) == "managed_endpoint"
-        and getattr(tuple_spec, "target", None)
+        and is_configured_target(getattr(tuple_spec, "target", None))
     ]
     if not endpoint_tuples:
         return {"configured": False}
