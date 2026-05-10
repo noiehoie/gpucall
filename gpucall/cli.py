@@ -1400,6 +1400,15 @@ async def provider_smoke_command(
                 "state": current.state.value,
                 "completed": current.state is JobState.COMPLETED,
             }
+            if current.result is not None:
+                summary["result"] = current.result.model_dump(mode="json")
+            if current.error:
+                summary["error"] = {
+                    "message": current.error,
+                    "code": "PROVIDER_ERROR" if current.state is JobState.FAILED else current.state.value,
+                    "status_code": 502 if current.state is JobState.FAILED else None,
+                    "retryable": current.state in {JobState.FAILED, JobState.EXPIRED},
+                }
             _finish_provider_smoke_summary(summary, started_at=started_at, config_dir=config_dir, plan=plan, write_artifact=write_artifact)
             return
         result = await runtime.dispatcher.execute_sync(plan)
