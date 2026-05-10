@@ -5,6 +5,7 @@ from typing import Any
 
 from gpucall.domain import TupleError
 from gpucall.live_catalog import live_error, live_info, price_per_second_from_mapping
+from gpucall.targeting import is_configured_target
 
 RUNPOD_API_BASE = "https://api.runpod.ai/v2"
 
@@ -40,7 +41,7 @@ def runpod_endpoint_catalog_findings(tuples: list[Any], credentials: dict[str, d
         if not api_key:
             findings.append(live_error(tuple, dimension="credential", reason="missing RunPod API key; cannot verify endpoint health"))
             continue
-        if not tuple.target:
+        if not is_configured_target(tuple.target):
             findings.append(live_error(tuple, dimension="endpoint", field="target", reason="RunPod endpoint target is not configured"))
             continue
         base_url = str(tuple.endpoint or RUNPOD_API_BASE).rstrip("/")

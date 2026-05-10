@@ -16,6 +16,7 @@ from gpucall.candidate_sources import load_tuple_candidate_payloads
 from gpucall.config import GpucallConfig, default_state_dir
 from gpucall.domain import ExecutionMode, Recipe, recipe_requirements
 from gpucall.execution.registry import adapter_descriptor, vendor_family_for_adapter
+from gpucall.targeting import has_configured_endpoint_or_target, is_configured_target
 
 NetworkTopologyValue = str | bool | None
 
@@ -576,9 +577,10 @@ def _provider_offering(row: Mapping[str, Any]) -> ProviderOfferingSpec:
 
 def _network_topology(row: Mapping[str, Any]) -> dict[str, NetworkTopologyValue]:
     surface = str(row.get("execution_surface") or _surface_for_adapter(str(row.get("adapter") or "")) or "unknown")
+    endpoint_or_target = has_configured_endpoint_or_target(row.get("endpoint"), row.get("target"))
     topology: dict[str, NetworkTopologyValue] = {
         "surface": surface,
-        "public_network_required": bool(row.get("endpoint") or row.get("target") or row.get("ssh_remote_cidr")),
+        "public_network_required": bool(endpoint_or_target or row.get("ssh_remote_cidr")),
     }
     for key in (
         "region",
@@ -593,7 +595,7 @@ def _network_topology(row: Mapping[str, Any]) -> dict[str, NetworkTopologyValue]
         value = row.get(key)
         if value not in (None, ""):
             topology[key] = str(value)
-    if row.get("endpoint") or row.get("target"):
+    if endpoint_or_target:
         topology["endpoint_configured"] = True
     return topology
 
@@ -804,6 +806,7 @@ def _worker_contract(row: Mapping[str, Any]) -> WorkerContractSpec:
     source = "tuple_candidate" if row.get("source") == "tuple_candidate" else "active_tuple"
     name = str(row.get("name") or "")
     adapter = str(row.get("adapter") or "")
+    target_configured = is_configured_target(row.get("target"))
     return WorkerContractSpec(
         worker_ref=f"{source}:{name}:worker",
         source=source,
@@ -817,8 +820,8 @@ def _worker_contract(row: Mapping[str, Any]) -> WorkerContractSpec:
         input_contracts=[str(item) for item in row.get("input_contracts") or []],
         output_contract=str(row.get("output_contract") or "") or None,
         stream_contract=str(row.get("stream_contract") or "none"),
-        target_configured=bool(row.get("target")),
-        endpoint_configured=bool(row.get("endpoint") or row.get("target")),
+        target_configured=target_configured,
+        endpoint_configured=has_configured_endpoint_or_target(row.get("endpoint"), row.get("target")),
         max_data_classification=str(row.get("max_data_classification") or "") or None,
     )
 

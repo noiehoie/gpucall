@@ -17,6 +17,7 @@ from gpucall.domain import (
     recipe_requirements,
 )
 from gpucall.execution.registry import adapter_descriptor
+from gpucall.targeting import is_configured_target
 
 
 def classification_rank(value: DataClassification) -> int:
@@ -68,7 +69,11 @@ def production_route_rejection_reason(tuple: ExecutionTupleSpec, *, allow_fake: 
         return "tuple model is not configured"
     required_fields = descriptor.required_auto_fields if descriptor is not None else {}
     for field, reason in required_fields.items():
-        if not getattr(tuple, field, None):
+        value = getattr(tuple, field, None)
+        if field in {"target", "stream_target"}:
+            if not is_configured_target(value):
+                return reason
+        elif not value:
             return reason
     return None
 
@@ -138,7 +143,11 @@ def tuple_route_rejection_reason(
             descriptor = adapter_descriptor(tuple)
             required_fields = descriptor.stream_required_fields if descriptor is not None else {}
             for field, reason in required_fields.items():
-                if not getattr(tuple, field, None):
+                value = getattr(tuple, field, None)
+                if field in {"target", "stream_target"}:
+                    if not is_configured_target(value):
+                        return reason
+                elif not value:
                     return reason
         if mode is ExecutionMode.STREAM and tuple.stream_contract == "none":
             return "tuple does not declare a streaming contract"
@@ -148,7 +157,11 @@ def tuple_route_rejection_reason(
     stream_required_fields = descriptor.stream_required_fields if descriptor is not None else {}
     if ExecutionMode.STREAM in tuple.modes and ExecutionMode.STREAM in recipe.allowed_modes:
         for field, reason in stream_required_fields.items():
-            if not getattr(tuple, field, None):
+            value = getattr(tuple, field, None)
+            if field in {"target", "stream_target"}:
+                if not is_configured_target(value):
+                    return reason
+            elif not value:
                 return reason
     return None
 

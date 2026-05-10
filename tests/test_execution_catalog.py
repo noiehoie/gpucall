@@ -44,6 +44,18 @@ def test_execution_catalog_separates_accounts_surfaces_and_workers() -> None:
     assert isinstance(snapshot.workers, tuple)
 
 
+def test_execution_catalog_treats_placeholder_targets_as_unconfigured() -> None:
+    config = load_config(Path("config"))
+    snapshot = build_resource_catalog_snapshot(config, config_dir=Path("config"))
+
+    worker = next(item for item in snapshot.workers if item.tuple_name == "runpod-vllm-serverless")
+    offering = next(item for item in snapshot.provider_offerings if item.resource_ref == "active_tuple:runpod-vllm-serverless:resource")
+
+    assert worker.target_configured is False
+    assert worker.endpoint_configured is False
+    assert offering.network_topology.get("endpoint_configured") is not True
+
+
 def test_execution_catalog_normalizes_hardware_surface_pricing_and_network() -> None:
     config = load_config(Path("config"))
     snapshot = build_resource_catalog_snapshot(config, config_dir=Path("config"))

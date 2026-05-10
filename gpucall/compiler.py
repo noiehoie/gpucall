@@ -26,6 +26,7 @@ from gpucall.execution.contracts import account_ref_for_spec
 from gpucall.price_freshness import tuple_configured_price_freshness
 from gpucall.registry import ObservedRegistry
 from gpucall.routing import classification_rank, is_production_route_candidate, tuple_route_rejection_reason, required_model_len, token_budget
+from gpucall.targeting import is_configured_target
 
 
 class GovernanceError(ValueError):
@@ -645,7 +646,7 @@ class GovernanceCompiler:
                 "input_contracts": list(tuple_spec.input_contracts),
                 "output_contract": tuple_spec.output_contract,
                 "stream_contract": tuple_spec.stream_contract,
-                "target_configured": bool(tuple_spec.target),
+                "target_configured": is_configured_target(tuple_spec.target),
             },
             "contract": {
                 "data_classification": recipe.data_classification.value,

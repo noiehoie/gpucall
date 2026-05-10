@@ -15,6 +15,7 @@ from gpucall.execution.contracts import artifact_tuple_evidence_key, official_co
 from gpucall.tuple_catalog import live_tuple_catalog_findings
 from gpucall.execution.registry import adapter_descriptor
 from gpucall.routing import tuple_route_rejection_reason
+from gpucall.targeting import is_configured_target
 
 
 def tuple_audit_report(config: Any, *, config_dir: Path, recipe_name: str | None = None, live: bool = False) -> dict[str, Any]:
@@ -357,7 +358,7 @@ def _tuple_summary(tuple: ExecutionTupleSpec | None) -> dict[str, Any]:
         "max_model_len": tuple.max_model_len,
         "cost_per_second": float(tuple.cost_per_second),
         "modes": [mode.value for mode in tuple.modes],
-        "target_configured": bool(tuple.target),
+        "target_configured": is_configured_target(tuple.target),
     }
 
 
@@ -373,7 +374,7 @@ def _candidate_tuple_summary(candidate: Mapping[str, Any]) -> dict[str, Any]:
         "max_model_len": candidate.get("max_model_len"),
         "cost_per_second": float(candidate.get("cost_per_second") or 0.0),
         "modes": _strings(candidate.get("modes") or ["sync", "async"]),
-        "target_configured": bool(candidate.get("target")),
+        "target_configured": is_configured_target(candidate.get("target")),
     }
 
 

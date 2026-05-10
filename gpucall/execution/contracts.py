@@ -6,6 +6,7 @@ import os
 from typing import Any, Mapping
 
 from gpucall.domain import ExecutionTupleSpec
+from gpucall.targeting import is_configured_target
 from gpucall.execution.registry import adapter_descriptor, vendor_family_for_adapter
 
 
@@ -63,7 +64,7 @@ def tuple_evidence_key(spec: ExecutionTupleSpec) -> str:
         "stream_contract": spec.stream_contract,
         "model_ref": spec.model_ref,
         "engine_ref": spec.engine_ref,
-        "target": bool(spec.target),
+        "target": is_configured_target(spec.target),
     }
     return official_contract_hash(payload)
 
@@ -88,7 +89,7 @@ def artifact_tuple_evidence_key(data: Mapping[str, object], tuple: ExecutionTupl
         "stream_contract": contract.get("stream_contract"),
         "model_ref": data.get("model_ref") or contract.get("model_ref"),
         "engine_ref": data.get("engine_ref") or contract.get("engine_ref"),
-        "target": bool(getattr(tuple, "target", None)),
+        "target": is_configured_target(getattr(tuple, "target", None)),
     }
     return official_contract_hash(payload)
 

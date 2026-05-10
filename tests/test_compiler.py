@@ -192,6 +192,29 @@ def test_runpod_provider_without_endpoint_is_not_auto_routed() -> None:
     assert "runpod" not in plan.tuple_chain
 
 
+def test_runpod_provider_with_placeholder_endpoint_is_not_auto_routed() -> None:
+    compiler = build_compiler()
+    compiler.policy.tuples.allow.append("runpod")
+    compiler.tuples["runpod"] = ExecutionTupleSpec(
+        name="runpod",
+        adapter="runpod-vllm-serverless",
+        gpu="L4",
+        vram_gb=24,
+        max_model_len=100,
+        cost_per_second=0,
+        model="Qwen/Qwen2.5-1.5B-Instruct",
+        image="runpod/worker-v1-vllm:v2.18.1",
+        target="RUNPOD_ENDPOINT_ID_PLACEHOLDER",
+    )
+
+    plan = compiler.compile(TaskRequest(task="infer", mode="sync", max_tokens=10))
+
+    assert "runpod" not in plan.tuple_chain
+    assert compiler._tuple_rejections(TaskRequest(task="infer", mode="sync", max_tokens=10), compiler.recipes["r1"], auto_selected=True)["runpod"] == (
+        "RunPod endpoint target is not configured"
+    )
+
+
 def test_modal_stream_requires_explicit_stream_target() -> None:
     compiler = build_compiler()
     compiler.recipes["r1"] = compiler.recipes["r1"].model_copy(update={"allowed_modes": [ExecutionMode.STREAM]})
