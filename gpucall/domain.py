@@ -80,9 +80,15 @@ class RecipeAdminAutomationConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     recipe_inbox_auto_materialize: bool = False
+    recipe_inbox_auto_validate_existing_tuples: bool = False
+    recipe_inbox_auto_activate_existing_validated_recipe: bool = False
     recipe_inbox_auto_promote_candidates: bool = False
     recipe_inbox_auto_billable_validation: bool = False
     recipe_inbox_auto_activate_validated: bool = False
+    recipe_inbox_auto_require_auto_select_safe: bool = True
+    recipe_inbox_auto_set_auto_select: bool = False
+    recipe_inbox_auto_run_validate_config: bool = True
+    recipe_inbox_auto_run_launch_check: bool = False
     recipe_inbox_promotion_work_dir: str | None = None
     api_key_handoff_mode: ApiKeyHandoffMode = ApiKeyHandoffMode.MANUAL
     api_key_bootstrap_allowed_cidrs: tuple[str, ...] = ()
@@ -97,10 +103,22 @@ class RecipeAdminAutomationConfig(BaseModel):
     def validate_admin_automation_chain(self) -> "RecipeAdminAutomationConfig":
         if self.recipe_inbox_auto_promote_candidates and not self.recipe_inbox_auto_materialize:
             raise ValueError("recipe_inbox_auto_promote_candidates requires recipe_inbox_auto_materialize")
-        if self.recipe_inbox_auto_billable_validation and not self.recipe_inbox_auto_promote_candidates:
-            raise ValueError("recipe_inbox_auto_billable_validation requires recipe_inbox_auto_promote_candidates")
+        if self.recipe_inbox_auto_validate_existing_tuples and not self.recipe_inbox_auto_materialize:
+            raise ValueError("recipe_inbox_auto_validate_existing_tuples requires recipe_inbox_auto_materialize")
+        if self.recipe_inbox_auto_activate_existing_validated_recipe and not self.recipe_inbox_auto_validate_existing_tuples:
+            raise ValueError("recipe_inbox_auto_activate_existing_validated_recipe requires recipe_inbox_auto_validate_existing_tuples")
+        if self.recipe_inbox_auto_billable_validation and not (
+            self.recipe_inbox_auto_promote_candidates or self.recipe_inbox_auto_validate_existing_tuples
+        ):
+            raise ValueError("recipe_inbox_auto_billable_validation requires candidate promotion or existing tuple validation")
         if self.recipe_inbox_auto_activate_validated and not self.recipe_inbox_auto_billable_validation:
             raise ValueError("recipe_inbox_auto_activate_validated requires recipe_inbox_auto_billable_validation")
+        if self.recipe_inbox_auto_set_auto_select and not (
+            self.recipe_inbox_auto_activate_existing_validated_recipe or self.recipe_inbox_auto_activate_validated
+        ):
+            raise ValueError("recipe_inbox_auto_set_auto_select requires an auto-activation path")
+        if self.recipe_inbox_auto_run_launch_check and not self.recipe_inbox_auto_run_validate_config:
+            raise ValueError("recipe_inbox_auto_run_launch_check requires recipe_inbox_auto_run_validate_config")
         return self
 
 

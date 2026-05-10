@@ -203,12 +203,24 @@ def main() -> None:
     admin.add_argument("--clear-bootstrap-allowlist", action="store_true")
     admin.add_argument("--enable-recipe-auto-materialize", action="store_true")
     admin.add_argument("--disable-recipe-auto-materialize", action="store_true")
+    admin.add_argument("--enable-recipe-auto-validate-existing-tuples", action="store_true")
+    admin.add_argument("--disable-recipe-auto-validate-existing-tuples", action="store_true")
+    admin.add_argument("--enable-recipe-auto-activate-existing", action="store_true")
+    admin.add_argument("--disable-recipe-auto-activate-existing", action="store_true")
     admin.add_argument("--enable-recipe-auto-promote", action="store_true")
     admin.add_argument("--disable-recipe-auto-promote", action="store_true")
     admin.add_argument("--enable-recipe-auto-billable-validation", action="store_true")
     admin.add_argument("--disable-recipe-auto-billable-validation", action="store_true")
     admin.add_argument("--enable-recipe-auto-activate", action="store_true")
     admin.add_argument("--disable-recipe-auto-activate", action="store_true")
+    admin.add_argument("--enable-recipe-auto-require-auto-select-safe", action="store_true")
+    admin.add_argument("--disable-recipe-auto-require-auto-select-safe", action="store_true")
+    admin.add_argument("--enable-recipe-auto-set-auto-select", action="store_true")
+    admin.add_argument("--disable-recipe-auto-set-auto-select", action="store_true")
+    admin.add_argument("--enable-recipe-auto-run-validate-config", action="store_true")
+    admin.add_argument("--disable-recipe-auto-run-validate-config", action="store_true")
+    admin.add_argument("--enable-recipe-auto-run-launch-check", action="store_true")
+    admin.add_argument("--disable-recipe-auto-run-launch-check", action="store_true")
     admin.add_argument("--recipe-promotion-work-dir", default=None)
     admin.add_argument("--onboarding-prompt-url", default=None)
     admin.add_argument("--onboarding-manual-url", default=None)
@@ -359,12 +371,24 @@ def main() -> None:
             clear_bootstrap_allowlist=args.clear_bootstrap_allowlist,
             enable_recipe_auto_materialize=args.enable_recipe_auto_materialize,
             disable_recipe_auto_materialize=args.disable_recipe_auto_materialize,
+            enable_recipe_auto_validate_existing_tuples=args.enable_recipe_auto_validate_existing_tuples,
+            disable_recipe_auto_validate_existing_tuples=args.disable_recipe_auto_validate_existing_tuples,
+            enable_recipe_auto_activate_existing=args.enable_recipe_auto_activate_existing,
+            disable_recipe_auto_activate_existing=args.disable_recipe_auto_activate_existing,
             enable_recipe_auto_promote=args.enable_recipe_auto_promote,
             disable_recipe_auto_promote=args.disable_recipe_auto_promote,
             enable_recipe_auto_billable_validation=args.enable_recipe_auto_billable_validation,
             disable_recipe_auto_billable_validation=args.disable_recipe_auto_billable_validation,
             enable_recipe_auto_activate=args.enable_recipe_auto_activate,
             disable_recipe_auto_activate=args.disable_recipe_auto_activate,
+            enable_recipe_auto_require_auto_select_safe=args.enable_recipe_auto_require_auto_select_safe,
+            disable_recipe_auto_require_auto_select_safe=args.disable_recipe_auto_require_auto_select_safe,
+            enable_recipe_auto_set_auto_select=args.enable_recipe_auto_set_auto_select,
+            disable_recipe_auto_set_auto_select=args.disable_recipe_auto_set_auto_select,
+            enable_recipe_auto_run_validate_config=args.enable_recipe_auto_run_validate_config,
+            disable_recipe_auto_run_validate_config=args.disable_recipe_auto_run_validate_config,
+            enable_recipe_auto_run_launch_check=args.enable_recipe_auto_run_launch_check,
+            disable_recipe_auto_run_launch_check=args.disable_recipe_auto_run_launch_check,
             recipe_promotion_work_dir=args.recipe_promotion_work_dir,
             onboarding_prompt_url=args.onboarding_prompt_url,
             onboarding_manual_url=args.onboarding_manual_url,
@@ -645,12 +669,24 @@ def admin_command(
     clear_bootstrap_allowlist: bool = False,
     enable_recipe_auto_materialize: bool = False,
     disable_recipe_auto_materialize: bool = False,
+    enable_recipe_auto_validate_existing_tuples: bool = False,
+    disable_recipe_auto_validate_existing_tuples: bool = False,
+    enable_recipe_auto_activate_existing: bool = False,
+    disable_recipe_auto_activate_existing: bool = False,
     enable_recipe_auto_promote: bool = False,
     disable_recipe_auto_promote: bool = False,
     enable_recipe_auto_billable_validation: bool = False,
     disable_recipe_auto_billable_validation: bool = False,
     enable_recipe_auto_activate: bool = False,
     disable_recipe_auto_activate: bool = False,
+    enable_recipe_auto_require_auto_select_safe: bool = False,
+    disable_recipe_auto_require_auto_select_safe: bool = False,
+    enable_recipe_auto_set_auto_select: bool = False,
+    disable_recipe_auto_set_auto_select: bool = False,
+    enable_recipe_auto_run_validate_config: bool = False,
+    disable_recipe_auto_run_validate_config: bool = False,
+    enable_recipe_auto_run_launch_check: bool = False,
+    disable_recipe_auto_run_launch_check: bool = False,
     recipe_promotion_work_dir: str | None = None,
     onboarding_prompt_url: str | None = None,
     onboarding_manual_url: str | None = None,
@@ -681,17 +717,39 @@ def admin_command(
     if action == "automation-configure":
         if enable_recipe_auto_materialize and disable_recipe_auto_materialize:
             raise SystemExit("choose only one of --enable-recipe-auto-materialize or --disable-recipe-auto-materialize")
+        if enable_recipe_auto_validate_existing_tuples and disable_recipe_auto_validate_existing_tuples:
+            raise SystemExit("choose only one of --enable-recipe-auto-validate-existing-tuples or --disable-recipe-auto-validate-existing-tuples")
+        if enable_recipe_auto_activate_existing and disable_recipe_auto_activate_existing:
+            raise SystemExit("choose only one of --enable-recipe-auto-activate-existing or --disable-recipe-auto-activate-existing")
         if enable_recipe_auto_promote and disable_recipe_auto_promote:
             raise SystemExit("choose only one of --enable-recipe-auto-promote or --disable-recipe-auto-promote")
         if enable_recipe_auto_billable_validation and disable_recipe_auto_billable_validation:
             raise SystemExit("choose only one of --enable-recipe-auto-billable-validation or --disable-recipe-auto-billable-validation")
         if enable_recipe_auto_activate and disable_recipe_auto_activate:
             raise SystemExit("choose only one of --enable-recipe-auto-activate or --disable-recipe-auto-activate")
+        if enable_recipe_auto_require_auto_select_safe and disable_recipe_auto_require_auto_select_safe:
+            raise SystemExit("choose only one of --enable-recipe-auto-require-auto-select-safe or --disable-recipe-auto-require-auto-select-safe")
+        if enable_recipe_auto_set_auto_select and disable_recipe_auto_set_auto_select:
+            raise SystemExit("choose only one of --enable-recipe-auto-set-auto-select or --disable-recipe-auto-set-auto-select")
+        if enable_recipe_auto_run_validate_config and disable_recipe_auto_run_validate_config:
+            raise SystemExit("choose only one of --enable-recipe-auto-run-validate-config or --disable-recipe-auto-run-validate-config")
+        if enable_recipe_auto_run_launch_check and disable_recipe_auto_run_launch_check:
+            raise SystemExit("choose only one of --enable-recipe-auto-run-launch-check or --disable-recipe-auto-run-launch-check")
         auto_materialize = None
         if enable_recipe_auto_materialize:
             auto_materialize = True
         if disable_recipe_auto_materialize:
             auto_materialize = False
+        auto_validate_existing = None
+        if enable_recipe_auto_validate_existing_tuples:
+            auto_validate_existing = True
+        if disable_recipe_auto_validate_existing_tuples:
+            auto_validate_existing = False
+        auto_activate_existing = None
+        if enable_recipe_auto_activate_existing:
+            auto_activate_existing = True
+        if disable_recipe_auto_activate_existing:
+            auto_activate_existing = False
         auto_promote = None
         if enable_recipe_auto_promote:
             auto_promote = True
@@ -707,14 +765,40 @@ def admin_command(
             auto_activate = True
         if disable_recipe_auto_activate:
             auto_activate = False
+        require_auto_select_safe = None
+        if enable_recipe_auto_require_auto_select_safe:
+            require_auto_select_safe = True
+        if disable_recipe_auto_require_auto_select_safe:
+            require_auto_select_safe = False
+        auto_set_auto_select = None
+        if enable_recipe_auto_set_auto_select:
+            auto_set_auto_select = True
+        if disable_recipe_auto_set_auto_select:
+            auto_set_auto_select = False
+        auto_run_validate_config = None
+        if enable_recipe_auto_run_validate_config:
+            auto_run_validate_config = True
+        if disable_recipe_auto_run_validate_config:
+            auto_run_validate_config = False
+        auto_run_launch_check = None
+        if enable_recipe_auto_run_launch_check:
+            auto_run_launch_check = True
+        if disable_recipe_auto_run_launch_check:
+            auto_run_launch_check = False
         try:
             updated = configure_admin_automation(
                 config_dir,
                 handoff_mode=ApiKeyHandoffMode(handoff_mode) if handoff_mode else None,
                 recipe_inbox_auto_materialize=auto_materialize,
+                recipe_inbox_auto_validate_existing_tuples=auto_validate_existing,
+                recipe_inbox_auto_activate_existing_validated_recipe=auto_activate_existing,
                 recipe_inbox_auto_promote_candidates=auto_promote,
                 recipe_inbox_auto_billable_validation=auto_billable_validation,
                 recipe_inbox_auto_activate_validated=auto_activate,
+                recipe_inbox_auto_require_auto_select_safe=require_auto_select_safe,
+                recipe_inbox_auto_set_auto_select=auto_set_auto_select,
+                recipe_inbox_auto_run_validate_config=auto_run_validate_config,
+                recipe_inbox_auto_run_launch_check=auto_run_launch_check,
                 recipe_inbox_promotion_work_dir=recipe_promotion_work_dir,
                 bootstrap_allowed_cidrs=bootstrap_allowed_cidrs,
                 bootstrap_allowed_hosts=bootstrap_allowed_hosts,

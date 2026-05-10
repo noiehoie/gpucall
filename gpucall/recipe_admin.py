@@ -3,7 +3,9 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import os
 import shutil
+import subprocess
 import sys
 import time
 from collections.abc import Mapping
@@ -291,6 +293,17 @@ def process_inbox(
             report["recipe_path"] = str(recipe_path)
             report["submission_path"] = str(path)
             report["catalog_readiness"] = _recipe_readiness_from_review(review, config_dir=config_dir)
+            existing_activation = _auto_existing_tuple_report(
+                review,
+                request_id=request_id,
+                automation=automation,
+                report_dir=reports,
+                config_dir=config_dir,
+                validation_dir=validation_dir,
+                force=force,
+            )
+            if existing_activation is not None:
+                report["existing_tuple_activation"] = existing_activation
             promotion = _auto_promotion_report(
                 review,
                 request_id=request_id,
@@ -356,6 +369,177 @@ def _auto_promotion_report(
     report_path = report_dir / f"{request_id}.promotion.json"
     report["auto_promotion_report_path"] = str(report_path)
     report_path.write_text(json.dumps(report, ensure_ascii=False, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    return report
+
+
+def _auto_existing_tuple_report(
+    review: Mapping[str, Any],
+    *,
+    request_id: str,
+    automation: RecipeAdminAutomationConfig,
+    report_dir: Path,
+    config_dir: str | Path | None,
+    validation_dir: str | Path | None,
+    force: bool,
+) -> dict[str, Any] | None:
+    if not automation.recipe_inbox_auto_validate_existing_tuples:
+        return None
+    if config_dir is None:
+        raise ValueError("recipe inbox existing tuple automation requires --config-dir")
+    recipe = dict(_mapping(review.get("canonical_recipe")))
+    if not recipe:
+        raise ValueError("review does not contain canonical_recipe")
+    eligible = [str(item) for item in review.get("eligible_tuples", []) if str(item)]
+    report: dict[str, Any] = {
+        "phase": "recipe-inbox-existing-tuple-activation",
+        "request_id": request_id,
+        "recipe": recipe.get("name"),
+        "eligible_tuples": eligible,
+        "run_billable_validation": automation.recipe_inbox_auto_billable_validation,
+        "activate_validated_recipe": automation.recipe_inbox_auto_activate_existing_validated_recipe,
+        "set_auto_select": automation.recipe_inbox_auto_set_auto_select,
+        "require_auto_select_safe": automation.recipe_inbox_auto_require_auto_select_safe,
+        "checks": [],
+        "activated": False,
+    }
+    if not eligible:
+        report["decision"] = "SKIPPED_NO_ELIGIBLE_TUPLE"
+        return report
+    live = _mapping(review.get("live_validation"))
+    matched = list(live.get("matched", [])) if isinstance(live.get("matched"), list) else []
+    if not matched:
+        if not automation.recipe_inbox_auto_billable_validation:
+            report["decision"] = "READY_FOR_BILLABLE_VALIDATION"
+            return report
+        validation = _run_existing_tuple_validation(
+            tuple_name=eligible[0],
+            recipe_name=str(recipe["name"]),
+            config_dir=Path(config_dir).expanduser(),
+            validation_dir=Path(validation_dir).expanduser() if validation_dir else None,
+        )
+        report["validation"] = validation
+        if validation.get("returncode") != 0 or validation.get("passed") is not True:
+            report["decision"] = "VALIDATION_FAILED"
+            _write_auto_existing_report(report_dir, request_id, report)
+            return report
+        matched = [{"tuple": eligible[0], "recipe": recipe["name"], "path": validation.get("artifact_path")}]
+    report["matched_validation"] = matched
+    if not automation.recipe_inbox_auto_activate_existing_validated_recipe:
+        report["decision"] = "VALIDATED_READY_TO_ACTIVATE"
+        _write_auto_existing_report(report_dir, request_id, report)
+        return report
+    active_recipe = dict(recipe)
+    if automation.recipe_inbox_auto_set_auto_select:
+        active_recipe["auto_select"] = True
+        if active_recipe.get("quality_floor") == "draft":
+            active_recipe["quality_floor"] = "standard"
+    config = load_config(Path(config_dir).expanduser())
+    shadowing = _auto_select_shadowing(Recipe.model_validate(active_recipe), config.recipes)
+    report["auto_select_review"] = shadowing
+    if automation.recipe_inbox_auto_require_auto_select_safe and not shadowing["safe"]:
+        report["decision"] = "BLOCKED_AUTO_SELECT_NOT_SAFE"
+        report["reason"] = shadowing["reason"]
+        _write_auto_existing_report(report_dir, request_id, report)
+        return report
+    recipe_path = _write_recipe_guarded(Path(config_dir).expanduser() / "recipes" / f"{active_recipe['name']}.yml", active_recipe, force=force)
+    report["activated"] = True
+    report["activation_paths"] = {"recipe": str(recipe_path)}
+    if automation.recipe_inbox_auto_run_validate_config:
+        check = _run_admin_check([sys.executable, "-m", "gpucall.cli", "validate-config", "--config-dir", str(config_dir)])
+        report["checks"].append(check)
+        if check["returncode"] != 0:
+            report["decision"] = "ACTIVATED_VALIDATE_CONFIG_FAILED"
+            _write_auto_existing_report(report_dir, request_id, report)
+            return report
+    if automation.recipe_inbox_auto_run_launch_check:
+        check = _run_admin_check([sys.executable, "-m", "gpucall.cli", "launch-check", "--profile", "static", "--config-dir", str(config_dir)])
+        report["checks"].append(check)
+        if check["returncode"] != 0:
+            report["decision"] = "ACTIVATED_LAUNCH_CHECK_FAILED"
+            _write_auto_existing_report(report_dir, request_id, report)
+            return report
+    report["decision"] = "ACTIVATED" if active_recipe.get("auto_select") is True else "ACTIVATED_NO_AUTO_SELECT"
+    _write_auto_existing_report(report_dir, request_id, report)
+    return report
+
+
+def _write_auto_existing_report(report_dir: Path, request_id: str, report: dict[str, Any]) -> None:
+    report_path = report_dir / f"{request_id}.existing-tuple-activation.json"
+    report["auto_existing_tuple_report_path"] = str(report_path)
+    report_path.write_text(json.dumps(report, ensure_ascii=False, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+
+
+def _write_recipe_guarded(path: Path, payload: Mapping[str, Any], *, force: bool) -> Path:
+    if path.exists() and not force:
+        current = path.read_text(encoding="utf-8")
+        rendered = to_yaml(payload)
+        if current != rendered:
+            import yaml
+
+            existing = yaml.safe_load(current) or {}
+            if not (
+                isinstance(existing, dict)
+                and existing.get("name") == payload.get("name")
+                and existing.get("auto_select") is False
+                and existing.get("quality_floor") == "draft"
+            ):
+                raise FileExistsError(f"refusing to overwrite existing recipe: {path}")
+            path.write_text(rendered, encoding="utf-8")
+        return path
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(to_yaml(payload), encoding="utf-8")
+    return path
+
+
+def _run_existing_tuple_validation(*, tuple_name: str, recipe_name: str, config_dir: Path, validation_dir: Path | None) -> dict[str, Any]:
+    mode = "sync"
+    try:
+        recipe = load_config(config_dir).recipes.get(recipe_name)
+        if recipe is not None and ExecutionMode.SYNC not in recipe.allowed_modes and recipe.allowed_modes:
+            mode = recipe.allowed_modes[0].value
+    except Exception:
+        pass
+    return _run_admin_check(
+        [
+            sys.executable,
+            "-m",
+            "gpucall.cli",
+            "tuple-smoke",
+            tuple_name,
+            "--config-dir",
+            str(config_dir),
+            "--recipe",
+            recipe_name,
+            "--mode",
+            mode,
+            "--write-artifact",
+        ],
+        validation_dir=validation_dir,
+        parse_json=True,
+    )
+
+
+def _run_admin_check(command: list[str], *, validation_dir: Path | None = None, parse_json: bool = False) -> dict[str, Any]:
+    env = None
+    if validation_dir is not None:
+        env = dict(os.environ)
+        env["GPUCALL_STATE_DIR"] = str(validation_dir.parent)
+    completed = subprocess.run(command, capture_output=True, text=True, check=False, env=env)
+    report: dict[str, Any] = {
+        "command": command,
+        "returncode": completed.returncode,
+        "stdout": completed.stdout,
+        "stderr": completed.stderr,
+    }
+    if parse_json and completed.stdout.strip():
+        try:
+            payload = json.loads(completed.stdout)
+            report["artifact"] = payload
+            report["artifact_path"] = payload.get("artifact_path")
+            report["passed"] = payload.get("passed") is True
+        except json.JSONDecodeError:
+            report["parse_error"] = "stdout was not JSON"
+            report["passed"] = False
     return report
 
 

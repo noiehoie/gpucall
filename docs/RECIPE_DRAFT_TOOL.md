@@ -310,17 +310,27 @@ Operators who deliberately want full automation can open the escalation chain in
 
 ```yaml
 recipe_inbox_auto_materialize: true
+recipe_inbox_auto_validate_existing_tuples: false
+recipe_inbox_auto_activate_existing_validated_recipe: false
 recipe_inbox_auto_promote_candidates: true
 recipe_inbox_auto_billable_validation: true
 recipe_inbox_auto_activate_validated: true
+recipe_inbox_auto_require_auto_select_safe: true
+recipe_inbox_auto_set_auto_select: false
+recipe_inbox_auto_run_validate_config: true
+recipe_inbox_auto_run_launch_check: false
 recipe_inbox_promotion_work_dir: /opt/gpucall/state/recipe_requests/promotions
 ```
 
 The chain is ordered and fail-closed:
 
 - `recipe_inbox_auto_promote_candidates` requires `recipe_inbox_auto_materialize`.
-- `recipe_inbox_auto_billable_validation` requires auto-promotion.
+- `recipe_inbox_auto_validate_existing_tuples` requires `recipe_inbox_auto_materialize`.
+- `recipe_inbox_auto_activate_existing_validated_recipe` requires existing tuple validation.
+- `recipe_inbox_auto_billable_validation` requires auto-promotion or existing tuple validation.
 - `recipe_inbox_auto_activate_validated` requires billable validation.
+- `recipe_inbox_auto_set_auto_select` requires an activation path.
+- `recipe_inbox_auto_run_launch_check` requires validate-config automation.
 
 When enabled, `process-inbox` and `watch` reuse the same review and promotion
 pipeline as the manual commands. Candidate promotion materializes provider tuple,
@@ -328,6 +338,12 @@ surface, and worker YAML into an isolated promotion workspace. Billable
 validation runs `gpucall tuple-smoke`. Activation copies only validated recipe
 and tuple config into the active config directory. If no candidate tuple exists,
 the report records `SKIPPED_NO_TUPLE_CANDIDATE` and does not invent a provider.
+If an existing production tuple already satisfies the materialized recipe,
+operators can separately allow existing-tuple validation and activation. That
+path writes a production recipe only after matching live validation evidence is
+present or after billable validation succeeds. It can set `auto_select: true`
+only when `recipe_inbox_auto_set_auto_select` is enabled, and by default it
+requires the auto-select shadowing review to be safe.
 
 To poll continuously:
 

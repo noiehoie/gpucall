@@ -62,9 +62,12 @@ tenant_onboarding:
 
 recipe_automation:
   auto_materialize: true
+  auto_validate_existing_tuples: false
+  auto_activate_existing_validated_recipe: false
   auto_promote_candidates: false
   auto_billable_validation: false
   auto_activate_validated: false
+  auto_set_auto_select: false
   promotion_work_dir: /opt/gpucall/state/recipe_requests/promotions
 
 handoff_assets:
@@ -241,9 +244,15 @@ submitted sanitized preflight or quality-feedback intake to the approved inbox.
 ```yaml
 recipe_automation:
   auto_materialize: true
+  auto_validate_existing_tuples: false
+  auto_activate_existing_validated_recipe: false
   auto_promote_candidates: true
   auto_billable_validation: false
   auto_activate_validated: false
+  auto_require_auto_select_safe: true
+  auto_set_auto_select: false
+  auto_run_validate_config: true
+  auto_run_launch_check: false
   promotion_work_dir: /opt/gpucall/state/recipe_requests/promotions
 ```
 
@@ -251,15 +260,27 @@ The chain is ordered and fail-closed:
 
 - `auto_materialize`: convert sanitized intake into canonical recipe YAML and
   move the original submission to `processed/` or `failed/`.
+- `auto_validate_existing_tuples`: use existing eligible production tuples and
+  matching live validation evidence, or run billable validation when that is
+  also enabled.
+- `auto_activate_existing_validated_recipe`: promote a materialized recipe into
+  active routing when existing tuple validation succeeds.
 - `auto_promote_candidates`: prepare an isolated candidate tuple promotion
   workspace when the catalog has matching candidate contracts.
 - `auto_billable_validation`: run billable tuple validation from that isolated
   workspace.
 - `auto_activate_validated`: copy only successfully validated recipes/tuples
   into active production config.
+- `auto_set_auto_select`: allow activation to set `auto_select: true`; otherwise
+  automation can prepare/validate but will not enter automatic routing.
+- `auto_require_auto_select_safe`: block auto-select activation unless the
+  deterministic shadowing review is safe.
+- `auto_run_validate_config` and `auto_run_launch_check`: run post-activation
+  checks before declaring the automation step complete.
 
 Each step requires the previous one. Setup plan validation rejects impossible
-chains such as billable validation without candidate promotion. The automation
+chains such as billable validation without candidate promotion or existing tuple
+validation. The automation
 does not invent provider credentials, endpoint IDs, or provider targets.
 
 ## Handoff Assets

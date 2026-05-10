@@ -337,6 +337,17 @@ def test_api_key_auth_when_configured(tmp_path, monkeypatch) -> None:
     assert authorized.status_code == 200
 
 
+def test_openapi_schema_is_public_when_gateway_auth_is_configured(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("GPUCALL_API_KEYS", "secret")
+    with TestClient(create_app(copy_config(tmp_path))) as client:
+        openapi = client.get("/openapi.json")
+        task = client.post("/v2/tasks/sync", json={"task": "infer", "mode": "sync"})
+
+    assert openapi.status_code == 200
+    assert openapi.json()["openapi"]
+    assert task.status_code == 401
+
+
 def test_api_key_auth_fails_closed_without_explicit_dev_override(tmp_path, monkeypatch) -> None:
     monkeypatch.delenv("GPUCALL_ALLOW_UNAUTHENTICATED", raising=False)
     with TestClient(create_app(copy_config(tmp_path))) as client:

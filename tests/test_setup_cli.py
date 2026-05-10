@@ -120,9 +120,12 @@ tenant_onboarding:
   recipe_inbox: admin@gpucall.example.internal:/srv/gpucall/state/recipe_requests/inbox
 recipe_automation:
   auto_materialize: true
+  auto_validate_existing_tuples: true
+  auto_activate_existing_validated_recipe: false
   auto_promote_candidates: true
   auto_billable_validation: true
   auto_activate_validated: false
+  auto_set_auto_select: false
   promotion_work_dir: /srv/gpucall/state/recipe_requests/promotions
 handoff_assets:
   onboarding_prompt_url: https://assets.example/gpucall/onboarding-prompt.md
@@ -154,9 +157,12 @@ launch:
     assert automation.api_key_bootstrap_allowed_hosts == ("trusted-host",)
     assert automation.api_key_bootstrap_gateway_url == "https://gpucall.example.internal"
     assert automation.recipe_inbox_auto_materialize is True
+    assert automation.recipe_inbox_auto_validate_existing_tuples is True
+    assert automation.recipe_inbox_auto_activate_existing_validated_recipe is False
     assert automation.recipe_inbox_auto_promote_candidates is True
     assert automation.recipe_inbox_auto_billable_validation is True
     assert automation.recipe_inbox_auto_activate_validated is False
+    assert automation.recipe_inbox_auto_set_auto_select is False
     assert automation.recipe_inbox_promotion_work_dir == "/srv/gpucall/state/recipe_requests/promotions"
     assert automation.onboarding_prompt_url == "https://assets.example/gpucall/onboarding-prompt.md"
     assert automation.onboarding_manual_url == "https://assets.example/gpucall/onboarding-manual.md"
@@ -183,7 +189,7 @@ recipe_automation:
     with pytest.raises(SystemExit) as exc:
         apply_setup_plan(tmp_path / "config", plan, dry_run=True, yes=True)
 
-    assert "auto_billable_validation requires auto_promote_candidates" in str(exc.value)
+    assert "auto_billable_validation requires auto_promote_candidates or auto_validate_existing_tuples" in str(exc.value)
 
 
 def test_setup_plan_rejects_raw_env_style_credentials(tmp_path) -> None:

@@ -8,7 +8,8 @@ import pytest
 import yaml
 
 from gpucall.config import load_config
-from gpucall.recipe_admin import canonical_recipe_from_artifact, main, process_inbox, promote_production_tuple, recipe_request_status, review_artifact
+from gpucall.execution.contracts import official_contract
+from gpucall.recipe_admin import _config_hash, _git_commit, canonical_recipe_from_artifact, main, process_inbox, promote_production_tuple, recipe_request_status, review_artifact
 from gpucall.tuple_promotion import _validation_mode
 from gpucall.recipe_request_index import RecipeRequestIndex
 
@@ -257,6 +258,101 @@ def test_admin_process_inbox_reports_catalog_readiness_without_smoke(tmp_path) -
     assert report["catalog_readiness"]["phase"] == "recipe-catalog-readiness"
     assert report["catalog_readiness"]["static_config_valid"] is True
     assert report["catalog_readiness"]["eligible_tuples"]
+
+
+def test_admin_process_inbox_can_activate_existing_validated_recipe(tmp_path) -> None:
+    config_dir = tmp_path / "config"
+    shutil.copytree("gpucall/config_templates", config_dir)
+    (config_dir / "admin.yml").write_text(
+        "\n".join(
+            [
+                "recipe_inbox_auto_materialize: true",
+                "recipe_inbox_auto_validate_existing_tuples: true",
+                "recipe_inbox_auto_activate_existing_validated_recipe: true",
+                "recipe_inbox_auto_set_auto_select: true",
+                "recipe_inbox_auto_require_auto_select_safe: false",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    inbox = tmp_path / "inbox"
+    output_dir = config_dir / "recipes"
+    validation_dir = tmp_path / "tuple-validation"
+    inbox.mkdir()
+    validation_dir.mkdir()
+    intake = {
+        "kind": "gpucall.recipe_request_submission",
+        "request_id": "rr-existing",
+        "intake": {
+            "sanitized_request": {"task": "infer", "mode": "sync", "intent": "smoke_test", "classification": "internal", "desired_capabilities": []},
+            "redaction_report": {"prompt_body_forwarded": False, "data_ref_uri_forwarded": False, "presigned_url_forwarded": False},
+        },
+    }
+    recipe = canonical_recipe_from_artifact(intake["intake"], catalog=load_config(config_dir))
+    (output_dir / f"{recipe['name']}.yml").write_text(yaml.safe_dump(recipe, sort_keys=False), encoding="utf-8")
+    config = load_config(config_dir)
+    tuple_spec = config.tuples["modal-a10g"]
+    (validation_dir / "modal-a10g-smoke.json").write_text(
+        json.dumps(
+            {
+                "validation_schema_version": 1,
+                "passed": True,
+                "tuple": "modal-a10g",
+                "recipe": recipe["name"],
+                "mode": "sync",
+                "model_ref": tuple_spec.model_ref,
+                "engine_ref": tuple_spec.engine_ref,
+                "official_contract": official_contract(tuple_spec),
+                "config_hash": _config_hash(config_dir),
+                "commit": _git_commit(Path.cwd()),
+            }
+        ),
+        encoding="utf-8",
+    )
+    (inbox / "rr-existing.json").write_text(json.dumps(intake), encoding="utf-8")
+
+    results = process_inbox(inbox_dir=inbox, output_dir=output_dir, config_dir=config_dir, validation_dir=validation_dir)
+
+    assert results[0]["ok"] is True
+    report = json.loads((inbox / "reports" / "rr-existing.report.json").read_text(encoding="utf-8"))
+    activated = json.loads((inbox / "reports" / "rr-existing.existing-tuple-activation.json").read_text(encoding="utf-8"))
+    active_recipe = yaml.safe_load((output_dir / f"{recipe['name']}.yml").read_text(encoding="utf-8"))
+    assert report["existing_tuple_activation"]["decision"] == "ACTIVATED"
+    assert activated["matched_validation"]
+    assert active_recipe["auto_select"] is True
+    assert active_recipe["quality_floor"] == "standard"
+
+
+def test_admin_process_inbox_existing_tuple_waits_for_validation_when_not_billable(tmp_path) -> None:
+    config_dir = tmp_path / "config"
+    shutil.copytree("gpucall/config_templates", config_dir)
+    (config_dir / "admin.yml").write_text(
+        "recipe_inbox_auto_materialize: true\nrecipe_inbox_auto_validate_existing_tuples: true\n",
+        encoding="utf-8",
+    )
+    inbox = tmp_path / "inbox"
+    output_dir = config_dir / "recipes"
+    inbox.mkdir()
+    (inbox / "rr-wait.json").write_text(
+        json.dumps(
+            {
+                "kind": "gpucall.recipe_request_submission",
+                "request_id": "rr-wait",
+                "intake": {
+                    "sanitized_request": {"task": "infer", "mode": "sync", "intent": "smoke_test", "classification": "internal", "desired_capabilities": []},
+                    "redaction_report": {"prompt_body_forwarded": False, "data_ref_uri_forwarded": False, "presigned_url_forwarded": False},
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    results = process_inbox(inbox_dir=inbox, output_dir=output_dir, config_dir=config_dir, force=True)
+
+    assert results[0]["ok"] is True
+    report = json.loads((inbox / "reports" / "rr-wait.report.json").read_text(encoding="utf-8"))
+    assert report["existing_tuple_activation"]["decision"] == "READY_FOR_BILLABLE_VALIDATION"
 
 
 def test_admin_process_inbox_can_auto_promote_candidate_without_validation(tmp_path) -> None:

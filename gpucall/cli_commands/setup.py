@@ -76,19 +76,33 @@ class SetupRecipeAutomation(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     auto_materialize: bool = False
+    auto_validate_existing_tuples: bool = False
+    auto_activate_existing_validated_recipe: bool = False
     auto_promote_candidates: bool = False
     auto_billable_validation: bool = False
     auto_activate_validated: bool = False
+    auto_require_auto_select_safe: bool = True
+    auto_set_auto_select: bool = False
+    auto_run_validate_config: bool = True
+    auto_run_launch_check: bool = False
     promotion_work_dir: str | None = None
 
     @model_validator(mode="after")
     def validate_recipe_automation_chain(self) -> "SetupRecipeAutomation":
         if self.auto_promote_candidates and not self.auto_materialize:
             raise ValueError("auto_promote_candidates requires auto_materialize")
-        if self.auto_billable_validation and not self.auto_promote_candidates:
-            raise ValueError("auto_billable_validation requires auto_promote_candidates")
+        if self.auto_validate_existing_tuples and not self.auto_materialize:
+            raise ValueError("auto_validate_existing_tuples requires auto_materialize")
+        if self.auto_activate_existing_validated_recipe and not self.auto_validate_existing_tuples:
+            raise ValueError("auto_activate_existing_validated_recipe requires auto_validate_existing_tuples")
+        if self.auto_billable_validation and not (self.auto_promote_candidates or self.auto_validate_existing_tuples):
+            raise ValueError("auto_billable_validation requires auto_promote_candidates or auto_validate_existing_tuples")
         if self.auto_activate_validated and not self.auto_billable_validation:
             raise ValueError("auto_activate_validated requires auto_billable_validation")
+        if self.auto_set_auto_select and not (self.auto_activate_existing_validated_recipe or self.auto_activate_validated):
+            raise ValueError("auto_set_auto_select requires an auto-activation path")
+        if self.auto_run_launch_check and not self.auto_run_validate_config:
+            raise ValueError("auto_run_launch_check requires auto_run_validate_config")
         return self
 
 
@@ -398,9 +412,12 @@ def setup_section_text(config_dir: Path, section: str, *, profile: str | None = 
             "not caller-side routing.\n\n"
             f"Current inbox: {automation['trusted_bootstrap']['recipe_inbox'] or '<unset>'}\n"
             f"Auto materialize recipes: {automation['recipe_inbox_auto_materialize']}\n"
+            f"Auto validate existing tuples: {automation['recipe_inbox_auto_validate_existing_tuples']}\n"
+            f"Auto activate existing validated recipes: {automation['recipe_inbox_auto_activate_existing_validated_recipe']}\n"
             f"Auto prepare tuple promotion workspace: {automation['recipe_inbox_auto_promote_candidates']}\n"
             f"Auto run billable validation: {automation['recipe_inbox_auto_billable_validation']}\n"
             f"Auto activate validated tuples: {automation['recipe_inbox_auto_activate_validated']}\n"
+            f"Auto set recipe auto_select: {automation['recipe_inbox_auto_set_auto_select']}\n"
             f"Promotion work dir: {automation['recipe_inbox_promotion_work_dir'] or '<default inbox/promotions>'}\n\n"
             "For setup-as-code, set recipe_automation in gpucall.setup.yml.\n"
             "For one-shot operation, run:\n"
@@ -797,9 +814,15 @@ def _apply_tenant_onboarding(config_dir: Path, plan: SetupPlan) -> None:
         bootstrap_gateway_url=plan.gateway.base_url,
         bootstrap_recipe_inbox=plan.tenant_onboarding.recipe_inbox,
         recipe_inbox_auto_materialize=plan.recipe_automation.auto_materialize,
+        recipe_inbox_auto_validate_existing_tuples=plan.recipe_automation.auto_validate_existing_tuples,
+        recipe_inbox_auto_activate_existing_validated_recipe=plan.recipe_automation.auto_activate_existing_validated_recipe,
         recipe_inbox_auto_promote_candidates=plan.recipe_automation.auto_promote_candidates,
         recipe_inbox_auto_billable_validation=plan.recipe_automation.auto_billable_validation,
         recipe_inbox_auto_activate_validated=plan.recipe_automation.auto_activate_validated,
+        recipe_inbox_auto_require_auto_select_safe=plan.recipe_automation.auto_require_auto_select_safe,
+        recipe_inbox_auto_set_auto_select=plan.recipe_automation.auto_set_auto_select,
+        recipe_inbox_auto_run_validate_config=plan.recipe_automation.auto_run_validate_config,
+        recipe_inbox_auto_run_launch_check=plan.recipe_automation.auto_run_launch_check,
         recipe_inbox_promotion_work_dir=plan.recipe_automation.promotion_work_dir,
         onboarding_prompt_url=plan.handoff_assets.onboarding_prompt_url,
         onboarding_manual_url=plan.handoff_assets.onboarding_manual_url,

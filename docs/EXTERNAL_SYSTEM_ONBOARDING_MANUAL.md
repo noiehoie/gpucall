@@ -266,7 +266,7 @@ gpucall-recipe-admin inbox readiness --inbox-dir /path/to/inbox --config-dir con
 
 Materialization consults the installed catalog and deterministic policy. If the submitted workload is long-context, batch/long-running, or maps to high-cold-start tuple candidates, the resulting draft recipe is async-only even when the caller submitted `mode=sync`.
 
-By default, billable validation and production activation remain explicit promotion steps. Operators can opt into a full automation chain in `config/admin.yml`: auto-materialize sanitized inbox submissions, auto-promote matching tuple candidates into an isolated workspace, run billable validation, and activate only after validation passes. This route is fail-closed and requires each previous stage to be enabled. It reuses configured provider credentials and configured candidate endpoint/target metadata; it does not invent provider secrets or silently route to an unconfigured provider.
+By default, billable validation and production activation remain explicit promotion steps. Operators can opt into automation in `config/admin.yml`: auto-materialize sanitized inbox submissions, validate and activate recipes against existing eligible tuples, auto-promote matching tuple candidates into an isolated workspace, run billable validation, and activate only after validation passes. This route is fail-closed and requires each previous stage to be enabled. It reuses configured provider credentials and configured candidate endpoint/target metadata; it does not invent provider secrets or silently route to an unconfigured provider.
 
 ### 4. Implement the application adapter
 

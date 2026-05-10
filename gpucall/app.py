@@ -386,7 +386,7 @@ def create_app(config_dir: Path | None = None) -> FastAPI:
     async def api_key_auth(request: Request, call_next):
         tenant_keys = tenant_key_map()
         configured = legacy_api_keys() + list(tenant_keys)
-        if request.url.path in {"/healthz", "/readyz", "/v2/bootstrap/tenant-key"}:
+        if request.url.path in {"/healthz", "/readyz", "/openapi.json", "/v2/bootstrap/tenant-key"}:
             return await call_next(request)
         if not configured:
             if not _allow_unauthenticated_gateway():
