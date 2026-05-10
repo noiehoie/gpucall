@@ -14,6 +14,7 @@ from urllib.parse import urlsplit, urlunsplit
 import httpx
 
 DEFAULT_AUTO_UPLOAD_THRESHOLD_BYTES = 8 * 1024
+SUPPORTED_TASKS = {"infer", "vision", "transcribe", "convert", "train", "fine-tune", "split-infer"}
 
 
 class GPUCallWarning(Warning):
@@ -170,6 +171,9 @@ class GPUCallClient:
         image: str | Path,
         prompt: str | None = None,
         mode: str = "sync",
+        intent: str | None = None,
+        task_family: str | None = None,
+        metadata: dict[str, Any] | None = None,
         response_format: dict[str, Any] | None = None,
         poll: bool = True,
     ) -> dict[str, Any]:
@@ -178,6 +182,9 @@ class GPUCallClient:
             files=[image],
             mode=mode,
             task="vision",
+            intent=intent,
+            task_family=task_family,
+            metadata=metadata,
             response_format=response_format,
             poll=poll,
         )
@@ -234,6 +241,7 @@ class GPUCallClient:
         metadata: dict[str, Any] | None = None,
         auto_upload: bool = True,
     ) -> dict[str, Any]:
+        _validate_task(task)
         refs = [self.upload_file(path) for path in files or []]
         inline = {}
         if prompt is not None:
@@ -350,6 +358,9 @@ class AsyncGPUCallClient:
         image: str | Path,
         prompt: str | None = None,
         mode: str = "sync",
+        intent: str | None = None,
+        task_family: str | None = None,
+        metadata: dict[str, Any] | None = None,
         response_format: dict[str, Any] | None = None,
         poll: bool = True,
     ) -> dict[str, Any]:
@@ -358,6 +369,9 @@ class AsyncGPUCallClient:
             files=[image],
             mode=mode,
             task="vision",
+            intent=intent,
+            task_family=task_family,
+            metadata=metadata,
             response_format=response_format,
             poll=poll,
         )
@@ -433,6 +447,7 @@ class AsyncGPUCallClient:
         metadata: dict[str, Any] | None = None,
         auto_upload: bool = True,
     ) -> dict[str, Any]:
+        _validate_task(task)
         refs = [await self.upload_file(path) for path in files or []]
         inline = {}
         if prompt is not None:
@@ -634,6 +649,15 @@ def _normalize_messages(messages: list[dict[str, Any]]) -> list[dict[str, str]]:
         if text:
             normalized.append({"role": role, "content": text})
     return normalized
+
+
+def _validate_task(task: str) -> None:
+    if task in SUPPORTED_TASKS:
+        return
+    raise GPUCallCallerRoutingError(
+        f"unsupported gpucall task {task!r}; keep task as one of {sorted(SUPPORTED_TASKS)} "
+        "and pass workload purpose with intent=... or task_family=..."
+    )
 
 
 def _openai_metadata(

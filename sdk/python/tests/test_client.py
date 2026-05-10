@@ -74,6 +74,50 @@ def test_chat_completions_sends_intent_and_openai_hints_as_metadata() -> None:
     assert sent_payload["metadata"]["openai.extra_keys"] == "custom_openai_field"
 
 
+def test_vision_sends_vision_task_with_intent() -> None:
+    sent_payload = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal sent_payload
+        if request.url.path == "/v2/objects/presign-put":
+            return httpx.Response(
+                200,
+                json={
+                    "upload_url": "https://example.com/upload",
+                    "method": "PUT",
+                    "data_ref": {"uri": "s3://bucket/image.png", "sha256": "a" * 64, "bytes": 3, "content_type": "image/png"},
+                },
+            )
+        sent_payload = json.loads(request.read())
+        return httpx.Response(200, json={"result": {"kind": "inline", "value": "ok"}})
+
+    def put(url, **kwargs):
+        return httpx.Response(200)
+
+    client = GPUCallClient("http://gpucall.test", transport=httpx.MockTransport(handler))
+
+    import tempfile
+    from pathlib import Path
+    from unittest.mock import patch
+
+    with tempfile.TemporaryDirectory() as directory, patch("httpx.put", put):
+        image = Path(directory) / "image.png"
+        image.write_bytes(b"png")
+        client.vision(image=image, prompt="read", task_family="understand_document_image")
+
+    assert sent_payload["task"] == "vision"
+    assert sent_payload["intent"] == "understand_document_image"
+    assert "recipe" not in sent_payload
+    assert "requested_tuple" not in sent_payload
+
+
+def test_sdk_rejects_intent_name_as_task() -> None:
+    client = GPUCallClient("http://gpucall.test", transport=httpx.MockTransport(lambda request: httpx.Response(500)))
+
+    with pytest.raises(GPUCallCallerRoutingError, match="pass workload purpose with intent"):
+        client.infer(task="extract_json", messages=[{"role": "user", "content": "json"}])
+
+
 def test_chat_completions_rejects_structured_message_content_without_flattening() -> None:
     client = GPUCallClient("http://gpucall.test", transport=httpx.MockTransport(lambda request: httpx.Response(500)))
 
