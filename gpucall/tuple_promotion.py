@@ -14,7 +14,7 @@ from typing import Any
 import yaml
 
 from gpucall.config import default_state_dir, load_config
-from gpucall.domain import ExecutionTupleSpec
+from gpucall.domain import ExecutionMode, ExecutionTupleSpec
 from gpucall.execution.registry import adapter_descriptor, vendor_family_for_adapter
 from gpucall.recipe_materialize import to_yaml
 
@@ -51,6 +51,7 @@ def promote_production_tuple(
     recipe_path = _write_yaml_guarded(promotion_config / "recipes" / f"{recipe['name']}.yml", recipe, force=force)
     tuple_path = _write_yaml_guarded(promotion_config / "tuples" / f"{tuple['name']}.yml", tuple, force=force)
     surface_path, worker_path = _write_split_tuple(promotion_config, tuple, force=force)
+    validation_mode = _validation_mode(recipe["name"], promotion_config)
     promotion_report: dict[str, Any] = {
         "schema_version": 1,
         "phase": "tuple-candidate-promotion",
@@ -68,7 +69,7 @@ def promote_production_tuple(
         "activation_paths": {},
         "next_actions": [
             f"run gpucall validate-config --config-dir {promotion_config}",
-            f"run gpucall tuple-smoke {tuple['name']} --config-dir {promotion_config} --recipe {recipe['name']} --mode sync --write-artifact",
+            f"run gpucall tuple-smoke {tuple['name']} --config-dir {promotion_config} --recipe {recipe['name']} --mode {validation_mode} --write-artifact",
             "rerun gpucall-recipe-admin review with the validation artifact directory",
             "activate only after validation passes for the exact recipe/tuple/model/engine tuple",
         ],
@@ -88,7 +89,7 @@ def promote_production_tuple(
             raise ValueError("refusing validation/activation because generated promotion config is not valid: " + str(exc)) from exc
         return promotion_report
     if run_validation:
-        validation = _run_tuple_validation(tuple["name"], recipe["name"], promotion_config, validation_dir=validation_dir)
+        validation = _run_tuple_validation(tuple["name"], recipe["name"], promotion_config, mode=validation_mode, validation_dir=validation_dir)
         promotion_report["validation"] = validation
         if validation.get("returncode") != 0 or validation.get("passed") is not True:
             promotion_report["decision"] = "VALIDATION_FAILED"
@@ -292,7 +293,19 @@ def _validate_config_dir(config_dir: Path) -> None:
     load_config(config_dir)
 
 
-def _run_tuple_validation(tuple: str, recipe: str, config_dir: Path, *, validation_dir: str | Path | None) -> dict[str, Any]:
+def _validation_mode(recipe: str, config_dir: Path) -> str:
+    config = load_config(config_dir)
+    recipe_spec = config.recipes.get(recipe)
+    if recipe_spec is None:
+        return "sync"
+    if ExecutionMode.SYNC in recipe_spec.allowed_modes:
+        return "sync"
+    if not recipe_spec.allowed_modes:
+        return "sync"
+    return recipe_spec.allowed_modes[0].value
+
+
+def _run_tuple_validation(tuple: str, recipe: str, config_dir: Path, *, mode: str, validation_dir: str | Path | None) -> dict[str, Any]:
     command = [
         sys.executable,
         "-m",
@@ -304,7 +317,7 @@ def _run_tuple_validation(tuple: str, recipe: str, config_dir: Path, *, validati
         "--recipe",
         recipe,
         "--mode",
-        "sync",
+        mode,
         "--write-artifact",
     ]
     env = dict(os.environ)

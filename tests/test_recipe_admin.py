@@ -9,6 +9,7 @@ import yaml
 
 from gpucall.config import load_config
 from gpucall.recipe_admin import canonical_recipe_from_artifact, main, process_inbox, promote_production_tuple, recipe_request_status, review_artifact
+from gpucall.tuple_promotion import _validation_mode
 from gpucall.recipe_request_index import RecipeRequestIndex
 
 
@@ -591,3 +592,8 @@ def test_promote_production_tuple_writes_isolated_config_without_activation(tmp_
     assert tuple["model"] == "Qwen/Qwen2.5-VL-7B-Instruct"
     assert tuple["model_ref"] == "qwen2.5-vl-7b-instruct"
     assert report["activated"] is False
+
+
+def test_promotion_validation_mode_follows_recipe_allowed_modes() -> None:
+    assert _validation_mode("text-infer-standard", Path("gpucall/config_templates")) == "sync"
+    assert _validation_mode("infer-rank-text-items-draft", Path("gpucall/config_templates")) == "async"
