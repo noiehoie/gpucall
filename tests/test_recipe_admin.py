@@ -258,6 +258,54 @@ def test_admin_process_inbox_reports_catalog_readiness_without_smoke(tmp_path) -
     assert report["catalog_readiness"]["eligible_tuples"]
 
 
+def test_admin_process_inbox_can_auto_promote_candidate_without_validation(tmp_path) -> None:
+    config_dir = tmp_path / "config"
+    shutil.copytree("gpucall/config_templates", config_dir)
+    (config_dir / "admin.yml").write_text(
+        "recipe_inbox_auto_materialize: true\nrecipe_inbox_auto_promote_candidates: true\n",
+        encoding="utf-8",
+    )
+    inbox = tmp_path / "inbox"
+    output_dir = config_dir / "recipes"
+    inbox.mkdir()
+    (inbox / "rr-test.json").write_text(
+        json.dumps(
+            {
+                "kind": "gpucall.recipe_request_submission",
+                "request_id": "rr-test",
+                "intake": {
+                    "phase": "deterministic-quality-feedback-intake",
+                    "sanitized_request": {
+                        "task": "vision",
+                        "mode": "sync",
+                        "intent": "understand_document_image",
+                        "classification": "confidential",
+                        "expected_output": "headline_list",
+                        "desired_capabilities": ["document_understanding", "visual_question_answering", "instruction_following"],
+                        "quality_feedback": {"kind": "insufficient_ocr", "observed_output_kind": "short_answer"},
+                    },
+                    "redaction_report": {
+                        "prompt_body_forwarded": False,
+                        "output_body_forwarded": False,
+                        "data_ref_uri_forwarded": False,
+                        "presigned_url_forwarded": False,
+                    },
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    results = process_inbox(inbox_dir=inbox, output_dir=output_dir, config_dir=config_dir, force=True)
+
+    assert results[0]["ok"] is True
+    report = json.loads((inbox / "reports" / "rr-test.report.json").read_text(encoding="utf-8"))
+    promotion = json.loads((inbox / "reports" / "rr-test.promotion.json").read_text(encoding="utf-8"))
+    assert report["promotion"]["decision"] == "READY_FOR_BILLABLE_VALIDATION"
+    assert promotion["candidate"]["name"] in {match["name"] for match in report["admin_review"]["tuple_candidate_matches"]}
+    assert (inbox / "promotions" / "rr-test" / "config" / "tuples" / f"{promotion['candidate']['name']}.yml").exists()
+
+
 def test_admin_process_inbox_links_existing_recipe_without_overwrite(tmp_path) -> None:
     config_dir = tmp_path / "config"
     shutil.copytree("gpucall/config_templates", config_dir)

@@ -74,6 +74,9 @@ def test_admin_automation_defaults_are_closed() -> None:
     for relative in ("config/admin.yml", "config/admin.yml.example", "gpucall/config_templates/admin.yml.example"):
         data = yaml.safe_load((root / relative).read_text(encoding="utf-8")) or {}
         assert data.get("recipe_inbox_auto_materialize") is False
+        assert data.get("recipe_inbox_auto_promote_candidates", False) is False
+        assert data.get("recipe_inbox_auto_billable_validation", False) is False
+        assert data.get("recipe_inbox_auto_activate_validated", False) is False
         assert data.get("api_key_handoff_mode") == "manual"
 
 

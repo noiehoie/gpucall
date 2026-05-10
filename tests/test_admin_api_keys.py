@@ -136,6 +136,15 @@ def test_admin_automation_configure_trusted_bootstrap(tmp_path, capsys) -> None:
         bootstrap_allowed_hosts=["macmini"],
         bootstrap_gateway_url="https://gpucall.example.internal",
         bootstrap_recipe_inbox="admin@gpucall.example.internal:/srv/gpucall/state/recipe_requests/inbox",
+        enable_recipe_auto_materialize=True,
+        disable_recipe_auto_materialize=False,
+        enable_recipe_auto_promote=True,
+        disable_recipe_auto_promote=False,
+        enable_recipe_auto_billable_validation=True,
+        disable_recipe_auto_billable_validation=False,
+        enable_recipe_auto_activate=False,
+        disable_recipe_auto_activate=False,
+        recipe_promotion_work_dir="/srv/gpucall/state/recipe_requests/promotions",
         manifest=None,
         gateway_url=None,
         recipe_inbox=None,
@@ -150,8 +159,15 @@ def test_admin_automation_configure_trusted_bootstrap(tmp_path, capsys) -> None:
     admin_yml = (config_dir / "admin.yml").read_text(encoding="utf-8")
 
     assert report["admin_automation"]["api_key_handoff_mode"] == "trusted_bootstrap"
+    assert report["admin_automation"]["recipe_inbox_auto_materialize"] is True
+    assert report["admin_automation"]["recipe_inbox_auto_promote_candidates"] is True
+    assert report["admin_automation"]["recipe_inbox_auto_billable_validation"] is True
+    assert report["admin_automation"]["recipe_inbox_auto_activate_validated"] is False
+    assert report["admin_automation"]["recipe_inbox_promotion_work_dir"] == "/srv/gpucall/state/recipe_requests/promotions"
     assert report["admin_automation"]["trusted_bootstrap"]["allowed_cidrs"] == ["10.0.0.42/32"]
     assert "api_key_handoff_mode: trusted_bootstrap" in admin_yml
+    assert "recipe_inbox_auto_promote_candidates: true" in admin_yml
+    assert "recipe_inbox_auto_billable_validation: true" in admin_yml
     assert "api_key_bootstrap_gateway_url: https://gpucall.example.internal" in admin_yml
 
 

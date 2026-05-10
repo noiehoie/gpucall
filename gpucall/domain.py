@@ -80,11 +80,25 @@ class RecipeAdminAutomationConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     recipe_inbox_auto_materialize: bool = False
+    recipe_inbox_auto_promote_candidates: bool = False
+    recipe_inbox_auto_billable_validation: bool = False
+    recipe_inbox_auto_activate_validated: bool = False
+    recipe_inbox_promotion_work_dir: str | None = None
     api_key_handoff_mode: ApiKeyHandoffMode = ApiKeyHandoffMode.MANUAL
     api_key_bootstrap_allowed_cidrs: tuple[str, ...] = ()
     api_key_bootstrap_allowed_hosts: tuple[str, ...] = ()
     api_key_bootstrap_gateway_url: str | None = None
     api_key_bootstrap_recipe_inbox: str | None = None
+
+    @model_validator(mode="after")
+    def validate_admin_automation_chain(self) -> "RecipeAdminAutomationConfig":
+        if self.recipe_inbox_auto_promote_candidates and not self.recipe_inbox_auto_materialize:
+            raise ValueError("recipe_inbox_auto_promote_candidates requires recipe_inbox_auto_materialize")
+        if self.recipe_inbox_auto_billable_validation and not self.recipe_inbox_auto_promote_candidates:
+            raise ValueError("recipe_inbox_auto_billable_validation requires recipe_inbox_auto_promote_candidates")
+        if self.recipe_inbox_auto_activate_validated and not self.recipe_inbox_auto_billable_validation:
+            raise ValueError("recipe_inbox_auto_activate_validated requires recipe_inbox_auto_billable_validation")
+        return self
 
 
 class RecipeLatencyClass(StrEnum):

@@ -17,6 +17,7 @@ from importlib.resources import files
 import httpx
 import uvicorn
 import yaml
+from pydantic import ValidationError
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if __package__ in (None, ""):
@@ -201,6 +202,13 @@ def main() -> None:
     admin.add_argument("--clear-bootstrap-allowlist", action="store_true")
     admin.add_argument("--enable-recipe-auto-materialize", action="store_true")
     admin.add_argument("--disable-recipe-auto-materialize", action="store_true")
+    admin.add_argument("--enable-recipe-auto-promote", action="store_true")
+    admin.add_argument("--disable-recipe-auto-promote", action="store_true")
+    admin.add_argument("--enable-recipe-auto-billable-validation", action="store_true")
+    admin.add_argument("--disable-recipe-auto-billable-validation", action="store_true")
+    admin.add_argument("--enable-recipe-auto-activate", action="store_true")
+    admin.add_argument("--disable-recipe-auto-activate", action="store_true")
+    admin.add_argument("--recipe-promotion-work-dir", default=None)
     args = parser.parse_args()
 
     if args.command == "serve":
@@ -347,6 +355,13 @@ def main() -> None:
             clear_bootstrap_allowlist=args.clear_bootstrap_allowlist,
             enable_recipe_auto_materialize=args.enable_recipe_auto_materialize,
             disable_recipe_auto_materialize=args.disable_recipe_auto_materialize,
+            enable_recipe_auto_promote=args.enable_recipe_auto_promote,
+            disable_recipe_auto_promote=args.disable_recipe_auto_promote,
+            enable_recipe_auto_billable_validation=args.enable_recipe_auto_billable_validation,
+            disable_recipe_auto_billable_validation=args.disable_recipe_auto_billable_validation,
+            enable_recipe_auto_activate=args.enable_recipe_auto_activate,
+            disable_recipe_auto_activate=args.disable_recipe_auto_activate,
+            recipe_promotion_work_dir=args.recipe_promotion_work_dir,
         )
 
 
@@ -623,6 +638,13 @@ def admin_command(
     clear_bootstrap_allowlist: bool = False,
     enable_recipe_auto_materialize: bool = False,
     disable_recipe_auto_materialize: bool = False,
+    enable_recipe_auto_promote: bool = False,
+    disable_recipe_auto_promote: bool = False,
+    enable_recipe_auto_billable_validation: bool = False,
+    disable_recipe_auto_billable_validation: bool = False,
+    enable_recipe_auto_activate: bool = False,
+    disable_recipe_auto_activate: bool = False,
+    recipe_promotion_work_dir: str | None = None,
 ) -> None:
     if action == "tenant-create":
         if not name:
@@ -649,23 +671,48 @@ def admin_command(
     if action == "automation-configure":
         if enable_recipe_auto_materialize and disable_recipe_auto_materialize:
             raise SystemExit("choose only one of --enable-recipe-auto-materialize or --disable-recipe-auto-materialize")
+        if enable_recipe_auto_promote and disable_recipe_auto_promote:
+            raise SystemExit("choose only one of --enable-recipe-auto-promote or --disable-recipe-auto-promote")
+        if enable_recipe_auto_billable_validation and disable_recipe_auto_billable_validation:
+            raise SystemExit("choose only one of --enable-recipe-auto-billable-validation or --disable-recipe-auto-billable-validation")
+        if enable_recipe_auto_activate and disable_recipe_auto_activate:
+            raise SystemExit("choose only one of --enable-recipe-auto-activate or --disable-recipe-auto-activate")
         auto_materialize = None
         if enable_recipe_auto_materialize:
             auto_materialize = True
         if disable_recipe_auto_materialize:
             auto_materialize = False
+        auto_promote = None
+        if enable_recipe_auto_promote:
+            auto_promote = True
+        if disable_recipe_auto_promote:
+            auto_promote = False
+        auto_billable_validation = None
+        if enable_recipe_auto_billable_validation:
+            auto_billable_validation = True
+        if disable_recipe_auto_billable_validation:
+            auto_billable_validation = False
+        auto_activate = None
+        if enable_recipe_auto_activate:
+            auto_activate = True
+        if disable_recipe_auto_activate:
+            auto_activate = False
         try:
             updated = configure_admin_automation(
                 config_dir,
                 handoff_mode=ApiKeyHandoffMode(handoff_mode) if handoff_mode else None,
                 recipe_inbox_auto_materialize=auto_materialize,
+                recipe_inbox_auto_promote_candidates=auto_promote,
+                recipe_inbox_auto_billable_validation=auto_billable_validation,
+                recipe_inbox_auto_activate_validated=auto_activate,
+                recipe_inbox_promotion_work_dir=recipe_promotion_work_dir,
                 bootstrap_allowed_cidrs=bootstrap_allowed_cidrs,
                 bootstrap_allowed_hosts=bootstrap_allowed_hosts,
                 bootstrap_gateway_url=bootstrap_gateway_url,
                 bootstrap_recipe_inbox=bootstrap_recipe_inbox,
                 clear_bootstrap_allowlist=clear_bootstrap_allowlist,
             )
-        except ValueError as exc:
+        except (ValueError, ValidationError) as exc:
             raise SystemExit(str(exc)) from exc
         print(
             json.dumps(

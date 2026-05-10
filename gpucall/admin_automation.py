@@ -14,6 +14,10 @@ def admin_automation_summary(config_dir: Path) -> dict[str, object]:
     return {
         "admin_yml": str(config_dir / "admin.yml"),
         "recipe_inbox_auto_materialize": config.recipe_inbox_auto_materialize,
+        "recipe_inbox_auto_promote_candidates": config.recipe_inbox_auto_promote_candidates,
+        "recipe_inbox_auto_billable_validation": config.recipe_inbox_auto_billable_validation,
+        "recipe_inbox_auto_activate_validated": config.recipe_inbox_auto_activate_validated,
+        "recipe_inbox_promotion_work_dir": config.recipe_inbox_promotion_work_dir,
         "api_key_handoff_mode": config.api_key_handoff_mode.value,
         "trusted_bootstrap": {
             "enabled": config.api_key_handoff_mode is ApiKeyHandoffMode.TRUSTED_BOOTSTRAP,
@@ -31,6 +35,10 @@ def configure_admin_automation(
     *,
     handoff_mode: ApiKeyHandoffMode | None = None,
     recipe_inbox_auto_materialize: bool | None = None,
+    recipe_inbox_auto_promote_candidates: bool | None = None,
+    recipe_inbox_auto_billable_validation: bool | None = None,
+    recipe_inbox_auto_activate_validated: bool | None = None,
+    recipe_inbox_promotion_work_dir: str | None = None,
     bootstrap_allowed_cidrs: Iterable[str] | None = None,
     bootstrap_allowed_hosts: Iterable[str] | None = None,
     bootstrap_gateway_url: str | None = None,
@@ -47,10 +55,34 @@ def configure_admin_automation(
         cidrs = tuple(_clean_items(bootstrap_allowed_cidrs))
     if bootstrap_allowed_hosts is not None:
         hosts = tuple(_clean_items(bootstrap_allowed_hosts))
+    auto_materialize = current.recipe_inbox_auto_materialize if recipe_inbox_auto_materialize is None else recipe_inbox_auto_materialize
+    auto_promote = (
+        current.recipe_inbox_auto_promote_candidates
+        if recipe_inbox_auto_promote_candidates is None
+        else recipe_inbox_auto_promote_candidates
+    )
+    auto_billable_validation = (
+        current.recipe_inbox_auto_billable_validation
+        if recipe_inbox_auto_billable_validation is None
+        else recipe_inbox_auto_billable_validation
+    )
+    auto_activate = (
+        current.recipe_inbox_auto_activate_validated
+        if recipe_inbox_auto_activate_validated is None
+        else recipe_inbox_auto_activate_validated
+    )
+    if auto_promote and not auto_materialize:
+        raise ValueError("recipe auto-promotion requires recipe auto-materialize")
+    if auto_billable_validation and not auto_promote:
+        raise ValueError("recipe auto billable validation requires recipe auto-promotion")
+    if auto_activate and not auto_billable_validation:
+        raise ValueError("recipe auto-activation requires recipe auto billable validation")
     updated = RecipeAdminAutomationConfig(
-        recipe_inbox_auto_materialize=(
-            current.recipe_inbox_auto_materialize if recipe_inbox_auto_materialize is None else recipe_inbox_auto_materialize
-        ),
+        recipe_inbox_auto_materialize=auto_materialize,
+        recipe_inbox_auto_promote_candidates=auto_promote,
+        recipe_inbox_auto_billable_validation=auto_billable_validation,
+        recipe_inbox_auto_activate_validated=auto_activate,
+        recipe_inbox_promotion_work_dir=_clean_optional(recipe_inbox_promotion_work_dir, current.recipe_inbox_promotion_work_dir),
         api_key_handoff_mode=handoff_mode or current.api_key_handoff_mode,
         api_key_bootstrap_allowed_cidrs=cidrs,
         api_key_bootstrap_allowed_hosts=hosts,

@@ -291,6 +291,18 @@ def process_inbox(
             report["recipe_path"] = str(recipe_path)
             report["submission_path"] = str(path)
             report["catalog_readiness"] = _recipe_readiness_from_review(review, config_dir=config_dir)
+            promotion = _auto_promotion_report(
+                review,
+                request_id=request_id,
+                automation=automation,
+                inbox_dir=inbox,
+                report_dir=reports,
+                config_dir=config_dir,
+                validation_dir=validation_dir,
+                force=force,
+            )
+            if promotion is not None:
+                report["promotion"] = promotion
             report_path = reports / f"{path.stem}.report.json"
             report_path.write_text(json.dumps(report, ensure_ascii=False, indent=2, sort_keys=True) + "\n", encoding="utf-8")
             destination = processed / path.name
@@ -303,6 +315,48 @@ def process_inbox(
             index.mark_failed(request_id, original_path=destination, error=str(exc))
             results.append({"submission": str(destination), "ok": False, "error": str(exc)})
     return results
+
+
+def _auto_promotion_report(
+    review: Mapping[str, Any],
+    *,
+    request_id: str,
+    automation: RecipeAdminAutomationConfig,
+    inbox_dir: Path,
+    report_dir: Path,
+    config_dir: str | Path | None,
+    validation_dir: str | Path | None,
+    force: bool,
+) -> dict[str, Any] | None:
+    if not automation.recipe_inbox_auto_promote_candidates:
+        return None
+    if config_dir is None:
+        raise ValueError("recipe inbox auto-promotion requires --config-dir")
+    matches = review.get("tuple_candidate_matches")
+    if not isinstance(matches, list) or not matches:
+        return {
+            "phase": "recipe-inbox-auto-promotion",
+            "enabled": True,
+            "decision": "SKIPPED_NO_TUPLE_CANDIDATE",
+            "run_billable_validation": automation.recipe_inbox_auto_billable_validation,
+            "activate_validated": automation.recipe_inbox_auto_activate_validated,
+        }
+    work_root = Path(automation.recipe_inbox_promotion_work_dir).expanduser() if automation.recipe_inbox_promotion_work_dir else inbox_dir / "promotions"
+    work_dir = work_root / request_id
+    report = promote_production_tuple(
+        review=review,
+        candidate_name=None,
+        config_dir=config_dir,
+        work_dir=work_dir,
+        validation_dir=validation_dir,
+        run_validation=automation.recipe_inbox_auto_billable_validation,
+        activate=automation.recipe_inbox_auto_activate_validated,
+        force=force,
+    )
+    report_path = report_dir / f"{request_id}.promotion.json"
+    report["auto_promotion_report_path"] = str(report_path)
+    report_path.write_text(json.dumps(report, ensure_ascii=False, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    return report
 
 
 def _materialization_catalog(config_dir: str | Path | None) -> Any | None:

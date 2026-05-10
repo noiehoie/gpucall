@@ -305,6 +305,30 @@ of overwritten unless `--force` is explicit. This route does not run billable
 validation and does not activate production routing. Use `gpucall-recipe-admin promote` explicitly
 when a recipe should be elevated to production.
 
+Operators who deliberately want full automation can open the escalation chain in
+`config/admin.yml`:
+
+```yaml
+recipe_inbox_auto_materialize: true
+recipe_inbox_auto_promote_candidates: true
+recipe_inbox_auto_billable_validation: true
+recipe_inbox_auto_activate_validated: true
+recipe_inbox_promotion_work_dir: /opt/gpucall/state/recipe_requests/promotions
+```
+
+The chain is ordered and fail-closed:
+
+- `recipe_inbox_auto_promote_candidates` requires `recipe_inbox_auto_materialize`.
+- `recipe_inbox_auto_billable_validation` requires auto-promotion.
+- `recipe_inbox_auto_activate_validated` requires billable validation.
+
+When enabled, `process-inbox` and `watch` reuse the same review and promotion
+pipeline as the manual commands. Candidate promotion materializes provider tuple,
+surface, and worker YAML into an isolated promotion workspace. Billable
+validation runs `gpucall tuple-smoke`. Activation copies only validated recipe
+and tuple config into the active config directory. If no candidate tuple exists,
+the report records `SKIPPED_NO_TUPLE_CANDIDATE` and does not invent a provider.
+
 To poll continuously:
 
 ```bash

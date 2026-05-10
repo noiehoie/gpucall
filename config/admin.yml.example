@@ -2,6 +2,13 @@
 # This only materializes reviewed recipe YAML and static catalog readiness.
 # It never runs billable smoke tests or activates production routing.
 recipe_inbox_auto_materialize: false
+# Optional escalation chain. Keep all false unless this operator host is
+# allowed to spend provider money and mutate production routing from inbox
+# submissions.
+recipe_inbox_auto_promote_candidates: false
+recipe_inbox_auto_billable_validation: false
+recipe_inbox_auto_activate_validated: false
+recipe_inbox_promotion_work_dir:
 # manual: administrators issue keys explicitly and hand them off through an
 # operator-approved channel.
 # handoff_file: tenant-onboard may generate a 0600 handoff file containing the
