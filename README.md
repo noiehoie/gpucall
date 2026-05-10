@@ -187,7 +187,7 @@ or coding agent that owns the application being migrated:
 
 - [docs/EXTERNAL_SYSTEM_ONBOARDING_PROMPT.md](docs/EXTERNAL_SYSTEM_ONBOARDING_PROMPT.md): the reusable prompt to paste into the external system's coding agent. It tells the agent how to inventory LLM / Vision / GPU paths, submit preflight intake, migrate wrappers, classify failures, run canaries, and report verified results.
 - [docs/EXTERNAL_SYSTEM_ONBOARDING_MANUAL.md](docs/EXTERNAL_SYSTEM_ONBOARDING_MANUAL.md): the detailed migration manual for operators and implementers.
-- [docs/EXTERNAL_SYSTEM_ADAPTATION_PROMPT.md](docs/EXTERNAL_SYSTEM_ADAPTATION_PROMPT.md): the older compact one-shot prompt for smaller migrations.
+- [docs/EXTERNAL_SYSTEM_ADAPTATION_PROMPT.md](docs/EXTERNAL_SYSTEM_ADAPTATION_PROMPT.md): a compact one-shot prompt for smaller migrations.
 
 The onboarding package is strict by design: direct hosted-AI fallback must be
 disabled by default, generated-only preflight is not the same as submitted
@@ -222,6 +222,11 @@ downloaded wheel against the matching release checksum before installing it in
 production automation.
 
 External systems should normally send only `task`, `mode`, and input data or `DataRef`; recipe and provider selection belong to the gateway.
+Intentionally local paths, such as local embedding models or private local
+OpenAI-compatible runtimes, should stay local when they do not need gateway
+governance. For long-context, batch/long-running, high-cold-start, image/file,
+or large DataRef workloads, prefer async or a timeout budget that honestly
+covers queueing and cold start.
 
 Manual DataRef integrations should follow the live OpenAPI schema. The v2
 upload handshake is `POST /v2/objects/presign-put` with `name`, `bytes`,

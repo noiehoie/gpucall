@@ -185,7 +185,7 @@ gpucall は、外部システムに渡すための受容パッケージを配布
 
 - [docs/EXTERNAL_SYSTEM_ONBOARDING_PROMPT.md](docs/EXTERNAL_SYSTEM_ONBOARDING_PROMPT.md): 外部システム側の coding agent にそのまま貼る reusable prompt です。LLM / Vision / GPU 呼び出しの棚卸し、preflight intake、wrapper 移行、failure classification、canary、検証済み報告まで指示します。
 - [docs/EXTERNAL_SYSTEM_ONBOARDING_MANUAL.md](docs/EXTERNAL_SYSTEM_ONBOARDING_MANUAL.md): operator / implementer 向けの詳細 migration manual です。
-- [docs/EXTERNAL_SYSTEM_ADAPTATION_PROMPT.md](docs/EXTERNAL_SYSTEM_ADAPTATION_PROMPT.md): 小規模移行向けに残している compact な one-shot prompt です。
+- [docs/EXTERNAL_SYSTEM_ADAPTATION_PROMPT.md](docs/EXTERNAL_SYSTEM_ADAPTATION_PROMPT.md): 小規模移行向けの compact な one-shot prompt です。
 
 この onboarding package は意図的に厳格です。direct hosted-AI fallback はデフォルト無効、generated-only preflight は submitted preflight ではない、live canary skipped は `No-Go`、`Conditional Go` は最終判定として禁止です。画像・ファイル workflow には DataRef production path が必須で、OpenAI-facade base64 画像/ファイル payload は production onboarding として認めません。
 
@@ -209,6 +209,7 @@ gpucall-recipe-draft --help
 wheel checksum は GitHub Release asset として公開します。本番 automation に入れる前に、download した wheel を同じ release の checksum で検証してください。
 
 外部システムは通常、`task`、`mode`、input data または `DataRef` だけを送ります。recipe と provider selection は gateway の責任です。
+local embedding model や private local OpenAI-compatible runtime など、意図的に local で完結しており gateway governance を必要としない経路は local のまま残します。long-context、batch/long-running、high-cold-start、image/file、大きな DataRef workload は、async または queueing と cold start を正直に含めた timeout budget を前提にします。
 
 DataRef を手実装する場合は、稼働中 gateway の OpenAPI schema を優先してください。v2 の upload handshake は
 `POST /v2/objects/presign-put` に `name`、`bytes`、`sha256`、`content_type` を渡し、返却された `upload_url` に
