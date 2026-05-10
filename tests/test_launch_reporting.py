@@ -124,6 +124,7 @@ def test_gateway_smoke_uses_v2_inline_inputs(monkeypatch) -> None:
             requests.append({"path": path, "json": json})
             assert path == "/v2/tasks/sync"
             assert "messages" not in json
+            assert "recipe" not in json
             assert json["inline_inputs"] == {
                 "prompt": {
                     "value": "Reply with exactly: gpucall smoke",

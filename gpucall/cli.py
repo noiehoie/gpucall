@@ -103,7 +103,7 @@ def main() -> None:
     smoke = sub.add_parser("smoke")
     smoke.add_argument("--url", default="http://127.0.0.1:18088")
     smoke.add_argument("--api-key", default=None)
-    smoke.add_argument("--recipe", default="text-infer-standard")
+    smoke.add_argument("--recipe", default=None, help="Deprecated recipe hint for reports only; not sent to the gateway")
     tuple_smoke = sub.add_parser("tuple-smoke")
     tuple_smoke.add_argument("tuple")
     tuple_smoke.add_argument("--config-dir", type=Path, default=default_config_dir())
@@ -1676,8 +1676,6 @@ def _gateway_smoke_summary(url: str, *, api_key: str | None, recipe: str | None 
             "max_tokens": 16,
             "metadata": {"smoke": "true"},
         }
-        if recipe:
-            sync_payload["recipe"] = recipe
         sync = client.post(
             "/v2/tasks/sync",
             json=sync_payload,
