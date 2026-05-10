@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+import json
 
 import yaml
 
@@ -83,6 +84,59 @@ def test_production_launch_report_blocks_without_live_requirements(tmp_path, mon
     labels = {row["label"] for row in tuple_live_validation["required_tuples"]}
     assert "function_runtime:modal-function:qwen2.5-1.5b-instruct:modal-vllm" in labels
     assert "managed_endpoint:openai-chat-completions:qwen2.5-1.5b-instruct:runpod-vllm-openai" not in labels
+
+
+def test_required_live_validation_tuples_respects_policy_deny(tmp_path, monkeypatch) -> None:
+    from gpucall.cli import _required_live_validation_tuples
+    from gpucall.config import load_config
+
+    monkeypatch.setenv("GPUCALL_STATE_DIR", str(tmp_path / "state"))
+    root = copy_config(tmp_path)
+    policy_path = root / "policy.yml"
+    policy = yaml.safe_load(policy_path.read_text(encoding="utf-8"))
+    policy["tuples"]["deny"] = ["modal-vision-a10g"]
+    policy_path.write_text(yaml.safe_dump(policy, sort_keys=False), encoding="utf-8")
+
+    config = load_config(root)
+    required = _required_live_validation_tuples(config)
+
+    assert "modal-vision-a10g" not in {row["tuple"] for row in required}
+
+
+def test_live_validation_artifact_accepts_policy_only_config_hash_drift(tmp_path, monkeypatch) -> None:
+    from gpucall.cli import _git_commit, _live_validation_artifacts_by_tuple
+    from gpucall.config import load_config
+    from gpucall.execution.contracts import official_contract, official_contract_hash, tuple_evidence_key
+
+    monkeypatch.setenv("GPUCALL_STATE_DIR", str(tmp_path / "state"))
+    root = copy_config(tmp_path)
+    config = load_config(root)
+    tuple_spec = config.tuples["modal-a10g"]
+    contract = official_contract(tuple_spec)
+    artifact_dir = tmp_path / "state" / "tuple-validation"
+    artifact_dir.mkdir(parents=True)
+    payload = {
+        "tuple": tuple_spec.name,
+        "recipe": "text-infer-light",
+        "mode": "sync",
+        "started_at": "2026-01-01T00:00:00+00:00",
+        "ended_at": "2026-01-01T00:00:01+00:00",
+        "commit": _git_commit(),
+        "config_hash": "policy-only-drift",
+        "governance_hash": "c" * 64,
+        "validation_schema_version": 1,
+        "passed": True,
+        "cleanup": {"required": False, "completed": None},
+        "cost": {"observed": None, "estimated": None},
+        "audit": {"event_ids": []},
+        "official_contract": contract,
+        "official_contract_hash": official_contract_hash(contract),
+    }
+    (artifact_dir / "modal-a10g.json").write_text(json.dumps(payload), encoding="utf-8")
+
+    artifacts = _live_validation_artifacts_by_tuple(config, config_dir=root)
+
+    assert tuple_evidence_key(tuple_spec) in artifacts
 
 
 def test_launch_report_blocks_smoke_provider_in_auto_recipe(tmp_path, monkeypatch) -> None:

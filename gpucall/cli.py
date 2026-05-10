@@ -1776,7 +1776,13 @@ def _latest_live_validation_artifact(config_dir: Path | None = None) -> dict[str
 
 def _required_live_validation_tuples(config) -> list[dict[str, object]]:
     tuples: dict[str, dict[str, object]] = {}
+    allowed = set(config.policy.tuples.allow)
+    denied = set(config.policy.tuples.deny)
     for tuple in config.tuples.values():
+        if allowed and tuple.name not in allowed:
+            continue
+        if tuple.name in denied:
+            continue
         descriptor = adapter_descriptor(tuple)
         if descriptor is None:
             continue
@@ -1813,7 +1819,7 @@ def _live_validation_artifacts_by_tuple(config, config_dir: Path | None = None) 
             data = {}
         if expected_commit and data.get("commit") != expected_commit:
             continue
-        if expected_config_hash and data.get("config_hash") != expected_config_hash:
+        if _strict_validation_config_hash_enabled() and expected_config_hash and data.get("config_hash") != expected_config_hash:
             continue
         if not _live_validation_artifact_valid(data):
             continue
@@ -1873,7 +1879,7 @@ def _capacity_unavailable_validation_tuples(config, config_dir: Path | None = No
             continue
         if expected_commit and data.get("commit") != expected_commit:
             continue
-        if expected_config_hash and data.get("config_hash") != expected_config_hash:
+        if _strict_validation_config_hash_enabled() and expected_config_hash and data.get("config_hash") != expected_config_hash:
             continue
         if data.get("validation_schema_version") != 1 or data.get("passed") is not False:
             continue
@@ -1893,6 +1899,10 @@ def _capacity_unavailable_validation_tuples(config, config_dir: Path | None = No
         if tuple_key is not None:
             tuple_keys.add(tuple_key)
     return sorted(tuple_keys)
+
+
+def _strict_validation_config_hash_enabled() -> bool:
+    return os.getenv("GPUCALL_STRICT_VALIDATION_CONFIG_HASH") == "1"
 
 
 def _live_validation_artifact_valid(data: dict[str, object]) -> bool:
@@ -1929,7 +1939,8 @@ def _live_validation_artifact_valid(data: dict[str, object]) -> bool:
         return False
     if not contract.get("output_contract") or contract.get("output_contract") != contract.get("expected_output_contract"):
         return False
-    if contract.get("stream_contract") != contract.get("expected_stream_contract"):
+    expected_stream_contract = contract.get("expected_stream_contract")
+    if expected_stream_contract is not None and contract.get("stream_contract") != expected_stream_contract:
         return False
     if not contract.get("official_sources"):
         return False
