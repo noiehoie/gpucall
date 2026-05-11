@@ -342,6 +342,25 @@ gpucall runtime validate --name site-gpu-ds4
 gpucall validate-config
 ```
 
+Existing Ollama endpoints can be registered the same way:
+
+```bash
+gpucall runtime add-ollama \
+  --name local-author-ollama \
+  --endpoint http://127.0.0.1:11434 \
+  --model qwen2.5-32b:latest \
+  --max-model-len 32768
+gpucall runtime validate --name local-author-ollama
+gpucall validate-config
+```
+
+Controlled Runtime registration does not download or install models. The
+operator must prepare the model in the runtime's own store or cache, such as
+Ollama's model store, a ds4 model directory, a llama.cpp model path, or a local
+vLLM cache. gpucall records the endpoint, model name, model catalog reference,
+trust profile, and validation evidence, then routes only when policy and recipe
+constraints match.
+
 The built-in `local-openai-compatible` adapter targets controlled OpenAI-compatible chat servers such as ds4-server, llama.cpp server, local vLLM, or other private endpoints. It supports inline text/chat requests only and intentionally rejects `DataRef` inputs so the gateway does not download or forward object bytes.
 
 For local text `DataRef` workloads, use the separate `local-dataref-openai-worker` adapter and run the worker process from `gpucall.local_dataref_worker`. The gateway adapter forwards only the worker-readable plan and DataRef metadata to that local worker endpoint; the worker fetches bytes, validates size and SHA256, calls the local OpenAI-compatible server, and returns a `TupleResult`. Example templates are shipped as `gpucall/config_templates/surfaces/local-dataref-openai.example` and `gpucall/config_templates/workers/local-dataref-openai.example`.

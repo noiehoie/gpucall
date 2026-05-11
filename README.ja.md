@@ -303,6 +303,24 @@ gpucall runtime validate --name site-gpu-ds4
 gpucall validate-config
 ```
 
+既存の Ollama endpoint も同じ窓口で登録できます。
+
+```bash
+gpucall runtime add-ollama \
+  --name local-author-ollama \
+  --endpoint http://127.0.0.1:11434 \
+  --model qwen2.5-32b:latest \
+  --max-model-len 32768
+gpucall runtime validate --name local-author-ollama
+gpucall validate-config
+```
+
+Controlled Runtime 登録は model を download / install しません。operator が
+Ollama の model store、ds4 の model directory、llama.cpp の model path、local
+vLLM cache など、runtime 側の store/cache に model を用意します。gpucall は
+endpoint、model name、model catalog reference、trust profile、validation
+evidence を記録し、policy と recipe constraints が一致した場合だけ routing します。
+
 組み込みの `local-openai-compatible` adapter は、ds4-server、llama.cpp server、local vLLM など、operator が管理下と認めた OpenAI-compatible chat server を対象にします。inline text/chat workload 用で、`DataRef` は dereference しません。gateway は data-byte-less のまま維持するためです。
 
 local text `DataRef` workload には、別アダプタ `local-dataref-openai-worker` と `gpucall.local_dataref_worker` の worker process を使います。gateway adapter は worker-readable plan と DataRef metadata だけを local worker endpoint に渡します。実バイトの fetch、size/SHA256 検証、local OpenAI-compatible server 呼び出し、`TupleResult` 返却は worker 側の責任です。設定例は `gpucall/config_templates/surfaces/local-dataref-openai.example` と `gpucall/config_templates/workers/local-dataref-openai.example` にあります。

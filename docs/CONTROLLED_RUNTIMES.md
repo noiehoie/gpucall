@@ -63,6 +63,16 @@ gpucall runtime add-openai \
   --dataref-worker
 ```
 
+Register an existing Ollama endpoint:
+
+```bash
+gpucall runtime add-ollama \
+  --name local-author-ollama \
+  --endpoint http://127.0.0.1:11434 \
+  --model qwen2.5-32b:latest \
+  --max-model-len 32768
+```
+
 Validate its health from the gateway host:
 
 ```bash
@@ -70,12 +80,15 @@ gpucall runtime validate --name site-gpu-ds4
 gpucall validate-config
 ```
 
-`runtime add-openai` writes three files:
+`runtime add-openai` and `runtime add-ollama` write three files:
 
 - `config/runtimes/<name>.yml`
 - `config/surfaces/<name>.yml`
 - `config/workers/<name>.yml`
 
-The command does not install ds4. It registers and validates an endpoint the
-operator already controls. Managed ds4 installation can be added later as a
-separate install-plan workflow without changing routing semantics.
+These commands do not install ds4, Ollama, vLLM, llama.cpp, or any model
+weights. They register and validate an endpoint the operator already controls.
+The operator is responsible for preparing the model in the runtime's own store
+or cache, such as Ollama's model store, a ds4 model directory, a llama.cpp model
+path, or a local vLLM cache. Managed runtime/model installation can be added
+later as a separate install-plan workflow without changing routing semantics.
