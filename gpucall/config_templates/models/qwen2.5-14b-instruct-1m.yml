@@ -5,7 +5,7 @@ max_model_len: 1048576
 min_vram_gb: 320
 supported_engines: [hyperstack-vllm, modal-vllm, runpod-vllm-openai]
 input_contracts: [text, chat_messages, data_refs]
-output_contracts: [plain-text, json_object]
+output_contracts: [plain-text, json_object, json_schema]
 supports_vision: false
 supports_guided_decoding: true
 supports_streaming: true

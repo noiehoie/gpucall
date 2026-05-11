@@ -5,7 +5,7 @@ max_model_len: 32768
 min_vram_gb: 24
 supported_engines: [modal-transformers-vision, runpod-vllm-openai]
 input_contracts: [text, image, data_refs]
-output_contracts: [plain-text, json_object]
+output_contracts: [plain-text, json_object, json_schema]
 supports_vision: true
 supports_guided_decoding: true
 supports_streaming: false

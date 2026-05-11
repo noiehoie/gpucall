@@ -2,7 +2,7 @@ name: local-openai-compatible-chat
 kind: openai-compatible-chat
 version: null
 input_contracts: [text, chat_messages]
-output_contracts: [openai-chat-completions, plain-text, json_object]
+output_contracts: [openai-chat-completions, plain-text, json_object, json_schema]
 supports_guided_decoding: false
 supports_streaming: true
 supports_multimodal: false

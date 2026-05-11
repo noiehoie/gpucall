@@ -19,6 +19,7 @@ input_contracts:
 output_contracts:
 - plain-text
 - json_object
+- json_schema
 supports_vision: true
 supports_guided_decoding: false
 supports_streaming: false

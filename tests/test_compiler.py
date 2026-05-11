@@ -482,7 +482,7 @@ def test_response_format_requires_structured_output_capable_route() -> None:
             max_model_len=100,
             min_vram_gb=1,
             input_contracts=["text"],
-            output_contracts=["plain-text", "json_object"],
+            output_contracts=["plain-text", "json_object", "json_schema"],
             supports_guided_decoding=True,
         ),
     }
@@ -498,14 +498,18 @@ def test_response_format_requires_structured_output_capable_route() -> None:
             name="json-engine",
             kind="test",
             input_contracts=["text"],
-            output_contracts=["plain-text", "json_object"],
+            output_contracts=["plain-text", "json_object", "json_schema"],
             supports_guided_decoding=True,
         ),
     }
 
-    plan = compiler.compile(TaskRequest(task="infer", mode="sync", recipe="r1", response_format={"type": "json_object"}))
+    for response_format in (
+        {"type": "json_object"},
+        {"type": "json_schema", "json_schema": {"type": "object", "properties": {"answer": {"type": "string"}}}},
+    ):
+        plan = compiler.compile(TaskRequest(task="infer", mode="sync", recipe="r1", response_format=response_format))
 
-    assert plan.tuple_chain == ["p2"]
+        assert plan.tuple_chain == ["p2"]
 
 
 def test_compiler_carries_generation_params_into_plan() -> None:

@@ -5,7 +5,7 @@ max_model_len: 131072
 min_vram_gb: 80
 supported_engines: [runpod-vllm-openai]
 input_contracts: [text, chat_messages, image]
-output_contracts: [plain-text, json_object]
+output_contracts: [plain-text, json_object, json_schema]
 supports_vision: true
 supports_guided_decoding: true
 supports_streaming: true
