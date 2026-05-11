@@ -18,7 +18,7 @@ from gpucall.config import ConfigError, default_config_dir, default_state_dir, l
 from gpucall.domain import ExecutionMode, ExecutionTupleSpec, Recipe, RecipeAdminAutomationConfig, recipe_requirements
 from gpucall.execution.contracts import artifact_tuple_evidence_key, tuple_evidence_key
 from gpucall.execution.registry import adapter_descriptor
-from gpucall.recipe_intents import capabilities_for
+from gpucall.recipe_intents import capabilities_for, normalize_intent
 from gpucall.recipe_authoring import (
     AUTHORING_SYSTEM_PROMPT,
     authoring_artifact,
@@ -26,7 +26,7 @@ from gpucall.recipe_authoring import (
     build_authoring_bundle,
     parse_authoring_proposal,
 )
-from gpucall.recipe_materialize import canonical_recipe_from_artifact, materialization_report, to_yaml, write_recipe_yaml
+from gpucall.recipe_materialize import canonical_recipe_from_artifact, context_budget_policy, materialization_report, to_yaml, write_recipe_yaml
 from gpucall.recipe_request_index import RecipeRequestIndex, default_recipe_request_index_path
 from gpucall.readiness import build_readiness_report
 from gpucall.tuple_promotion import promote_candidate, promote_production_tuple
@@ -1110,6 +1110,10 @@ def tuple_contract_requirements(artifact: Mapping[str, Any], recipe: Recipe) -> 
         "model_capabilities": [str(item) for item in desired_capabilities],
         "min_vram_gb": recipe_requirements(recipe).minimum_vram_gb,
         "min_model_len": recipe_requirements(recipe).context_budget_tokens,
+        "context_budget_policy": context_budget_policy(
+            _requested_context_budget_from_artifact(artifact) or recipe_requirements(recipe).context_budget_tokens,
+            materialized_context_budget=recipe_requirements(recipe).context_budget_tokens,
+        ),
         "modes": [str(mode) for mode in recipe.allowed_modes],
         "input_contracts": sorted(_required_input_contracts(recipe)),
         "max_data_classification": str(recipe.data_classification),
@@ -1143,6 +1147,19 @@ def _endpoint_contract_for(recipe: Recipe) -> str:
     if recipe.task == "vision":
         return "serverless-function-or-official-vlm-endpoint"
     return "official-chat-completions-or-gpucall-tuple-result"
+
+
+def _requested_context_budget_from_artifact(artifact: Mapping[str, Any]) -> int | None:
+    context = _mapping(_mapping(_mapping(artifact.get("sanitized_request")).get("error")).get("context"))
+    for key in ("context_budget_tokens", "required_model_len"):
+        value = context.get(key)
+        if value is None:
+            continue
+        try:
+            return int(value)
+        except (TypeError, ValueError):
+            continue
+    return None
 
 
 def _required_input_contracts(recipe: Recipe) -> set[str]:
@@ -1244,7 +1261,14 @@ def _matching_live_validation(
 
 
 def _auto_select_shadowing(recipe: Recipe, recipes: Mapping[str, Recipe]) -> dict[str, Any]:
-    same_task = [item for item in recipes.values() if item.task == recipe.task and item.auto_select]
+    recipe_intent = normalize_intent(recipe.intent) if recipe.intent else None
+    same_task = [
+        item
+        for item in recipes.values()
+        if item.task == recipe.task
+        and item.auto_select
+        and ((normalize_intent(item.intent) if item.intent else None) == recipe_intent)
+    ]
     candidate_requirements = recipe_requirements(recipe)
     larger_than_existing = all(candidate_requirements.context_budget_tokens > recipe_requirements(item).context_budget_tokens for item in same_task) if same_task else True
     cheaper_or_equal = all(candidate_requirements.minimum_vram_gb <= recipe_requirements(item).minimum_vram_gb for item in same_task) if same_task else True

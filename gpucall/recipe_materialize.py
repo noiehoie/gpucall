@@ -14,6 +14,8 @@ TEXT_STOP_TOKENS = ["<|im_end|>", "<|endoftext|>"]
 ASYNC_ONLY_RESOURCE_CLASSES = {"large", "exlarge", "ultralong"}
 ASYNC_ONLY_LATENCY_CLASSES = {"batch", "long_running"}
 HIGH_COLD_START_SECONDS = 300
+CONTEXT_BUDGET_TIERS = (8192, 32768, 65536, 131072, 262144, 524288, 1010000)
+MEGA_CONTEXT_THRESHOLD = 1010000
 
 
 def canonical_recipe_from_artifact(artifact: Mapping[str, Any], *, catalog: Any | None = None) -> dict[str, Any]:
@@ -69,6 +71,10 @@ def canonical_recipe_from_artifact(artifact: Mapping[str, Any], *, catalog: Any 
 
 def materialization_report(artifact: Mapping[str, Any], recipe: Mapping[str, Any], *, catalog: Any | None = None) -> dict[str, Any]:
     proposed = _proposed_recipe_from_artifact(artifact)
+    context_policy = context_budget_policy(
+        proposed.get("requested_context_budget_tokens") or proposed.get("context_budget_tokens") or recipe.get("context_budget_tokens"),
+        materialized_context_budget=recipe.get("context_budget_tokens"),
+    )
     catalog_policy = _catalog_mode_policy(
         task=str(recipe.get("task") or proposed.get("task") or "infer"),
         context_budget_tokens=_positive_int(recipe.get("context_budget_tokens") or proposed.get("context_budget_tokens"), default=32768),
@@ -82,6 +88,7 @@ def materialization_report(artifact: Mapping[str, Any], recipe: Mapping[str, Any
         "policy": "accept-all",
         "human_review_bypassed": True,
         "canonical_recipe": dict(recipe),
+        "context_budget_policy": context_policy,
         "catalog_policy": catalog_policy,
         "discarded_draft_fields": sorted(set(proposed) - set(recipe)),
         "warnings": [
@@ -122,9 +129,10 @@ def _proposed_recipe_from_sanitized(sanitized: Mapping[str, Any]) -> dict[str, A
     capabilities = sanitized.get("desired_capabilities")
     if not isinstance(capabilities, list) or not capabilities:
         capabilities = capabilities_for(task=task, intent=intent)
-    context_budget_tokens = _round_context_budget(_context_budget_from_context(_mapping(_mapping(sanitized.get("error")).get("context"))))
+    requested_context_budget_tokens = _context_budget_from_context(_mapping(_mapping(sanitized.get("error")).get("context")))
+    context_budget_tokens = _round_context_budget(requested_context_budget_tokens)
     return {
-        "name": _recipe_name(task, intent),
+        "name": _recipe_name(task, intent, context_budget_tokens=context_budget_tokens),
         "recipe_schema_version": 3,
         "task": task,
         "intent": intent,
@@ -132,6 +140,7 @@ def _proposed_recipe_from_sanitized(sanitized: Mapping[str, Any]) -> dict[str, A
         "data_classification": str(sanitized.get("classification") or "confidential"),
         "allowed_modes": [str(sanitized.get("mode") or "sync")],
         "required_model_capabilities": [str(item) for item in capabilities],
+        "requested_context_budget_tokens": requested_context_budget_tokens or context_budget_tokens,
         "context_budget_tokens": context_budget_tokens,
         "resource_class": _resource_class_for(task, context_budget_tokens),
         "latency_class": "long_running" if context_budget_tokens >= 524288 else ("batch" if context_budget_tokens >= 65536 else "standard"),
@@ -159,9 +168,10 @@ def _canonical_name(value: str) -> str:
     return cleaned or "recipe-draft"
 
 
-def _recipe_name(task: str, intent: str) -> str:
+def _recipe_name(task: str, intent: str, *, context_budget_tokens: int | None = None) -> str:
     cleaned = re.sub(r"[^a-z0-9]+", "-", intent.lower()).strip("-")
-    return f"{task}-{cleaned or 'standard'}-draft"
+    suffix = "-mega" if context_budget_tokens is not None and context_budget_tokens > MEGA_CONTEXT_THRESHOLD else ""
+    return f"{task}-{cleaned or 'standard'}{suffix}-draft"
 
 
 def _positive_int(value: Any, *, default: int) -> int:
@@ -177,10 +187,52 @@ def _round_context_budget(value: Any) -> int:
         required = int(value)
     except (TypeError, ValueError):
         required = 8192
-    for candidate in (8192, 32768, 65536, 131072, 262144, 524288, 1010000):
+    for candidate in CONTEXT_BUDGET_TIERS:
         if required <= candidate:
             return candidate
-    return required
+    return _next_power_of_two(required)
+
+
+def context_budget_policy(value: Any, *, materialized_context_budget: Any | None = None) -> dict[str, Any]:
+    try:
+        requested = int(value)
+    except (TypeError, ValueError):
+        requested = 8192
+    materialized = _positive_int(materialized_context_budget, default=_round_context_budget(requested))
+    return {
+        "requested_context_budget_tokens": max(1, requested),
+        "materialized_context_budget_tokens": materialized,
+        "scale": _context_scale(materialized),
+        "rounding": "fixed_tier" if materialized <= MEGA_CONTEXT_THRESHOLD else "next_power_of_two",
+        "requires_async": materialized > 32768,
+        "requires_tuple_authoring": materialized > MEGA_CONTEXT_THRESHOLD,
+        "notes": _context_policy_notes(materialized),
+    }
+
+
+def _next_power_of_two(value: int) -> int:
+    required = max(1, int(value))
+    return 1 << (required - 1).bit_length()
+
+
+def _context_scale(context_budget_tokens: int) -> str:
+    if context_budget_tokens > MEGA_CONTEXT_THRESHOLD:
+        return "mega"
+    if context_budget_tokens >= 524288:
+        return "ultra"
+    if context_budget_tokens >= 131072:
+        return "large"
+    return "standard"
+
+
+def _context_policy_notes(context_budget_tokens: int) -> list[str]:
+    notes: list[str] = []
+    if context_budget_tokens > 32768:
+        notes.append("sync mode is not selected for long-context infer workloads")
+    if context_budget_tokens > MEGA_CONTEXT_THRESHOLD:
+        notes.append("mega-context intake is materialized as a draft contract for administrator tuple authoring, not as production routing")
+        notes.append("production activation requires an explicit tuple whose model catalog declares at least this context window")
+    return notes
 
 
 def _context_budget_from_context(context: Mapping[str, Any]) -> int | None:

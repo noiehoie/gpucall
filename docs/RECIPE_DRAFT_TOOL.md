@@ -266,6 +266,15 @@ gpucall-recipe-admin materialize \
 
 `--accept-all` is required so accidental materialization fails closed. This command writes canonical recipe YAML for the current gpucall schema. With `--config-dir`, materialization consults the installed recipe/model/engine/tuple catalog before writing YAML. Long-context, batch or long-running workloads, and workloads whose satisfying tuple candidates declare `expected_cold_start_seconds` above the sync-safe threshold are materialized as async-only recipes. The caller's requested mode is treated as intake evidence, not as routing authority. The command does not create a capable provider, does not edit policy, and does not deploy anything.
 
+When failure intake reports ultra or mega context requirements, the
+materializer still writes a draft recipe contract instead of failing because no
+current tuple can run it. Context budgets up to the fixed catalog tiers are
+rounded to the next known tier; requirements above the current ultra tier are
+rounded to the next power of two and marked as `scale: mega` in the
+materialization report and required execution contract. These drafts remain
+async-only, `auto_select: false`, and require administrator tuple authoring,
+billable validation, and explicit activation before production routing.
+
 After materialization:
 
 ```bash

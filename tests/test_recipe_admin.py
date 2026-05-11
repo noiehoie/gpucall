@@ -13,6 +13,7 @@ from gpucall.domain import ChatMessage, ExecutionMode, RecipeAdminAutomationConf
 from gpucall.execution.contracts import official_contract
 from gpucall.recipe_admin import (
     _auto_existing_tuple_report,
+    _auto_select_shadowing,
     _config_hash,
     _git_commit,
     author_recipe_proposal,
@@ -136,6 +137,36 @@ def test_admin_materializer_uses_catalog_cold_start_to_force_async() -> None:
     assert recipe["auto_select"] is False
 
 
+def test_admin_materializer_writes_mega_context_draft_contract() -> None:
+    intake = {
+        "sanitized_request": {
+            "task": "infer",
+            "mode": "async",
+            "intent": "rank_text_items",
+            "classification": "confidential",
+            "desired_capabilities": ["instruction_following"],
+            "error": {"context": {"context_budget_tokens": 6650439, "largest_auto_recipe_context_budget_tokens": 1010000}},
+        },
+        "redaction_report": {"prompt_body_forwarded": False, "data_ref_uri_forwarded": False, "presigned_url_forwarded": False},
+    }
+
+    recipe = canonical_recipe_from_artifact(intake, catalog=load_config(Path("gpucall/config_templates")))
+    report = review_artifact(intake, config_dir="gpucall/config_templates")
+
+    assert recipe["name"] == "infer-rank-text-items-mega-draft"
+    assert recipe["allowed_modes"] == ["async"]
+    assert recipe["context_budget_tokens"] == 8388608
+    assert recipe["resource_class"] == "ultralong"
+    assert recipe["auto_select"] is False
+    assert report["decision"] == "CANDIDATE_ONLY"
+    assert report["blockers"] == []
+    assert report["required_execution_contract"]["min_model_len"] == 8388608
+    assert report["required_execution_contract"]["context_budget_policy"]["requested_context_budget_tokens"] == 6650439
+    assert report["required_execution_contract"]["context_budget_policy"]["materialized_context_budget_tokens"] == 8388608
+    assert report["required_execution_contract"]["context_budget_policy"]["scale"] == "mega"
+    assert report["required_execution_contract"]["context_budget_policy"]["requires_tuple_authoring"] is True
+
+
 def test_admin_materializer_keeps_sync_when_catalog_has_sync_safe_tuple() -> None:
     intake = {
         "sanitized_request": {
@@ -216,6 +247,50 @@ def test_admin_process_inbox_materializes_submission(tmp_path) -> None:
     assert record["report_path"] == str(inbox / "reports" / "rr-test.report.json")
     assert len(record["original_sha256"]) == 64
     assert status["index_record"]["status"] == "processed"
+
+
+def test_admin_process_inbox_materializes_mega_context_submission(tmp_path) -> None:
+    config_dir = tmp_path / "config"
+    shutil.copytree("gpucall/config_templates", config_dir)
+    inbox = tmp_path / "inbox"
+    output_dir = tmp_path / "recipes"
+    inbox.mkdir()
+    (inbox / "rr-mega.json").write_text(
+        json.dumps(
+            {
+                "kind": "gpucall.recipe_request_submission",
+                "request_id": "rr-mega",
+                "source": "example-caller-app",
+                "intake": {
+                    "phase": "deterministic-intake",
+                    "sanitized_request": {
+                        "task": "infer",
+                        "mode": "async",
+                        "intent": "rank_text_items",
+                        "classification": "confidential",
+                        "desired_capabilities": ["instruction_following"],
+                        "error": {"context": {"context_budget_tokens": 6650439, "largest_auto_recipe_context_budget_tokens": 1010000}},
+                    },
+                    "redaction_report": {"prompt_body_forwarded": False, "data_ref_uri_forwarded": False, "presigned_url_forwarded": False},
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    results = process_inbox(inbox_dir=inbox, output_dir=output_dir, config_dir=config_dir, accept_all=True)
+
+    assert results[0]["ok"] is True
+    recipe = yaml.safe_load((output_dir / "infer-rank-text-items-mega-draft.yml").read_text(encoding="utf-8"))
+    report = json.loads((inbox / "reports" / "rr-mega.report.json").read_text(encoding="utf-8"))
+    assert recipe["context_budget_tokens"] == 8388608
+    assert recipe["allowed_modes"] == ["async"]
+    assert report["context_budget_policy"]["scale"] == "mega"
+    assert report["context_budget_policy"]["requested_context_budget_tokens"] == 6650439
+    assert report["context_budget_policy"]["materialized_context_budget_tokens"] == 8388608
+    assert report["admin_review"]["decision"] == "CANDIDATE_ONLY"
+    assert report["admin_review"]["required_execution_contract"]["context_budget_policy"]["requires_tuple_authoring"] is True
+    assert (inbox / "processed" / "rr-mega.json").exists()
 
 
 def test_admin_cli_process_inbox_requires_accept_all(tmp_path) -> None:
@@ -355,6 +430,16 @@ def test_admin_process_inbox_can_activate_existing_validated_recipe(tmp_path) ->
     assert activated["matched_validation"]
     assert active_recipe["auto_select"] is True
     assert active_recipe["quality_floor"] == "standard"
+
+
+def test_auto_select_shadowing_is_intent_scoped() -> None:
+    config = load_config(Path("gpucall/config_templates"))
+    candidate = config.recipes["admin-author-recipe-draft"].model_copy(update={"auto_select": True})
+
+    shadowing = _auto_select_shadowing(candidate, config.recipes)
+
+    assert shadowing["safe"] is True
+    assert shadowing["existing_auto_select_recipes"] == []
 
 
 def test_admin_process_inbox_existing_tuple_waits_for_validation_when_not_billable(tmp_path) -> None:
