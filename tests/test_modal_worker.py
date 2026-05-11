@@ -11,6 +11,7 @@ from gpucall.worker_contracts.modal import (
     _json_object_guided_schema,
     _looks_like_document_prompt,
     _prepare_vision_image,
+    normalize_structured_vision_output,
     vision_prompt_from_payload,
 )
 
@@ -109,8 +110,22 @@ def test_vision_prompt_adds_response_format_json_instruction() -> None:
     prompt = vision_prompt_from_payload(payload)
 
     assert "紙面を構造化せよ" in prompt
-    assert "Return only one valid JSON object" in prompt
+    assert "Return exactly one valid JSON object" in prompt
+    assert "Return only valid JSON" not in prompt
     assert "vision request directly" not in prompt
+
+
+def test_structured_vision_prompt_includes_structured_system_prompt() -> None:
+    payload = {
+        "system_prompt": "Return only valid JSON when response_format requests JSON. Do not include markdown fences or prose.",
+        "inline_inputs": {"prompt": {"value": "紙面を構造化せよ", "content_type": "text/plain"}},
+        "response_format": {"type": "json_object"},
+    }
+
+    prompt = vision_prompt_from_payload(payload)
+
+    assert "Return only valid JSON when response_format requests JSON" in prompt
+    assert "Return exactly one valid JSON object" in prompt
 
 
 def test_vision_prompt_adds_response_format_json_schema_instruction() -> None:
@@ -124,6 +139,21 @@ def test_vision_prompt_adds_response_format_json_schema_instruction() -> None:
     assert "紙面を構造化せよ" in prompt
     assert "JSON Schema" in prompt
     assert '"required":["headline"]' in prompt
+
+
+def test_structured_vision_output_is_canonicalized_from_markdown_fence() -> None:
+    payload = {"response_format": {"type": "json_object"}}
+    text = '```json\n{"summary":"yellow","contains_text":false}\n```'
+
+    normalized = normalize_structured_vision_output(payload, text)
+
+    assert normalized == '{"contains_text":false,"summary":"yellow"}'
+
+
+def test_structured_vision_output_keeps_raw_text_when_no_json_object() -> None:
+    payload = {"response_format": {"type": "json_object"}}
+
+    assert normalize_structured_vision_output(payload, "yellow image") == "yellow image"
 
 
 def test_florence_document_prompt_detects_japanese_headline_request() -> None:

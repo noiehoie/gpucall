@@ -131,15 +131,85 @@ def _vision_structured_instruction(payload: dict[str, Any]) -> str:
     response_format = payload.get("response_format") or {}
     format_type = response_format.get("type")
     if format_type == "json_object":
-        return "Return only one valid JSON object. Do not include markdown fences, XML, or explanatory prose."
+        system_prompt = _structured_system_prompt_for_payload(payload)
+        instruction = "Return exactly one valid JSON object. Do not include markdown fences, XML, or explanatory prose."
+        return "\n".join(part for part in (system_prompt, instruction) if part)
     if format_type == "json_schema":
         schema = response_format.get("json_schema") or {}
+        system_prompt = _structured_system_prompt_for_payload(payload)
         return (
-            "Return only one valid JSON object matching this JSON Schema. "
-            "Do not include markdown fences, XML, or explanatory prose.\n"
+            "\n".join(
+                part
+                for part in (
+                    system_prompt,
+                    "Return exactly one valid JSON object matching this JSON Schema. Do not include markdown fences, XML, or explanatory prose.",
+                )
+                if part
+            )
+            + "\n"
             + json.dumps(schema, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
         )
     return ""
+
+
+def _structured_system_prompt_for_payload(payload: dict[str, Any]) -> str:
+    if not _is_structured_payload(payload):
+        return ""
+    system_prompt = _system_prompt_for_payload(payload)
+    if "json" not in system_prompt.lower():
+        return ""
+    return system_prompt
+
+
+def normalize_structured_vision_output(payload: dict[str, Any], text: str) -> str:
+    if not _is_structured_payload(payload):
+        return text.strip()
+    parsed = _parse_json_object_from_text(text)
+    if parsed is None:
+        return text.strip()
+    return json.dumps(parsed, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+
+
+def _parse_json_object_from_text(text: str) -> dict[str, Any] | None:
+    stripped = text.strip()
+    try:
+        value = json.loads(stripped)
+    except json.JSONDecodeError:
+        value = None
+    if isinstance(value, dict):
+        return value
+    start = stripped.find("{")
+    while start >= 0:
+        depth = 0
+        in_string = False
+        escape = False
+        for index in range(start, len(stripped)):
+            char = stripped[index]
+            if in_string:
+                if escape:
+                    escape = False
+                elif char == "\\":
+                    escape = True
+                elif char == '"':
+                    in_string = False
+                continue
+            if char == '"':
+                in_string = True
+            elif char == "{":
+                depth += 1
+            elif char == "}":
+                depth -= 1
+                if depth == 0:
+                    candidate = stripped[start : index + 1]
+                    try:
+                        value = json.loads(candidate)
+                    except json.JSONDecodeError:
+                        break
+                    if isinstance(value, dict):
+                        return value
+                    break
+        start = stripped.find("{", start + 1)
+    return None
 
 
 def _looks_like_document_prompt(prompt: str) -> bool:
@@ -648,7 +718,7 @@ if modal is not None:
             output_ids = vision_model.generate(**inputs, max_new_tokens=int(payload.get("max_tokens") or 256))
             trimmed = [out_ids[len(in_ids) :] for in_ids, out_ids in zip(inputs.input_ids, output_ids)]
             decoded = processor.batch_decode(trimmed, skip_special_tokens=True, clean_up_tokenization_spaces=False)
-            return (decoded[0] if decoded else "").strip() or "image processed"
+            return normalize_structured_vision_output(payload, (decoded[0] if decoded else "").strip() or "image processed")
         if model_id == "Salesforce/blip-vqa-base" and not prompt:
             prompt = "What is in the image?"
         if model_id == "Salesforce/blip-vqa-base" and prompt:
