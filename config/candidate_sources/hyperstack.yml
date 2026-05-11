@@ -158,6 +158,10 @@ gpus:
   vram_gb: 640
   cost_per_second: 0.00311111
 models:
+- ref: deepseek-r1
+  slug: deepseek-r1
+  provider_model_id: deepseek-ai/DeepSeek-R1
+  max_model_len: 131072
 - ref: deepseek-r1-distill-llama-70b
   slug: deepseek-r1-distill-llama-70b
   provider_model_id: deepseek-ai/DeepSeek-R1-Distill-Llama-70B
@@ -181,6 +185,38 @@ models:
 - ref: deepseek-r1-distill-qwen-7b
   slug: deepseek-r1-distill-qwen-7b
   provider_model_id: deepseek-ai/DeepSeek-R1-Distill-Qwen-7B
+  max_model_len: 131072
+- ref: deepseek-r1-zero
+  slug: deepseek-r1-zero
+  provider_model_id: deepseek-ai/DeepSeek-R1-Zero
+  max_model_len: 131072
+- ref: deepseek-v3
+  slug: deepseek-v3
+  provider_model_id: deepseek-ai/DeepSeek-V3
+  max_model_len: 131072
+- ref: deepseek-v3-base
+  slug: deepseek-v3-base
+  provider_model_id: deepseek-ai/DeepSeek-V3-Base
+  max_model_len: 131072
+- ref: deepseek-v3.1
+  slug: deepseek-v3-1
+  provider_model_id: deepseek-ai/DeepSeek-V3.1
+  max_model_len: 131072
+- ref: deepseek-v3.1-base
+  slug: deepseek-v3-1-base
+  provider_model_id: deepseek-ai/DeepSeek-V3.1-Base
+  max_model_len: 131072
+- ref: deepseek-v3.2
+  slug: deepseek-v3-2
+  provider_model_id: deepseek-ai/DeepSeek-V3.2
+  max_model_len: 131072
+- ref: deepseek-v3.2-exp
+  slug: deepseek-v3-2-exp
+  provider_model_id: deepseek-ai/DeepSeek-V3.2-Exp
+  max_model_len: 131072
+- ref: deepseek-v3.2-speciale
+  slug: deepseek-v3-2-speciale
+  provider_model_id: deepseek-ai/DeepSeek-V3.2-Speciale
   max_model_len: 131072
 - ref: gemma-3-12b-it
   slug: gemma-3-12b-it
@@ -611,12 +647,21 @@ families:
     - qwen3-4b
     - qwen3-8b
     n3-A100x8:
+    - deepseek-r1
     - deepseek-r1-distill-llama-70b
     - deepseek-r1-distill-llama-8b
     - deepseek-r1-distill-qwen-1.5b
     - deepseek-r1-distill-qwen-14b
     - deepseek-r1-distill-qwen-32b
     - deepseek-r1-distill-qwen-7b
+    - deepseek-r1-zero
+    - deepseek-v3
+    - deepseek-v3-base
+    - deepseek-v3.1
+    - deepseek-v3.1-base
+    - deepseek-v3.2
+    - deepseek-v3.2-exp
+    - deepseek-v3.2-speciale
     - gemma-3-12b-it
     - gemma-3-1b-it
     - gemma-3-27b-it
@@ -771,12 +816,21 @@ families:
     - qwen3-4b
     - qwen3-8b
     n3-H100x8:
+    - deepseek-r1
     - deepseek-r1-distill-llama-70b
     - deepseek-r1-distill-llama-8b
     - deepseek-r1-distill-qwen-1.5b
     - deepseek-r1-distill-qwen-14b
     - deepseek-r1-distill-qwen-32b
     - deepseek-r1-distill-qwen-7b
+    - deepseek-r1-zero
+    - deepseek-v3
+    - deepseek-v3-base
+    - deepseek-v3.1
+    - deepseek-v3.1-base
+    - deepseek-v3.2
+    - deepseek-v3.2-exp
+    - deepseek-v3.2-speciale
     - gemma-3-12b-it
     - gemma-3-1b-it
     - gemma-3-27b-it
@@ -813,12 +867,21 @@ families:
     - qwen3-4b
     - qwen3-8b
     n3-H200-SXM5x8:
+    - deepseek-r1
     - deepseek-r1-distill-llama-70b
     - deepseek-r1-distill-llama-8b
     - deepseek-r1-distill-qwen-1.5b
     - deepseek-r1-distill-qwen-14b
     - deepseek-r1-distill-qwen-32b
     - deepseek-r1-distill-qwen-7b
+    - deepseek-r1-zero
+    - deepseek-v3
+    - deepseek-v3-base
+    - deepseek-v3.1
+    - deepseek-v3.1-base
+    - deepseek-v3.2
+    - deepseek-v3.2-exp
+    - deepseek-v3.2-speciale
     - gemma-3-12b-it
     - gemma-3-1b-it
     - gemma-3-27b-it
@@ -1091,12 +1154,21 @@ families:
     - qwen3-4b
     - qwen3-8b
     n3-RTX-6000-Prox8:
+    - deepseek-r1
     - deepseek-r1-distill-llama-70b
     - deepseek-r1-distill-llama-8b
     - deepseek-r1-distill-qwen-1.5b
     - deepseek-r1-distill-qwen-14b
     - deepseek-r1-distill-qwen-32b
     - deepseek-r1-distill-qwen-7b
+    - deepseek-r1-zero
+    - deepseek-v3
+    - deepseek-v3-base
+    - deepseek-v3.1
+    - deepseek-v3.1-base
+    - deepseek-v3.2
+    - deepseek-v3.2-exp
+    - deepseek-v3.2-speciale
     - gemma-3-12b-it
     - gemma-3-1b-it
     - gemma-3-27b-it
@@ -1251,12 +1323,21 @@ families:
     - qwen3-4b
     - qwen3-8b
     n3-H100-SXMx8:
+    - deepseek-r1
     - deepseek-r1-distill-llama-70b
     - deepseek-r1-distill-llama-8b
     - deepseek-r1-distill-qwen-1.5b
     - deepseek-r1-distill-qwen-14b
     - deepseek-r1-distill-qwen-32b
     - deepseek-r1-distill-qwen-7b
+    - deepseek-r1-zero
+    - deepseek-v3
+    - deepseek-v3-base
+    - deepseek-v3.1
+    - deepseek-v3.1-base
+    - deepseek-v3.2
+    - deepseek-v3.2-exp
+    - deepseek-v3.2-speciale
     - gemma-3-12b-it
     - gemma-3-1b-it
     - gemma-3-27b-it
@@ -1411,12 +1492,21 @@ families:
     - qwen3-4b
     - qwen3-8b
     n3-H100-NVLinkx8:
+    - deepseek-r1
     - deepseek-r1-distill-llama-70b
     - deepseek-r1-distill-llama-8b
     - deepseek-r1-distill-qwen-1.5b
     - deepseek-r1-distill-qwen-14b
     - deepseek-r1-distill-qwen-32b
     - deepseek-r1-distill-qwen-7b
+    - deepseek-r1-zero
+    - deepseek-v3
+    - deepseek-v3-base
+    - deepseek-v3.1
+    - deepseek-v3.1-base
+    - deepseek-v3.2
+    - deepseek-v3.2-exp
+    - deepseek-v3.2-speciale
     - gemma-3-12b-it
     - gemma-3-1b-it
     - gemma-3-27b-it
@@ -1571,12 +1661,21 @@ families:
     - qwen3-4b
     - qwen3-8b
     n3-A100-SXMx8:
+    - deepseek-r1
     - deepseek-r1-distill-llama-70b
     - deepseek-r1-distill-llama-8b
     - deepseek-r1-distill-qwen-1.5b
     - deepseek-r1-distill-qwen-14b
     - deepseek-r1-distill-qwen-32b
     - deepseek-r1-distill-qwen-7b
+    - deepseek-r1-zero
+    - deepseek-v3
+    - deepseek-v3-base
+    - deepseek-v3.1
+    - deepseek-v3.1-base
+    - deepseek-v3.2
+    - deepseek-v3.2-exp
+    - deepseek-v3.2-speciale
     - gemma-3-12b-it
     - gemma-3-1b-it
     - gemma-3-27b-it
@@ -1731,12 +1830,21 @@ families:
     - qwen3-4b
     - qwen3-8b
     n3-A100-NVLinkx8:
+    - deepseek-r1
     - deepseek-r1-distill-llama-70b
     - deepseek-r1-distill-llama-8b
     - deepseek-r1-distill-qwen-1.5b
     - deepseek-r1-distill-qwen-14b
     - deepseek-r1-distill-qwen-32b
     - deepseek-r1-distill-qwen-7b
+    - deepseek-r1-zero
+    - deepseek-v3
+    - deepseek-v3-base
+    - deepseek-v3.1
+    - deepseek-v3.1-base
+    - deepseek-v3.2
+    - deepseek-v3.2-exp
+    - deepseek-v3.2-speciale
     - gemma-3-12b-it
     - gemma-3-1b-it
     - gemma-3-27b-it

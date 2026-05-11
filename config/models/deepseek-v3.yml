@@ -1,0 +1,35 @@
+name: deepseek-v3
+provider_model_id: deepseek-ai/DeepSeek-V3
+capabilities:
+- chat
+- instruction_following
+- summarization
+- translation
+- classification
+- reasoning
+- structured_output
+- long_context
+- agentic_tool_use
+max_model_len: 131072
+min_vram_gb: 640
+supported_engines:
+- hyperstack-vllm
+- modal-vllm
+- runpod-vllm-openai
+input_contracts:
+- text
+- chat_messages
+output_contracts:
+- plain-text
+- json_object
+supports_vision: false
+supports_guided_decoding: true
+supports_streaming: true
+trust_remote_code: true
+source: https://huggingface.co/deepseek-ai/DeepSeek-V3
+evidence:
+- DeepSeek-V3 model card describes a 671B-total-parameter MoE model and points to
+  multi-node, multi-GPU deployment.
+- Catalog entry is intentionally production_ready=false; exact tensor-parallel, quantization,
+  and worker contract must be validated before activation.
+production_ready: false
