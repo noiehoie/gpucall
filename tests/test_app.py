@@ -403,6 +403,7 @@ def test_trusted_bootstrap_issues_tenant_key_without_existing_auth(tmp_path, mon
     assert issued["handoff"]["GPUCALL_TENANT"] == "new-system"
     assert issued["handoff"]["GPUCALL_BASE_URL"] == "http://gpucall.internal:18088"
     assert issued["handoff"]["GPUCALL_RECIPE_INBOX"] == "admin@gpucall.internal:/opt/gpucall/state/recipe_requests/inbox"
+    assert issued["handoff"]["GPUCALL_QUALITY_FEEDBACK_INBOX"] == "admin@gpucall.internal:/opt/gpucall/state/quality_feedback/inbox"
     assert "api_key" not in second.text
     assert second.status_code == 409
 

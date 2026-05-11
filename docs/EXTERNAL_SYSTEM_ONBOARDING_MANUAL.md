@@ -150,6 +150,7 @@ Give the external system only the integration facts it needs:
 export GPUCALL_BASE_URL="https://gpucall-gateway.example.internal"
 export GPUCALL_API_KEY="<real token>"
 export GPUCALL_RECIPE_INBOX="admin@gateway.example.internal:/opt/gpucall/state/recipe_requests/inbox"
+export GPUCALL_QUALITY_FEEDBACK_INBOX="admin@gateway.example.internal:/opt/gpucall/state/quality_feedback/inbox"
 ```
 
 Rules:
@@ -411,7 +412,10 @@ caller requires fields, arrays, or per-item types, send
 fails caller schema validation, submit quality feedback with
 `--quality-failure-kind schema_mismatch`, `--response-format`,
 `--expected-json-schema`, `--observed-json-schema`, and schema success/failure
-counts. The observed schema must contain only keys and types, never raw output.
+counts. Send this to `GPUCALL_QUALITY_FEEDBACK_INBOX`, not
+`GPUCALL_RECIPE_INBOX`; quality feedback is reviewed as evidence about an
+existing recipe or tuple and is not materialized directly into recipe YAML. The
+observed schema must contain only keys and types, never raw output.
 
 For any gateway 5xx, completion reports must separate verified facts from
 unknowns. Include HTTP status, response body if any, endpoint, request class,

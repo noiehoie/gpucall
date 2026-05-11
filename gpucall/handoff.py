@@ -5,12 +5,14 @@ import json
 from gpucall.release import ONBOARDING_MANUAL_URL, ONBOARDING_PROMPT_URL, SDK_WHEEL_URL
 
 
-def handoff_payload(*, tenant: str, token: str, gateway_url: str, recipe_inbox: str) -> dict[str, str]:
+def handoff_payload(*, tenant: str, token: str, gateway_url: str, recipe_inbox: str, quality_feedback_inbox: str | None = None) -> dict[str, str]:
+    quality_inbox = quality_feedback_inbox or _default_quality_feedback_inbox(recipe_inbox)
     return {
         "GPUCALL_TENANT": tenant,
         "GPUCALL_BASE_URL": gateway_url,
         "GPUCALL_API_KEY": token,
         "GPUCALL_RECIPE_INBOX": recipe_inbox,
+        "GPUCALL_QUALITY_FEEDBACK_INBOX": quality_inbox,
         "GPUCALL_ONBOARDING_PROMPT_URL": ONBOARDING_PROMPT_URL,
         "GPUCALL_ONBOARDING_MANUAL_URL": ONBOARDING_MANUAL_URL,
         "GPUCALL_SDK_WHEEL_URL": SDK_WHEEL_URL,
@@ -27,3 +29,10 @@ def render_handoff(payload: dict[str, str], output_format: str) -> str:
 
 def _shell_quote(value: str) -> str:
     return "'" + value.replace("'", "'\"'\"'") + "'"
+
+
+def _default_quality_feedback_inbox(recipe_inbox: str) -> str:
+    marker = "/recipe_requests/inbox"
+    if recipe_inbox.endswith(marker):
+        return recipe_inbox[: -len(marker)] + "/quality_feedback/inbox"
+    return recipe_inbox.rstrip("/") + "/quality_feedback"

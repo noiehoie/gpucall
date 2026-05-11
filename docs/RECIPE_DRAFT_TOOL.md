@@ -52,7 +52,7 @@ In normal operation, unknown workloads are handled as follows:
 3. Administrator materializes or rejects the workload class.
 4. If production still fails, gpucall returns `422 NO_AUTO_SELECTABLE_RECIPE` or `503 no eligible tuple after policy, recipe, and circuit constraints`.
 5. Caller runs post-failure `intake` and `compare` to distinguish workload drift from admin/catalog/runtime failure.
-6. If gpucall returns `200 OK` but caller-side validation fails, caller runs `quality` and submits that sanitized feedback to the same admin inbox.
+6. If gpucall returns `200 OK` but caller-side validation fails, caller runs `quality` and submits that sanitized feedback to the separate quality feedback inbox.
 
 The helper is designed to remove raw prompt bodies, message bodies, documents, media bytes, DataRef URIs, presigned URLs, and secrets. It produces an intake artifact for gpucall administrators. LLM-assisted recipe authoring belongs on the administrator side, after the administrator accepts the sanitized intake into an audited workflow.
 
@@ -106,7 +106,7 @@ gpucall-recipe-draft intake \
   --business-need "画像の内容に関する質問に答えたい" \
   --classification confidential \
   --output intake.json \
-  --remote-inbox admin@gateway.example.internal:/opt/gpucall/state/recipe_requests/inbox \
+  --remote-quality-inbox admin@gateway.example.internal:/opt/gpucall/state/quality_feedback/inbox \
   --source example-caller-app
 ```
 
@@ -152,11 +152,11 @@ gpucall-recipe-draft quality \
   --reported-tuple-model Salesforce/blip-vqa-base \
   --quality-failure-kind insufficient_ocr \
   --quality-failure-reason "short answer only; expected top headlines" \
-  --remote-inbox admin@gateway.example.internal:/opt/gpucall/state/recipe_requests/inbox \
+  --remote-quality-inbox admin@gateway.example.internal:/opt/gpucall/state/quality_feedback/inbox \
   --source example-caller-app
 ```
 
-This creates a `deterministic-quality-feedback-intake` submission. It is a request to review recipe intent and production tuple capability, not proof that gpucall routed incorrectly.
+This creates a `deterministic-quality-feedback-intake` submission for the separate quality feedback inbox. It is evidence for recipe or tuple quality review, not a recipe materialization request and not proof that gpucall routed incorrectly.
 
 #### Quality Feedback Grammar For Structured Output
 
@@ -187,7 +187,7 @@ gpucall-recipe-draft quality \
   --observed-json-schema observed-schema.json \
   --schema-success-count 5 \
   --schema-failure-count 16 \
-  --remote-inbox admin@gateway.example.internal:/opt/gpucall/state/recipe_requests/inbox \
+  --remote-quality-inbox admin@gateway.example.internal:/opt/gpucall/state/quality_feedback/inbox \
   --source example-caller-app
 ```
 
@@ -252,7 +252,7 @@ gpucall-recipe-draft submit \
 
 Remote submission uses SSH, creates the target directory if needed, writes a temporary file, and atomically renames it to `<request_id>.json`. The submitted bundle contains only the sanitized intake and optional draft. It does not contain raw prompt bodies, DataRef URIs, presigned URLs, or secrets.
 
-For caller automation, `preflight`, `intake`, and `quality` also accept `--inbox-dir`, `--remote-inbox`, and `--source`. When either inbox flag is present, the helper writes the sanitized intake and submits it in one command.
+For caller automation, `preflight` and `intake` accept `--inbox-dir`, `--remote-inbox`, and `--source`. `quality` accepts those legacy flags plus `--quality-inbox-dir` and `--remote-quality-inbox`; operators should route quality feedback to the separate quality feedback inbox. When an inbox flag is present, the helper writes the sanitized intake and submits it in one command.
 
 ## Caller-Facing Intents
 
@@ -355,6 +355,26 @@ gpucall-recipe-admin process-inbox \
 ```
 
 Processed submissions are moved to `inbox/processed`, failed submissions to `inbox/failed`, and materialization reports to `inbox/reports`. The original JSON file remains the canonical submission record; it is not deleted after materialization. `process-inbox` and `watch` also maintain `inbox/recipe_requests.db`, a SQLite WAL index containing request id, source, task, intent, status, original/report/recipe paths, original SHA-256, and timestamps.
+
+Quality feedback uses a separate inbox because it is evidence about an existing
+recipe or tuple, not a recipe materialization request:
+
+```bash
+gpucall-recipe-admin process-quality-inbox \
+  --inbox-dir /path/to/gpucall-quality-feedback/inbox \
+  --config-dir config
+
+gpucall-recipe-admin quality-inbox list \
+  --inbox-dir /path/to/gpucall-quality-feedback/inbox
+```
+
+Processed feedback is moved to `inbox/processed`, failed feedback to
+`inbox/failed`, and review reports to `inbox/reports`. The helper maintains
+`inbox/quality_feedback.db` with feedback id, source, task, intent, quality
+kind, observed tuple, status, paths, SHA-256, and timestamps. This route does
+not write recipe YAML, does not activate tuples, and does not run billable
+validation. Administrators use the report as evidence for recipe revision,
+model upgrade, or tuple promotion decisions.
 
 `--accept-all` is a one-shot operator decision. For a persistent operator host,
 the same route can be opened explicitly in config:

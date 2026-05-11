@@ -120,7 +120,8 @@ Use these operator-provided values:
 ```bash
 export GPUCALL_BASE_URL="<gpucall-base-url>"
 export GPUCALL_API_KEY="<gpucall-api-key>"
-export GPUCALL_RECIPE_INBOX="<admin-inbox>"
+export GPUCALL_RECIPE_INBOX="<recipe-request-admin-inbox>"
+export GPUCALL_QUALITY_FEEDBACK_INBOX="<quality-feedback-admin-inbox>"
 ```
 
 Validate the installed gateway before implementation:
@@ -321,7 +322,8 @@ Production default must be fail-closed:
   validation, submit `gpucall-recipe-draft quality` with
   `--quality-failure-kind schema_mismatch`, `--response-format`, sanitized
   `--expected-json-schema`, sanitized `--observed-json-schema`, and success /
-  failure counts. Do not include raw model output.
+  failure counts. Submit it to `GPUCALL_QUALITY_FEEDBACK_INBOX`, not
+  `GPUCALL_RECIPE_INBOX`. Do not include raw model output.
 - Add tests proving hosted-AI fallback is disabled by default.
 
 Correct request shape:

@@ -34,6 +34,7 @@ Operator-provided values:
   GPUCALL_BASE_URL=<gpucall-base-url>
   GPUCALL_API_KEY=<gpucall-api-key-or-use-trusted-bootstrap>
   GPUCALL_RECIPE_INBOX=<approved-local-or-ssh-inbox>
+  GPUCALL_QUALITY_FEEDBACK_INBOX=<approved-local-or-ssh-quality-feedback-inbox>
 
 Verify the installed gateway contract before coding:
 
@@ -77,7 +78,8 @@ Rules:
   If retained for local development, it must require an explicit dev-only opt-in
   and production must ignore or reject that opt-in.
 - Quality failures after gpucall returns `200 OK` are not a reason to fall back
-  to hosted AI. Submit quality feedback instead.
+  to hosted AI. Submit quality feedback to `GPUCALL_QUALITY_FEEDBACK_INBOX`
+  instead of the recipe request inbox.
 
 Workload intents should be abstract and reusable. Prefer names such as:
 

@@ -33,6 +33,7 @@ from gpucall.recipe_materialize import (
     to_yaml,
     write_recipe_yaml,
 )
+from gpucall.quality_feedback_index import QualityFeedbackIndex, default_quality_feedback_index_path
 from gpucall.recipe_request_index import RecipeRequestIndex, default_recipe_request_index_path
 from gpucall.readiness import build_readiness_report
 from gpucall.tuple_promotion import promote_candidate, promote_production_tuple
@@ -90,6 +91,14 @@ def main(argv: list[str] | None = None) -> int:
     process.add_argument("--config-dir", help="gpucall config directory to review against")
     process.add_argument("--validation-dir", help="tuple live validation artifact directory")
 
+    quality_process = subcommands.add_parser("process-quality-inbox", help="process file-based quality feedback submissions once")
+    quality_process.add_argument("--inbox-dir", required=True)
+    quality_process.add_argument("--processed-dir")
+    quality_process.add_argument("--failed-dir")
+    quality_process.add_argument("--report-dir")
+    quality_process.add_argument("--index-db", help="SQLite index path for submitted quality feedback; defaults to inbox/quality_feedback.db")
+    quality_process.add_argument("--config-dir", help="gpucall config directory to summarize against")
+
     status = subcommands.add_parser("status", help="show status for a submitted recipe request id")
     status.add_argument("--request-id", required=True)
     status.add_argument("--inbox-dir", required=True)
@@ -110,6 +119,16 @@ def main(argv: list[str] | None = None) -> int:
     watch.add_argument("--interval-seconds", type=float, default=10.0)
     watch.add_argument("--max-iterations", type=int)
 
+    quality_watch = subcommands.add_parser("watch-quality-inbox", help="poll a file-based quality feedback inbox and write review reports")
+    quality_watch.add_argument("--inbox-dir", required=True)
+    quality_watch.add_argument("--processed-dir")
+    quality_watch.add_argument("--failed-dir")
+    quality_watch.add_argument("--report-dir")
+    quality_watch.add_argument("--index-db", help="SQLite index path for submitted quality feedback; defaults to inbox/quality_feedback.db")
+    quality_watch.add_argument("--config-dir", help="gpucall config directory to summarize against")
+    quality_watch.add_argument("--interval-seconds", type=float, default=10.0)
+    quality_watch.add_argument("--max-iterations", type=int)
+
     inbox_command = subcommands.add_parser("inbox", help="inspect and operate the recipe request inbox index")
     inbox_command.add_argument("action", choices=["list", "status", "materialize", "readiness"])
     inbox_command.add_argument("--inbox-dir", required=True)
@@ -121,6 +140,13 @@ def main(argv: list[str] | None = None) -> int:
     inbox_command.add_argument("--accept-all", action="store_true")
     inbox_command.add_argument("--force", action="store_true")
     inbox_command.add_argument("--allow-contract-narrowing", action="store_true", help="allow --force to narrow an existing recipe contract")
+
+    quality_inbox = subcommands.add_parser("quality-inbox", help="inspect and operate the quality feedback inbox index")
+    quality_inbox.add_argument("action", choices=["list", "status", "process"])
+    quality_inbox.add_argument("--inbox-dir", required=True)
+    quality_inbox.add_argument("--feedback-id")
+    quality_inbox.add_argument("--index-db")
+    quality_inbox.add_argument("--config-dir", help="gpucall config directory to summarize against")
 
     args = parser.parse_args(argv)
     if args.command == "materialize":
@@ -186,6 +212,17 @@ def main(argv: list[str] | None = None) -> int:
         )
         sys.stdout.write(json.dumps({"processed": results}, ensure_ascii=False, indent=2, sort_keys=True) + "\n")
         return 0
+    if args.command == "process-quality-inbox":
+        results = process_quality_inbox(
+            inbox_dir=args.inbox_dir,
+            processed_dir=args.processed_dir,
+            failed_dir=args.failed_dir,
+            report_dir=args.report_dir,
+            index_db=args.index_db,
+            config_dir=args.config_dir,
+        )
+        sys.stdout.write(json.dumps({"processed": results}, ensure_ascii=False, indent=2, sort_keys=True) + "\n")
+        return 0
     if args.command == "status":
         sys.stdout.write(json.dumps(recipe_request_status(args.request_id, args.inbox_dir, index_db=args.index_db), ensure_ascii=False, indent=2, sort_keys=True) + "\n")
         return 0
@@ -214,6 +251,24 @@ def main(argv: list[str] | None = None) -> int:
             if args.max_iterations is not None and iterations >= args.max_iterations:
                 return 0
             time.sleep(args.interval_seconds)
+    if args.command == "watch-quality-inbox":
+        iterations = 0
+        while True:
+            results = process_quality_inbox(
+                inbox_dir=args.inbox_dir,
+                processed_dir=args.processed_dir,
+                failed_dir=args.failed_dir,
+                report_dir=args.report_dir,
+                index_db=args.index_db,
+                config_dir=args.config_dir,
+            )
+            if results:
+                sys.stdout.write(json.dumps({"processed": results}, ensure_ascii=False, indent=2, sort_keys=True) + "\n")
+                sys.stdout.flush()
+            iterations += 1
+            if args.max_iterations is not None and iterations >= args.max_iterations:
+                return 0
+            time.sleep(args.interval_seconds)
     if args.command == "inbox":
         result = inbox_command_report(
             action=args.action,
@@ -226,6 +281,16 @@ def main(argv: list[str] | None = None) -> int:
             accept_all=args.accept_all,
             force=args.force,
             allow_contract_narrowing=args.allow_contract_narrowing,
+        )
+        sys.stdout.write(json.dumps(result, ensure_ascii=False, indent=2, sort_keys=True) + "\n")
+        return 0
+    if args.command == "quality-inbox":
+        result = quality_inbox_command_report(
+            action=args.action,
+            inbox_dir=args.inbox_dir,
+            feedback_id=args.feedback_id,
+            index_db=args.index_db,
+            config_dir=args.config_dir,
         )
         sys.stdout.write(json.dumps(result, ensure_ascii=False, indent=2, sort_keys=True) + "\n")
         return 0
@@ -365,6 +430,124 @@ def process_inbox(
             index.mark_failed(request_id, original_path=destination, error=str(exc))
             results.append({"submission": str(destination), "ok": False, "error": str(exc)})
     return results
+
+
+def process_quality_inbox(
+    *,
+    inbox_dir: str | Path,
+    processed_dir: str | Path | None = None,
+    failed_dir: str | Path | None = None,
+    report_dir: str | Path | None = None,
+    index_db: str | Path | None = None,
+    config_dir: str | Path | None = None,
+) -> list[dict[str, Any]]:
+    inbox = Path(inbox_dir)
+    processed = Path(processed_dir) if processed_dir else inbox / "processed"
+    failed = Path(failed_dir) if failed_dir else inbox / "failed"
+    reports = Path(report_dir) if report_dir else inbox / "reports"
+    processed.mkdir(parents=True, exist_ok=True)
+    failed.mkdir(parents=True, exist_ok=True)
+    reports.mkdir(parents=True, exist_ok=True)
+    index = QualityFeedbackIndex(index_db or default_quality_feedback_index_path(inbox))
+    results: list[dict[str, Any]] = []
+    for path in sorted(inbox.glob("*.json")):
+        if path.parent != inbox:
+            continue
+        feedback_id = path.stem
+        report_path: Path | None = None
+        try:
+            submission = _load_json(str(path))
+            feedback_id = index.upsert_pending(path, submission)["feedback_id"]
+            report = quality_feedback_report(submission, config_dir=config_dir)
+            if report.get("decision") == "REJECT":
+                raise ValueError("quality feedback rejected: " + "; ".join(_finding_reasons(report.get("blockers"))))
+            report_path = reports / f"{path.stem}.report.json"
+            report_path.write_text(json.dumps(report, ensure_ascii=False, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+            destination = _move_submission(path, processed / path.name)
+            index.mark_processed(feedback_id, original_path=destination, report_path=report_path)
+            results.append({"submission": str(destination), "report": str(report_path), "ok": True})
+        except Exception as exc:
+            destination = _move_submission(path, failed / path.name)
+            index.mark_failed(feedback_id, original_path=destination, error=str(exc), report_path=report_path)
+            results.append({"submission": str(destination), "ok": False, "error": str(exc)})
+    return results
+
+
+def quality_feedback_report(
+    submission_or_intake: Mapping[str, Any],
+    *,
+    config_dir: str | Path | None = None,
+) -> dict[str, Any]:
+    started = datetime.now(timezone.utc).isoformat()
+    report: dict[str, Any] = {
+        "schema_version": 1,
+        "phase": "quality-feedback-review",
+        "reviewed_at": started,
+        "decision": "ACCEPT",
+        "blockers": [],
+        "warnings": [],
+        "findings": [],
+        "next_actions": [],
+    }
+    artifact = _artifact_from_submission(submission_or_intake)
+    report["feedback_id"] = submission_or_intake.get("request_id") if isinstance(submission_or_intake, Mapping) else None
+    report["submission_kind"] = submission_or_intake.get("kind") if isinstance(submission_or_intake, Mapping) else None
+    if artifact.get("phase") != "deterministic-quality-feedback-intake":
+        report["blockers"].append({"check": "phase", "reason": "submission is not deterministic quality feedback intake"})
+    _review_redaction(artifact, report)
+    sanitized = _mapping(artifact.get("sanitized_request"))
+    quality = _mapping(sanitized.get("quality_feedback"))
+    runtime = _mapping(sanitized.get("runtime_selection"))
+    if not sanitized:
+        report["blockers"].append({"check": "sanitized_request", "reason": "missing sanitized_request"})
+    if not quality:
+        report["blockers"].append({"check": "quality_feedback", "reason": "missing quality_feedback"})
+    output_contract_feedback = _mapping(quality.get("output_contract_feedback"))
+    report["task"] = sanitized.get("task")
+    report["intent"] = sanitized.get("intent")
+    report["classification"] = sanitized.get("classification")
+    report["expected_output"] = sanitized.get("expected_output")
+    report["observed"] = {
+        "recipe": runtime.get("observed_recipe"),
+        "tuple": runtime.get("observed_tuple"),
+        "tuple_model": runtime.get("observed_tuple_model"),
+        "output_validated": runtime.get("output_validated"),
+    }
+    report["quality_feedback"] = {
+        "kind": quality.get("kind"),
+        "observed_output_kind": quality.get("observed_output_kind"),
+        "reason": quality.get("reason"),
+    }
+    if output_contract_feedback:
+        report["output_contract_feedback"] = {
+            "response_format": output_contract_feedback.get("response_format"),
+            "expected_json_schema_present": bool(output_contract_feedback.get("expected_json_schema")),
+            "observed_json_schema_present": bool(output_contract_feedback.get("observed_json_schema")),
+            "schema_success_count": output_contract_feedback.get("schema_success_count"),
+            "schema_failure_count": output_contract_feedback.get("schema_failure_count"),
+            "raw_output_forwarded": bool(output_contract_feedback.get("raw_output_forwarded")),
+        }
+        if output_contract_feedback.get("raw_output_forwarded"):
+            report["blockers"].append({"check": "output_contract_feedback", "reason": "raw output must not be forwarded"})
+    if config_dir and sanitized.get("task"):
+        try:
+            config = load_config(Path(config_dir))
+            matching = [
+                recipe.name
+                for recipe in config.recipes.values()
+                if str(recipe.task) == str(sanitized.get("task")) and (not sanitized.get("intent") or recipe.intent == normalize_intent(str(sanitized.get("intent"))))
+            ]
+            report["matching_recipes"] = sorted(matching)
+        except Exception as exc:
+            report["warnings"].append({"check": "config", "reason": str(exc)})
+    if quality.get("kind") in {"schema_mismatch", "schema_noncompliance", "missing_required_json_field", "malformed_business_output"}:
+        report["next_actions"].append("review structured-output schema adherence for the observed tuple")
+        report["next_actions"].append("consider recipe schema tightening or promotion of a stronger JSON-capable tuple")
+    else:
+        report["next_actions"].append("review observed tuple quality evidence before changing production routing")
+    if report["blockers"]:
+        report["decision"] = "REJECT"
+    return report
 
 
 def author_recipe_proposal(
@@ -823,6 +1006,43 @@ def recipe_request_status(request_id: str, inbox_dir: str | Path, *, index_db: s
     return {"request_id": request_id, "state": "missing"}
 
 
+def quality_feedback_status(feedback_id: str, inbox_dir: str | Path, *, index_db: str | Path | None = None) -> dict[str, Any]:
+    inbox = Path(inbox_dir)
+    db_path = Path(index_db) if index_db is not None else default_quality_feedback_index_path(inbox)
+    index_record: dict[str, Any] | None = None
+    if db_path.exists():
+        index_record = QualityFeedbackIndex(db_path).get(feedback_id)
+    candidates = [
+        ("pending", inbox / f"{feedback_id}.json"),
+        ("processed", inbox / "processed" / f"{feedback_id}.json"),
+        ("failed", inbox / "failed" / f"{feedback_id}.json"),
+    ]
+    for state, path in candidates:
+        if path.exists():
+            result: dict[str, Any] = {"feedback_id": feedback_id, "state": state, "path": str(path)}
+            if index_record is not None:
+                result["index_record"] = index_record
+            report_path = inbox / "reports" / f"{feedback_id}.report.json"
+            if report_path.exists():
+                result["report_path"] = str(report_path)
+                try:
+                    result["report"] = json.loads(report_path.read_text(encoding="utf-8"))
+                except json.JSONDecodeError:
+                    result["report_error"] = "invalid report JSON"
+            return result
+    if index_record is not None:
+        result = {"feedback_id": feedback_id, "state": index_record.get("status") or "indexed", "path": index_record.get("original_path"), "index_record": index_record}
+        report_path = index_record.get("report_path")
+        if report_path and Path(str(report_path)).exists():
+            result["report_path"] = str(report_path)
+            try:
+                result["report"] = json.loads(Path(str(report_path)).read_text(encoding="utf-8"))
+            except json.JSONDecodeError:
+                result["report_error"] = "invalid report JSON"
+        return result
+    return {"feedback_id": feedback_id, "state": "missing"}
+
+
 def inbox_command_report(
     *,
     action: str,
@@ -883,6 +1103,31 @@ def inbox_command_report(
                 except Exception as exc:
                     reports.append({"recipe": recipe_name, "error": str(exc)})
         return {"phase": "recipe-inbox-readiness", "inbox_dir": str(inbox), "index_db": str(db_path), "readiness": reports}
+    raise AssertionError(action)
+
+
+def quality_inbox_command_report(
+    *,
+    action: str,
+    inbox_dir: str | Path,
+    feedback_id: str | None = None,
+    index_db: str | Path | None = None,
+    config_dir: str | Path | None = None,
+) -> dict[str, Any]:
+    inbox = Path(inbox_dir)
+    db_path = Path(index_db) if index_db else default_quality_feedback_index_path(inbox)
+    if action == "list":
+        rows = QualityFeedbackIndex(db_path).list() if db_path.exists() else []
+        return {"phase": "quality-feedback-inbox-list", "inbox_dir": str(inbox), "index_db": str(db_path), "feedback": rows}
+    if action == "status":
+        if not feedback_id:
+            raise SystemExit("quality-inbox status requires --feedback-id")
+        return quality_feedback_status(feedback_id, inbox, index_db=db_path)
+    if action == "process":
+        return {
+            "phase": "quality-feedback-inbox-process",
+            "processed": process_quality_inbox(inbox_dir=inbox, index_db=db_path, config_dir=config_dir),
+        }
     raise AssertionError(action)
 
 

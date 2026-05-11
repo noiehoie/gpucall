@@ -85,8 +85,10 @@ def main(argv: list[str] | None = None) -> int:
     quality.add_argument("--schema-success-count", type=int, help="number of successful caller-side schema validations")
     quality.add_argument("--schema-failure-count", type=int, help="number of failed caller-side schema validations")
     quality.add_argument("--output", "-o", help="write quality feedback intake JSON to this path")
-    quality.add_argument("--inbox-dir", help="also submit the sanitized intake to this file-based admin inbox")
-    quality.add_argument("--remote-inbox", help="also submit to USER@HOST:/absolute/admin/inbox over SSH")
+    quality.add_argument("--inbox-dir", help="also submit to a file-based admin inbox; prefer --quality-inbox-dir for quality feedback")
+    quality.add_argument("--remote-inbox", help="also submit to USER@HOST:/absolute/admin/inbox over SSH; prefer --remote-quality-inbox for quality feedback")
+    quality.add_argument("--quality-inbox-dir", help="also submit to the file-based quality feedback inbox")
+    quality.add_argument("--remote-quality-inbox", help="also submit to USER@HOST:/absolute/quality-feedback/inbox over SSH")
     quality.add_argument("--source", help="caller/source label for automatic submission")
 
     compare = subcommands.add_parser("compare", help="compare a preflight intake with a post-failure intake")
@@ -169,7 +171,12 @@ def main(argv: list[str] | None = None) -> int:
             )
         )
         _write_json(result, args.output)
-        _submit_if_requested(result, args.inbox_dir, args.remote_inbox, args.source)
+        _submit_if_requested(
+            result,
+            args.quality_inbox_dir or args.inbox_dir,
+            args.remote_quality_inbox or args.remote_inbox,
+            args.source,
+        )
         return 0
     if args.command == "compare":
         result = compare_preflight_to_failure(_load_json(args.preflight), _load_json(args.failure))

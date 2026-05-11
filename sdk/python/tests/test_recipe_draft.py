@@ -258,6 +258,42 @@ def test_recipe_draft_cli_quality_can_submit_to_remote(monkeypatch, capsys) -> N
     assert "operator@gateway.example.internal:/opt/gpucall/state/recipe_requests/inbox/rr-test.json" in captured.err
 
 
+def test_recipe_draft_cli_quality_prefers_remote_quality_inbox(monkeypatch, capsys) -> None:
+    submitted = []
+
+    def fake_submit(bundle, remote_inbox):
+        submitted.append({"bundle": bundle, "remote_inbox": remote_inbox})
+        return f"{remote_inbox}/rr-quality.json"
+
+    monkeypatch.setattr("gpucall_recipe_draft.cli.submit_bundle_to_remote", fake_submit)
+
+    assert (
+        main(
+            [
+                "quality",
+                "--task",
+                "vision",
+                "--intent",
+                "understand_document_image",
+                "--quality-failure-kind",
+                "schema_noncompliance",
+                "--remote-inbox",
+                "operator@gateway.example.internal:/opt/gpucall/state/recipe_requests/inbox",
+                "--remote-quality-inbox",
+                "operator@gateway.example.internal:/opt/gpucall/state/quality_feedback/inbox",
+                "--source",
+                "example-caller-app",
+            ]
+        )
+        == 0
+    )
+    captured = capsys.readouterr()
+
+    assert submitted[0]["remote_inbox"] == "operator@gateway.example.internal:/opt/gpucall/state/quality_feedback/inbox"
+    assert submitted[0]["bundle"]["intake"]["phase"] == "deterministic-quality-feedback-intake"
+    assert "operator@gateway.example.internal:/opt/gpucall/state/quality_feedback/inbox/rr-quality.json" in captured.err
+
+
 def test_preflight_intake_is_sanitized_metadata_only() -> None:
     intake = intake_from_preflight(
         PreflightInputs(

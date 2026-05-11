@@ -118,6 +118,7 @@ def test_admin_tenant_onboard_creates_tenant_key_and_handoff_file(tmp_path, monk
     assert "GPUCALL_API_KEY='gpk_" in handoff_payload
     assert "GPUCALL_BASE_URL='https://gpucall.example.internal'" in handoff_payload
     assert "GPUCALL_RECIPE_INBOX='admin@gpucall.example.internal:/opt/gpucall/state/recipe_requests/inbox'" in handoff_payload
+    assert "GPUCALL_QUALITY_FEEDBACK_INBOX='admin@gpucall.example.internal:/opt/gpucall/state/quality_feedback/inbox'" in handoff_payload
     assert oct(handoff.stat().st_mode & 0o777) == "0o600"
     assert (config_dir / "tenants" / "external-system.yml").exists()
 

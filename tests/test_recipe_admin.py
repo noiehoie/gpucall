@@ -20,7 +20,9 @@ from gpucall.recipe_admin import (
     canonical_recipe_from_artifact,
     main,
     process_inbox,
+    process_quality_inbox,
     promote_production_tuple,
+    quality_feedback_status,
     recipe_request_status,
     review_artifact,
 )
@@ -28,6 +30,7 @@ from gpucall.recipe_materialize import write_recipe_yaml
 from gpucall.registry import ObservedRegistry
 from gpucall.tuple_promotion import _validation_mode
 from gpucall.recipe_request_index import RecipeRequestIndex
+from gpucall.quality_feedback_index import QualityFeedbackIndex
 
 
 def test_admin_materializes_intake_to_canonical_recipe() -> None:
@@ -898,6 +901,74 @@ def test_admin_process_inbox_indexes_failed_submission(tmp_path) -> None:
     assert record["intent"] == "summarize_text"
     assert record["original_path"] == str(inbox / "failed" / "rr-bad.json")
     assert "admin review rejected submission" in record["error"]
+
+
+def test_admin_process_quality_inbox_accepts_quality_feedback_without_recipe_materialization(tmp_path) -> None:
+    inbox = tmp_path / "quality_feedback" / "inbox"
+    inbox.mkdir(parents=True)
+    submission = {
+        "kind": "gpucall.recipe_request_submission",
+        "request_id": "rr-quality",
+        "source": "example-quality-caller",
+        "intake": {
+            "phase": "deterministic-quality-feedback-intake",
+            "llm_safe": True,
+            "sanitized_request": {
+                "task": "vision",
+                "mode": "sync",
+                "intent": "understand_document_image",
+                "classification": "newspaper_frontpage_article_extraction",
+                "expected_output": "json_schema: articles array",
+                "runtime_selection": {
+                    "observed_recipe": "vision-understand-document-image-draft",
+                    "observed_tuple": "modal-h100-qwen25-vl-3b",
+                    "observed_tuple_model": "qwen25-vl-3b",
+                    "output_validated": False,
+                },
+                "quality_feedback": {
+                    "kind": "schema_noncompliance",
+                    "reason": "21 of 27 caller schema checks failed",
+                    "observed_output_kind": "schema_violation",
+                    "output_contract_feedback": {
+                        "response_format": "json_schema",
+                        "expected_json_schema": {"type": "object"},
+                        "observed_json_schema": {"type": "object"},
+                        "schema_success_count": 6,
+                        "schema_failure_count": 21,
+                        "raw_output_forwarded": False,
+                    },
+                },
+            },
+            "redaction_report": {
+                "prompt_body_forwarded": False,
+                "message_content_forwarded": False,
+                "data_ref_uri_forwarded": False,
+                "presigned_url_forwarded": False,
+                "output_body_forwarded": False,
+            },
+            "redacted_error_payload": {},
+        },
+        "draft": None,
+    }
+    (inbox / "rr-quality.json").write_text(json.dumps(submission), encoding="utf-8")
+
+    results = process_quality_inbox(inbox_dir=inbox)
+
+    assert results == [{"submission": str(inbox / "processed" / "rr-quality.json"), "report": str(inbox / "reports" / "rr-quality.report.json"), "ok": True}]
+    assert (inbox / "processed" / "rr-quality.json").exists()
+    assert not (tmp_path / "quality_feedback" / "recipes").exists()
+    report = json.loads((inbox / "reports" / "rr-quality.report.json").read_text(encoding="utf-8"))
+    assert report["decision"] == "ACCEPT"
+    assert report["classification"] == "newspaper_frontpage_article_extraction"
+    assert report["observed"]["tuple"] == "modal-h100-qwen25-vl-3b"
+    assert report["output_contract_feedback"]["schema_failure_count"] == 21
+    record = QualityFeedbackIndex(inbox / "quality_feedback.db").get("rr-quality")
+    assert record is not None
+    assert record["status"] == "processed"
+    assert record["quality_kind"] == "schema_noncompliance"
+    status = quality_feedback_status("rr-quality", inbox)
+    assert status["state"] == "processed"
+    assert status["report"]["decision"] == "ACCEPT"
 
 
 def test_admin_cli_watch_one_iteration(tmp_path, capsys) -> None:
