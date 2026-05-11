@@ -551,6 +551,7 @@ def test_standard_config_routes_structured_vision_to_json_capable_model(tmp_path
     plan = compiler.compile(request)
 
     assert plan.tuple_chain[0] == "modal-h100-qwen25-vl-7b"
+    assert "modal-h100-qwen25-vl-32b" in plan.tuple_chain
     assert "modal-h100-qwen25-vl-3b" not in plan.tuple_chain
     assert "modal-h100-florence-2-large-ft" not in plan.tuple_chain
 
@@ -570,6 +571,7 @@ def test_template_config_routes_structured_vision_to_json_capable_model() -> Non
     plan = compiler.compile(request)
 
     assert plan.tuple_chain[0] == "modal-h100-qwen25-vl-7b"
+    assert "modal-h100-qwen25-vl-32b" in plan.tuple_chain
     assert "modal-h100-qwen25-vl-3b" not in plan.tuple_chain
     assert "modal-h100-florence-2-large-ft" not in plan.tuple_chain
 
