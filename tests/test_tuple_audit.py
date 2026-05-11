@@ -69,6 +69,23 @@ def test_runpod_candidates_are_generated_from_catalog_source() -> None:
     )
 
 
+def test_hyperstack_multi_gpu_candidates_set_worker_parallelism() -> None:
+    root = Path(__file__).resolve().parents[1] / "config"
+    candidates = load_tuple_candidate_payloads(root)
+    candidate = next(
+        row
+        for row in candidates
+        if row["adapter"] == "hyperstack"
+        and row["gpu"] == "n3-RTX-A6000x2"
+        and row["model_ref"] == "qwen2.5-7b-instruct-1m-524k"
+    )
+
+    worker_env = candidate["provider_params"]["worker_env"]
+    assert worker_env["GPUCALL_WORKER_TENSOR_PARALLEL_SIZE"] == "2"
+    assert worker_env["GPUCALL_WORKER_GPU_MEMORY_UTILIZATION"] == "0.95"
+    assert worker_env["GPUCALL_WORKER_MAX_MODEL_LEN"] == str(candidate["max_model_len"])
+
+
 def test_tuple_audit_fails_closed_for_unknown_recipe(tmp_path) -> None:
     root = copy_config(tmp_path)
     result = subprocess.run(

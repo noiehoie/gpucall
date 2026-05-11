@@ -40,6 +40,7 @@ class HyperstackAdapter(TupleAdapter):
         ssh_remote_cidr: str | None = None,
         model: str | None = None,
         max_model_len: int | None = None,
+        provider_params: dict[str, Any] | None = None,
     ) -> None:
         self.name = name
         self.api_key = api_key or os.getenv("GPUCALL_HYPERSTACK_API_KEY", "")
@@ -51,6 +52,7 @@ class HyperstackAdapter(TupleAdapter):
         self.key_name = key_name
         self.model = model
         self.max_model_len = max_model_len
+        self.provider_params = dict(provider_params or {})
         self.ssh_remote_cidr = ssh_remote_cidr or ""
         self.lease_manifest_path = Path(
             lease_manifest_path
@@ -137,6 +139,11 @@ class HyperstackAdapter(TupleAdapter):
             ssh = self._connect_ssh(ip_address)
             model = self.model or "Qwen/Qwen2.5-1.5B-Instruct"
             max_model_len = self.max_model_len or plan.token_budget or 32768
+            worker_env = {
+                str(key): str(value)
+                for key, value in ((self.provider_params.get("worker_env") or {}).items())
+                if key and value is not None
+            }
             self._upload_worker_files(ssh, plan)
             cmd = (
                 "set -euo pipefail\n"
@@ -144,6 +151,8 @@ class HyperstackAdapter(TupleAdapter):
                 "test -s /tmp/gpucall/worker.py\n"
                 "python3 - <<'PY'\n"
                 "import os, subprocess, sys\n"
+                "worker_env = " + repr(worker_env) + "\n"
+                "os.environ.update(worker_env)\n"
                 "os.environ.setdefault('GPUCALL_WORKER_MODEL', " + repr(model) + ")\n"
                 "os.environ.setdefault('GPUCALL_WORKER_MAX_MODEL_LEN', " + repr(str(max_model_len)) + ")\n"
                 "os.environ.setdefault('GPUCALL_WORKER_TENSOR_PARALLEL_SIZE', '1')\n"
@@ -282,7 +291,8 @@ class HyperstackAdapter(TupleAdapter):
         known_hosts = os.getenv("GPUCALL_HYPERSTACK_KNOWN_HOSTS")
         if known_hosts:
             ssh.load_host_keys(known_hosts)
-            if os.getenv("GPUCALL_HYPERSTACK_SSH_TOFU", "").strip().lower() in {"1", "true", "yes", "on"}:
+            tofu_enabled = os.getenv("GPUCALL_HYPERSTACK_SSH_TOFU", "").strip().lower() in {"1", "true", "yes", "on"}
+            if tofu_enabled:
                 ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
             else:
                 ssh.set_missing_host_key_policy(paramiko.RejectPolicy())
@@ -293,7 +303,20 @@ class HyperstackAdapter(TupleAdapter):
                 status_code=503,
                 code="PROVIDER_CONFIG_UNAVAILABLE",
             )
-        ssh.connect(ip_address, username="ubuntu", key_filename=self.ssh_key_path, timeout=10)
+        try:
+            ssh.connect(ip_address, username="ubuntu", key_filename=self.ssh_key_path, timeout=10)
+        except paramiko.ssh_exception.BadHostKeyException:
+            if not tofu_enabled:
+                raise
+            ssh.close()
+            host_keys = ssh.get_host_keys()
+            if ip_address in host_keys:
+                del host_keys[ip_address]
+                host_keys.save(known_hosts)
+            ssh = paramiko.SSHClient()
+            ssh.load_host_keys(known_hosts)
+            ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+            ssh.connect(ip_address, username="ubuntu", key_filename=self.ssh_key_path, timeout=10)
         return ssh
 
     def _wait_sync(self, handle: RemoteHandle, plan: CompiledPlan) -> TupleResult:
@@ -701,6 +724,7 @@ def build_hyperstack_adapter(spec, credentials):
         lease_manifest_path=spec.lease_manifest_path,
         model=spec.model,
         max_model_len=spec.max_model_len,
+        provider_params=spec.provider_params,
     )
 
 

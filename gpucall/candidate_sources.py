@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+import re
 from typing import Any, Mapping
 
 import yaml
@@ -110,6 +111,14 @@ def _worker_fields(family: Mapping[str, Any], model: Mapping[str, Any], *, gpu: 
         return {
             "instance": str(gpu["ref"]),
             "model": provider_model_id,
+            "provider_params": {
+                "worker_env": {
+                    "GPUCALL_WORKER_MODEL": provider_model_id,
+                    "GPUCALL_WORKER_MAX_MODEL_LEN": str(model["max_model_len"]),
+                    "GPUCALL_WORKER_TENSOR_PARALLEL_SIZE": str(_gpu_count(gpu["ref"])),
+                    "GPUCALL_WORKER_GPU_MEMORY_UTILIZATION": "0.95",
+                },
+            },
         }
     if family["endpoint_contract"] == "runpod-flash-sdk":
         return {
@@ -163,6 +172,13 @@ def _mapping_rows(value: object, source_path: Path, key: str) -> list[Mapping[st
     if not isinstance(value, list) or not all(isinstance(row, Mapping) for row in value):
         raise ValueError(f"{source_path} {key} must be a list of mappings")
     return value
+
+
+def _gpu_count(ref: object) -> int:
+    match = re.search(r"x(\d+)$", str(ref))
+    if match:
+        return max(1, int(match.group(1)))
+    return 1
 
 
 def _load_mapping(path: Path) -> dict[str, Any]:

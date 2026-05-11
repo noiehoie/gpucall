@@ -113,9 +113,24 @@ def promote_production_tuple(
     if activate:
         active_recipe = _write_yaml_guarded(config_root / "recipes" / f"{recipe['name']}.yml", recipe, force=force)
         active_tuple = _write_yaml_guarded(config_root / "tuples" / f"{tuple['name']}.yml", tuple, force=force)
+        active_surface = _write_yaml_guarded(
+            config_root / "surfaces" / f"{tuple['name']}.yml",
+            _load_yaml_file(surface_path),
+            force=force,
+        )
+        active_worker = _write_yaml_guarded(
+            config_root / "workers" / f"{tuple['name']}.yml",
+            _load_yaml_file(worker_path),
+            force=force,
+        )
         _validate_config_dir(config_root)
         promotion_report["activated"] = True
-        promotion_report["activation_paths"] = {"recipe": str(active_recipe), "tuple": str(active_tuple)}
+        promotion_report["activation_paths"] = {
+            "recipe": str(active_recipe),
+            "tuple": str(active_tuple),
+            "surface": str(active_surface),
+            "worker": str(active_worker),
+        }
         promotion_report["decision"] = "ACTIVATED"
     else:
         promotion_report["decision"] = "VALIDATED_READY_TO_ACTIVATE"
