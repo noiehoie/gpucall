@@ -310,9 +310,13 @@ When this flag is absent or false, `process-inbox` and `watch` fail closed unles
 `--accept-all` is present. When it is true, sanitized caller submissions can be
 automatically reviewed and materialized into draft recipe YAML with a static
 catalog-readiness report. Existing recipe names are linked in the report instead
-of overwritten unless `--force` is explicit. This route does not run billable
-validation and does not activate production routing. Use `gpucall-recipe-admin promote` explicitly
-when a recipe should be elevated to production.
+of overwritten unless `--force` is explicit. Even with `--force`, materialization
+refuses to narrow an existing recipe contract by reducing context budget, input
+bytes, allowed modes, model capabilities, MIME prefixes, or data classification.
+Use `--allow-contract-narrowing` only for a deliberate operator rollback after
+reviewing the existing and proposed contract. This route does not run billable
+validation and does not activate production routing. Use `gpucall-recipe-admin
+promote` explicitly when a recipe should be elevated to production.
 
 Operators who deliberately want full automation can open the escalation chain in
 `config/admin.yml`:

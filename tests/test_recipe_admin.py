@@ -24,6 +24,7 @@ from gpucall.recipe_admin import (
     recipe_request_status,
     review_artifact,
 )
+from gpucall.recipe_materialize import write_recipe_yaml
 from gpucall.registry import ObservedRegistry
 from gpucall.tuple_promotion import _validation_mode
 from gpucall.recipe_request_index import RecipeRequestIndex
@@ -695,7 +696,7 @@ def test_admin_process_inbox_can_auto_promote_long_text_candidate_without_valida
                         "mode": "sync",
                         "intent": "rank_text_items",
                         "classification": "confidential",
-                        "desired_capabilities": ["summarization", "instruction_following"],
+                        "desired_capabilities": ["summarization", "instruction_following", "reasoning"],
                         "error": {"context": {"context_budget_tokens": 46000}},
                     },
                     "redaction_report": {
@@ -770,6 +771,93 @@ def test_admin_process_inbox_links_existing_recipe_without_overwrite(tmp_path) -
     assert results[0]["ok"] is True
     report = json.loads((inbox / "reports" / "rr-test.report.json").read_text(encoding="utf-8"))
     assert report["processing_action"] == "existing_recipe_linked"
+    assert recipe_path.read_text(encoding="utf-8") == before
+
+
+def test_write_recipe_yaml_rejects_contract_narrowing_with_force(tmp_path) -> None:
+    output_dir = tmp_path / "recipes"
+    existing = canonical_recipe_from_artifact(
+        {
+            "sanitized_request": {
+                "task": "infer",
+                "mode": "async",
+                "intent": "rank_text_items",
+                "desired_capabilities": ["instruction_following", "ranking"],
+                "error": {"context": {"context_budget_tokens": 40000}},
+            },
+            "redaction_report": {"prompt_body_forwarded": False, "data_ref_uri_forwarded": False, "presigned_url_forwarded": False},
+        }
+    )
+    existing["allowed_modes"] = ["sync", "async"]
+    write_recipe_yaml(existing, output_dir)
+    before = (output_dir / "infer-rank-text-items-draft.yml").read_text(encoding="utf-8")
+    proposed = dict(existing)
+    proposed["context_budget_tokens"] = 32768
+    proposed["max_input_bytes"] = 65536
+    proposed["allowed_modes"] = ["sync"]
+    proposed["required_model_capabilities"] = ["instruction_following"]
+
+    with pytest.raises(ValueError, match="refusing to narrow existing recipe contract"):
+        write_recipe_yaml(proposed, output_dir, force=True)
+
+    assert (output_dir / "infer-rank-text-items-draft.yml").read_text(encoding="utf-8") == before
+
+
+def test_write_recipe_yaml_allows_explicit_contract_narrowing(tmp_path) -> None:
+    output_dir = tmp_path / "recipes"
+    existing = canonical_recipe_from_artifact(
+        {
+            "sanitized_request": {"task": "infer", "mode": "sync", "intent": "summarize_text", "error": {"context": {"context_budget_tokens": 40000}}},
+            "redaction_report": {"prompt_body_forwarded": False, "data_ref_uri_forwarded": False, "presigned_url_forwarded": False},
+        }
+    )
+    write_recipe_yaml(existing, output_dir)
+    proposed = dict(existing)
+    proposed["context_budget_tokens"] = 32768
+
+    write_recipe_yaml(proposed, output_dir, force=True, allow_contract_narrowing=True)
+
+    recipe = yaml.safe_load((output_dir / "infer-summarize-text-draft.yml").read_text(encoding="utf-8"))
+    assert recipe["context_budget_tokens"] == 32768
+
+
+def test_admin_process_inbox_force_rejects_existing_contract_narrowing(tmp_path) -> None:
+    inbox = tmp_path / "inbox"
+    output_dir = tmp_path / "recipes"
+    inbox.mkdir()
+    existing = canonical_recipe_from_artifact(
+        {
+            "sanitized_request": {"task": "infer", "mode": "async", "intent": "summarize_text", "error": {"context": {"context_budget_tokens": 700000}}},
+            "redaction_report": {"prompt_body_forwarded": False, "data_ref_uri_forwarded": False, "presigned_url_forwarded": False},
+        }
+    )
+    write_recipe_yaml(existing, output_dir)
+    recipe_path = output_dir / "infer-summarize-text-draft.yml"
+    before = recipe_path.read_text(encoding="utf-8")
+    (inbox / "rr-old.json").write_text(
+        json.dumps(
+            {
+                "kind": "gpucall.recipe_request_submission",
+                "request_id": "rr-old",
+                "intake": {
+                    "sanitized_request": {
+                        "task": "infer",
+                        "mode": "sync",
+                        "intent": "summarize_text",
+                        "error": {"context": {"context_budget_tokens": 4096}},
+                    },
+                    "redaction_report": {"prompt_body_forwarded": False, "data_ref_uri_forwarded": False, "presigned_url_forwarded": False},
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    results = process_inbox(inbox_dir=inbox, output_dir=output_dir, accept_all=True, force=True)
+
+    assert results[0]["ok"] is False
+    assert "refusing to narrow existing recipe contract" in results[0]["error"]
+    assert (inbox / "failed" / "rr-old.json").exists()
     assert recipe_path.read_text(encoding="utf-8") == before
 
 

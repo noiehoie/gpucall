@@ -26,7 +26,13 @@ from gpucall.recipe_authoring import (
     build_authoring_bundle,
     parse_authoring_proposal,
 )
-from gpucall.recipe_materialize import canonical_recipe_from_artifact, context_budget_policy, materialization_report, to_yaml, write_recipe_yaml
+from gpucall.recipe_materialize import (
+    canonical_recipe_from_artifact,
+    context_budget_policy,
+    materialization_report,
+    to_yaml,
+    write_recipe_yaml,
+)
 from gpucall.recipe_request_index import RecipeRequestIndex, default_recipe_request_index_path
 from gpucall.readiness import build_readiness_report
 from gpucall.tuple_promotion import promote_candidate, promote_production_tuple
@@ -44,6 +50,7 @@ def main(argv: list[str] | None = None) -> int:
     materialize.add_argument("--report", help="write materialization report JSON")
     materialize.add_argument("--accept-all", action="store_true", help="explicitly accept caller artifact into a recipe intent candidate")
     materialize.add_argument("--force", action="store_true", help="overwrite existing recipe YAML")
+    materialize.add_argument("--allow-contract-narrowing", action="store_true", help="allow --force to narrow an existing recipe contract")
     materialize.add_argument("--dry-run", action="store_true", help="print YAML without writing files")
 
     review = subcommands.add_parser("review", help="review a submitted recipe request against config, tuples, policy, and live evidence")
@@ -79,6 +86,7 @@ def main(argv: list[str] | None = None) -> int:
     process.add_argument("--index-db", help="SQLite index path for submitted recipe requests; defaults to inbox/recipe_requests.db")
     process.add_argument("--accept-all", action="store_true")
     process.add_argument("--force", action="store_true")
+    process.add_argument("--allow-contract-narrowing", action="store_true", help="allow --force to narrow an existing recipe contract")
     process.add_argument("--config-dir", help="gpucall config directory to review against")
     process.add_argument("--validation-dir", help="tuple live validation artifact directory")
 
@@ -96,6 +104,7 @@ def main(argv: list[str] | None = None) -> int:
     watch.add_argument("--index-db", help="SQLite index path for submitted recipe requests; defaults to inbox/recipe_requests.db")
     watch.add_argument("--accept-all", action="store_true")
     watch.add_argument("--force", action="store_true")
+    watch.add_argument("--allow-contract-narrowing", action="store_true", help="allow --force to narrow an existing recipe contract")
     watch.add_argument("--config-dir", help="gpucall config directory to review against")
     watch.add_argument("--validation-dir", help="tuple live validation artifact directory")
     watch.add_argument("--interval-seconds", type=float, default=10.0)
@@ -111,6 +120,7 @@ def main(argv: list[str] | None = None) -> int:
     inbox_command.add_argument("--validation-dir", help="tuple live validation artifact directory")
     inbox_command.add_argument("--accept-all", action="store_true")
     inbox_command.add_argument("--force", action="store_true")
+    inbox_command.add_argument("--allow-contract-narrowing", action="store_true", help="allow --force to narrow an existing recipe contract")
 
     args = parser.parse_args(argv)
     if args.command == "materialize":
@@ -123,7 +133,7 @@ def main(argv: list[str] | None = None) -> int:
         if args.dry_run or not args.output_dir:
             sys.stdout.write(to_yaml(recipe))
         else:
-            path = write_recipe_yaml(recipe, args.output_dir, force=args.force)
+            path = write_recipe_yaml(recipe, args.output_dir, force=args.force, allow_contract_narrowing=args.allow_contract_narrowing)
             report["recipe_path"] = str(path)
         if args.report:
             Path(args.report).write_text(json.dumps(report, ensure_ascii=False, indent=2, sort_keys=True) + "\n", encoding="utf-8")
@@ -169,6 +179,7 @@ def main(argv: list[str] | None = None) -> int:
             report_dir=args.report_dir,
             index_db=args.index_db,
             force=args.force,
+            allow_contract_narrowing=args.allow_contract_narrowing,
             config_dir=args.config_dir,
             validation_dir=args.validation_dir,
             accept_all=args.accept_all,
@@ -191,6 +202,7 @@ def main(argv: list[str] | None = None) -> int:
                 report_dir=args.report_dir,
                 index_db=args.index_db,
                 force=args.force,
+                allow_contract_narrowing=args.allow_contract_narrowing,
                 config_dir=args.config_dir,
                 validation_dir=args.validation_dir,
                 accept_all=args.accept_all,
@@ -213,6 +225,7 @@ def main(argv: list[str] | None = None) -> int:
             validation_dir=args.validation_dir,
             accept_all=args.accept_all,
             force=args.force,
+            allow_contract_narrowing=args.allow_contract_narrowing,
         )
         sys.stdout.write(json.dumps(result, ensure_ascii=False, indent=2, sort_keys=True) + "\n")
         return 0
@@ -274,6 +287,7 @@ def process_inbox(
     report_dir: str | Path | None = None,
     index_db: str | Path | None = None,
     force: bool = False,
+    allow_contract_narrowing: bool = False,
     config_dir: str | Path | None = None,
     validation_dir: str | Path | None = None,
     accept_all: bool = False,
@@ -311,7 +325,7 @@ def process_inbox(
             if recipe_path.exists() and not force:
                 report["processing_action"] = "existing_recipe_linked"
             else:
-                recipe_path = write_recipe_yaml(recipe, output, force=force)
+                recipe_path = write_recipe_yaml(recipe, output, force=force, allow_contract_narrowing=allow_contract_narrowing)
                 report["processing_action"] = "recipe_written"
             report["recipe_path"] = str(recipe_path)
             report["submission_path"] = str(path)
@@ -820,6 +834,7 @@ def inbox_command_report(
     validation_dir: str | Path | None = None,
     accept_all: bool = False,
     force: bool = False,
+    allow_contract_narrowing: bool = False,
 ) -> dict[str, Any]:
     inbox = Path(inbox_dir)
     db_path = Path(index_db) if index_db else default_recipe_request_index_path(inbox)
@@ -842,6 +857,7 @@ def inbox_command_report(
                 output_dir=output_dir,
                 index_db=db_path,
                 force=force,
+                allow_contract_narrowing=allow_contract_narrowing,
                 config_dir=config_dir,
                 validation_dir=validation_dir,
                 accept_all=accept_all,

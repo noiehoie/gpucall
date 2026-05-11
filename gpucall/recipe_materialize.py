@@ -100,18 +100,57 @@ def materialization_report(artifact: Mapping[str, Any], recipe: Mapping[str, Any
     }
 
 
-def write_recipe_yaml(recipe: Mapping[str, Any], output_dir: str | Path, *, force: bool = False) -> Path:
+def write_recipe_yaml(
+    recipe: Mapping[str, Any],
+    output_dir: str | Path,
+    *,
+    force: bool = False,
+    allow_contract_narrowing: bool = False,
+) -> Path:
     root = Path(output_dir)
     root.mkdir(parents=True, exist_ok=True)
     path = root / f"{recipe['name']}.yml"
     if path.exists() and not force:
         raise FileExistsError(f"recipe already exists: {path}")
+    if path.exists() and force and not allow_contract_narrowing:
+        existing = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+        if not isinstance(existing, Mapping):
+            raise ValueError(f"refusing to overwrite invalid existing recipe YAML: {path}")
+        reasons = contract_narrowing_reasons(existing, recipe)
+        if reasons:
+            raise ValueError(f"refusing to narrow existing recipe contract: {path}: " + "; ".join(reasons))
     path.write_text(to_yaml(recipe), encoding="utf-8")
     return path
 
 
 def to_yaml(value: Mapping[str, Any]) -> str:
     return yaml.safe_dump(dict(value), allow_unicode=True, sort_keys=False)
+
+
+def contract_narrowing_reasons(existing: Mapping[str, Any], proposed: Mapping[str, Any]) -> list[str]:
+    reasons: list[str] = []
+    for key in ("context_budget_tokens", "max_input_bytes"):
+        current = _optional_positive_int(existing.get(key))
+        next_value = _optional_positive_int(proposed.get(key))
+        if current is not None and next_value is not None and next_value < current:
+            reasons.append(f"{key} would decrease from {current} to {next_value}")
+    current_modes = _string_set(existing.get("allowed_modes"))
+    next_modes = _string_set(proposed.get("allowed_modes"))
+    if current_modes and next_modes and not current_modes.issubset(next_modes):
+        reasons.append("allowed_modes would drop " + ", ".join(sorted(current_modes - next_modes)))
+    current_caps = _string_set(existing.get("required_model_capabilities"))
+    next_caps = _string_set(proposed.get("required_model_capabilities"))
+    if current_caps and next_caps and not current_caps.issubset(next_caps):
+        reasons.append("required_model_capabilities would drop " + ", ".join(sorted(current_caps - next_caps)))
+    current_mimes = _string_set(existing.get("allowed_mime_prefixes"))
+    next_mimes = _string_set(proposed.get("allowed_mime_prefixes"))
+    if current_mimes and next_mimes and not current_mimes.issubset(next_mimes):
+        reasons.append("allowed_mime_prefixes would drop " + ", ".join(sorted(current_mimes - next_mimes)))
+    current_class = _classification_rank(existing.get("data_classification"))
+    next_class = _classification_rank(proposed.get("data_classification"))
+    if current_class is not None and next_class is not None and next_class < current_class:
+        reasons.append(f"data_classification would decrease from {existing.get('data_classification')} to {proposed.get('data_classification')}")
+    return reasons
 
 
 def _proposed_recipe_from_artifact(artifact: Mapping[str, Any]) -> Mapping[str, Any]:
@@ -180,6 +219,25 @@ def _positive_int(value: Any, *, default: int) -> int:
     except (TypeError, ValueError):
         return default
     return max(1, number)
+
+
+def _optional_positive_int(value: Any) -> int | None:
+    try:
+        number = int(value)
+    except (TypeError, ValueError):
+        return None
+    return number if number > 0 else None
+
+
+def _string_set(value: Any) -> set[str]:
+    if not isinstance(value, list):
+        return set()
+    return {str(item) for item in value if str(item)}
+
+
+def _classification_rank(value: Any) -> int | None:
+    order = {"public": 0, "internal": 1, "confidential": 2, "restricted": 3}
+    return order.get(str(value or "").strip().lower())
 
 
 def _round_context_budget(value: Any) -> int:
