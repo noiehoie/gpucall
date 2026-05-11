@@ -282,7 +282,10 @@ class HyperstackAdapter(TupleAdapter):
         known_hosts = os.getenv("GPUCALL_HYPERSTACK_KNOWN_HOSTS")
         if known_hosts:
             ssh.load_host_keys(known_hosts)
-            ssh.set_missing_host_key_policy(paramiko.RejectPolicy())
+            if os.getenv("GPUCALL_HYPERSTACK_SSH_TOFU", "").strip().lower() in {"1", "true", "yes", "on"}:
+                ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+            else:
+                ssh.set_missing_host_key_policy(paramiko.RejectPolicy())
         else:
             raise TupleError(
                 "Hyperstack SSH requires GPUCALL_HYPERSTACK_KNOWN_HOSTS",
