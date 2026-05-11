@@ -99,6 +99,33 @@ def test_vision_prompt_excludes_gateway_system_prompt() -> None:
     assert "vision request directly" not in prompt
 
 
+def test_vision_prompt_adds_response_format_json_instruction() -> None:
+    payload = {
+        "system_prompt": "Answer the user's vision request directly from the supplied image and prompt.",
+        "inline_inputs": {"prompt": {"value": "紙面を構造化せよ", "content_type": "text/plain"}},
+        "response_format": {"type": "json_object"},
+    }
+
+    prompt = vision_prompt_from_payload(payload)
+
+    assert "紙面を構造化せよ" in prompt
+    assert "Return only one valid JSON object" in prompt
+    assert "vision request directly" not in prompt
+
+
+def test_vision_prompt_adds_response_format_json_schema_instruction() -> None:
+    payload = {
+        "messages": [{"role": "user", "content": "紙面を構造化せよ"}],
+        "response_format": {"type": "json_schema", "json_schema": {"type": "object", "required": ["headline"]}},
+    }
+
+    prompt = vision_prompt_from_payload(payload)
+
+    assert "紙面を構造化せよ" in prompt
+    assert "JSON Schema" in prompt
+    assert '"required":["headline"]' in prompt
+
+
 def test_florence_document_prompt_detects_japanese_headline_request() -> None:
     assert _looks_like_document_prompt("この新聞紙面の主要ヘッドライン上位3件を日本語で箇条書きにせよ。")
 

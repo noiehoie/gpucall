@@ -29,8 +29,8 @@ stop_tokens:
 - <|im_end|>
 - <|endoftext|>
 repetition_penalty: 1.05
-guided_decoding: true
-output_validation_attempts: 1
+guided_decoding: false
+output_validation_attempts: 2
 artifact_export: false
 requires_key_release: false
 required_model_capabilities:

@@ -2,7 +2,7 @@ name: modal-transformers-vision
 kind: transformers
 version: null
 input_contracts: [image, data_refs, text]
-output_contracts: [plain-text]
+output_contracts: [plain-text, json_object]
 supports_guided_decoding: false
 supports_streaming: false
 supports_multimodal: true

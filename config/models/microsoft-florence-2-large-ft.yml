@@ -5,7 +5,7 @@ max_model_len: 8192
 min_vram_gb: 16
 supported_engines: [modal-transformers-vision]
 input_contracts: [text, image, data_refs]
-output_contracts: [plain-text, json_object]
+output_contracts: [plain-text]
 supports_vision: true
 supports_guided_decoding: false
 supports_streaming: false

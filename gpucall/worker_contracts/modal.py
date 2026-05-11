@@ -109,16 +109,36 @@ def prompt_from_payload(payload: dict[str, Any]) -> str:
 def vision_prompt_from_payload(payload: dict[str, Any]) -> str:
     inline = payload.get("inline_inputs") or {}
     prompt_item = inline.get("prompt")
+    prompt = ""
     if isinstance(prompt_item, dict) and str(prompt_item.get("value", "")):
-        return str(prompt_item.get("value", ""))
-    messages = payload.get("messages") or []
-    parts = [
-        str(message.get("content", ""))
-        for message in messages
-        if str(message.get("role", "user")) != "system" and str(message.get("content", ""))
-    ]
-    if parts:
-        return "\n".join(parts)
+        prompt = str(prompt_item.get("value", ""))
+    else:
+        messages = payload.get("messages") or []
+        parts = [
+            str(message.get("content", ""))
+            for message in messages
+            if str(message.get("role", "user")) != "system" and str(message.get("content", ""))
+        ]
+        if parts:
+            prompt = "\n".join(parts)
+    structured_instruction = _vision_structured_instruction(payload)
+    if structured_instruction:
+        return "\n\n".join(part for part in (prompt, structured_instruction) if part)
+    return prompt
+
+
+def _vision_structured_instruction(payload: dict[str, Any]) -> str:
+    response_format = payload.get("response_format") or {}
+    format_type = response_format.get("type")
+    if format_type == "json_object":
+        return "Return only one valid JSON object. Do not include markdown fences, XML, or explanatory prose."
+    if format_type == "json_schema":
+        schema = response_format.get("json_schema") or {}
+        return (
+            "Return only one valid JSON object matching this JSON Schema. "
+            "Do not include markdown fences, XML, or explanatory prose.\n"
+            + json.dumps(schema, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+        )
     return ""
 
 
