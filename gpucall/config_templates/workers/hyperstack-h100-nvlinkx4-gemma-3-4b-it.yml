@@ -1,0 +1,24 @@
+worker_ref: hyperstack-h100-nvlinkx4-gemma-3-4b-it
+adapter: hyperstack
+execution_surface: iaas_vm
+model_ref: gemma-3-4b-it
+engine_ref: hyperstack-vllm
+modes:
+- sync
+- async
+input_contracts:
+- text
+- chat_messages
+- data_refs
+output_contract: plain-text
+stream_contract: none
+target: default-CANADA-1
+endpoint_contract: hyperstack-vm
+model: google/gemma-3-4b-it
+provider_params:
+  worker_env:
+    GPUCALL_WORKER_MODEL: google/gemma-3-4b-it
+    GPUCALL_WORKER_MAX_MODEL_LEN: '131072'
+    GPUCALL_WORKER_TENSOR_PARALLEL_SIZE: '4'
+    GPUCALL_WORKER_GPU_MEMORY_UTILIZATION: '0.95'
+declared_model_max_len: 131072

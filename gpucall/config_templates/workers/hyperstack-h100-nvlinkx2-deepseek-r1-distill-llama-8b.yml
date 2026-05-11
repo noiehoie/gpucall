@@ -1,0 +1,24 @@
+worker_ref: hyperstack-h100-nvlinkx2-deepseek-r1-distill-llama-8b
+adapter: hyperstack
+execution_surface: iaas_vm
+model_ref: deepseek-r1-distill-llama-8b
+engine_ref: hyperstack-vllm
+modes:
+- sync
+- async
+input_contracts:
+- text
+- chat_messages
+- data_refs
+output_contract: plain-text
+stream_contract: none
+target: default-CANADA-1
+endpoint_contract: hyperstack-vm
+model: deepseek-ai/DeepSeek-R1-Distill-Llama-8B
+provider_params:
+  worker_env:
+    GPUCALL_WORKER_MODEL: deepseek-ai/DeepSeek-R1-Distill-Llama-8B
+    GPUCALL_WORKER_MAX_MODEL_LEN: '131072'
+    GPUCALL_WORKER_TENSOR_PARALLEL_SIZE: '2'
+    GPUCALL_WORKER_GPU_MEMORY_UTILIZATION: '0.95'
+declared_model_max_len: 131072

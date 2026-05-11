@@ -1,0 +1,24 @@
+worker_ref: hyperstack-h100x4-qwen2-5-7b-instruct-1m
+adapter: hyperstack
+execution_surface: iaas_vm
+model_ref: qwen2.5-7b-instruct-1m
+engine_ref: hyperstack-vllm
+modes:
+- sync
+- async
+input_contracts:
+- text
+- chat_messages
+- data_refs
+output_contract: plain-text
+stream_contract: none
+target: default-CANADA-1
+endpoint_contract: hyperstack-vm
+model: Qwen/Qwen2.5-7B-Instruct-1M
+provider_params:
+  worker_env:
+    GPUCALL_WORKER_MODEL: Qwen/Qwen2.5-7B-Instruct-1M
+    GPUCALL_WORKER_MAX_MODEL_LEN: '1010000'
+    GPUCALL_WORKER_TENSOR_PARALLEL_SIZE: '4'
+    GPUCALL_WORKER_GPU_MEMORY_UTILIZATION: '0.95'
+declared_model_max_len: 1010000

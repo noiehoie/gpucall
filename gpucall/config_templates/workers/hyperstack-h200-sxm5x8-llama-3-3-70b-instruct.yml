@@ -1,0 +1,24 @@
+worker_ref: hyperstack-h200-sxm5x8-llama-3-3-70b-instruct
+adapter: hyperstack
+execution_surface: iaas_vm
+model_ref: llama-3.3-70b-instruct
+engine_ref: hyperstack-vllm
+modes:
+- sync
+- async
+input_contracts:
+- text
+- chat_messages
+- data_refs
+output_contract: plain-text
+stream_contract: none
+target: default-CANADA-1
+endpoint_contract: hyperstack-vm
+model: meta-llama/Llama-3.3-70B-Instruct
+provider_params:
+  worker_env:
+    GPUCALL_WORKER_MODEL: meta-llama/Llama-3.3-70B-Instruct
+    GPUCALL_WORKER_MAX_MODEL_LEN: '131072'
+    GPUCALL_WORKER_TENSOR_PARALLEL_SIZE: '8'
+    GPUCALL_WORKER_GPU_MEMORY_UTILIZATION: '0.95'
+declared_model_max_len: 131072

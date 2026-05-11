@@ -1,0 +1,24 @@
+worker_ref: hyperstack-h100-sxmx4-phi-4
+adapter: hyperstack
+execution_surface: iaas_vm
+model_ref: phi-4
+engine_ref: hyperstack-vllm
+modes:
+- sync
+- async
+input_contracts:
+- text
+- chat_messages
+- data_refs
+output_contract: plain-text
+stream_contract: none
+target: default-CANADA-1
+endpoint_contract: hyperstack-vm
+model: microsoft/phi-4
+provider_params:
+  worker_env:
+    GPUCALL_WORKER_MODEL: microsoft/phi-4
+    GPUCALL_WORKER_MAX_MODEL_LEN: '16384'
+    GPUCALL_WORKER_TENSOR_PARALLEL_SIZE: '4'
+    GPUCALL_WORKER_GPU_MEMORY_UTILIZATION: '0.95'
+declared_model_max_len: 16384

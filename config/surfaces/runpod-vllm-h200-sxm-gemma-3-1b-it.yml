@@ -1,0 +1,17 @@
+surface_ref: runpod-vllm-h200-sxm-gemma-3-1b-it
+worker_ref: runpod-vllm-h200-sxm-gemma-3-1b-it
+adapter: runpod-vllm-serverless
+execution_surface: managed_endpoint
+gpu: RUNPOD_H200_SXM
+vram_gb: 141
+max_model_len: 32768
+cost_per_second: 0.00155
+configured_price_source: https://docs.runpod.io/serverless/pricing
+configured_price_observed_at: '2026-05-08T00:00:00+00:00'
+configured_price_ttl_seconds: 604800
+stock_state: configured
+billing_granularity_seconds: 1
+image: runpod/worker-v1-vllm:v2.18.1
+max_data_classification: confidential
+scaledown_window_seconds: 5
+min_billable_seconds: 1

@@ -1,0 +1,28 @@
+worker_ref: runpod-vllm-ada48pro-qwen2-5-coder-14b-instruct
+adapter: runpod-vllm-serverless
+execution_surface: managed_endpoint
+model_ref: qwen2.5-coder-14b-instruct
+engine_ref: runpod-vllm-openai
+modes:
+- sync
+- async
+input_contracts:
+- chat_messages
+output_contract: openai-chat-completions
+stream_contract: none
+target: RUNPOD_ENDPOINT_ID_PLACEHOLDER
+endpoint_contract: openai-chat-completions
+model: Qwen/Qwen2.5-Coder-14B-Instruct
+provider_params:
+  model_storage:
+    storage_kind: runpod_cached_model
+    cached_model_ref: Qwen/Qwen2.5-Coder-14B-Instruct
+    mount_path: /runpod-volume
+    cache_hit_required: true
+  worker_env:
+    MODEL_NAME: Qwen/Qwen2.5-Coder-14B-Instruct
+    OPENAI_SERVED_MODEL_NAME_OVERRIDE: Qwen/Qwen2.5-Coder-14B-Instruct
+    MAX_MODEL_LEN: '131072'
+    BASE_PATH: /runpod-volume
+    GPU_MEMORY_UTILIZATION: '0.95'
+    MAX_CONCURRENCY: '30'

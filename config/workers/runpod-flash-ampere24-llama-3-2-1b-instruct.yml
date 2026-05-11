@@ -1,0 +1,15 @@
+worker_ref: runpod-flash-ampere24-llama-3-2-1b-instruct
+adapter: runpod-vllm-flashboot
+execution_surface: function_runtime
+model_ref: llama-3.2-1b-instruct
+engine_ref: runpod-vllm-openai
+modes:
+- sync
+- async
+input_contracts:
+- chat_messages
+output_contract: gpucall-tuple-result
+stream_contract: none
+target: RUNPOD_ENDPOINT_ID_PLACEHOLDER
+endpoint_contract: runpod-flash-sdk
+model: meta-llama/Llama-3.2-1B-Instruct

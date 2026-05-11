@@ -1,0 +1,28 @@
+surface_ref: hyperstack-a100x8-qwen3-8b
+worker_ref: hyperstack-a100x8-qwen3-8b
+adapter: hyperstack
+execution_surface: iaas_vm
+gpu: n3-A100x8
+vram_gb: 640
+max_model_len: 131072
+cost_per_second: 0.003
+configured_price_source: https://www.hyperstack.cloud/gpu-pricing
+configured_price_observed_at: '2026-05-11T00:00:00+00:00'
+configured_price_ttl_seconds: 604800
+stock_state: configured
+billing_granularity_seconds: 60
+image: Ubuntu Server 22.04 LTS R570 CUDA 12.8 with Docker
+max_data_classification: restricted
+scaledown_window_seconds: 0
+min_billable_seconds: 60
+endpoint: https://infrahub-api.nexgencloud.com/v1
+instance: n3-A100x8
+key_name: gpucall-key
+ssh_remote_cidr: 203.0.113.10/32
+trust_profile:
+  security_tier: encrypted_capsule
+  sovereign_jurisdiction: CA
+  dedicated_gpu: true
+  requires_attestation: false
+  supports_key_release: false
+  allows_worker_s3_credentials: false

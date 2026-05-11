@@ -1,0 +1,15 @@
+worker_ref: runpod-flash-a100-80gb-qwen2-5-coder-1-5b-instruct
+adapter: runpod-vllm-flashboot
+execution_surface: function_runtime
+model_ref: qwen2.5-coder-1.5b-instruct
+engine_ref: runpod-vllm-openai
+modes:
+- sync
+- async
+input_contracts:
+- chat_messages
+output_contract: gpucall-tuple-result
+stream_contract: none
+target: RUNPOD_ENDPOINT_ID_PLACEHOLDER
+endpoint_contract: runpod-flash-sdk
+model: Qwen/Qwen2.5-Coder-1.5B-Instruct

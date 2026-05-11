@@ -1,0 +1,15 @@
+worker_ref: runpod-flash-ampere48-gemma-3-1b-it
+adapter: runpod-vllm-flashboot
+execution_surface: function_runtime
+model_ref: gemma-3-1b-it
+engine_ref: runpod-vllm-openai
+modes:
+- sync
+- async
+input_contracts:
+- chat_messages
+output_contract: gpucall-tuple-result
+stream_contract: none
+target: RUNPOD_ENDPOINT_ID_PLACEHOLDER
+endpoint_contract: runpod-flash-sdk
+model: google/gemma-3-1b-it

@@ -1,0 +1,16 @@
+surface_ref: runpod-flash-ada24-qwen2-5-7b-instruct
+worker_ref: runpod-flash-ada24-qwen2-5-7b-instruct
+adapter: runpod-vllm-flashboot
+execution_surface: function_runtime
+gpu: ADA_24
+vram_gb: 24
+max_model_len: 131072
+cost_per_second: 0.00031
+configured_price_source: https://docs.runpod.io/serverless/pricing
+configured_price_observed_at: '2026-05-08T00:00:00+00:00'
+configured_price_ttl_seconds: 604800
+stock_state: configured
+billing_granularity_seconds: 1
+max_data_classification: confidential
+scaledown_window_seconds: 5
+min_billable_seconds: 1

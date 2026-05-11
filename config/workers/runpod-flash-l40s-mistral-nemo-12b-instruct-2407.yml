@@ -1,0 +1,15 @@
+worker_ref: runpod-flash-l40s-mistral-nemo-12b-instruct-2407
+adapter: runpod-vllm-flashboot
+execution_surface: function_runtime
+model_ref: mistral-nemo-12b-instruct-2407
+engine_ref: runpod-vllm-openai
+modes:
+- sync
+- async
+input_contracts:
+- chat_messages
+output_contract: gpucall-tuple-result
+stream_contract: none
+target: RUNPOD_ENDPOINT_ID_PLACEHOLDER
+endpoint_contract: runpod-flash-sdk
+model: mistralai/Mistral-Nemo-Instruct-2407

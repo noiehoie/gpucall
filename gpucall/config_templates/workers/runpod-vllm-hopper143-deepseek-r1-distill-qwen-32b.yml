@@ -1,0 +1,28 @@
+worker_ref: runpod-vllm-hopper143-deepseek-r1-distill-qwen-32b
+adapter: runpod-vllm-serverless
+execution_surface: managed_endpoint
+model_ref: deepseek-r1-distill-qwen-32b
+engine_ref: runpod-vllm-openai
+modes:
+- sync
+- async
+input_contracts:
+- chat_messages
+output_contract: openai-chat-completions
+stream_contract: none
+target: RUNPOD_ENDPOINT_ID_PLACEHOLDER
+endpoint_contract: openai-chat-completions
+model: deepseek-ai/DeepSeek-R1-Distill-Qwen-32B
+provider_params:
+  model_storage:
+    storage_kind: runpod_cached_model
+    cached_model_ref: deepseek-ai/DeepSeek-R1-Distill-Qwen-32B
+    mount_path: /runpod-volume
+    cache_hit_required: true
+  worker_env:
+    MODEL_NAME: deepseek-ai/DeepSeek-R1-Distill-Qwen-32B
+    OPENAI_SERVED_MODEL_NAME_OVERRIDE: deepseek-ai/DeepSeek-R1-Distill-Qwen-32B
+    MAX_MODEL_LEN: '131072'
+    BASE_PATH: /runpod-volume
+    GPU_MEMORY_UTILIZATION: '0.95'
+    MAX_CONCURRENCY: '30'

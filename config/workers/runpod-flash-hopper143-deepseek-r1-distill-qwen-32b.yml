@@ -1,0 +1,15 @@
+worker_ref: runpod-flash-hopper143-deepseek-r1-distill-qwen-32b
+adapter: runpod-vllm-flashboot
+execution_surface: function_runtime
+model_ref: deepseek-r1-distill-qwen-32b
+engine_ref: runpod-vllm-openai
+modes:
+- sync
+- async
+input_contracts:
+- chat_messages
+output_contract: gpucall-tuple-result
+stream_contract: none
+target: RUNPOD_ENDPOINT_ID_PLACEHOLDER
+endpoint_contract: runpod-flash-sdk
+model: deepseek-ai/DeepSeek-R1-Distill-Qwen-32B
