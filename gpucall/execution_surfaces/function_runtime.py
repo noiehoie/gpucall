@@ -77,7 +77,30 @@ def _unwrap_invocation(invocation: Any, timeout: float) -> Any:
     try:
         return get(timeout=timeout)
     except TypeError:
-        return get()
+        try:
+            return get()
+        except Exception as exc:
+            mapped = _modal_exception_to_tuple_error(exc)
+            if mapped is not None:
+                raise mapped from exc
+            raise
+    except Exception as exc:
+        mapped = _modal_exception_to_tuple_error(exc)
+        if mapped is not None:
+            raise mapped from exc
+        raise
+
+
+def _modal_exception_to_tuple_error(exc: Exception) -> TupleError | None:
+    exc_type = f"{exc.__class__.__module__}.{exc.__class__.__name__}"
+    if exc_type == "modal.exception.ResourceExhaustedError" or exc.__class__.__name__ == "ResourceExhaustedError":
+        return TupleError(
+            "Modal GPU resource exhausted",
+            retryable=True,
+            status_code=503,
+            code="PROVIDER_RESOURCE_EXHAUSTED",
+        )
+    return None
 
 
 def _start_modal_call(remote: Any, *args: Any, **kwargs: Any) -> Any:
@@ -200,31 +223,12 @@ class ModalAdapter(TupleAdapter):
         modal = _import_modal()
         to = _get_timeout(timeout)
         payload = plan_payload(plan)
-        with _modal_output(modal):
-            if self.app_name and self.function_name:
-                fn = modal.Function.from_name(self.app_name, self.function_name)
-                invocation = _start_modal_call(
-                    fn,
-                    payload,
-                    plan.task,
-                    max_model_len=self.max_model_len,
-                    model=self.model,
-                    **self.provider_params,
-                )
-                with self._remote_lock:
-                    self._invocations[remote_id] = invocation
-                try:
-                    return _unwrap_invocation(invocation, to)
-                finally:
-                    with self._remote_lock:
-                        self._invocations.pop(remote_id, None)
-            with _ephemeral_guard(to):
-                from gpucall.worker_contracts.modal import app, vllm_a10g_ref, vllm_t4_ref
-
-                worker = vllm_a10g_ref if (plan.token_budget or 0) > 8192 else vllm_t4_ref
-                with app.run():
+        try:
+            with _modal_output(modal):
+                if self.app_name and self.function_name:
+                    fn = modal.Function.from_name(self.app_name, self.function_name)
                     invocation = _start_modal_call(
-                        worker.run_inference_on_modal,
+                        fn,
                         payload,
                         plan.task,
                         max_model_len=self.max_model_len,
@@ -238,6 +242,33 @@ class ModalAdapter(TupleAdapter):
                     finally:
                         with self._remote_lock:
                             self._invocations.pop(remote_id, None)
+                with _ephemeral_guard(to):
+                    from gpucall.worker_contracts.modal import app, vllm_a10g_ref, vllm_t4_ref
+
+                    worker = vllm_a10g_ref if (plan.token_budget or 0) > 8192 else vllm_t4_ref
+                    with app.run():
+                        invocation = _start_modal_call(
+                            worker.run_inference_on_modal,
+                            payload,
+                            plan.task,
+                            max_model_len=self.max_model_len,
+                            model=self.model,
+                            **self.provider_params,
+                        )
+                        with self._remote_lock:
+                            self._invocations[remote_id] = invocation
+                        try:
+                            return _unwrap_invocation(invocation, to)
+                        finally:
+                            with self._remote_lock:
+                                self._invocations.pop(remote_id, None)
+        except TupleError:
+            raise
+        except Exception as exc:
+            mapped = _modal_exception_to_tuple_error(exc)
+            if mapped is not None:
+                raise mapped from exc
+            raise
 
     def _stream_sync(self, plan: CompiledPlan, timeout: float | None, remote_id: str) -> Iterator[str]:
         modal = _import_modal()

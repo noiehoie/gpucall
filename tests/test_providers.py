@@ -595,6 +595,45 @@ def test_modal_stream_uses_explicit_deployed_remote_gen(monkeypatch) -> None:
     assert calls["kwargs"]["max_model_len"] == 100
 
 
+def test_modal_resource_exhausted_maps_to_capacity_error(monkeypatch) -> None:
+    class ResourceExhaustedError(Exception):
+        pass
+
+    ResourceExhaustedError.__module__ = "modal.exception"
+
+    class FakeInvocation:
+        def get(self, timeout: float):
+            raise ResourceExhaustedError("redacted provider capacity message")
+
+    class FakeFunction:
+        @staticmethod
+        def from_name(app_name: str, function_name: str):
+            return FakeFunction()
+
+        def spawn(self, *args, **kwargs):
+            return FakeInvocation()
+
+    fake_modal = types.SimpleNamespace(
+        Function=FakeFunction,
+        enable_output=lambda **_: contextlib.nullcontext(),
+    )
+    monkeypatch.setitem(sys.modules, "modal", fake_modal)
+
+    adapter = ModalAdapter(
+        name="modal",
+        app_name="gpucall-worker",
+        function_name="run_inference_on_modal",
+        max_model_len=100,
+    )
+
+    with pytest.raises(TupleError) as caught:
+        adapter._invoke(plan_payload_plan(), timeout=3, remote_id="modal-1")
+
+    assert caught.value.status_code == 503
+    assert caught.value.code == "PROVIDER_RESOURCE_EXHAUSTED"
+    assert caught.value.retryable is True
+
+
 def test_modal_scaledown_metadata_matches_worker_defaults() -> None:
     root = Path(__file__).resolve().parents[1]
     worker = (root / "gpucall" / "worker_contracts" / "modal.py").read_text(encoding="utf-8")
