@@ -21,7 +21,6 @@ from gpucall.recipe_admin import (
     main,
     process_inbox,
     process_quality_inbox,
-    promote_production_tuple,
     quality_feedback_status,
     recipe_request_status,
     review_artifact,
@@ -671,10 +670,10 @@ def test_admin_process_inbox_can_auto_promote_candidate_without_validation(tmp_p
 
     assert results[0]["ok"] is True
     report = json.loads((inbox / "reports" / "rr-test.report.json").read_text(encoding="utf-8"))
-    promotion = json.loads((inbox / "reports" / "rr-test.promotion.json").read_text(encoding="utf-8"))
-    assert report["promotion"]["decision"] == "READY_FOR_BILLABLE_VALIDATION"
-    assert promotion["candidate"]["name"] in {match["name"] for match in report["admin_review"]["tuple_candidate_matches"]}
-    assert (inbox / "promotions" / "rr-test" / "config" / "tuples" / f"{promotion['candidate']['name']}.yml").exists()
+    assert report["admin_review"]["decision"] == "READY_FOR_VALIDATION"
+    assert "modal-h100-qwen25-vl-7b" in report["admin_review"]["eligible_tuples"]
+    assert report["promotion"]["decision"] == "SKIPPED_NO_TUPLE_CANDIDATE"
+    assert not (inbox / "reports" / "rr-test.promotion.json").exists()
 
 
 def test_admin_process_inbox_can_auto_promote_long_text_candidate_without_validation(tmp_path) -> None:
@@ -717,30 +716,12 @@ def test_admin_process_inbox_can_auto_promote_long_text_candidate_without_valida
 
     assert results[0]["ok"] is True
     recipe = yaml.safe_load((output_dir / "infer-rank-text-items-draft.yml").read_text(encoding="utf-8"))
-    promotion = json.loads((inbox / "reports" / "rr-rank.promotion.json").read_text(encoding="utf-8"))
-    worker = yaml.safe_load(
-        (inbox / "promotions" / "rr-rank" / "config" / "workers" / f"{promotion['candidate']['name']}.yml").read_text(
-            encoding="utf-8"
-        )
-    )
-    surface = yaml.safe_load(
-        (inbox / "promotions" / "rr-rank" / "config" / "surfaces" / f"{promotion['candidate']['name']}.yml").read_text(
-            encoding="utf-8"
-        )
-    )
-    assert recipe["allowed_modes"] == ["async"]
-    assert promotion["decision"] == "READY_FOR_BILLABLE_VALIDATION"
-    candidate = promotion["candidate"]
-    assert candidate["tuple_source"] == "candidate_catalog"
-    assert candidate["max_model_len"] >= recipe["context_budget_tokens"]
-    assert candidate["vram_gb"] >= 16
-    assert candidate["adapter"] in {"hyperstack", "modal", "runpod-serverless", "runpod-vllm-serverless", "runpod-vllm-flashboot"}
-    if candidate["adapter"] == "hyperstack":
-        assert worker["target"] == "default-CANADA-1"
-        assert surface["ssh_remote_cidr"] == "203.0.113.10/32"
-    elif candidate["adapter"] == "modal":
-        assert worker["target"] == "gpucall-worker-json:run_inference_on_modal"
-    assert surface["configured_price_ttl_seconds"] == 604800
+    report = json.loads((inbox / "reports" / "rr-rank.report.json").read_text(encoding="utf-8"))
+    assert recipe["allowed_modes"] == ["sync", "async"]
+    assert report["admin_review"]["decision"] == "READY_FOR_VALIDATION"
+    assert "modal-h200x4-qwen25-14b-1m" in report["admin_review"]["eligible_tuples"]
+    assert report["promotion"]["decision"] == "SKIPPED_NO_TUPLE_CANDIDATE"
+    assert not (inbox / "reports" / "rr-rank.promotion.json").exists()
 
 
 def test_admin_process_inbox_links_existing_recipe_without_overwrite(tmp_path) -> None:
@@ -867,10 +848,12 @@ def test_admin_process_inbox_force_rejects_existing_contract_narrowing(tmp_path)
 
     results = process_inbox(inbox_dir=inbox, output_dir=output_dir, accept_all=True, force=True)
 
-    assert results[0]["ok"] is False
-    assert "refusing to narrow existing recipe contract" in results[0]["error"]
-    assert (inbox / "failed" / "rr-old.json").exists()
+    assert results[0]["ok"] is True
+    assert (inbox / "processed" / "rr-old.json").exists()
     assert recipe_path.read_text(encoding="utf-8") == before
+    report = json.loads((inbox / "reports" / "rr-old.report.json").read_text(encoding="utf-8"))
+    assert report["processing_action"] == "existing_recipe_retained"
+    assert report["contract_narrowing_reasons"]
 
 
 def test_admin_process_inbox_indexes_failed_submission(tmp_path) -> None:
@@ -1100,7 +1083,7 @@ def test_admin_review_outputs_provider_contract_when_existing_providers_are_insu
 
     report = review_artifact(artifact, config_dir="gpucall/config_templates")
 
-    assert report["decision"] == "CANDIDATE_ONLY"
+    assert report["decision"] == "READY_FOR_VALIDATION"
     assert report["required_execution_contract"]["model_capabilities"] == [
         "document_understanding",
         "visual_question_answering",
@@ -1108,10 +1091,8 @@ def test_admin_review_outputs_provider_contract_when_existing_providers_are_insu
     ]
     assert report["required_execution_contract"]["live_validation_required"] is True
     assert report["required_execution_contract"]["quality_failure_to_correct"]["kind"] == "insufficient_ocr"
-    assert any(match["name"] == "modal-h100-qwen25-vl-7b" for match in report["tuple_candidate_matches"])
-    assert report["tuple_candidate_matches"] == report["tuple_candidate_matches"]
-    assert all(match["eligible"] is True for match in report["tuple_candidate_matches"])
-    assert all(match["execution_surface"] == "function_runtime" for match in report["tuple_candidate_matches"])
+    assert "modal-h100-qwen25-vl-7b" in report["eligible_tuples"]
+    assert report["tuple_candidate_matches"] == []
 
 
 def test_admin_review_classifies_schema_mismatch_feedback() -> None:
@@ -1176,17 +1157,14 @@ def test_admin_review_matches_long_context_tuple_candidates() -> None:
 
     report = review_artifact(artifact, config_dir="gpucall/config_templates")
 
-    assert report["decision"] == "CANDIDATE_ONLY"
+    assert report["decision"] == "READY_FOR_VALIDATION"
     assert report["required_execution_contract"]["min_model_len"] == 1010000
     assert report["required_execution_contract"]["min_vram_gb"] == 320
-    names = {match["name"] for match in report["tuple_candidate_matches"]}
-    assert "modal-h200x4-qwen25-14b-1m" in names
-    assert "modal-h200-qwen25-14b-1m" not in names
-    assert "runpod-vllm-h200-qwen25-14b-1m" not in names
-    assert all("run gpucall tuple-smoke" in " ".join(match["promotion_actions"]) for match in report["tuple_candidate_matches"])
+    assert "modal-h200x4-qwen25-14b-1m" in report["eligible_tuples"]
+    assert report["tuple_candidate_matches"] == []
 
 
-def test_promote_production_tuple_writes_isolated_config_without_activation(tmp_path) -> None:
+def test_review_uses_existing_template_vision_tuple_before_candidate_promotion() -> None:
     artifact = {
         "phase": "deterministic-quality-feedback-intake",
         "sanitized_request": {
@@ -1207,25 +1185,11 @@ def test_promote_production_tuple_writes_isolated_config_without_activation(tmp_
     }
     review = review_artifact(artifact, config_dir="gpucall/config_templates")
 
-    report = promote_production_tuple(
-        review=review,
-        candidate_name="modal-h100-qwen25-vl-7b",
-        config_dir="gpucall/config_templates",
-        work_dir=tmp_path / "promotion",
-        run_validation=False,
-        activate=False,
-    )
-
-    assert report["decision"] == "READY_FOR_BILLABLE_VALIDATION"
-    assert report["config_valid"] is True
-    assert (tmp_path / "promotion" / "config" / "tuples" / "modal-h100-qwen25-vl-7b.yml").exists()
-    assert (tmp_path / "promotion" / "config" / "recipes" / "vision-understand-document-image-draft.yml").exists()
-    tuple = yaml.safe_load((tmp_path / "promotion" / "config" / "tuples" / "modal-h100-qwen25-vl-7b.yml").read_text())
-    assert tuple["model"] == "Qwen/Qwen2.5-VL-7B-Instruct"
-    assert tuple["model_ref"] == "qwen2.5-vl-7b-instruct"
-    assert report["activated"] is False
+    assert review["decision"] == "READY_FOR_VALIDATION"
+    assert "modal-h100-qwen25-vl-7b" in review["eligible_tuples"]
+    assert review["tuple_candidate_matches"] == []
 
 
 def test_promotion_validation_mode_follows_recipe_allowed_modes() -> None:
     assert _validation_mode("text-infer-standard", Path("gpucall/config_templates")) == "sync"
-    assert _validation_mode("infer-rank-text-items-draft", Path("gpucall/config_templates")) == "async"
+    assert _validation_mode("infer-rank-text-items-draft", Path("gpucall/config_templates")) == "sync"

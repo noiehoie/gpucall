@@ -13,6 +13,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+import yaml
+
 from gpucall.candidate_sources import load_tuple_candidate_payloads
 from gpucall.config import ConfigError, default_config_dir, default_state_dir, load_admin_automation, load_config
 from gpucall.domain import ExecutionMode, ExecutionTupleSpec, Recipe, RecipeAdminAutomationConfig, recipe_requirements
@@ -28,6 +30,7 @@ from gpucall.recipe_authoring import (
 )
 from gpucall.recipe_materialize import (
     canonical_recipe_from_artifact,
+    contract_narrowing_reasons,
     context_budget_policy,
     materialization_report,
     to_yaml,
@@ -389,6 +392,18 @@ def process_inbox(
             recipe_path = output / f"{recipe['name']}.yml"
             if recipe_path.exists() and not force:
                 report["processing_action"] = "existing_recipe_linked"
+            elif recipe_path.exists() and force and not allow_contract_narrowing:
+                existing = yaml.safe_load(recipe_path.read_text(encoding="utf-8")) or {}
+                if not isinstance(existing, Mapping):
+                    raise ValueError(f"refusing to overwrite invalid existing recipe YAML: {recipe_path}")
+                narrowing = contract_narrowing_reasons(existing, recipe)
+                if narrowing:
+                    report["processing_action"] = "existing_recipe_retained"
+                    report["retained_existing_recipe_reason"] = "submitted intake would narrow an existing broader recipe"
+                    report["contract_narrowing_reasons"] = narrowing
+                else:
+                    recipe_path = write_recipe_yaml(recipe, output, force=force, allow_contract_narrowing=allow_contract_narrowing)
+                    report["processing_action"] = "recipe_written"
             else:
                 recipe_path = write_recipe_yaml(recipe, output, force=force, allow_contract_narrowing=allow_contract_narrowing)
                 report["processing_action"] = "recipe_written"

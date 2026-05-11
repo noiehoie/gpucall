@@ -1,0 +1,28 @@
+surface_ref: modal-h100-qwen25-vl-7b
+worker_ref: modal-h100-qwen25-vl-7b
+account_ref: modal
+adapter: modal
+execution_surface: function_runtime
+gpu: H100
+vram_gb: 80
+max_model_len: 32768
+region: null
+zone: null
+cost_per_second: 0.001097
+configured_price_source: https://modal.com/pricing
+configured_price_observed_at: '2026-05-08T00:00:00+00:00'
+configured_price_ttl_seconds: 604800
+stock_state: configured
+billing_granularity_seconds: 0
+max_data_classification: confidential
+scaledown_window_seconds: 60
+min_billable_seconds: 0
+trust_profile:
+  security_tier: encrypted_capsule
+  sovereign_jurisdiction: US
+  dedicated_gpu: false
+  requires_attestation: false
+  supports_key_release: false
+  allows_worker_s3_credentials: false
+endpoint: null
+supports_vision: true

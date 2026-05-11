@@ -1,0 +1,21 @@
+worker_ref: modal-h100-florence-2-large-ft
+account_ref: modal
+adapter: modal
+execution_surface: function_runtime
+model_ref: microsoft-florence-2-large-ft
+engine_ref: modal-transformers-vision
+modes:
+- sync
+- async
+input_contracts:
+- image
+- data_refs
+- text
+output_contract: plain-text
+stream_contract: none
+target: gpucall-worker-json:run_inference_on_modal_vision_h100
+stream_target: null
+endpoint_contract: modal-function
+model: microsoft/Florence-2-large-ft
+provider_params: {}
+declared_model_max_len: 8192

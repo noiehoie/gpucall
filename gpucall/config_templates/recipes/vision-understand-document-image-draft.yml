@@ -1,7 +1,7 @@
-name: vision-answer-question-about-image-draft
+name: vision-understand-document-image-draft
 task: vision
 recipe_schema_version: 3
-intent: answer_question_about_image
+intent: understand_document_image
 context_budget_tokens: 8192
 resource_class: document_vision
 latency_class: standard
@@ -29,11 +29,12 @@ stop_tokens:
 - <|im_end|>
 - <|endoftext|>
 repetition_penalty: 1.05
-guided_decoding: true
-output_validation_attempts: 1
+guided_decoding: false
+output_validation_attempts: 2
 artifact_export: false
 requires_key_release: false
 required_model_capabilities:
+- document_understanding
 - visual_question_answering
 - instruction_following
 output_contract: plain-text

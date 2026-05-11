@@ -1,0 +1,29 @@
+surface_ref: local-author-ollama
+worker_ref: local-author-ollama
+controlled_runtime_ref: local-author-ollama
+account_ref: local
+adapter: local-ollama
+execution_surface: local_runtime
+gpu: local
+vram_gb: 24
+max_model_len: 32768
+region: local
+zone: local
+cost_per_second: 0
+configured_price_source: local-free
+configured_price_observed_at: '2026-05-10T13:27:09.681588+00:00'
+configured_price_ttl_seconds: 315360000
+stock_state: configured
+expected_cold_start_seconds: 2
+billing_granularity_seconds: 0
+max_data_classification: restricted
+scaledown_window_seconds: 0
+min_billable_seconds: 0
+trust_profile:
+  security_tier: local
+  sovereign_jurisdiction: local
+  dedicated_gpu: true
+  requires_attestation: false
+  supports_key_release: false
+  allows_worker_s3_credentials: false
+endpoint: http://127.0.0.1:11434

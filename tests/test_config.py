@@ -555,6 +555,25 @@ def test_standard_config_routes_structured_vision_to_json_capable_model(tmp_path
     assert "modal-h100-florence-2-large-ft" not in plan.tuple_chain
 
 
+def test_template_config_routes_structured_vision_to_json_capable_model() -> None:
+    config = load_config(Path("gpucall/config_templates"))
+    compiler = GovernanceCompiler(policy=config.policy, recipes=config.recipes, tuples=config.tuples, models=config.models, engines=config.engines, registry=ObservedRegistry())
+
+    request = TaskRequest(
+        task="vision",
+        mode=ExecutionMode.SYNC,
+        intent="understand_document_image",
+        input_refs=[DataRef(uri="s3://bucket/image.png", sha256="c" * 64, bytes=2_000_000, content_type="image/png")],
+        response_format={"type": "json_schema", "json_schema": {"type": "object", "required": ["articles"], "properties": {"articles": {"type": "array"}}}},
+    )
+
+    plan = compiler.compile(request)
+
+    assert plan.tuple_chain[0] == "modal-h100-qwen25-vl-7b"
+    assert "modal-h100-qwen25-vl-3b" not in plan.tuple_chain
+    assert "modal-h100-florence-2-large-ft" not in plan.tuple_chain
+
+
 def test_provider_smoke_uses_chat_messages_for_chat_only_provider(tmp_path) -> None:
     config = load_config(copy_config(tmp_path))
     recipe = config.recipes["text-infer-light"]

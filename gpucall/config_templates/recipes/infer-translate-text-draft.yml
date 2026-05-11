@@ -2,14 +2,14 @@ name: infer-translate-text-draft
 recipe_schema_version: 3
 task: infer
 intent: translate_text
-auto_select: false
+auto_select: true
 data_classification: confidential
 allowed_modes:
 - sync
 context_budget_tokens: 32768
 resource_class: standard
 latency_class: standard
-quality_floor: draft
+quality_floor: standard
 timeout_seconds: 180
 lease_ttl_seconds: 240
 token_estimation_profile: generic_utf8
