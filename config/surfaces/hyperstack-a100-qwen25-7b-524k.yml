@@ -1,0 +1,29 @@
+surface_ref: hyperstack-a100-qwen25-7b-524k
+worker_ref: hyperstack-a100-qwen25-7b-524k
+account_ref: hyperstack
+adapter: hyperstack
+execution_surface: iaas_vm
+gpu: A100
+vram_gb: 80
+max_model_len: 524288
+cost_per_second: 0.0012
+configured_price_source: operator-configured
+configured_price_observed_at: '2026-05-08T00:00:00+00:00'
+configured_price_ttl_seconds: 604800
+stock_state: configured
+billing_granularity_seconds: 60
+max_data_classification: restricted
+scaledown_window_seconds: 0
+min_billable_seconds: 60
+trust_profile:
+  security_tier: encrypted_capsule
+  sovereign_jurisdiction: CA
+  dedicated_gpu: true
+  requires_attestation: false
+  supports_key_release: false
+  allows_worker_s3_credentials: false
+endpoint: https://infrahub-api.nexgencloud.com/v1
+instance: n3-A100x1
+image: Ubuntu Server 22.04 LTS R570 CUDA 12.8 with Docker
+key_name: gpucall-key
+ssh_remote_cidr: 203.0.113.10/32

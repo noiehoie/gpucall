@@ -380,13 +380,15 @@ def test_standard_config_routes_news_sized_prompts_to_long_recipes(tmp_path) -> 
     if is_configured_cidr(config.tuples["hyperstack-qwen-1m"].ssh_remote_cidr):
         assert large_plan.tuple_chain[0] == "hyperstack-qwen-1m"
     else:
-        assert large_plan.tuple_chain[0] == "modal-h200x4-qwen25-14b-1m"
+        assert large_plan.tuple_chain[0] == "modal-a100-qwen25-7b"
+        assert "modal-a100-qwen25-14b" in large_plan.tuple_chain
+        assert "modal-h200x4-qwen25-14b-1m" in large_plan.tuple_chain
         assert "hyperstack-qwen-1m" not in large_plan.tuple_chain
     artifact = large_plan.attestations["compile_artifact"]
     assert artifact["selected_tuple"]["tuple"] == large_plan.tuple_chain[0]
     assert artifact["selected_tuple_hash"]
     assert ultralong_plan.recipe_name == "text-infer-ultralong"
-    assert ultralong_plan.tuple_chain[0] == large_plan.tuple_chain[0]
+    assert ultralong_plan.tuple_chain[0] == "modal-h200x4-qwen25-14b-1m"
     assert "modal-h200x4-qwen25-14b-1m" in ultralong_plan.tuple_chain
 
 
@@ -536,7 +538,8 @@ def test_standard_config_routes_structured_vision_to_json_capable_model(tmp_path
     )
     plan = compiler.compile(request)
 
-    assert plan.tuple_chain[0] == "modal-h100-qwen25-vl-3b"
+    assert plan.tuple_chain[0] == "modal-vision-catalog-a100-qwen2-5-vl-3b-instruct"
+    assert "modal-vision-catalog-a100-qwen2-5-vl-7b-instruct" in plan.tuple_chain
     assert "modal-h100-qwen25-vl-7b" in plan.tuple_chain
     assert "modal-h100-florence-2-large-ft" not in plan.tuple_chain
 
@@ -550,7 +553,9 @@ def test_standard_config_routes_structured_vision_to_json_capable_model(tmp_path
 
     plan = compiler.compile(request)
 
-    assert plan.tuple_chain[0] == "modal-h100-qwen25-vl-7b"
+    assert plan.tuple_chain[0] == "modal-vision-catalog-a100-qwen2-5-vl-7b-instruct"
+    assert "modal-vision-catalog-a100-qwen2-5-vl-32b-instruct" in plan.tuple_chain
+    assert "modal-h100-qwen25-vl-7b" in plan.tuple_chain
     assert "modal-h100-qwen25-vl-32b" in plan.tuple_chain
     assert "modal-h100-qwen25-vl-3b" not in plan.tuple_chain
     assert "modal-h100-florence-2-large-ft" not in plan.tuple_chain
@@ -570,7 +575,9 @@ def test_template_config_routes_structured_vision_to_json_capable_model() -> Non
 
     plan = compiler.compile(request)
 
-    assert plan.tuple_chain[0] == "modal-h100-qwen25-vl-7b"
+    assert plan.tuple_chain[0] == "modal-vision-catalog-a100-qwen2-5-vl-7b-instruct"
+    assert "modal-vision-catalog-a100-qwen2-5-vl-32b-instruct" in plan.tuple_chain
+    assert "modal-h100-qwen25-vl-7b" in plan.tuple_chain
     assert "modal-h100-qwen25-vl-32b" in plan.tuple_chain
     assert "modal-h100-qwen25-vl-3b" not in plan.tuple_chain
     assert "modal-h100-florence-2-large-ft" not in plan.tuple_chain
