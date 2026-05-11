@@ -303,6 +303,24 @@ def runpod_vllm_config_findings(tuple: Any) -> list[str]:
         findings.append(f"tuple {tuple.name!r} worker_env.GPU_MEMORY_UTILIZATION must be declared")
     if "MAX_CONCURRENCY" not in worker_env:
         findings.append(f"tuple {tuple.name!r} worker_env.MAX_CONCURRENCY must be declared")
+    storage = (tuple.provider_params or {}).get("model_storage")
+    if not isinstance(storage, dict):
+        findings.append(f"tuple {tuple.name!r} must declare provider_params.model_storage for official worker-vLLM deployment")
+        return findings
+    storage_kind = str(storage.get("storage_kind") or "")
+    allowed_storage = {"runpod_cached_model", "runpod_network_volume", "container_ephemeral", "baked_image"}
+    if storage_kind not in allowed_storage:
+        findings.append(f"tuple {tuple.name!r} provider_params.model_storage.storage_kind must be one of {sorted(allowed_storage)}")
+    if storage_kind == "runpod_cached_model":
+        cached_ref = str(storage.get("cached_model_ref") or "")
+        if declared_model and cached_ref != declared_model:
+            findings.append(f"tuple {tuple.name!r} cached_model_ref must match deployed model")
+    if storage_kind in {"runpod_cached_model", "runpod_network_volume"}:
+        mount_path = str(storage.get("mount_path") or "")
+        if mount_path != "/runpod-volume":
+            findings.append(f"tuple {tuple.name!r} RunPod model storage mount_path must be /runpod-volume")
+        if str(worker_env.get("BASE_PATH") or "") != "/runpod-volume":
+            findings.append(f"tuple {tuple.name!r} worker_env.BASE_PATH must be /runpod-volume for persistent RunPod model storage")
     return findings
 
 

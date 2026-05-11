@@ -118,10 +118,17 @@ def _worker_fields(family: Mapping[str, Any], model: Mapping[str, Any]) -> dict[
         return {
             "image": str(family.get("image") or "runpod/worker-v1-vllm:v2.18.1"),
             "provider_params": {
+                "model_storage": {
+                    "storage_kind": str(family.get("model_storage_kind") or "runpod_cached_model"),
+                    "cached_model_ref": provider_model_id,
+                    "mount_path": str(family.get("model_storage_mount_path") or "/runpod-volume"),
+                    "cache_hit_required": bool(family.get("model_cache_hit_required", True)),
+                },
                 "worker_env": {
                     "MODEL_NAME": provider_model_id,
                     "OPENAI_SERVED_MODEL_NAME_OVERRIDE": provider_model_id,
                     "MAX_MODEL_LEN": str(model["max_model_len"]),
+                    "BASE_PATH": str(family.get("model_storage_mount_path") or "/runpod-volume"),
                     "GPU_MEMORY_UTILIZATION": "0.95",
                     "MAX_CONCURRENCY": "30",
                 }

@@ -16,9 +16,15 @@ stream_target: null
 endpoint_contract: openai-chat-completions
 model: Qwen/Qwen2.5-1.5B-Instruct
 provider_params:
+  model_storage:
+    storage_kind: runpod_cached_model
+    cached_model_ref: Qwen/Qwen2.5-1.5B-Instruct
+    mount_path: /runpod-volume
+    cache_hit_required: true
   worker_env:
     MODEL_NAME: Qwen/Qwen2.5-1.5B-Instruct
     OPENAI_SERVED_MODEL_NAME_OVERRIDE: Qwen/Qwen2.5-1.5B-Instruct
     MAX_MODEL_LEN: '8192'
+    BASE_PATH: /runpod-volume
     GPU_MEMORY_UTILIZATION: '0.95'
     MAX_CONCURRENCY: '30'

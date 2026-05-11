@@ -72,6 +72,7 @@ def test_runpod_vllm_tuple_examples_include_official_worker_env() -> None:
     required_env = {
         "MODEL_NAME",
         "MAX_MODEL_LEN",
+        "BASE_PATH",
         "GPU_MEMORY_UTILIZATION",
         "MAX_CONCURRENCY",
     }
@@ -82,15 +83,24 @@ def test_runpod_vllm_tuple_examples_include_official_worker_env() -> None:
         if payload.get("adapter") != "runpod-vllm-serverless":
             continue
         worker_env = ((payload.get("provider_params") or {}).get("worker_env") or {})
+        model_storage = ((payload.get("provider_params") or {}).get("model_storage") or {})
         missing = sorted(required_env.difference(worker_env))
         if missing:
             errors.append(f"{path.relative_to(root)} missing worker_env keys: {missing}")
+        if not isinstance(model_storage, dict) or model_storage.get("storage_kind") != "runpod_cached_model":
+            errors.append(f"{path.relative_to(root)} must default to runpod_cached_model storage")
+        if model_storage.get("mount_path") != "/runpod-volume":
+            errors.append(f"{path.relative_to(root)} model_storage.mount_path must be /runpod-volume")
+        if worker_env.get("BASE_PATH") != "/runpod-volume":
+            errors.append(f"{path.relative_to(root)} worker_env.BASE_PATH must be /runpod-volume")
         declared_model = str(payload.get("model") or "")
         if declared_model and declared_model not in {
             str(worker_env.get("MODEL_NAME") or ""),
             str(worker_env.get("OPENAI_SERVED_MODEL_NAME_OVERRIDE") or ""),
         }:
             errors.append(f"{path.relative_to(root)} model does not match worker_env")
+        if declared_model and model_storage.get("cached_model_ref") != declared_model:
+            errors.append(f"{path.relative_to(root)} cached_model_ref does not match model")
         try:
             max_model_len = int(worker_env.get("MAX_MODEL_LEN"))
         except (TypeError, ValueError):

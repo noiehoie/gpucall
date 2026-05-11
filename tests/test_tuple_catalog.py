@@ -204,3 +204,61 @@ def test_modal_provider_requires_deployed_function_target() -> None:
         assert "target must be '<modal-app>:<function>'" in str(exc)
     else:
         raise AssertionError("Modal tuple accepted a non-deployed-function target")
+
+
+def test_runpod_vllm_requires_model_storage_contract() -> None:
+    tuple = ExecutionTupleSpec(
+        name="runpod-vllm-serverless",
+        adapter="runpod-vllm-serverless",
+        gpu="AMPERE_16",
+        vram_gb=16,
+        max_model_len=8192,
+        cost_per_second=0.00016,
+        modes=["sync"],
+        target="endpoint-1",
+        image="runpod/worker-v1-vllm:v2.18.1",
+        endpoint_contract="openai-chat-completions",
+        input_contracts=["chat_messages"],
+        output_contract="openai-chat-completions",
+        stream_contract="none",
+        model="Qwen/Qwen2.5-1.5B-Instruct",
+        provider_params={
+            "worker_env": {
+                "MODEL_NAME": "Qwen/Qwen2.5-1.5B-Instruct",
+                "OPENAI_SERVED_MODEL_NAME_OVERRIDE": "Qwen/Qwen2.5-1.5B-Instruct",
+                "MAX_MODEL_LEN": "8192",
+                "BASE_PATH": "/runpod-volume",
+                "GPU_MEMORY_UTILIZATION": "0.95",
+                "MAX_CONCURRENCY": "30",
+            }
+        },
+    )
+    recipe = Recipe(
+        name="text-infer-light",
+        task="infer",
+        allowed_modes=["sync"],
+        min_vram_gb=8,
+        max_model_len=8192,
+        timeout_seconds=30,
+        lease_ttl_seconds=60,
+        token_estimation_profile="qwen",
+    )
+    config = GpucallConfig(
+        policy=Policy(
+            version="test",
+            inline_bytes_limit=8192,
+            default_lease_ttl_seconds=60,
+            max_lease_ttl_seconds=120,
+            max_timeout_seconds=60,
+            tuples={"allow": ["runpod-vllm-serverless"], "deny": []},
+        ),
+        recipes={recipe.name: recipe},
+        tuples={tuple.name: tuple},
+    )
+
+    try:
+        validate_config(config)
+    except ConfigError as exc:
+        assert "provider_params.model_storage" in str(exc)
+    else:
+        raise AssertionError("RunPod worker-vLLM tuple accepted missing model_storage contract")
