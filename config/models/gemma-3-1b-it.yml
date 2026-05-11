@@ -1,0 +1,32 @@
+name: gemma-3-1b-it
+provider_model_id: google/gemma-3-1b-it
+capabilities:
+- chat
+- instruction_following
+- summarization
+- translation
+- classification
+- reasoning
+- structured_output
+- long_context
+max_model_len: 32768
+min_vram_gb: 16
+supported_engines:
+- modal-vllm
+- hyperstack-vllm
+- runpod-vllm-openai
+input_contracts:
+- text
+- chat_messages
+output_contracts:
+- plain-text
+- json_object
+supports_vision: false
+supports_guided_decoding: true
+supports_streaming: true
+trust_remote_code: false
+source: https://ai.google.dev/gemma/docs/core
+evidence:
+- Google Gemma documentation lists Gemma 3 1B as the small Gemma 3 variant; route
+  as candidate pending validation.
+production_ready: false

@@ -727,14 +727,15 @@ def test_admin_process_inbox_can_auto_promote_long_text_candidate_without_valida
     )
     assert recipe["allowed_modes"] == ["async"]
     assert promotion["decision"] == "READY_FOR_BILLABLE_VALIDATION"
-    assert promotion["candidate"]["name"] in {
-        "hyperstack-a100-qwen25-14b-128k",
-        "modal-h100-qwen25-14b",
-    }
-    if promotion["candidate"]["name"].startswith("hyperstack-"):
+    candidate = promotion["candidate"]
+    assert candidate["tuple_source"] == "candidate_catalog"
+    assert candidate["max_model_len"] >= recipe["context_budget_tokens"]
+    assert candidate["vram_gb"] >= 16
+    assert candidate["adapter"] in {"hyperstack", "modal", "runpod-serverless", "runpod-vllm-serverless", "runpod-vllm-flashboot"}
+    if candidate["adapter"] == "hyperstack":
         assert worker["target"] == "default-CANADA-1"
         assert surface["ssh_remote_cidr"] == "203.0.113.10/32"
-    else:
+    elif candidate["adapter"] == "modal":
         assert worker["target"] == "gpucall-worker-json:run_inference_on_modal"
     assert surface["configured_price_ttl_seconds"] == 604800
 

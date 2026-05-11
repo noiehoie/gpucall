@@ -13,6 +13,7 @@ from typing import Any
 
 import yaml
 
+from gpucall.candidate_sources import load_tuple_candidate_payloads
 from gpucall.config import default_state_dir, load_config
 from gpucall.domain import ExecutionMode, ExecutionTupleSpec
 from gpucall.execution.registry import adapter_descriptor, vendor_family_for_adapter
@@ -41,7 +42,7 @@ def promote_production_tuple(
     candidate_path = candidate.get("path")
     if not candidate_path:
         raise ValueError("candidate match does not include source path")
-    candidate_payload = _load_yaml_file(Path(str(candidate_path)))
+    candidate_payload = _load_candidate_payload(config_root, candidate)
     tuple = _tuple_from_candidate(candidate_payload, active_config=active_config)
     started = datetime.now(timezone.utc).isoformat()
     promotion_config = workspace / "config"
@@ -404,6 +405,17 @@ def _load_yaml_file(path: Path) -> dict[str, Any]:
     if not isinstance(payload, dict):
         raise ValueError(f"YAML root must be a mapping: {path}")
     return payload
+
+
+def _load_candidate_payload(config_root: Path, candidate: Mapping[str, Any]) -> dict[str, Any]:
+    candidate_path = str(candidate.get("path") or "")
+    if "#" not in candidate_path:
+        return _load_yaml_file(Path(candidate_path))
+    candidate_name = str(candidate.get("name") or candidate_path.rsplit("#", 1)[-1])
+    for payload in load_tuple_candidate_payloads(config_root):
+        if str(payload.get("name") or "") == candidate_name:
+            return payload
+    raise FileNotFoundError(f"generated candidate not found in catalog: {candidate_name}")
 
 
 def _mapping(value: Any) -> Mapping[str, Any]:

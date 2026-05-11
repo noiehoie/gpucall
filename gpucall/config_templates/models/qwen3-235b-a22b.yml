@@ -1,0 +1,32 @@
+name: qwen3-235b-a22b
+provider_model_id: Qwen/Qwen3-235B-A22B
+capabilities:
+- chat
+- instruction_following
+- summarization
+- translation
+- classification
+- reasoning
+- structured_output
+- long_context
+max_model_len: 131072
+min_vram_gb: 320
+supported_engines:
+- hyperstack-vllm
+- runpod-vllm-openai
+- modal-vllm
+input_contracts:
+- text
+- chat_messages
+output_contracts:
+- plain-text
+- json_object
+supports_vision: false
+supports_guided_decoding: true
+supports_streaming: true
+trust_remote_code: true
+source: https://huggingface.co/Qwen/Qwen3-235B-A22B
+evidence:
+- Qwen3 model family includes 235B-A22B MoE model; large multi-GPU candidate only
+  pending validation.
+production_ready: false

@@ -1,0 +1,31 @@
+name: qwen2.5-coder-32b-instruct
+provider_model_id: Qwen/Qwen2.5-Coder-32B-Instruct
+capabilities:
+- chat
+- instruction_following
+- summarization
+- translation
+- classification
+- reasoning
+- structured_output
+- long_context
+max_model_len: 131072
+min_vram_gb: 80
+supported_engines:
+- modal-vllm
+- hyperstack-vllm
+- runpod-vllm-openai
+input_contracts:
+- text
+- chat_messages
+output_contracts:
+- plain-text
+- json_object
+supports_vision: false
+supports_guided_decoding: true
+supports_streaming: true
+trust_remote_code: true
+source: https://huggingface.co/Qwen/Qwen2.5-Coder-32B-Instruct
+evidence:
+- Qwen2.5-Coder-32B-Instruct model card states long-context support up to 128K tokens.
+production_ready: false

@@ -1,0 +1,32 @@
+name: phi-4
+provider_model_id: microsoft/phi-4
+capabilities:
+- chat
+- instruction_following
+- summarization
+- translation
+- classification
+- reasoning
+- structured_output
+- long_context
+max_model_len: 16384
+min_vram_gb: 32
+supported_engines:
+- modal-vllm
+- hyperstack-vllm
+- runpod-vllm-openai
+input_contracts:
+- text
+- chat_messages
+output_contracts:
+- plain-text
+- json_object
+supports_vision: false
+supports_guided_decoding: true
+supports_streaming: true
+trust_remote_code: true
+source: https://huggingface.co/microsoft/phi-4
+evidence:
+- Phi-4 model card provides an open text-generation checkpoint; route as candidate
+  pending validation.
+production_ready: false

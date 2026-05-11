@@ -13,6 +13,7 @@ max_model_len: 1010000
 min_vram_gb: 80
 supported_engines:
   - hyperstack-vllm
+  - runpod-vllm-openai
 input_contracts: [text, chat_messages, data_refs]
 output_contracts: [plain-text, json_object]
 supports_vision: false

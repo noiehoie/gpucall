@@ -1,0 +1,31 @@
+name: deepseek-r1-distill-llama-8b
+provider_model_id: deepseek-ai/DeepSeek-R1-Distill-Llama-8B
+capabilities:
+- chat
+- instruction_following
+- summarization
+- translation
+- classification
+- reasoning
+- structured_output
+- long_context
+max_model_len: 131072
+min_vram_gb: 32
+supported_engines:
+- modal-vllm
+- hyperstack-vllm
+- runpod-vllm-openai
+input_contracts:
+- text
+- chat_messages
+output_contracts:
+- plain-text
+- json_object
+supports_vision: false
+supports_guided_decoding: true
+supports_streaming: true
+trust_remote_code: true
+source: https://huggingface.co/deepseek-ai/DeepSeek-R1-Distill-Llama-8B
+evidence:
+- DeepSeek-R1 model card lists this distill model derived from Llama-3.1-8B.
+production_ready: false

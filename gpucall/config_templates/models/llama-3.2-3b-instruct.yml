@@ -1,0 +1,32 @@
+name: llama-3.2-3b-instruct
+provider_model_id: meta-llama/Llama-3.2-3B-Instruct
+capabilities:
+- chat
+- instruction_following
+- summarization
+- translation
+- classification
+- reasoning
+- structured_output
+- long_context
+max_model_len: 131072
+min_vram_gb: 16
+supported_engines:
+- modal-vllm
+- hyperstack-vllm
+- runpod-vllm-openai
+input_contracts:
+- text
+- chat_messages
+output_contracts:
+- plain-text
+- json_object
+supports_vision: false
+supports_guided_decoding: true
+supports_streaming: true
+trust_remote_code: false
+source: https://huggingface.co/meta-llama/Llama-3.2-3B-Instruct
+evidence:
+- Llama 3.2 text models are small instruction-tuned Llama models; route as candidate
+  pending validation.
+production_ready: false

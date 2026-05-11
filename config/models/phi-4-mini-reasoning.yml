@@ -1,0 +1,31 @@
+name: phi-4-mini-reasoning
+provider_model_id: microsoft/Phi-4-mini-reasoning
+capabilities:
+- chat
+- instruction_following
+- summarization
+- translation
+- classification
+- reasoning
+- structured_output
+- long_context
+max_model_len: 131072
+min_vram_gb: 16
+supported_engines:
+- modal-vllm
+- hyperstack-vllm
+- runpod-vllm-openai
+input_contracts:
+- text
+- chat_messages
+output_contracts:
+- plain-text
+- json_object
+supports_vision: false
+supports_guided_decoding: true
+supports_streaming: true
+trust_remote_code: true
+source: https://huggingface.co/microsoft/Phi-4-mini-reasoning
+evidence:
+- Phi-4-mini-reasoning model card states support for 128K token context length.
+production_ready: false

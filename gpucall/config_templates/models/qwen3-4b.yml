@@ -1,0 +1,32 @@
+name: qwen3-4b
+provider_model_id: Qwen/Qwen3-4B
+capabilities:
+- chat
+- instruction_following
+- summarization
+- translation
+- classification
+- reasoning
+- structured_output
+- long_context
+max_model_len: 131072
+min_vram_gb: 16
+supported_engines:
+- modal-vllm
+- hyperstack-vllm
+- runpod-vllm-openai
+input_contracts:
+- text
+- chat_messages
+output_contracts:
+- plain-text
+- json_object
+supports_vision: false
+supports_guided_decoding: true
+supports_streaming: true
+trust_remote_code: true
+source: https://huggingface.co/Qwen/Qwen3-4B
+evidence:
+- Qwen3 model card family includes 4B dense model with 32768 native context and 131072
+  context with YaRN.
+production_ready: false
