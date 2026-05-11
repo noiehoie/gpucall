@@ -527,25 +527,19 @@ def test_standard_config_routes_structured_vision_to_json_capable_model(tmp_path
     config = load_config(copy_config(tmp_path))
     compiler = GovernanceCompiler(policy=config.policy, recipes=config.recipes, tuples=config.tuples, models=config.models, engines=config.engines, registry=ObservedRegistry())
 
-    for response_format in (
-        {"type": "json_object"},
-        {"type": "json_schema", "json_schema": {"type": "object", "required": ["articles"], "properties": {"articles": {"type": "array"}}}},
-    ):
-        request = TaskRequest(
-            task="vision",
-            mode=ExecutionMode.SYNC,
-            intent="understand_document_image",
-            input_refs=[DataRef(uri="s3://bucket/image.png", sha256="c" * 64, bytes=2_000_000, content_type="image/png")],
-            response_format=response_format,
-        )
+    request = TaskRequest(
+        task="vision",
+        mode=ExecutionMode.SYNC,
+        intent="understand_document_image",
+        input_refs=[DataRef(uri="s3://bucket/image.png", sha256="c" * 64, bytes=2_000_000, content_type="image/png")],
+        response_format={"type": "json_object"},
+    )
+    plan = compiler.compile(request)
 
-        plan = compiler.compile(request)
+    assert plan.tuple_chain[0] == "modal-h100-qwen25-vl-3b"
+    assert "modal-h100-qwen25-vl-7b" in plan.tuple_chain
+    assert "modal-h100-florence-2-large-ft" not in plan.tuple_chain
 
-        assert plan.tuple_chain[0] == "modal-h100-qwen25-vl-3b"
-        assert "modal-h100-qwen25-vl-7b" in plan.tuple_chain
-        assert "modal-h100-florence-2-large-ft" not in plan.tuple_chain
-
-    compiler.registry.mark_unavailable("modal-h100-qwen25-vl-3b")
     request = TaskRequest(
         task="vision",
         mode=ExecutionMode.SYNC,
@@ -557,6 +551,8 @@ def test_standard_config_routes_structured_vision_to_json_capable_model(tmp_path
     plan = compiler.compile(request)
 
     assert plan.tuple_chain[0] == "modal-h100-qwen25-vl-7b"
+    assert "modal-h100-qwen25-vl-3b" not in plan.tuple_chain
+    assert "modal-h100-florence-2-large-ft" not in plan.tuple_chain
 
 
 def test_provider_smoke_uses_chat_messages_for_chat_only_provider(tmp_path) -> None:
