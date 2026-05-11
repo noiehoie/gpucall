@@ -33,7 +33,7 @@ def _load_generated_candidates(root: Path) -> list[dict[str, Any]]:
     for path in sorted(root.glob("*.yml")):
         source = _load_mapping(path)
         kind = str(source.get("kind") or "")
-        if kind != "runpod_serverless_candidate_matrix":
+        if kind not in {"runpod_serverless_candidate_matrix", "tuple_candidate_matrix"}:
             raise ValueError(f"unknown candidate source kind {kind!r}: {path}")
         payloads.extend(_runpod_serverless_candidates(source, source_path=path))
     return payloads
@@ -69,7 +69,7 @@ def _runpod_family_candidates(
             "name": f"{prefix}-{gpu['slug']}-{model['slug']}",
             "status": "candidate",
             "adapter": family["adapter"],
-            "execution_surface": "managed_endpoint",
+            "execution_surface": family.get("execution_surface") or "managed_endpoint",
             "gpu": gpu["ref"],
             "vram_gb": gpu["vram_gb"],
             "max_model_len": model["max_model_len"],
@@ -94,6 +94,7 @@ def _runpod_family_candidates(
             "_source": str(source_path),
             "_path": f"{source_path}#{prefix}-{gpu['slug']}-{model['slug']}",
         }
+        row.update(dict(family.get("candidate_defaults") or {}))
         row.update(_worker_fields(family, model))
         generated.append(row)
     return generated
@@ -101,6 +102,18 @@ def _runpod_family_candidates(
 
 def _worker_fields(family: Mapping[str, Any], model: Mapping[str, Any]) -> dict[str, Any]:
     provider_model_id = str(model["provider_model_id"])
+    if family["endpoint_contract"] == "modal-function":
+        return {
+            "target": str(family.get("target") or "gpucall-worker-json:run_inference_on_modal"),
+        }
+    if family["endpoint_contract"] == "hyperstack-vm":
+        return {
+            "model": provider_model_id,
+        }
+    if family["endpoint_contract"] == "runpod-flash-sdk":
+        return {
+            "model": provider_model_id,
+        }
     if family["endpoint_contract"] == "openai-chat-completions":
         return {
             "image": str(family.get("image") or "runpod/worker-v1-vllm:v2.18.1"),

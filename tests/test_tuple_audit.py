@@ -57,9 +57,10 @@ def test_runpod_candidates_are_generated_from_catalog_source() -> None:
     runpod = [row for row in candidates if str(row.get("name", "")).startswith("runpod-")]
 
     assert not list((root / "tuple_candidates").glob("runpod-*.yml"))
-    assert len(runpod) == 72
+    assert len(runpod) == 102
     assert sum(1 for row in runpod if row["adapter"] == "runpod-vllm-serverless") == 42
     assert sum(1 for row in runpod if row["adapter"] == "runpod-serverless") == 30
+    assert sum(1 for row in runpod if row["adapter"] == "runpod-vllm-flashboot") == 30
     assert any(row["model_ref"] == "qwen2.5-7b-instruct-1m" for row in runpod)
     assert any(
         row["model_ref"] == "qwen2.5-7b-instruct-1m-524k"

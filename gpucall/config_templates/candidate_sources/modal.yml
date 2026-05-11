@@ -1,0 +1,134 @@
+schema_version: 1
+kind: tuple_candidate_matrix
+common:
+  max_data_classification: confidential
+  scaledown_window_seconds: 60
+  min_billable_seconds: 0
+  billing_granularity_seconds: 0
+  configured_price_source: https://modal.com/pricing
+  configured_price_observed_at: '2026-05-11T00:00:00+00:00'
+  configured_price_ttl_seconds: 604800
+gpus:
+- ref: T4
+  slug: t4
+  vram_gb: 16
+  cost_per_second: 0.000164
+- ref: L4
+  slug: l4
+  vram_gb: 24
+  cost_per_second: 0.000222
+- ref: A10
+  slug: a10
+  vram_gb: 24
+  cost_per_second: 0.000306
+- ref: L40S
+  slug: l40s
+  vram_gb: 48
+  cost_per_second: 0.000542
+- ref: A100-40GB
+  slug: a100-40gb
+  vram_gb: 40
+  cost_per_second: 0.000583
+- ref: A100
+  slug: a100
+  vram_gb: 80
+  cost_per_second: 0.000694
+- ref: RTX-PRO-6000
+  slug: rtx-pro-6000
+  vram_gb: 96
+  cost_per_second: 0.000842
+- ref: H100
+  slug: h100
+  vram_gb: 80
+  cost_per_second: 0.001097
+- ref: H200
+  slug: h200
+  vram_gb: 141
+  cost_per_second: 0.001261
+- ref: B200
+  slug: b200
+  vram_gb: 180
+  cost_per_second: 0.001736
+models:
+- ref: qwen2.5-1.5b-instruct
+  slug: qwen25-1_5b
+  provider_model_id: Qwen/Qwen2.5-1.5B-Instruct
+  max_model_len: 32768
+- ref: qwen2.5-7b-instruct
+  slug: qwen25-7b
+  provider_model_id: Qwen/Qwen2.5-7B-Instruct
+  max_model_len: 131072
+- ref: qwen2.5-14b-instruct
+  slug: qwen25-14b
+  provider_model_id: Qwen/Qwen2.5-14B-Instruct
+  max_model_len: 131072
+- ref: qwen2.5-32b-instruct
+  slug: qwen25-32b
+  provider_model_id: Qwen/Qwen2.5-32B-Instruct
+  max_model_len: 32768
+- ref: mistral-small-3.2-24b-instruct-2506
+  slug: mistral-small-32-24b
+  provider_model_id: mistralai/Mistral-Small-3.2-24B-Instruct-2506
+  max_model_len: 131072
+- ref: qwen2.5-7b-instruct-1m-524k
+  slug: qwen25-7b-524k
+  provider_model_id: Qwen/Qwen2.5-7B-Instruct-1M
+  max_model_len: 524288
+- ref: qwen2.5-14b-instruct-1m
+  slug: qwen25-14b-1m
+  provider_model_id: Qwen/Qwen2.5-14B-Instruct-1M
+  max_model_len: 1048576
+- ref: qwen2.5-vl-3b-instruct
+  slug: qwen25-vl-3b
+  provider_model_id: Qwen/Qwen2.5-VL-3B-Instruct
+  max_model_len: 32768
+- ref: qwen2.5-vl-7b-instruct
+  slug: qwen25-vl-7b
+  provider_model_id: Qwen/Qwen2.5-VL-7B-Instruct
+  max_model_len: 32768
+- ref: microsoft-florence-2-large-ft
+  slug: florence-2-large-ft
+  provider_model_id: microsoft/Florence-2-large-ft
+  max_model_len: 8192
+families:
+- prefix: modal-catalog
+  adapter: modal
+  execution_surface: function_runtime
+  engine_ref: modal-vllm
+  endpoint_contract: modal-function
+  input_contracts: [text, chat_messages, data_refs]
+  output_contract: plain-text
+  stream_contract: none
+  target: gpucall-worker-json:run_inference_on_modal
+  notes: Candidate generated from Modal GPU pricing catalog. Requires deployed Modal function and billable validation before production routing.
+  official_doc_refs:
+  - https://modal.com/pricing
+  - https://modal.com/docs/guide/gpu
+  matrix:
+    L4: [qwen2.5-1.5b-instruct, qwen2.5-7b-instruct]
+    A10: [qwen2.5-1.5b-instruct, qwen2.5-7b-instruct]
+    L40S: [qwen2.5-1.5b-instruct, qwen2.5-7b-instruct, qwen2.5-14b-instruct, mistral-small-3.2-24b-instruct-2506]
+    A100-40GB: [qwen2.5-1.5b-instruct, qwen2.5-7b-instruct]
+    A100: [qwen2.5-1.5b-instruct, qwen2.5-7b-instruct, qwen2.5-14b-instruct, qwen2.5-32b-instruct, mistral-small-3.2-24b-instruct-2506, qwen2.5-7b-instruct-1m-524k]
+    RTX-PRO-6000: [qwen2.5-1.5b-instruct, qwen2.5-7b-instruct, qwen2.5-14b-instruct, qwen2.5-32b-instruct, mistral-small-3.2-24b-instruct-2506]
+    H100: [qwen2.5-1.5b-instruct, qwen2.5-7b-instruct, qwen2.5-14b-instruct, qwen2.5-32b-instruct, mistral-small-3.2-24b-instruct-2506, qwen2.5-7b-instruct-1m-524k]
+    H200: [qwen2.5-1.5b-instruct, qwen2.5-7b-instruct, qwen2.5-14b-instruct, qwen2.5-32b-instruct, mistral-small-3.2-24b-instruct-2506, qwen2.5-7b-instruct-1m-524k]
+    B200: [qwen2.5-1.5b-instruct, qwen2.5-7b-instruct, qwen2.5-14b-instruct, qwen2.5-32b-instruct, mistral-small-3.2-24b-instruct-2506, qwen2.5-7b-instruct-1m-524k]
+- prefix: modal-vision-catalog
+  adapter: modal
+  execution_surface: function_runtime
+  engine_ref: modal-transformers-vision
+  endpoint_contract: modal-function
+  input_contracts: [data_refs]
+  output_contract: plain-text
+  stream_contract: none
+  target: gpucall-worker-json:run_inference_on_modal_vision_h100
+  notes: Candidate generated from Modal GPU pricing catalog for vision workloads. Requires deployed Modal vision function and billable validation.
+  official_doc_refs:
+  - https://modal.com/pricing
+  - https://modal.com/docs/guide/gpu
+  matrix:
+    L40S: [qwen2.5-vl-3b-instruct, qwen2.5-vl-7b-instruct, microsoft-florence-2-large-ft]
+    A100: [qwen2.5-vl-3b-instruct, qwen2.5-vl-7b-instruct, microsoft-florence-2-large-ft]
+    H100: [qwen2.5-vl-3b-instruct, qwen2.5-vl-7b-instruct, microsoft-florence-2-large-ft]
+    H200: [qwen2.5-vl-3b-instruct, qwen2.5-vl-7b-instruct, microsoft-florence-2-large-ft]

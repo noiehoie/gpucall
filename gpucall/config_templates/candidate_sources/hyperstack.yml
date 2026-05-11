@@ -1,0 +1,134 @@
+schema_version: 1
+kind: tuple_candidate_matrix
+common:
+  max_data_classification: restricted
+  scaledown_window_seconds: 0
+  min_billable_seconds: 60
+  billing_granularity_seconds: 60
+  configured_price_source: https://www.hyperstack.cloud/gpu-pricing
+  configured_price_observed_at: '2026-05-11T00:00:00+00:00'
+  configured_price_ttl_seconds: 604800
+gpus:
+- ref: n3-RTX-A4000x1
+  slug: rtx-a4000x1
+  vram_gb: 16
+  cost_per_second: 0.00004167
+- ref: n3-RTX-A6000x1
+  slug: rtx-a6000x1
+  vram_gb: 48
+  cost_per_second: 0.00013889
+- ref: n3-RTX-A6000x2
+  slug: rtx-a6000x2
+  vram_gb: 96
+  cost_per_second: 0.00027778
+- ref: n3-L40x1
+  slug: l40x1
+  vram_gb: 48
+  cost_per_second: 0.00027778
+- ref: n3-L40x2
+  slug: l40x2
+  vram_gb: 96
+  cost_per_second: 0.00055556
+- ref: n3-A100x1
+  slug: a100x1
+  vram_gb: 80
+  cost_per_second: 0.000375
+- ref: n3-A100x2
+  slug: a100x2
+  vram_gb: 160
+  cost_per_second: 0.00075
+- ref: n3-A100x4
+  slug: a100x4
+  vram_gb: 320
+  cost_per_second: 0.0015
+- ref: n3-A100x8
+  slug: a100x8
+  vram_gb: 640
+  cost_per_second: 0.003
+- ref: n3-H100x1
+  slug: h100x1
+  vram_gb: 80
+  cost_per_second: 0.00052778
+- ref: n3-H100x2
+  slug: h100x2
+  vram_gb: 160
+  cost_per_second: 0.00105556
+- ref: n3-H100x4
+  slug: h100x4
+  vram_gb: 320
+  cost_per_second: 0.00211111
+- ref: n3-H100x8
+  slug: h100x8
+  vram_gb: 640
+  cost_per_second: 0.00422222
+- ref: n3-H200-SXM5x8
+  slug: h200-sxm5x8
+  vram_gb: 1128
+  cost_per_second: 0.00777778
+models:
+- ref: qwen2.5-1.5b-instruct
+  slug: qwen25-1_5b
+  provider_model_id: Qwen/Qwen2.5-1.5B-Instruct
+  max_model_len: 32768
+- ref: qwen2.5-7b-instruct
+  slug: qwen25-7b
+  provider_model_id: Qwen/Qwen2.5-7B-Instruct
+  max_model_len: 131072
+- ref: qwen2.5-14b-instruct
+  slug: qwen25-14b
+  provider_model_id: Qwen/Qwen2.5-14B-Instruct
+  max_model_len: 131072
+- ref: qwen2.5-32b-instruct
+  slug: qwen25-32b
+  provider_model_id: Qwen/Qwen2.5-32B-Instruct
+  max_model_len: 32768
+- ref: qwen2.5-72b-instruct
+  slug: qwen25-72b
+  provider_model_id: Qwen/Qwen2.5-72B-Instruct
+  max_model_len: 131072
+- ref: qwen2.5-7b-instruct-1m-524k
+  slug: qwen25-7b-524k
+  provider_model_id: Qwen/Qwen2.5-7B-Instruct-1M
+  max_model_len: 524288
+- ref: qwen2.5-14b-instruct-1m
+  slug: qwen25-14b-1m
+  provider_model_id: Qwen/Qwen2.5-14B-Instruct-1M
+  max_model_len: 1048576
+families:
+- prefix: hyperstack
+  adapter: hyperstack
+  execution_surface: iaas_vm
+  engine_ref: hyperstack-vllm
+  endpoint_contract: hyperstack-vm
+  input_contracts: [text, chat_messages, data_refs]
+  output_contract: plain-text
+  stream_contract: none
+  candidate_defaults:
+    key_name: gpucall-key
+    image: Ubuntu Server 22.04 LTS R570 CUDA 12.8 with Docker
+    ssh_remote_cidr: 203.0.113.10/32
+    endpoint: https://infrahub-api.nexgencloud.com/v1
+    lease_manifest_path: null
+    target: default-CANADA-1
+    security_tier: encrypted_capsule
+    sovereign_jurisdiction: CA
+    dedicated_gpu: true
+  notes: Candidate generated from Hyperstack /core/flavors and public GPU pricing. Requires live stock check, VM provisioning contract review, and billable validation.
+  official_doc_refs:
+  - https://infrahub-api.nexgencloud.com/v1/core/flavors
+  - https://www.hyperstack.cloud/gpu-pricing
+  matrix:
+    n3-RTX-A4000x1: [qwen2.5-1.5b-instruct]
+    n3-RTX-A6000x1: [qwen2.5-1.5b-instruct, qwen2.5-7b-instruct, qwen2.5-14b-instruct]
+    n3-RTX-A6000x2: [qwen2.5-32b-instruct]
+    n3-L40x1: [qwen2.5-1.5b-instruct, qwen2.5-7b-instruct, qwen2.5-14b-instruct]
+    n3-L40x2: [qwen2.5-32b-instruct]
+    n3-A100x1: [qwen2.5-1.5b-instruct, qwen2.5-7b-instruct, qwen2.5-14b-instruct, qwen2.5-32b-instruct, qwen2.5-7b-instruct-1m-524k]
+    n3-A100x2: [qwen2.5-72b-instruct]
+    n3-A100x4: [qwen2.5-14b-instruct-1m]
+    n3-A100x8: [qwen2.5-14b-instruct-1m]
+    n3-H100x1: [qwen2.5-1.5b-instruct, qwen2.5-7b-instruct, qwen2.5-14b-instruct, qwen2.5-32b-instruct, qwen2.5-7b-instruct-1m-524k]
+    n3-H100x2: [qwen2.5-72b-instruct]
+    n3-H100x4: [qwen2.5-14b-instruct-1m]
+    n3-H100x8: [qwen2.5-14b-instruct-1m]
+    n3-H200-SXM5x8: [qwen2.5-14b-instruct-1m]

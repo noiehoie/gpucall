@@ -124,3 +124,25 @@ families:
     AMPERE_48: [qwen2.5-1.5b-instruct, qwen2.5-7b-instruct, qwen2.5-14b-instruct]
     AMPERE_80: [qwen2.5-1.5b-instruct, qwen2.5-7b-instruct, qwen2.5-7b-instruct-1m-524k, qwen2.5-14b-instruct, qwen2.5-32b-instruct, mistral-small-3.2-24b-instruct-2506]
     HOPPER_141: [qwen2.5-1.5b-instruct, qwen2.5-7b-instruct, qwen2.5-7b-instruct-1m-524k, qwen2.5-7b-instruct-1m, qwen2.5-14b-instruct, qwen2.5-32b-instruct, mistral-small-3.2-24b-instruct-2506]
+- prefix: runpod-flash
+  adapter: runpod-vllm-flashboot
+  execution_surface: function_runtime
+  engine_ref: runpod-vllm-openai
+  endpoint_contract: runpod-flash-sdk
+  input_contracts: [chat_messages]
+  output_contract: gpucall-tuple-result
+  stream_contract: none
+  notes: Candidate for RunPod FlashBoot vLLM execution. Requires endpoint id, image/runtime confirmation, and billable validation before production routing.
+  official_doc_refs:
+  - https://docs.runpod.io/flash/pricing
+  - https://docs.runpod.io/serverless/endpoints/send-requests
+  - https://github.com/runpod/runpod-python
+  matrix:
+    ADA_24: [qwen2.5-1.5b-instruct, qwen2.5-7b-instruct]
+    ADA_48_PRO: [qwen2.5-1.5b-instruct, qwen2.5-7b-instruct, qwen2.5-14b-instruct]
+    ADA_80_PRO: [qwen2.5-1.5b-instruct, qwen2.5-7b-instruct, qwen2.5-7b-instruct-1m-524k, qwen2.5-14b-instruct, qwen2.5-32b-instruct, mistral-small-3.2-24b-instruct-2506]
+    AMPERE_16: [qwen2.5-1.5b-instruct]
+    AMPERE_24: [qwen2.5-1.5b-instruct, qwen2.5-7b-instruct]
+    AMPERE_48: [qwen2.5-1.5b-instruct, qwen2.5-7b-instruct, qwen2.5-14b-instruct]
+    AMPERE_80: [qwen2.5-1.5b-instruct, qwen2.5-7b-instruct, qwen2.5-7b-instruct-1m-524k, qwen2.5-14b-instruct, qwen2.5-32b-instruct, mistral-small-3.2-24b-instruct-2506]
+    HOPPER_141: [qwen2.5-1.5b-instruct, qwen2.5-7b-instruct, qwen2.5-7b-instruct-1m-524k, qwen2.5-7b-instruct-1m, qwen2.5-14b-instruct, qwen2.5-32b-instruct, mistral-small-3.2-24b-instruct-2506]
