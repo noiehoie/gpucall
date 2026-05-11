@@ -79,6 +79,11 @@ def main(argv: list[str] | None = None) -> int:
     quality.add_argument("--quality-failure-kind", default="low_quality_success")
     quality.add_argument("--quality-failure-reason", default="")
     quality.add_argument("--observed-output-kind", default="")
+    quality.add_argument("--response-format", choices=["text", "json_object", "json_schema"], help="response_format used by the caller")
+    quality.add_argument("--expected-json-schema", help="path to sanitized expected JSON Schema; no raw output or prompt content")
+    quality.add_argument("--observed-json-schema", help="path to sanitized observed output shape/schema; no output values")
+    quality.add_argument("--schema-success-count", type=int, help="number of successful caller-side schema validations")
+    quality.add_argument("--schema-failure-count", type=int, help="number of failed caller-side schema validations")
     quality.add_argument("--output", "-o", help="write quality feedback intake JSON to this path")
     quality.add_argument("--inbox-dir", help="also submit the sanitized intake to this file-based admin inbox")
     quality.add_argument("--remote-inbox", help="also submit to USER@HOST:/absolute/admin/inbox over SSH")
@@ -156,6 +161,11 @@ def main(argv: list[str] | None = None) -> int:
                 quality_failure_kind=args.quality_failure_kind,
                 quality_failure_reason=args.quality_failure_reason,
                 observed_output_kind=args.observed_output_kind,
+                response_format=args.response_format,
+                expected_json_schema=_load_optional_json(args.expected_json_schema),
+                observed_json_schema=_load_optional_json(args.observed_json_schema),
+                schema_success_count=args.schema_success_count,
+                schema_failure_count=args.schema_failure_count,
             )
         )
         _write_json(result, args.output)
@@ -185,6 +195,12 @@ def _load_json(path: str) -> dict[str, Any]:
     if not isinstance(data, dict):
         raise SystemExit("input JSON must be an object")
     return data
+
+
+def _load_optional_json(path: str | None) -> dict[str, Any] | None:
+    if not path:
+        return None
+    return _load_json(path)
 
 
 def _write_json(data: dict[str, Any], output: str | None) -> None:

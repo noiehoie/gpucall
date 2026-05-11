@@ -1043,6 +1043,47 @@ def test_admin_review_outputs_provider_contract_when_existing_providers_are_insu
     assert all(match["execution_surface"] == "function_runtime" for match in report["tuple_candidate_matches"])
 
 
+def test_admin_review_classifies_schema_mismatch_feedback() -> None:
+    artifact = {
+        "phase": "deterministic-quality-feedback-intake",
+        "sanitized_request": {
+            "task": "vision",
+            "mode": "sync",
+            "intent": "understand_document_image",
+            "classification": "confidential",
+            "expected_output": "articles_json",
+            "desired_capabilities": ["document_understanding", "visual_question_answering", "instruction_following"],
+            "quality_feedback": {
+                "kind": "schema_mismatch",
+                "observed_output_kind": "json_object_wrong_schema",
+                "output_contract_feedback": {
+                    "response_format": "json_object",
+                    "expected_json_schema": {"type": "object", "required": ["articles"], "properties": {"articles": {"type": "array"}}},
+                    "observed_json_schema": {"type": "object", "required": ["summary"], "properties": {"summary": {"type": "string"}}},
+                    "schema_success_count": 5,
+                    "schema_failure_count": 16,
+                    "raw_output_forwarded": False,
+                },
+            },
+        },
+        "redaction_report": {
+            "prompt_body_forwarded": False,
+            "output_body_forwarded": False,
+            "data_ref_uri_forwarded": False,
+            "presigned_url_forwarded": False,
+        },
+    }
+
+    report = review_artifact(artifact, config_dir="gpucall/config_templates")
+    contract = report["required_execution_contract"]
+
+    assert contract["quality_failure_to_correct"]["kind"] == "schema_mismatch"
+    assert contract["output_contract_feedback"]["response_format"] == "json_object"
+    assert contract["output_contract_feedback"]["expected_json_schema_present"] is True
+    assert contract["output_contract_feedback"]["schema_failure_count"] == 16
+    assert contract["caller_action"].startswith("send response_format=json_schema")
+
+
 def test_admin_review_matches_long_context_tuple_candidates() -> None:
     artifact = {
         "phase": "deterministic-intake",

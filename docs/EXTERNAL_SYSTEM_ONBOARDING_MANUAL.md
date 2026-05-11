@@ -404,6 +404,15 @@ default.
 | provider 5xx without governance code | provider/runtime failure | retry/circuit according to local policy |
 | gpucall not configured | application not ready for gpucall production | fail closed; do not call hosted AI by default |
 
+For structured JSON workloads, distinguish JSON syntax from business schema.
+`response_format={"type":"json_object"}` guarantees only a JSON object. If the
+caller requires fields, arrays, or per-item types, send
+`response_format={"type":"json_schema","json_schema":...}`. If a `200 OK` result
+fails caller schema validation, submit quality feedback with
+`--quality-failure-kind schema_mismatch`, `--response-format`,
+`--expected-json-schema`, `--observed-json-schema`, and schema success/failure
+counts. The observed schema must contain only keys and types, never raw output.
+
 For any gateway 5xx, completion reports must separate verified facts from
 unknowns. Include HTTP status, response body if any, endpoint, request class,
 whether bootstrap/auth/presign/preflight succeeded, and whether secrets were

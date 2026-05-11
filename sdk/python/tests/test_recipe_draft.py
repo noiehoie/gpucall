@@ -316,6 +316,99 @@ def test_quality_feedback_intake_is_sanitized_metadata_only() -> None:
     assert intake["redaction_report"]["output_body_forwarded"] is False
 
 
+def test_quality_feedback_carries_schema_mismatch_metadata_only() -> None:
+    intake = intake_from_quality_feedback(
+        QualityFeedbackInputs(
+            task="vision",
+            mode="sync",
+            intent="understand_document_image",
+            expected_output="articles_json",
+            quality_failure_kind="schema_mismatch",
+            quality_failure_reason="caller schema rejected output",
+            observed_output_kind="json_object_wrong_schema",
+            response_format="json_object",
+            expected_json_schema={
+                "type": "object",
+                "required": ["articles"],
+                "properties": {
+                    "articles": {
+                        "type": "array",
+                        "items": {
+                            "type": "object",
+                            "required": ["headline_original", "rank"],
+                            "properties": {
+                                "headline_original": {"type": "string", "description": "raw headline text must not be included here"},
+                                "rank": {"type": "integer"},
+                            },
+                        },
+                    }
+                },
+                "description": "must be dropped",
+            },
+            observed_json_schema={
+                "type": "object",
+                "required": ["contains_text", "dominant_color", "summary"],
+                "properties": {"contains_text": {"type": "boolean"}, "summary": {"type": "string"}},
+            },
+            schema_success_count=5,
+            schema_failure_count=16,
+        )
+    )
+
+    feedback = intake["sanitized_request"]["quality_feedback"]
+    contract = feedback["output_contract_feedback"]
+    assert feedback["kind"] == "schema_mismatch"
+    assert intake["sanitized_request"]["error"]["capability_gap"] == "output_contract_insufficient"
+    assert contract["response_format"] == "json_object"
+    assert contract["schema_success_count"] == 5
+    assert contract["schema_failure_count"] == 16
+    assert contract["expected_json_schema"]["required"] == ["articles"]
+    assert "description" not in contract["expected_json_schema"]
+    assert "description" not in contract["expected_json_schema"]["properties"]["articles"]["items"]["properties"]["headline_original"]
+    assert contract["observed_json_schema"]["required"] == ["contains_text", "dominant_color", "summary"]
+    assert contract["raw_output_forwarded"] is False
+
+
+def test_recipe_draft_cli_quality_accepts_schema_files(tmp_path) -> None:
+    expected = tmp_path / "expected.json"
+    observed = tmp_path / "observed.json"
+    output = tmp_path / "quality.json"
+    expected.write_text(json.dumps({"type": "object", "required": ["articles"], "properties": {"articles": {"type": "array"}}}), encoding="utf-8")
+    observed.write_text(json.dumps({"type": "object", "required": ["summary"], "properties": {"summary": {"type": "string"}}}), encoding="utf-8")
+
+    assert (
+        main(
+            [
+                "quality",
+                "--task",
+                "vision",
+                "--intent",
+                "understand_document_image",
+                "--quality-failure-kind",
+                "schema_mismatch",
+                "--response-format",
+                "json_object",
+                "--expected-json-schema",
+                str(expected),
+                "--observed-json-schema",
+                str(observed),
+                "--schema-success-count",
+                "5",
+                "--schema-failure-count",
+                "16",
+                "--output",
+                str(output),
+            ]
+        )
+        == 0
+    )
+
+    data = json.loads(output.read_text(encoding="utf-8"))
+    contract = data["sanitized_request"]["quality_feedback"]["output_contract_feedback"]
+    assert contract["expected_json_schema"]["required"] == ["articles"]
+    assert contract["observed_json_schema"]["required"] == ["summary"]
+
+
 def test_compare_preflight_to_failure_detects_workload_drift() -> None:
     preflight = intake_from_preflight(
         PreflightInputs(task="infer", intent="summarize_text", content_types=("text/plain",), context_budget_tokens=40000)
@@ -353,7 +446,7 @@ def test_preflight_normalizes_legacy_topic_ranking_intent() -> None:
     draft = draft_from_intake(intake)
 
     assert intake["sanitized_request"]["intent"] == "rank_text_items"
-    assert intake["sanitized_request"]["desired_capabilities"] == ["instruction_following"]
+    assert intake["sanitized_request"]["desired_capabilities"] == ["instruction_following", "reasoning"]
     assert draft["proposed_recipe"]["name"] == "infer-rank-text-items-draft"
 
 

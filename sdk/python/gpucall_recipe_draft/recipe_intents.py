@@ -11,7 +11,7 @@ except ModuleNotFoundError:
         "extract_json": ("structured_output",),
         "fine_tune_lora": ("lora_training",),
         "large_context_text_inference": ("instruction_following",),
-        "rank_text_items": ("instruction_following",),
+        "rank_text_items": ("instruction_following", "reasoning"),
         "short_text_inference": ("instruction_following",),
         "smoke_test": ("instruction_following",),
         "split_infer_activation": ("split_inference",),

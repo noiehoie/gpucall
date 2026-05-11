@@ -1156,6 +1156,22 @@ def tuple_contract_requirements(artifact: Mapping[str, Any], recipe: Recipe) -> 
             "observed_output_kind": quality_feedback.get("observed_output_kind"),
             "expected_output": sanitized.get("expected_output"),
         }
+        output_contract_feedback = _mapping(quality_feedback.get("output_contract_feedback"))
+        if output_contract_feedback:
+            requirements["output_contract_feedback"] = {
+                "response_format": output_contract_feedback.get("response_format"),
+                "expected_json_schema_present": bool(output_contract_feedback.get("expected_json_schema")),
+                "observed_json_schema_present": bool(output_contract_feedback.get("observed_json_schema")),
+                "schema_success_count": output_contract_feedback.get("schema_success_count"),
+                "schema_failure_count": output_contract_feedback.get("schema_failure_count"),
+                "raw_output_forwarded": bool(output_contract_feedback.get("raw_output_forwarded")),
+            }
+            if (
+                quality_feedback.get("kind") in {"schema_mismatch", "missing_required_json_field", "malformed_business_output"}
+                and output_contract_feedback.get("response_format") == "json_object"
+                and output_contract_feedback.get("expected_json_schema")
+            ):
+                requirements["caller_action"] = "send response_format=json_schema with the declared expected_json_schema; json_object validates only JSON object shape"
     return requirements
 
 

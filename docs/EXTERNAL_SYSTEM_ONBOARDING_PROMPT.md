@@ -313,6 +313,15 @@ Production default must be fail-closed:
   `200 OK`, including JSON parse failures, empty output, schema failures, or
   business-validator rejection. Treat those as quality feedback and submit
   `gpucall-recipe-draft quality`.
+- If the caller requires a specific JSON business schema, do not rely on prompt
+  text plus `response_format={"type":"json_object"}`. Send
+  `response_format={"type":"json_schema","json_schema":...}` with required
+  fields. `json_object` guarantees only that the output is a JSON object.
+- If `200 OK` / `output_validated=true` still fails caller-side schema
+  validation, submit `gpucall-recipe-draft quality` with
+  `--quality-failure-kind schema_mismatch`, `--response-format`, sanitized
+  `--expected-json-schema`, sanitized `--observed-json-schema`, and success /
+  failure counts. Do not include raw model output.
 - Add tests proving hosted-AI fallback is disabled by default.
 
 Correct request shape:
@@ -427,7 +436,8 @@ Classify these correctly:
   may be appropriate.
 - malformed output, empty output, schema failure, or business-validator failure
   after `200 OK`: do not fall back to direct hosted AI in production. Record a
-  quality failure and submit `gpucall-recipe-draft quality`.
+  quality failure and submit `gpucall-recipe-draft quality`. For schema
+  failures, include expected and observed schemas as metadata, never raw output.
 
 For any gateway 5xx, the completion report must include only verified facts:
 HTTP status, response body if available, endpoint, request class, whether

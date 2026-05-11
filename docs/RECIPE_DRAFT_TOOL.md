@@ -158,6 +158,64 @@ gpucall-recipe-draft quality \
 
 This creates a `deterministic-quality-feedback-intake` submission. It is a request to review recipe intent and production tuple capability, not proof that gpucall routed incorrectly.
 
+#### Quality Feedback Grammar For Structured Output
+
+When gpucall returns `200 OK` and `output_validated=true`, `response_format:
+json_object` means only that the returned value is a JSON object. It does not
+mean that caller-specific fields are present. If the caller requires fields such
+as `articles`, `headline_original`, or `rank`, the production request should use
+`response_format: json_schema` with those fields marked as required.
+
+If a caller used `json_object` and then rejected the result because the business
+schema was wrong, submit quality feedback with structured-output metadata:
+
+```bash
+gpucall-recipe-draft quality \
+  --task vision \
+  --mode sync \
+  --intent understand_document_image \
+  --expected-output articles_json \
+  --content-type image/jpeg \
+  --bytes 1136521 \
+  --observed-recipe vision-understand-document-image-draft \
+  --reported-tuple modal-h100-qwen25-vl-3b \
+  --output-validated true \
+  --quality-failure-kind schema_mismatch \
+  --observed-output-kind json_object_wrong_schema \
+  --response-format json_object \
+  --expected-json-schema expected-schema.json \
+  --observed-json-schema observed-schema.json \
+  --schema-success-count 5 \
+  --schema-failure-count 16 \
+  --remote-inbox admin@gateway.example.internal:/opt/gpucall/state/recipe_requests/inbox \
+  --source example-caller-app
+```
+
+`expected-schema.json` is the caller's desired JSON Schema. It may contain
+property names, `type`, `required`, `properties`, `items`, numeric/string
+limits, and composition keywords. Do not include examples, raw values, prompt
+text, document text, or output excerpts.
+
+`observed-schema.json` is the observed output shape, not the observed output. It
+must contain keys and types only. For example, this is safe:
+
+```json
+{
+  "type": "object",
+  "required": ["contains_text", "dominant_color", "summary"],
+  "properties": {
+    "contains_text": {"type": "boolean"},
+    "dominant_color": {"type": "string"},
+    "summary": {"type": "string"}
+  }
+}
+```
+
+This feedback tells the administrator whether the correct action is caller-side
+`json_schema`, recipe-level schema defaults, or stronger tuple validation. The
+caller-side helper remains deterministic and does not inspect or forward raw
+model output.
+
 ### Phase 2: Local Draft Summary
 
 This phase consumes only the sanitized intake JSON and does not call an LLM.

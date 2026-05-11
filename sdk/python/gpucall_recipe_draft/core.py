@@ -67,6 +67,11 @@ class QualityFeedbackInputs:
     quality_failure_kind: str = "low_quality_success"
     quality_failure_reason: str = ""
     observed_output_kind: str | None = None
+    response_format: str | None = None
+    expected_json_schema: Mapping[str, Any] | None = None
+    observed_json_schema: Mapping[str, Any] | None = None
+    schema_success_count: int | None = None
+    schema_failure_count: int | None = None
 
 
 def intake_from_error(inputs: DraftInputs) -> dict[str, Any]:
@@ -216,6 +221,7 @@ def intake_from_quality_feedback(inputs: QualityFeedbackInputs) -> dict[str, Any
                 "kind": _sanitize_quality_kind(inputs.quality_failure_kind),
                 "reason": _sanitize_free_text(inputs.quality_failure_reason),
                 "observed_output_kind": _sanitize_free_text(inputs.observed_output_kind or ""),
+                "output_contract_feedback": _output_contract_feedback(inputs),
             },
             "desired_capabilities": desired_capabilities,
         },
@@ -328,7 +334,7 @@ def _quality_capability_gap(kind: str) -> str:
         return "model_or_recipe_capability_mismatch"
     if normalized in {"insufficient_context", "truncated_output"}:
         return "context_or_output_budget_insufficient"
-    if normalized in {"insufficient_structured_output", "malformed_business_output"}:
+    if normalized in {"insufficient_structured_output", "malformed_business_output", "schema_mismatch", "missing_required_json_field"}:
         return "output_contract_insufficient"
     return "quality_expectation_not_met"
 
@@ -336,6 +342,99 @@ def _quality_capability_gap(kind: str) -> str:
 def _sanitize_quality_kind(value: str) -> str:
     cleaned = re.sub(r"[^a-z0-9_]+", "_", value.strip().lower()).strip("_")
     return cleaned[:80] or "low_quality_success"
+
+
+def _output_contract_feedback(inputs: QualityFeedbackInputs) -> dict[str, Any]:
+    expected_schema = _sanitize_schema(inputs.expected_json_schema)
+    observed_schema = _sanitize_schema(inputs.observed_json_schema)
+    return {
+        "response_format": _sanitize_response_format(inputs.response_format),
+        "expected_json_schema": expected_schema,
+        "observed_json_schema": observed_schema,
+        "schema_success_count": _non_negative_int(inputs.schema_success_count),
+        "schema_failure_count": _non_negative_int(inputs.schema_failure_count),
+        "raw_output_forwarded": False,
+    }
+
+
+def _sanitize_response_format(value: str | None) -> str | None:
+    if value is None:
+        return None
+    cleaned = re.sub(r"[^a-z0-9_]+", "_", value.strip().lower()).strip("_")
+    if cleaned in {"text", "json_object", "json_schema"}:
+        return cleaned
+    return cleaned[:40] or None
+
+
+def _non_negative_int(value: int | None) -> int | None:
+    if value is None:
+        return None
+    return max(int(value), 0)
+
+
+_SCHEMA_KEYS = {
+    "$schema",
+    "additionalItems",
+    "additionalProperties",
+    "allOf",
+    "anyOf",
+    "items",
+    "maxItems",
+    "maxLength",
+    "maximum",
+    "minItems",
+    "minLength",
+    "minimum",
+    "oneOf",
+    "pattern",
+    "properties",
+    "required",
+    "type",
+}
+
+
+def _sanitize_schema(value: Mapping[str, Any] | None, *, depth: int = 0) -> dict[str, Any] | None:
+    if value is None:
+        return None
+    if depth > 8:
+        return {"truncated": True}
+    cleaned: dict[str, Any] = {}
+    for key in sorted(str(item) for item in value):
+        if key not in _SCHEMA_KEYS:
+            continue
+        item = value.get(key)
+        if key == "properties" and isinstance(item, Mapping):
+            cleaned[key] = {
+                _sanitize_schema_name(str(prop_key)): _sanitize_schema(_as_mapping(prop_value), depth=depth + 1) or {}
+                for prop_key, prop_value in sorted(item.items(), key=lambda pair: str(pair[0]))
+                if _sanitize_schema_name(str(prop_key))
+            }
+            continue
+        if key == "required" and isinstance(item, list):
+            cleaned[key] = [_sanitize_schema_name(str(entry)) for entry in item if _sanitize_schema_name(str(entry))][:100]
+            continue
+        if key in {"items", "additionalProperties"} and isinstance(item, Mapping):
+            cleaned[key] = _sanitize_schema(item, depth=depth + 1)
+            continue
+        if key in {"allOf", "anyOf", "oneOf"} and isinstance(item, list):
+            cleaned[key] = [_sanitize_schema(_as_mapping(entry), depth=depth + 1) or {} for entry in item[:20]]
+            continue
+        if isinstance(item, bool | int | float):
+            cleaned[key] = item
+            continue
+        if isinstance(item, str):
+            cleaned[key] = _sanitize_schema_text(item)
+    return cleaned or None
+
+
+def _sanitize_schema_name(value: str) -> str:
+    cleaned = re.sub(r"[^A-Za-z0-9_.:-]+", "_", value.strip()).strip("_")
+    return cleaned[:120]
+
+
+def _sanitize_schema_text(value: str) -> str:
+    cleaned = re.sub(r"\s+", " ", value.strip())
+    return cleaned[:120]
 
 
 def _extract_rejections(error: Mapping[str, Any], context: Mapping[str, Any]) -> list[str]:
