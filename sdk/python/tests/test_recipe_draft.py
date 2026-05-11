@@ -181,6 +181,107 @@ def test_recipe_draft_cli_submit(tmp_path, capsys) -> None:
     assert json.loads(Path(output_path).read_text(encoding="utf-8"))["source"] == "caller"
 
 
+def test_recipe_draft_cli_recipe_status_reads_report(tmp_path, capsys) -> None:
+    request_id = "rr-test-recipe"
+    reports = tmp_path / "inbox" / "reports"
+    reports.mkdir(parents=True)
+    (reports / f"{request_id}.report.json").write_text(
+        json.dumps(
+            {
+                "phase": "recipe-materialization",
+                "decision": "READY_FOR_VALIDATION",
+                "task": "infer",
+                "intent": "summarize_text",
+                "next_actions": ["run validation"],
+                "warnings": [{"check": "tuple_fit", "reason": "validation required", "secret": "drop"}],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    assert main(["status", "--pipeline", "recipe", "--request-id", request_id, "--inbox-dir", str(tmp_path / "inbox")]) == 0
+    output = json.loads(capsys.readouterr().out)
+
+    assert output == {
+        "pipeline": "recipe",
+        "request_id": request_id,
+        "status": "processed",
+        "report_available": True,
+        "decision": "READY_FOR_VALIDATION",
+        "task": "infer",
+        "intent": "summarize_text",
+        "phase": "recipe-materialization",
+        "next_actions": ["run validation"],
+        "warnings": [{"check": "tuple_fit", "reason": "validation required"}],
+    }
+
+
+def test_recipe_draft_cli_quality_status_reads_report(tmp_path, capsys) -> None:
+    request_id = "rr-test-quality"
+    reports = tmp_path / "quality" / "reports"
+    reports.mkdir(parents=True)
+    (reports / f"{request_id}.report.json").write_text(
+        json.dumps(
+            {
+                "phase": "quality-feedback-review",
+                "decision": "ACCEPT",
+                "task": "vision",
+                "intent": "understand_document_image",
+                "quality_feedback": {"kind": "schema_noncompliance", "reason": "redacted summary only"},
+                "observed": {"tuple": "modal-h100-qwen25-vl-3b", "tuple_model": "qwen25-vl-3b"},
+                "next_actions": ["review structured-output schema adherence for the observed tuple"],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    assert main(["quality-status", "--request-id", request_id, "--quality-inbox-dir", str(tmp_path / "quality")]) == 0
+    output = json.loads(capsys.readouterr().out)
+
+    assert output["pipeline"] == "quality"
+    assert output["request_id"] == request_id
+    assert output["status"] == "processed"
+    assert output["decision"] == "ACCEPT"
+    assert output["quality_kind"] == "schema_noncompliance"
+    assert output["observed_tuple"] == "modal-h100-qwen25-vl-3b"
+    assert output["observed_tuple_model"] == "qwen25-vl-3b"
+
+
+def test_recipe_draft_cli_status_reads_remote_quality_inbox(monkeypatch, capsys) -> None:
+    calls = []
+
+    def fake_status(*, request_id, remote_inbox, pipeline):
+        calls.append({"request_id": request_id, "remote_inbox": remote_inbox, "pipeline": pipeline})
+        return {"pipeline": pipeline, "request_id": request_id, "status": "processed", "report_available": True}
+
+    monkeypatch.setattr("gpucall_recipe_draft.cli.get_remote_submission_status", fake_status)
+
+    assert (
+        main(
+            [
+                "status",
+                "--pipeline",
+                "quality",
+                "--request-id",
+                "rr-test",
+                "--remote-quality-inbox",
+                "operator@gateway.example.internal:/opt/gpucall/state/quality_feedback/inbox",
+            ]
+        )
+        == 0
+    )
+    output = json.loads(capsys.readouterr().out)
+
+    assert calls == [
+        {
+            "request_id": "rr-test",
+            "remote_inbox": "operator@gateway.example.internal:/opt/gpucall/state/quality_feedback/inbox",
+            "pipeline": "quality",
+        }
+    ]
+    assert output["status"] == "processed"
+
+
 def test_parse_remote_inbox_requires_absolute_path() -> None:
     target = parse_remote_inbox("operator@gateway.example.internal:/opt/gpucall/state/recipe_requests/inbox")
 

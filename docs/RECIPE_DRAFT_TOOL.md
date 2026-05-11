@@ -272,6 +272,32 @@ Remote submission uses SSH, creates the target directory if needed, writes a tem
 
 For caller automation, `preflight` and `intake` accept `--inbox-dir`, `--remote-inbox`, and `--source`. `quality` accepts those legacy flags plus `--quality-inbox-dir` and `--remote-quality-inbox`; operators should route quality feedback to the separate quality feedback inbox. When an inbox flag is present, the helper writes the sanitized intake and submits it in one command.
 
+After submitting, callers should poll the same approved inbox for a sanitized
+status summary instead of waiting for a human copy/paste relay:
+
+```bash
+gpucall-recipe-draft status \
+  --pipeline recipe \
+  --request-id rr-20260510T104401Z-2add39e6d6d2 \
+  --remote-inbox admin@gateway.example.internal:/opt/gpucall/state/recipe_requests/inbox
+
+gpucall-recipe-draft status \
+  --pipeline quality \
+  --request-id rr-20260511T124553Z-03157f894e6d \
+  --remote-quality-inbox admin@gateway.example.internal:/opt/gpucall/state/quality_feedback/inbox
+```
+
+Convenience aliases are available:
+
+```bash
+gpucall-recipe-draft recipe-status --request-id rr-... --remote-inbox "$GPUCALL_RECIPE_INBOX"
+gpucall-recipe-draft quality-status --request-id rr-... --remote-quality-inbox "$GPUCALL_QUALITY_FEEDBACK_INBOX"
+```
+
+The status output includes only processing state, decision, task, intent,
+quality kind, safe blockers/warnings, and next actions. It does not return raw
+prompt text, raw model output, DataRef URIs, presigned URLs, or API keys.
+
 ## Caller-Facing Intents
 
 Callers should describe intent at a high level. They should not specify GPU names, provider names, model names, or gpucall-internal capability labels.

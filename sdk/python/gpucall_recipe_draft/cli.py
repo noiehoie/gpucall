@@ -17,7 +17,13 @@ from gpucall_recipe_draft.core import (
     intake_from_preflight,
     intake_from_quality_feedback,
 )
-from gpucall_recipe_draft.submit import build_submission_bundle, submit_bundle, submit_bundle_to_remote
+from gpucall_recipe_draft.submit import (
+    build_submission_bundle,
+    get_remote_submission_status,
+    get_submission_status,
+    submit_bundle,
+    submit_bundle_to_remote,
+)
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -102,6 +108,29 @@ def main(argv: list[str] | None = None) -> int:
     submit.add_argument("--inbox-dir", help="shared inbox directory managed outside the gpucall API")
     submit.add_argument("--remote-inbox", help="submit to USER@HOST:/absolute/admin/inbox over SSH")
     submit.add_argument("--source", help="caller/source label to include in the submission bundle")
+
+    status = subcommands.add_parser("status", help="read recipe or quality feedback processing status from an inbox")
+    status.add_argument("--pipeline", choices=["recipe", "quality"], default="recipe")
+    status.add_argument("--request-id", required=True)
+    status.add_argument("--inbox-dir", help="file-based recipe request inbox")
+    status.add_argument("--remote-inbox", help="remote recipe request inbox over SSH")
+    status.add_argument("--quality-inbox-dir", help="file-based quality feedback inbox")
+    status.add_argument("--remote-quality-inbox", help="remote quality feedback inbox over SSH")
+    status.add_argument("--output", "-o", help="write status JSON to this path")
+
+    recipe_status = subcommands.add_parser("recipe-status", help="read recipe request processing status")
+    recipe_status.add_argument("--request-id", required=True)
+    recipe_status.add_argument("--inbox-dir")
+    recipe_status.add_argument("--remote-inbox")
+    recipe_status.add_argument("--output", "-o")
+
+    quality_status = subcommands.add_parser("quality-status", help="read quality feedback processing status")
+    quality_status.add_argument("--request-id", required=True)
+    quality_status.add_argument("--quality-inbox-dir")
+    quality_status.add_argument("--remote-quality-inbox")
+    quality_status.add_argument("--inbox-dir", help=argparse.SUPPRESS)
+    quality_status.add_argument("--remote-inbox", help=argparse.SUPPRESS)
+    quality_status.add_argument("--output", "-o")
 
     args = parser.parse_args(argv)
     if args.command == "intake":
@@ -193,6 +222,16 @@ def main(argv: list[str] | None = None) -> int:
             raise SystemExit("submit requires --inbox-dir or --remote-inbox")
         sys.stdout.write("\n".join(paths) + "\n")
         return 0
+    if args.command in {"status", "recipe-status", "quality-status"}:
+        pipeline = _status_pipeline(args)
+        result = _read_status(
+            pipeline=pipeline,
+            request_id=args.request_id,
+            inbox_dir=_status_inbox_dir(args, pipeline),
+            remote_inbox=_status_remote_inbox(args, pipeline),
+        )
+        _write_json(result, args.output)
+        return 0
     raise AssertionError(args.command)
 
 
@@ -246,6 +285,41 @@ def _parse_bool(value: str) -> bool | None:
     if value == "false":
         return False
     return None
+
+
+def _status_pipeline(args: argparse.Namespace) -> str:
+    if args.command == "quality-status":
+        return "quality"
+    if args.command == "recipe-status":
+        return "recipe"
+    return args.pipeline
+
+
+def _status_inbox_dir(args: argparse.Namespace, pipeline: str) -> str | None:
+    if pipeline == "quality":
+        return getattr(args, "quality_inbox_dir", None) or getattr(args, "inbox_dir", None)
+    return getattr(args, "inbox_dir", None)
+
+
+def _status_remote_inbox(args: argparse.Namespace, pipeline: str) -> str | None:
+    if pipeline == "quality":
+        return getattr(args, "remote_quality_inbox", None) or getattr(args, "remote_inbox", None)
+    return getattr(args, "remote_inbox", None)
+
+
+def _read_status(
+    *,
+    pipeline: str,
+    request_id: str,
+    inbox_dir: str | None,
+    remote_inbox: str | None,
+) -> dict[str, Any]:
+    if remote_inbox:
+        return get_remote_submission_status(request_id=request_id, remote_inbox=remote_inbox, pipeline=pipeline)
+    if inbox_dir:
+        return get_submission_status(request_id=request_id, inbox_dir=inbox_dir, pipeline=pipeline)
+    flag = "--quality-inbox-dir/--remote-quality-inbox" if pipeline == "quality" else "--inbox-dir/--remote-inbox"
+    raise SystemExit(f"status requires {flag}")
 
 
 if __name__ == "__main__":  # pragma: no cover

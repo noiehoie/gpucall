@@ -329,6 +329,12 @@ Production default must be fail-closed:
   `--expected-json-schema`, sanitized `--observed-json-schema`, and success /
   failure counts. Submit it to `GPUCALL_QUALITY_FEEDBACK_INBOX`, not
   `GPUCALL_RECIPE_INBOX`. Do not include raw model output.
+- After any preflight, intake, or quality submission, keep the returned
+  `rr-...` request id and poll the matching inbox with
+  `gpucall-recipe-draft status`. Use `--pipeline recipe` with
+  `GPUCALL_RECIPE_INBOX` and `--pipeline quality` with
+  `GPUCALL_QUALITY_FEEDBACK_INBOX`. Do not ask the operator to copy/paste the
+  result unless status polling itself fails.
 - Add tests proving hosted-AI fallback is disabled by default.
 
 Correct request shape:

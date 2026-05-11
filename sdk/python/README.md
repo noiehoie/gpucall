@@ -113,8 +113,17 @@ gpucall-recipe-draft submit \
   --draft recipe-draft.json \
   --remote-inbox operator@gateway.example.internal:/opt/gpucall/state/recipe_requests/inbox \
   --source example-caller-app
+
+gpucall-recipe-draft status \
+  --pipeline recipe \
+  --request-id rr-... \
+  --remote-inbox operator@gateway.example.internal:/opt/gpucall/state/recipe_requests/inbox
+
+gpucall-recipe-draft quality-status \
+  --request-id rr-... \
+  --remote-quality-inbox operator@gateway.example.internal:/opt/gpucall/state/quality_feedback/inbox
 ```
 
 The caller-side helper does not call an LLM. It creates deterministic intake material for gpucall administrators. If LLM-assisted recipe authoring is needed, it should run on the gpucall administrator side as an audited admin workflow.
 
-Generated drafts are review artifacts, not production config. `submit` writes a JSON bundle to a file-based recipe request inbox; it does not call the gpucall gateway API. `preflight` and `intake` can also write to that inbox directly with `--inbox-dir` or over SSH with `--remote-inbox USER@HOST:/absolute/path`. `quality` should write to the separate quality feedback inbox with `--quality-inbox-dir` or `--remote-quality-inbox`.
+Generated drafts are review artifacts, not production config. `submit` writes a JSON bundle to a file-based recipe request inbox; it does not call the gpucall gateway API. `preflight` and `intake` can also write to that inbox directly with `--inbox-dir` or over SSH with `--remote-inbox USER@HOST:/absolute/path`. `quality` should write to the separate quality feedback inbox with `--quality-inbox-dir` or `--remote-quality-inbox`. `status`, `recipe-status`, and `quality-status` read back sanitized processing state and next actions without returning raw prompt text, raw model output, DataRef URIs, presigned URLs, or API keys.
