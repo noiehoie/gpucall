@@ -1,6 +1,6 @@
 name: qwen2.5-7b-instruct
 provider_model_id: Qwen/Qwen2.5-7B-Instruct
-capabilities: [chat, instruction_following, summarization, translation, classification, reasoning]
+capabilities: [chat, instruction_following, summarization, translation, classification, reasoning, structured_output]
 max_model_len: 131072
 min_vram_gb: 24
 supported_engines: [modal-vllm, hyperstack-vllm, runpod-vllm-openai, local-ollama]
@@ -13,4 +13,5 @@ trust_remote_code: true
 source: https://qwen.ai/blog?id=qwen2.5-llm
 evidence:
   - Qwen2.5 model family includes 7B instruction-tuned model; Qwen states most models support 128K context.
+  - Qwen2.5-7B-Instruct model card describes improved structured output generation, especially JSON.
 production_ready: false

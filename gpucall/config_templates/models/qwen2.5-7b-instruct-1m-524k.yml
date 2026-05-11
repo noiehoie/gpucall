@@ -1,4 +1,4 @@
-name: qwen2.5-7b-instruct-1m
+name: qwen2.5-7b-instruct-1m-524k
 provider_model_id: Qwen/Qwen2.5-7B-Instruct-1M
 capabilities:
   - chat
@@ -9,19 +9,19 @@ capabilities:
   - reasoning
   - structured_output
   - long_context
-max_model_len: 1010000
+max_model_len: 524288
 min_vram_gb: 80
 supported_engines:
   - hyperstack-vllm
+  - runpod-vllm-openai
 input_contracts: [text, chat_messages, data_refs]
 output_contracts: [plain-text, json_object]
 supports_vision: false
 supports_guided_decoding: true
 supports_streaming: false
 trust_remote_code: true
-source: https://huggingface.co/Qwen/Qwen2.5-7B-Instruct-1M
+source: deployment-profile
 evidence:
-  - Qwen2.5-7B-Instruct-1M model card states support for full 1,010,000 token context and generation up to 8192 tokens.
-  - Qwen2.5-1M model card states the 1M variant maintains short-task capability while improving long-context handling.
-  - The base Qwen2.5-7B-Instruct model card describes improved structured output generation, especially JSON.
+  - Operator deployment profile caps Qwen2.5-7B-Instruct-1M at 524288 tokens on 80GB-class GPU until live validation proves a larger window.
+  - The full model catalog entry remains qwen2.5-7b-instruct-1m for 1010000-token deployments.
 production_ready: false

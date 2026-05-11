@@ -2,7 +2,7 @@ worker_ref: hyperstack-qwen-1m
 account_ref: hyperstack
 adapter: hyperstack
 execution_surface: iaas_vm
-model_ref: qwen2.5-7b-instruct-1m
+model_ref: qwen2.5-7b-instruct-1m-524k
 engine_ref: hyperstack-vllm
 modes:
 - sync

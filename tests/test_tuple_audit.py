@@ -57,10 +57,15 @@ def test_runpod_candidates_are_generated_from_catalog_source() -> None:
     runpod = [row for row in candidates if str(row.get("name", "")).startswith("runpod-")]
 
     assert not list((root / "tuple_candidates").glob("runpod-*.yml"))
-    assert len(runpod) == 66
-    assert sum(1 for row in runpod if row["adapter"] == "runpod-vllm-serverless") == 39
-    assert sum(1 for row in runpod if row["adapter"] == "runpod-serverless") == 27
+    assert len(runpod) == 72
+    assert sum(1 for row in runpod if row["adapter"] == "runpod-vllm-serverless") == 42
+    assert sum(1 for row in runpod if row["adapter"] == "runpod-serverless") == 30
     assert any(row["model_ref"] == "qwen2.5-7b-instruct-1m" for row in runpod)
+    assert any(
+        row["model_ref"] == "qwen2.5-7b-instruct-1m-524k"
+        and row["gpu"] in {"ADA_80_PRO", "AMPERE_80", "HOPPER_141"}
+        for row in runpod
+    )
 
 
 def test_tuple_audit_fails_closed_for_unknown_recipe(tmp_path) -> None:

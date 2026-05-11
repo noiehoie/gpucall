@@ -1,0 +1,24 @@
+name: gemma4-31b-ollama-local
+provider_model_id: gemma4-31b:latest
+capabilities:
+  - chat
+  - instruction_following
+  - summarization
+  - translation
+  - classification
+  - reasoning
+  - long_context
+max_model_len: 262144
+min_vram_gb: 24
+supported_engines:
+  - local-ollama
+input_contracts: [text, chat_messages]
+output_contracts: [ollama-generate, plain-text]
+supports_vision: false
+supports_guided_decoding: false
+supports_streaming: false
+trust_remote_code: false
+source: local-ollama-api
+evidence:
+  - Operator-local Ollama /api/show reported gemma4.context_length 262144, parameter_size 30.7B, and quantization Q4_K_M on 2026-05-11.
+production_ready: false

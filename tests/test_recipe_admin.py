@@ -727,7 +727,15 @@ def test_admin_process_inbox_can_auto_promote_long_text_candidate_without_valida
     )
     assert recipe["allowed_modes"] == ["async"]
     assert promotion["decision"] == "READY_FOR_BILLABLE_VALIDATION"
-    assert worker["target"] == "gpucall-worker-json:run_inference_on_modal"
+    assert promotion["candidate"]["name"] in {
+        "hyperstack-a100-qwen25-14b-128k",
+        "modal-h100-qwen25-14b",
+    }
+    if promotion["candidate"]["name"].startswith("hyperstack-"):
+        assert worker["target"] == "default-CANADA-1"
+        assert surface["ssh_remote_cidr"] == "203.0.113.10/32"
+    else:
+        assert worker["target"] == "gpucall-worker-json:run_inference_on_modal"
     assert surface["configured_price_ttl_seconds"] == 604800
 
 

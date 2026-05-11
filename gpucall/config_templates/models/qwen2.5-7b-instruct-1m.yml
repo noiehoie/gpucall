@@ -1,9 +1,12 @@
 name: qwen2.5-7b-instruct-1m
 provider_model_id: Qwen/Qwen2.5-7B-Instruct-1M
 capabilities:
+  - chat
   - instruction_following
   - summarization
   - translation
+  - classification
+  - reasoning
   - structured_output
   - long_context
 max_model_len: 1010000
@@ -16,6 +19,9 @@ supports_vision: false
 supports_guided_decoding: true
 supports_streaming: false
 trust_remote_code: true
-source: configured
-evidence: []
+source: https://huggingface.co/Qwen/Qwen2.5-7B-Instruct-1M
+evidence:
+  - Qwen2.5-7B-Instruct-1M model card states support for full 1,010,000 token context and generation up to 8192 tokens.
+  - Qwen2.5-1M model card states the 1M variant maintains short-task capability while improving long-context handling.
+  - The base Qwen2.5-7B-Instruct model card describes improved structured output generation, especially JSON.
 production_ready: false
