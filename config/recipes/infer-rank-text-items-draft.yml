@@ -7,14 +7,14 @@ data_classification: confidential
 allowed_modes:
 - sync
 - async
-context_budget_tokens: 65536
-resource_class: large
-latency_class: batch
+context_budget_tokens: 524288
+resource_class: ultralong
+latency_class: long_running
 quality_floor: standard
 timeout_seconds: 600
 lease_ttl_seconds: 900
 token_estimation_profile: generic_utf8
-max_input_bytes: 67108864
+max_input_bytes: 536870912
 allowed_mime_prefixes:
 - text/
 allowed_inline_mime_prefixes: []

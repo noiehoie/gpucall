@@ -2,19 +2,19 @@ name: infer-extract-json-draft
 task: infer
 recipe_schema_version: 3
 intent: extract_json
-context_budget_tokens: 32768
-resource_class: standard
-latency_class: standard
+context_budget_tokens: 131072
+resource_class: exlarge
+latency_class: batch
 quality_floor: standard
 cost_ceiling_usd: null
 auto_select: true
 data_classification: confidential
 allowed_modes:
 - sync
-timeout_seconds: 180
-lease_ttl_seconds: 240
+timeout_seconds: 600
+lease_ttl_seconds: 900
 token_estimation_profile: generic_utf8
-max_input_bytes: 33554432
+max_input_bytes: 134217728
 allowed_mime_prefixes:
 - text/
 allowed_inline_mime_prefixes: []
@@ -34,5 +34,6 @@ requires_key_release: false
 required_model_capabilities:
 - structured_output
 output_contract: plain-text
-expected_cold_start_seconds: null
-cost_policy: null
+expected_cold_start_seconds: 600
+cost_policy:
+  max_estimated_cost_usd: 10.0
