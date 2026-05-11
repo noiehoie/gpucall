@@ -146,6 +146,10 @@ class PostgresIdempotencyStore:
                     WHERE status IS NULL OR content IS NULL OR headers IS NULL
                     """
                 )
+            cur.execute("ALTER TABLE gpucall_idempotency ALTER COLUMN headers SET DEFAULT '{}'::jsonb")
+            cur.execute("ALTER TABLE gpucall_idempotency ALTER COLUMN status SET NOT NULL")
+            cur.execute("ALTER TABLE gpucall_idempotency ALTER COLUMN content SET NOT NULL")
+            cur.execute("ALTER TABLE gpucall_idempotency ALTER COLUMN headers SET NOT NULL")
             cur.execute("CREATE INDEX IF NOT EXISTS gpucall_idempotency_created_at_idx ON gpucall_idempotency(created_at)")
         self._conn.commit()
 
