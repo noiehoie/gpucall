@@ -5,7 +5,7 @@ from datetime import datetime, timedelta, timezone
 import pytest
 
 from gpucall.compiler import GovernanceCompiler, GovernanceError
-from gpucall.domain import CostPolicy, DataRef, ExecutionMode, Policy, TuplePolicy, ExecutionTupleSpec, Recipe, RecipeQualityFloor, TaskRequest
+from gpucall.domain import CostPolicy, DataRef, EngineSpec, ExecutionMode, ModelSpec, Policy, TuplePolicy, ExecutionTupleSpec, Recipe, RecipeQualityFloor, TaskRequest
 from gpucall.domain import TupleObservation
 from gpucall.registry import ObservedRegistry
 
@@ -459,6 +459,53 @@ def test_compiler_carries_response_format_into_plan() -> None:
     plan = compiler.compile(request)
 
     assert plan.response_format.type == "json_object"
+
+
+def test_response_format_requires_structured_output_capable_route() -> None:
+    compiler = build_compiler()
+    compiler.recipes["r1"] = compiler.recipes["r1"].model_copy(update={"guided_decoding": True})
+    compiler.tuples["p1"] = compiler.tuples["p1"].model_copy(update={"model_ref": "plain", "engine_ref": "plain-engine"})
+    compiler.tuples["p2"] = compiler.tuples["p2"].model_copy(update={"model_ref": "json", "engine_ref": "json-engine"})
+    compiler.models = {
+        "plain": ModelSpec(
+            name="plain",
+            provider_model_id="plain",
+            max_model_len=100,
+            min_vram_gb=1,
+            input_contracts=["text"],
+            output_contracts=["plain-text"],
+            supports_guided_decoding=False,
+        ),
+        "json": ModelSpec(
+            name="json",
+            provider_model_id="json",
+            max_model_len=100,
+            min_vram_gb=1,
+            input_contracts=["text"],
+            output_contracts=["plain-text", "json_object"],
+            supports_guided_decoding=True,
+        ),
+    }
+    compiler.engines = {
+        "plain-engine": EngineSpec(
+            name="plain-engine",
+            kind="test",
+            input_contracts=["text"],
+            output_contracts=["plain-text"],
+            supports_guided_decoding=False,
+        ),
+        "json-engine": EngineSpec(
+            name="json-engine",
+            kind="test",
+            input_contracts=["text"],
+            output_contracts=["plain-text", "json_object"],
+            supports_guided_decoding=True,
+        ),
+    }
+
+    plan = compiler.compile(TaskRequest(task="infer", mode="sync", recipe="r1", response_format={"type": "json_object"}))
+
+    assert plan.tuple_chain == ["p2"]
 
 
 def test_compiler_carries_generation_params_into_plan() -> None:

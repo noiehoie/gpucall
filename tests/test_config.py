@@ -523,6 +523,26 @@ def test_standard_config_transport_matrix_is_explicit(tmp_path) -> None:
         assert required_tuples.issubset(set(plan.tuple_chain)), label
 
 
+def test_standard_config_does_not_route_structured_vision_to_plain_text_only_engine(tmp_path) -> None:
+    config = load_config(copy_config(tmp_path))
+    compiler = GovernanceCompiler(policy=config.policy, recipes=config.recipes, tuples=config.tuples, models=config.models, engines=config.engines, registry=ObservedRegistry())
+
+    request = TaskRequest(
+        task="vision",
+        mode=ExecutionMode.SYNC,
+        intent="understand_document_image",
+        input_refs=[DataRef(uri="s3://bucket/image.png", sha256="c" * 64, bytes=2_000_000, content_type="image/png")],
+        response_format={"type": "json_object"},
+    )
+
+    with pytest.raises(GovernanceError) as exc_info:
+        compiler.compile(request)
+
+    assert exc_info.value.code == "NO_ELIGIBLE_TUPLE"
+    rejections = exc_info.value.context["tuple_rejections"]
+    assert rejections["modal-h100-florence-2-large-ft"] == "model does not declare guided decoding support"
+
+
 def test_provider_smoke_uses_chat_messages_for_chat_only_provider(tmp_path) -> None:
     config = load_config(copy_config(tmp_path))
     recipe = config.recipes["text-infer-light"]

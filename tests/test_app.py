@@ -75,6 +75,12 @@ def copy_config(tmp_path: Path) -> Path:
         recipe["timeout_seconds"] = 30
         recipe["lease_ttl_seconds"] = 120
         path.write_text(yaml.safe_dump(recipe, sort_keys=False), encoding="utf-8")
+    for rel_path in ("models/local-echo-model.yml", "engines/local-echo-engine.yml"):
+        path = root / rel_path
+        payload = yaml.safe_load(path.read_text(encoding="utf-8"))
+        payload["output_contracts"] = sorted(set(payload.get("output_contracts") or []) | {"json_object"})
+        payload["supports_guided_decoding"] = True
+        path.write_text(yaml.safe_dump(payload, sort_keys=False), encoding="utf-8")
     return root
 
 

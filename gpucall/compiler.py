@@ -26,7 +26,7 @@ from gpucall.domain import ChatMessage, ResponseFormatType
 from gpucall.execution.contracts import account_ref_for_spec
 from gpucall.price_freshness import tuple_configured_price_freshness
 from gpucall.registry import ObservedRegistry
-from gpucall.routing import classification_rank, is_production_route_candidate, tuple_route_rejection_reason, required_model_len, token_budget
+from gpucall.routing import classification_rank, is_production_route_candidate, requested_output_contract, tuple_route_rejection_reason, required_model_len, token_budget
 from gpucall.targeting import is_configured_target
 
 
@@ -387,6 +387,7 @@ class GovernanceCompiler:
                 mode=request.mode,
                 required_len=self._required_model_len(request, recipe),
                 required_input_contracts=self._required_input_contracts(request),
+                required_output_contract=requested_output_contract(request, recipe),
                 auto_selected=auto_selected,
             )
             if reason is not None:
@@ -415,6 +416,7 @@ class GovernanceCompiler:
                 mode=request.mode,
                 required_len=self._required_model_len(request, recipe),
                 required_input_contracts=self._required_input_contracts(request),
+                required_output_contract=requested_output_contract(request, recipe),
                 auto_selected=auto_selected,
             )
             if reason is None and not self.registry.is_available(name):

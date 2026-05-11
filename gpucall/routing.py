@@ -13,6 +13,7 @@ from gpucall.domain import (
     Policy,
     ExecutionTupleSpec,
     Recipe,
+    ResponseFormatType,
     SecurityTier,
     TaskRequest,
     recipe_requirements,
@@ -48,6 +49,16 @@ def required_model_len(request: TaskRequest, recipe: Recipe, policy: Policy) -> 
     ref_bytes = sum(int(ref.bytes or 0) for ref in request.input_refs)
     estimated_input_tokens = math.ceil((inline_bytes + message_bytes + ref_bytes) * float(policy.tokenizer_safety_multiplier))
     return max(1, estimated_input_tokens + output_budget)
+
+
+def requested_output_contract(request: TaskRequest, recipe: Recipe) -> str | None:
+    if request.response_format is None or request.response_format.type is ResponseFormatType.TEXT:
+        return recipe.output_contract
+    if request.response_format.type is ResponseFormatType.JSON_OBJECT:
+        return "json_object"
+    if request.response_format.type is ResponseFormatType.JSON_SCHEMA:
+        return "json_schema"
+    return recipe.output_contract
 
 
 def is_production_route_candidate(
@@ -101,6 +112,7 @@ def tuple_route_rejection_reason(
     mode: ExecutionMode | None = None,
     required_len: int | None = None,
     required_input_contracts: set[str] | None = None,
+    required_output_contract: str | None = None,
     auto_selected: bool = True,
     require_auto_select: bool = False,
     allow_fake: bool | None = None,
@@ -147,6 +159,7 @@ def tuple_route_rejection_reason(
         required_len=minimum_model_len,
         mode=mode,
         required_input_contracts=required_input_contracts,
+        required_output_contract=required_output_contract,
     )
     if catalog_reason is not None:
         return catalog_reason
@@ -189,8 +202,10 @@ def catalog_route_rejection_reason(
     required_len: int,
     mode: ExecutionMode | None,
     required_input_contracts: set[str] | None,
+    required_output_contract: str | None = None,
 ) -> str | None:
-    requires_catalog = bool(recipe.required_model_capabilities or recipe.output_contract or tuple.model_ref or tuple.engine_ref)
+    output_contract = required_output_contract or recipe.output_contract
+    requires_catalog = bool(recipe.required_model_capabilities or output_contract or tuple.model_ref or tuple.engine_ref)
     if not requires_catalog:
         return None
     if model is None and engine is None and (tuple.model_ref or tuple.engine_ref):
@@ -219,10 +234,10 @@ def catalog_route_rejection_reason(
                 return "model input_contracts missing: " + ", ".join(missing_contracts)
         if recipe.task == "vision" and not model.supports_vision:
             return "model does not declare vision support"
-        if recipe.guided_decoding and recipe.output_contract in {"json_object", "json_schema"} and not model.supports_guided_decoding:
+        if recipe.guided_decoding and output_contract in {"json_object", "json_schema"} and not model.supports_guided_decoding:
             return "model does not declare guided decoding support"
-        if recipe.output_contract and model.output_contracts and recipe.output_contract not in model.output_contracts:
-            return "model output_contracts missing: " + recipe.output_contract
+        if output_contract and model.output_contracts and output_contract not in model.output_contracts:
+            return "model output_contracts missing: " + output_contract
     if engine is not None:
         if model is not None and model.supported_engines and engine.name not in model.supported_engines:
             return "engine is not listed in model supported_engines"
@@ -232,10 +247,10 @@ def catalog_route_rejection_reason(
                 return "engine input_contracts missing: " + ", ".join(missing_engine_contracts)
         if recipe.task == "vision" and not engine.supports_multimedia:
             return "engine does not declare multi-media support"
-        if recipe.guided_decoding and recipe.output_contract in {"json_object", "json_schema"} and not engine.supports_guided_decoding:
+        if recipe.guided_decoding and output_contract in {"json_object", "json_schema"} and not engine.supports_guided_decoding:
             return "engine does not declare guided decoding support"
-        if recipe.output_contract and engine.output_contracts and recipe.output_contract not in engine.output_contracts:
-            return "engine output_contracts missing: " + recipe.output_contract
+        if output_contract and engine.output_contracts and output_contract not in engine.output_contracts:
+            return "engine output_contracts missing: " + output_contract
         if mode is ExecutionMode.STREAM and not engine.supports_streaming:
             return "engine does not declare streaming support"
         if required_input_contracts and "data_refs" in required_input_contracts and not engine.supports_data_refs:
