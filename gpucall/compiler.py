@@ -17,6 +17,7 @@ from gpucall.domain import (
     Policy,
     ExecutionTupleSpec,
     Recipe,
+    RecipeQualityFloor,
     SecurityTier,
     TaskRequest,
     recipe_requirements,
@@ -194,7 +195,7 @@ class GovernanceCompiler:
                 code="NO_AUTO_SELECTABLE_RECIPE",
                 context=context,
             )
-        return sorted(candidates, key=self._recipe_selection_key)[0]
+        return sorted(candidates, key=lambda recipe: self._recipe_selection_key(recipe, request))[0]
 
     def _recipe_rejection_reason(self, request: TaskRequest, recipe: Recipe) -> str | None:
         if not recipe.auto_select:
@@ -230,11 +231,13 @@ class GovernanceCompiler:
                     return f"inline content_type {content_type!r} is not allowed"
         return None
 
-    def _recipe_selection_key(self, recipe: Recipe) -> tuple[int, int, int, str]:
-        # Prefer the smallest matching recipe. Larger/expensive recipes remain
-        # available for requests that exceed lighter recipe limits.
+    def _recipe_selection_key(self, recipe: Recipe, request: TaskRequest) -> tuple[int, int, int, int, str]:
+        # For intentless requests, do not silently pick draft/smoke recipes just
+        # because they are smaller. A caller that supplies an intent still gets
+        # the exact deterministic recipe match for that intent.
         requirements = recipe_requirements(recipe)
-        return (classification_rank(recipe.data_classification), requirements.minimum_vram_gb, requirements.context_budget_tokens, recipe.name)
+        quality_rank = 0 if request.intent is not None else _quality_selection_rank(recipe.quality_floor)
+        return (quality_rank, classification_rank(recipe.data_classification), requirements.minimum_vram_gb, requirements.context_budget_tokens, recipe.name)
 
     def _validate_request_against_recipe(self, request: TaskRequest, recipe: Recipe) -> None:
         if request.mode not in recipe.allowed_modes:
@@ -737,6 +740,14 @@ def _has_image_ref(request: TaskRequest) -> bool:
         if content_type.startswith("image/"):
             return True
     return False
+
+
+def _quality_selection_rank(quality: RecipeQualityFloor) -> int:
+    if quality in {RecipeQualityFloor.STANDARD, RecipeQualityFloor.HIGH, RecipeQualityFloor.LOSSLESS}:
+        return 0
+    if quality is RecipeQualityFloor.DRAFT:
+        return 1
+    return 2
 
 
 def _text_snapshot(value: str) -> dict[str, object]:

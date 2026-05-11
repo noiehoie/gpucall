@@ -120,8 +120,8 @@ v2.0 で production-supported なタスク:
 - Draft control-plane recipe contracts: `transcribe`, `convert`, `train`, `fine-tune`, `split-infer`
 - Modes: `sync`, `async`, `stream`
 - Object store: Cloudflare R2 endpoint override を含む S3-compatible API
-- Deployment: Docker Compose
-- State: デフォルトは SQLite WAL。`GPUCALL_DATABASE_URL` による Postgres job/idempotency backend
+- Deployment: production-like run では Postgres service 付き Docker Compose
+- State: Docker Compose では gateway jobs/idempotency に Postgres を使う。`GPUCALL_DATABASE_URL` 未設定時の SQLite WAL は dev/test fallback
 - Optional deployment manifests: Helm、systemd、Postgres DDL、Prometheus alerts、Grafana dashboard
 
 v2.0 で production-supported ではないもの:
@@ -452,8 +452,8 @@ TEE が使えない、または適さない場合のために split-learning exe
 
 ### Hardened Deployment Profile
 
-v3 では、v2 の Docker Compose / SQLite profile に加えて production hardened profile を追加します。
+v3 では、v2 の Docker Compose / Postgres profile に加えて production hardened profile を追加します。
 
-- **Standard profile**: Docker Compose、SQLite WAL、single-node。PoC と production 初期に適します。
+- **Standard profile**: Docker Compose、Postgres-backed gateway jobs/idempotency、single-node。PoC と production 初期に適します。
 - **Hardened profile**: Helm chart、PostgreSQL HA、multi-replica gateway。governance logic は Standard と完全に共通で、infrastructure layer だけが異なります。
 - **Profile selection**: `gpucall init --profile hardened` または `deployment_profile: hardened` で選択します。`gpucall migrate-profile` のような profile migration tool を提供します。

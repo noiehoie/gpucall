@@ -5,7 +5,7 @@ from datetime import datetime, timedelta, timezone
 import pytest
 
 from gpucall.compiler import GovernanceCompiler, GovernanceError
-from gpucall.domain import CostPolicy, DataRef, ExecutionMode, Policy, TuplePolicy, ExecutionTupleSpec, Recipe, TaskRequest
+from gpucall.domain import CostPolicy, DataRef, ExecutionMode, Policy, TuplePolicy, ExecutionTupleSpec, Recipe, RecipeQualityFloor, TaskRequest
 from gpucall.domain import TupleObservation
 from gpucall.registry import ObservedRegistry
 
@@ -85,6 +85,34 @@ def test_compiler_auto_selects_matching_intent_when_provided() -> None:
     plan = compiler.compile(TaskRequest(task="infer", mode="sync", intent="translate_text"))
 
     assert plan.recipe_name == "translate"
+
+
+def test_compiler_intentless_selection_prefers_production_quality_recipe() -> None:
+    compiler = build_compiler()
+    draft = compiler.recipes["r1"].model_copy(
+        update={
+            "name": "draft",
+            "intent": "standard_text_inference",
+            "quality_floor": RecipeQualityFloor.DRAFT,
+            "context_budget_tokens": 100,
+            "max_input_bytes": 100,
+        }
+    )
+    standard = compiler.recipes["r1"].model_copy(
+        update={
+            "name": "standard",
+            "intent": "standard_text_inference",
+            "quality_floor": RecipeQualityFloor.STANDARD,
+            "context_budget_tokens": 1000,
+            "max_input_bytes": 1000,
+        }
+    )
+    compiler.recipes = {"draft": draft, "standard": standard}
+    compiler.tuples["p2"] = compiler.tuples["p2"].model_copy(update={"max_model_len": 1000})
+
+    plan = compiler.compile(TaskRequest(task="infer", mode="sync", max_tokens=20))
+
+    assert plan.recipe_name == "standard"
 
 
 def test_compiler_ignores_intent_specific_recipes_without_request_intent() -> None:

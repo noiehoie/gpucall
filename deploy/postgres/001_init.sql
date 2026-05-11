@@ -9,12 +9,11 @@ CREATE TABLE IF NOT EXISTS gpucall_jobs (
 
 CREATE TABLE IF NOT EXISTS gpucall_idempotency (
   key TEXT PRIMARY KEY,
-  owner_identity TEXT NOT NULL,
+  created_at DOUBLE PRECISION NOT NULL,
   request_hash TEXT NOT NULL,
-  status_code INTEGER NOT NULL,
-  response_json JSONB NOT NULL,
-  headers_json JSONB NOT NULL DEFAULT '{}'::jsonb,
-  created_at DOUBLE PRECISION NOT NULL
+  status INTEGER NOT NULL,
+  content JSONB NOT NULL,
+  headers JSONB NOT NULL DEFAULT '{}'::jsonb
 );
 
 CREATE INDEX IF NOT EXISTS gpucall_jobs_owner_state_idx ON gpucall_jobs(owner_identity, state);

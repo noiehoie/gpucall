@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import asyncio
 import json
-import sqlite3
 import time
 import threading
 from datetime import datetime, timezone
@@ -12,6 +11,7 @@ from uuid import uuid4
 
 from gpucall.dispatcher import JobStore
 from gpucall.domain import CompiledPlan, JobRecord, JobState
+from gpucall.sqlite_utils import connect_sqlite
 
 
 class SQLiteJobStore(JobStore):
@@ -20,8 +20,7 @@ class SQLiteJobStore(JobStore):
         self.path = path
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self._lock = asyncio.Lock()
-        self._conn = sqlite3.connect(self.path, check_same_thread=False)
-        self._conn.execute("PRAGMA journal_mode=WAL")
+        self._conn = connect_sqlite(self.path, check_same_thread=False)
         self._conn.execute(
             """
             CREATE TABLE IF NOT EXISTS jobs (
@@ -84,8 +83,7 @@ class SQLiteIdempotencyStore:
         self.path = path
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self._lock = threading.RLock()
-        self._conn = sqlite3.connect(self.path, check_same_thread=False)
-        self._conn.execute("PRAGMA journal_mode=WAL")
+        self._conn = connect_sqlite(self.path, check_same_thread=False)
         self._conn.execute(
             """
             CREATE TABLE IF NOT EXISTS idempotency_entries (

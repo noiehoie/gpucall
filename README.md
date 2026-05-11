@@ -120,8 +120,8 @@ Production-supported v2.0 tasks:
 - Draft control-plane recipe contracts: `transcribe`, `convert`, `train`, `fine-tune`, `split-infer`
 - Modes: `sync`, `async`, `stream`
 - Object store: S3-compatible API, including Cloudflare R2 via endpoint override
-- Deployment: Docker Compose
-- State: SQLite WAL by default; Postgres job/idempotency backend with `GPUCALL_DATABASE_URL`
+- Deployment: Docker Compose with a bundled Postgres service for production-like runs
+- State: Postgres for gateway jobs and idempotency in Docker Compose; SQLite WAL remains a dev/test fallback when `GPUCALL_DATABASE_URL` is unset
 - Optional deployment manifests: Helm, systemd, Postgres DDL, Prometheus alerts, Grafana dashboard
 
 Not production-supported in v2.0:
@@ -492,8 +492,8 @@ v3 adds split-learning execution for cases where TEE is unavailable or unsuitabl
 
 ### Hardened Deployment Profile
 
-v3 adds a production hardened deployment profile alongside the v2 Docker Compose / SQLite profile.
+v3 adds a production hardened deployment profile alongside the v2 Docker Compose / Postgres profile.
 
-- **Standard profile**: Docker Compose, SQLite WAL, single-node; suitable for PoC and early production.
+- **Standard profile**: Docker Compose, Postgres-backed gateway jobs/idempotency, single-node; suitable for PoC and early production.
 - **Hardened profile**: Helm chart, PostgreSQL HA, multi-replica gateway. Governance logic stays identical; only infrastructure changes.
 - **Profile selection**: `gpucall init --profile hardened` or `deployment_profile: hardened`, plus a profile migration tool such as `gpucall migrate-profile`.

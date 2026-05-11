@@ -20,6 +20,7 @@ services:
       HOME: /config
       PYTHONDONTWRITEBYTECODE: "1"
       GPUCALL_CREDENTIALS: /config/credentials.yml
+      GPUCALL_DATABASE_URL: postgresql://${GPUCALL_POSTGRES_USER:-gpucall}:${GPUCALL_POSTGRES_PASSWORD:?set GPUCALL_POSTGRES_PASSWORD}@postgres:5432/${GPUCALL_POSTGRES_DB:-gpucall}
       GPUCALL_GIT_COMMIT: ${GPUCALL_GIT_COMMIT:-}
       GPUCALL_STATE_DIR: /state
       XDG_CACHE_HOME: /cache
@@ -44,3 +45,25 @@ services:
       timeout: 5s
       retries: 3
       start_period: 10s
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${GPUCALL_POSTGRES_DB:-gpucall}
+      POSTGRES_USER: ${GPUCALL_POSTGRES_USER:-gpucall}
+      POSTGRES_PASSWORD: ${GPUCALL_POSTGRES_PASSWORD:?set GPUCALL_POSTGRES_PASSWORD}
+    volumes:
+      - gpucall-postgres:/var/lib/postgresql/data
+      - ./deploy/postgres/001_init.sql:/docker-entrypoint-initdb.d/001_init.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  gpucall-postgres:

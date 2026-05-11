@@ -113,6 +113,39 @@ class PostgresIdempotencyStore:
                 )
                 """
             )
+            cur.execute("ALTER TABLE gpucall_idempotency ADD COLUMN IF NOT EXISTS status INTEGER")
+            cur.execute("ALTER TABLE gpucall_idempotency ADD COLUMN IF NOT EXISTS content JSONB")
+            cur.execute("ALTER TABLE gpucall_idempotency ADD COLUMN IF NOT EXISTS headers JSONB")
+            cur.execute(
+                """
+                SELECT column_name
+                FROM information_schema.columns
+                WHERE table_name = 'gpucall_idempotency'
+                """
+            )
+            columns = {str(row[0]) for row in cur.fetchall()}
+            if {"status_code", "response_json", "headers_json"} & columns:
+                if "owner_identity" in columns:
+                    cur.execute("ALTER TABLE gpucall_idempotency ALTER COLUMN owner_identity DROP NOT NULL")
+                if "status_code" in columns:
+                    cur.execute("ALTER TABLE gpucall_idempotency ALTER COLUMN status_code DROP NOT NULL")
+                if "response_json" in columns:
+                    cur.execute("ALTER TABLE gpucall_idempotency ALTER COLUMN response_json DROP NOT NULL")
+                if "headers_json" in columns:
+                    cur.execute("ALTER TABLE gpucall_idempotency ALTER COLUMN headers_json DROP NOT NULL")
+                status_source = "status_code" if "status_code" in columns else "status"
+                content_source = "response_json" if "response_json" in columns else "content"
+                headers_source = "headers_json" if "headers_json" in columns else "headers"
+                cur.execute(
+                    f"""
+                    UPDATE gpucall_idempotency
+                    SET
+                      status = COALESCE(status, {status_source}),
+                      content = COALESCE(content, {content_source}),
+                      headers = COALESCE(headers, {headers_source}, '{{}}'::jsonb)
+                    WHERE status IS NULL OR content IS NULL OR headers IS NULL
+                    """
+                )
             cur.execute("CREATE INDEX IF NOT EXISTS gpucall_idempotency_created_at_idx ON gpucall_idempotency(created_at)")
         self._conn.commit()
 

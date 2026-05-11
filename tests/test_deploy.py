@@ -32,3 +32,9 @@ def test_postgres_schema_matches_runtime_payload_contract() -> None:
     assert "payload JSONB NOT NULL" in schema
     assert "gpucall_idempotency" in schema
     assert "created_at DOUBLE PRECISION NOT NULL" in schema
+    assert "status INTEGER NOT NULL" in schema
+    assert "content JSONB NOT NULL" in schema
+    assert "headers JSONB NOT NULL" in schema
+    assert "status_code" not in schema
+    assert "response_json" not in schema
+    assert "headers_json" not in schema
