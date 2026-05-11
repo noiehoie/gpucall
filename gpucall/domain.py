@@ -296,6 +296,13 @@ class ResponseFormat(BaseModel):
             raise ValueError("json_schema is required when response_format.type is json_schema")
         if self.type is not ResponseFormatType.JSON_SCHEMA and self.json_schema is not None:
             raise ValueError("json_schema is only valid when response_format.type is json_schema")
+        if self.type is ResponseFormatType.JSON_SCHEMA and isinstance(self.json_schema, dict):
+            schema = self.json_schema.get("schema")
+            if isinstance(schema, dict):
+                strict = self.json_schema.get("strict")
+                self.json_schema = schema
+                if isinstance(strict, bool):
+                    self.strict = strict
         return self
 
 

@@ -78,7 +78,7 @@ def copy_config(tmp_path: Path) -> Path:
     for rel_path in ("models/local-echo-model.yml", "engines/local-echo-engine.yml"):
         path = root / rel_path
         payload = yaml.safe_load(path.read_text(encoding="utf-8"))
-        payload["output_contracts"] = sorted(set(payload.get("output_contracts") or []) | {"json_object"})
+        payload["output_contracts"] = sorted(set(payload.get("output_contracts") or []) | {"json_object", "json_schema"})
         payload["supports_guided_decoding"] = True
         path.write_text(yaml.safe_dump(payload, sort_keys=False), encoding="utf-8")
     return root
@@ -1054,6 +1054,30 @@ def test_openai_chat_completions_promotes_metadata_intent_and_preserves_hints(tm
     assert captured["metadata"]["openai.seed"] == "7"
     assert "openai.tools" in captured["metadata"]
     assert captured["metadata"]["openai.extra_keys"] == "ignored_by_gpucall"
+
+
+def test_openai_chat_completions_accepts_openai_json_schema_wrapper(tmp_path, monkeypatch) -> None:
+    captured = {}
+
+    async def fake_execute_sync(plan):
+        captured["response_format"] = plan.response_format
+        return TupleResult(kind="inline", value='{"answer": "ok"}', output_validated=True)
+
+    schema = {"type": "object", "required": ["answer"], "properties": {"answer": {"type": "string"}}}
+    with TestClient(create_app(copy_config(tmp_path))) as client:
+        monkeypatch.setattr(client.app.state.runtime.dispatcher, "execute_sync", fake_execute_sync)
+        response = client.post(
+            "/v1/chat/completions",
+            json={
+                "model": "gpt-4o-mini",
+                "messages": [{"role": "user", "content": "return json"}],
+                "response_format": {"type": "json_schema", "json_schema": {"name": "answer", "schema": schema, "strict": False}},
+            },
+        )
+
+    assert response.status_code == 200
+    assert captured["response_format"].json_schema == schema
+    assert captured["response_format"].strict is False
 
 
 def test_openai_facade_prompt_does_not_add_user_prefix(tmp_path, monkeypatch) -> None:

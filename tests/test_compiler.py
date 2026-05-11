@@ -461,6 +461,46 @@ def test_compiler_carries_response_format_into_plan() -> None:
     assert plan.response_format.type == "json_object"
 
 
+def test_compiler_normalizes_openai_json_schema_response_format() -> None:
+    compiler = build_compiler()
+    compiler.recipes["r1"] = compiler.recipes["r1"].model_copy(update={"guided_decoding": True})
+    compiler.tuples["p1"] = compiler.tuples["p1"].model_copy(update={"model_ref": "json-model", "engine_ref": "json-engine"})
+    compiler.models = {
+        "json-model": ModelSpec(
+            name="json-model",
+            provider_model_id="json-model",
+            max_model_len=100,
+            min_vram_gb=1,
+            input_contracts=["text"],
+            output_contracts=["plain-text", "json_schema"],
+            supports_guided_decoding=True,
+        )
+    }
+    compiler.engines = {
+        "json-engine": EngineSpec(
+            name="json-engine",
+            kind="test",
+            input_contracts=["text"],
+            output_contracts=["plain-text", "json_schema"],
+            supports_guided_decoding=True,
+        )
+    }
+    schema = {"type": "object", "required": ["answer"], "properties": {"answer": {"type": "string"}}}
+
+    plan = compiler.compile(
+        TaskRequest(
+            task="infer",
+            mode="sync",
+            recipe="r1",
+            response_format={"type": "json_schema", "json_schema": {"name": "answer", "schema": schema, "strict": False}},
+        )
+    )
+
+    assert plan.response_format is not None
+    assert plan.response_format.json_schema == schema
+    assert plan.response_format.strict is False
+
+
 def test_response_format_requires_structured_output_capable_route() -> None:
     compiler = build_compiler()
     compiler.recipes["r1"] = compiler.recipes["r1"].model_copy(update={"guided_decoding": True})
