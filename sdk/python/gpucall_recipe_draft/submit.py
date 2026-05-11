@@ -50,7 +50,7 @@ def submit_bundle_to_remote(bundle: dict[str, Any], remote_inbox: str) -> str:
     payload = json.dumps(bundle, ensure_ascii=False, indent=2, sort_keys=True) + "\n"
     tmp_path = posixpath.join(target.inbox_dir, f".{request_id}.tmp")
     final_path = posixpath.join(target.inbox_dir, f"{request_id}.json")
-    command = "set -eu; mkdir -p -- {dir}; umask 077; cat > {tmp}; mv -f -- {tmp} {final}".format(
+    command = "set -eu; mkdir -p -- {dir}; umask 077; cat > {tmp}; mv -f -- {tmp} {final}; chmod 0644 -- {final}".format(
         dir=shlex.quote(target.inbox_dir),
         tmp=shlex.quote(tmp_path),
         final=shlex.quote(final_path),

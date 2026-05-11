@@ -216,6 +216,7 @@ def test_submit_bundle_to_remote_uses_ssh_atomic_write(monkeypatch) -> None:
     assert "mkdir -p" in calls[0]["args"][2]
     assert f".{request_id}.tmp" in calls[0]["args"][2]
     assert f"{request_id}.json" in calls[0]["args"][2]
+    assert "chmod 0644" in calls[0]["args"][2]
     assert json.loads(calls[0]["input"])["source"] == "example-caller-app"
 
 

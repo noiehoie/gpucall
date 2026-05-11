@@ -153,6 +153,12 @@ export GPUCALL_RECIPE_INBOX="admin@gateway.example.internal:/opt/gpucall/state/r
 export GPUCALL_QUALITY_FEEDBACK_INBOX="admin@gateway.example.internal:/opt/gpucall/state/quality_feedback/inbox"
 ```
 
+The inbox SSH user should be a deployment-scoped operator or intake account,
+not `root`. The gpucall operator owns the exact username, path, forced-command
+policy, and file permissions. External systems should only write sanitized
+recipe intake to `GPUCALL_RECIPE_INBOX` and sanitized post-success quality
+feedback to `GPUCALL_QUALITY_FEEDBACK_INBOX`.
+
 Rules:
 
 - `GPUCALL_API_KEY` must be a gateway key issued for this external system or

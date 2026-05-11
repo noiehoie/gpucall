@@ -124,6 +124,11 @@ export GPUCALL_RECIPE_INBOX="<recipe-request-admin-inbox>"
 export GPUCALL_QUALITY_FEEDBACK_INBOX="<quality-feedback-admin-inbox>"
 ```
 
+The operator-provided inbox values are approved dropboxes for sanitized
+metadata. Do not substitute a privileged host login or another SSH target
+yourself. Use the exact recipe inbox for unknown-workload intake and the exact
+quality feedback inbox for post-success business validation failures.
+
 Validate the installed gateway before implementation:
 
 ```bash

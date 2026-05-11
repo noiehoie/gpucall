@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "gpucall-sdk"
-version = "2.0.9"
+version = "2.0.10"
 description = "Lightweight Python SDK for gpucall v2.0 Gateway"
 readme = "README.md"
 requires-python = ">=3.11"

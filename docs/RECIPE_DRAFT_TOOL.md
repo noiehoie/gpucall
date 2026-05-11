@@ -232,6 +232,24 @@ The output is not production config. It is a review artifact for gpucall adminis
 
 The caller-side helper can submit sanitized intake and draft artifacts to a file-based inbox. This is not a gpucall API. The inbox can be a local shared directory, or an SSH-accessible directory controlled by the gpucall administrator.
 
+Production deployments should not depend on a `root` submitter writing files
+that a different unprivileged watcher later reads. The recommended shape is a
+dedicated operator account or shared service group that owns the dropbox:
+
+```bash
+install -d -o gpucall -g gpucall-intake -m 2770 /opt/gpucall/state/recipe_requests/inbox
+install -d -o gpucall -g gpucall-intake -m 2770 /opt/gpucall/state/quality_feedback/inbox
+```
+
+Caller SSH access should be scoped to that approved inbox path, preferably by a
+forced command or deployment-specific SSH policy. The submitted payloads are
+sanitized metadata only; API keys, prompt bodies, raw model output, DataRef
+URIs, and presigned URLs must not be included. The SDK remote submitter writes
+the final JSON atomically and makes it readable by the gateway watcher as a
+compatibility guard for cross-user dropboxes, but a production installation
+should still use service-account ownership, group permissions, default ACLs, or
+an equivalent restricted intake mechanism instead of relying on `root`.
+
 ```bash
 gpucall-recipe-draft submit \
   --intake intake.json \
