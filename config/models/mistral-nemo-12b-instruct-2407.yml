@@ -1,0 +1,17 @@
+name: mistral-nemo-12b-instruct-2407
+provider_model_id: mistralai/Mistral-Nemo-Instruct-2407
+capabilities: [chat, instruction_following, summarization, translation, classification, reasoning, long_context]
+max_model_len: 131072
+min_vram_gb: 32
+supported_engines: [modal-vllm, hyperstack-vllm, runpod-vllm-openai]
+input_contracts: [text, chat_messages]
+output_contracts: [plain-text]
+supports_vision: false
+supports_guided_decoding: false
+supports_streaming: true
+trust_remote_code: false
+source: https://docs.mistral.ai/models/mistral-nemo-12b-24-07
+evidence:
+  - Mistral Nemo 12B model card describes the 12B open model released in July 2024.
+  - Mistral Nemo is treated as a 128k-class model in gpucall pending live validation.
+production_ready: false

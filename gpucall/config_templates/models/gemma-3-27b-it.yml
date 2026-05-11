@@ -1,0 +1,16 @@
+name: gemma-3-27b-it
+provider_model_id: google/gemma-3-27b-it
+capabilities: [chat, instruction_following, summarization, translation, classification, reasoning, long_context]
+max_model_len: 131072
+min_vram_gb: 80
+supported_engines: [modal-vllm, hyperstack-vllm, runpod-vllm-openai]
+input_contracts: [text, chat_messages]
+output_contracts: [plain-text]
+supports_vision: false
+supports_guided_decoding: false
+supports_streaming: true
+trust_remote_code: false
+source: https://huggingface.co/google/gemma-3-27b-it
+evidence:
+  - Gemma 3 model card lists 128k input context for 4B, 12B, and 27B sizes.
+production_ready: false

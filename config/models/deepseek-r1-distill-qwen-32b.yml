@@ -1,0 +1,17 @@
+name: deepseek-r1-distill-qwen-32b
+provider_model_id: deepseek-ai/DeepSeek-R1-Distill-Qwen-32B
+capabilities: [chat, instruction_following, summarization, classification, reasoning, long_context]
+max_model_len: 131072
+min_vram_gb: 80
+supported_engines: [modal-vllm, hyperstack-vllm, runpod-vllm-openai]
+input_contracts: [text, chat_messages]
+output_contracts: [plain-text]
+supports_vision: false
+supports_guided_decoding: false
+supports_streaming: true
+trust_remote_code: true
+source: https://huggingface.co/deepseek-ai/DeepSeek-R1-Distill-Qwen-32B
+evidence:
+  - DeepSeek R1 Distill Qwen 32B model card lists DeepSeek-R1-Distill-Qwen-32B in the distilled model family.
+  - gpucall treats this as a 128k-class reasoning model pending live validation.
+production_ready: false

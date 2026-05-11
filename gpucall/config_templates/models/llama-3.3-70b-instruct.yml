@@ -1,0 +1,16 @@
+name: llama-3.3-70b-instruct
+provider_model_id: meta-llama/Llama-3.3-70B-Instruct
+capabilities: [chat, instruction_following, summarization, translation, classification, reasoning, long_context]
+max_model_len: 131072
+min_vram_gb: 160
+supported_engines: [hyperstack-vllm, runpod-vllm-openai]
+input_contracts: [text, chat_messages]
+output_contracts: [plain-text]
+supports_vision: false
+supports_guided_decoding: false
+supports_streaming: true
+trust_remote_code: false
+source: https://huggingface.co/meta-llama/Llama-3.3-70B-Instruct
+evidence:
+  - Llama 3.3 70B Instruct model card lists 70B parameters and 128k context length.
+production_ready: false

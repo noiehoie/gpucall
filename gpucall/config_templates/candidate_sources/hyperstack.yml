@@ -12,7 +12,7 @@ gpus:
 - ref: n3-RTX-A4000x1
   slug: rtx-a4000x1
   vram_gb: 16
-  cost_per_second: 0.00004167
+  cost_per_second: 4.167e-05
 - ref: n3-RTX-A6000x1
   slug: rtx-a6000x1
   vram_gb: 48
@@ -94,13 +94,64 @@ models:
   slug: qwen25-14b-1m
   provider_model_id: Qwen/Qwen2.5-14B-Instruct-1M
   max_model_len: 1048576
+- ref: deepseek-r1-distill-qwen-32b
+  slug: deepseek-r1-distill-qwen-32b
+  provider_model_id: deepseek-ai/DeepSeek-R1-Distill-Qwen-32B
+  max_model_len: 131072
+- ref: llama-3.1-70b-instruct
+  slug: llama-3-1-70b-instruct
+  provider_model_id: meta-llama/Llama-3.1-70B-Instruct
+  max_model_len: 131072
+- ref: llama-3.1-8b-instruct
+  slug: llama-3-1-8b-instruct
+  provider_model_id: meta-llama/Llama-3.1-8B-Instruct
+  max_model_len: 131072
+- ref: llama-3.3-70b-instruct
+  slug: llama-3-3-70b-instruct
+  provider_model_id: meta-llama/Llama-3.3-70B-Instruct
+  max_model_len: 131072
+- ref: mistral-nemo-12b-instruct-2407
+  slug: mistral-nemo-12b-instruct-2407
+  provider_model_id: mistralai/Mistral-Nemo-Instruct-2407
+  max_model_len: 131072
+- ref: qwen2.5-7b-instruct-1m
+  slug: qwen2-5-7b-instruct-1m
+  provider_model_id: Qwen/Qwen2.5-7B-Instruct-1M
+  max_model_len: 1010000
+- ref: qwen3-14b
+  slug: qwen3-14b
+  provider_model_id: Qwen/Qwen3-14B
+  max_model_len: 131072
+- ref: qwen3-32b
+  slug: qwen3-32b
+  provider_model_id: Qwen/Qwen3-32B
+  max_model_len: 131072
+- ref: qwen3-8b
+  slug: qwen3-8b
+  provider_model_id: Qwen/Qwen3-8B
+  max_model_len: 131072
+- ref: gemma-3-12b-it
+  slug: gemma-3-12b-it
+  provider_model_id: google/gemma-3-12b-it
+  max_model_len: 131072
+- ref: gemma-3-27b-it
+  slug: gemma-3-27b-it
+  provider_model_id: google/gemma-3-27b-it
+  max_model_len: 131072
+- ref: gemma-3-4b-it
+  slug: gemma-3-4b-it
+  provider_model_id: google/gemma-3-4b-it
+  max_model_len: 131072
 families:
 - prefix: hyperstack
   adapter: hyperstack
   execution_surface: iaas_vm
   engine_ref: hyperstack-vllm
   endpoint_contract: hyperstack-vm
-  input_contracts: [text, chat_messages, data_refs]
+  input_contracts:
+  - text
+  - chat_messages
+  - data_refs
   output_contract: plain-text
   stream_contract: none
   candidate_defaults:
@@ -113,22 +164,233 @@ families:
     security_tier: encrypted_capsule
     sovereign_jurisdiction: CA
     dedicated_gpu: true
-  notes: Candidate generated from Hyperstack /core/flavors and public GPU pricing. Requires live stock check, VM provisioning contract review, and billable validation.
+  notes: Candidate generated from Hyperstack /core/flavors and public GPU pricing.
+    Requires live stock check, VM provisioning contract review, and billable validation.
   official_doc_refs:
   - https://infrahub-api.nexgencloud.com/v1/core/flavors
   - https://www.hyperstack.cloud/gpu-pricing
   matrix:
-    n3-RTX-A4000x1: [qwen2.5-1.5b-instruct]
-    n3-RTX-A6000x1: [qwen2.5-1.5b-instruct, qwen2.5-7b-instruct, qwen2.5-14b-instruct]
-    n3-RTX-A6000x2: [qwen2.5-32b-instruct]
-    n3-L40x1: [qwen2.5-1.5b-instruct, qwen2.5-7b-instruct, qwen2.5-14b-instruct]
-    n3-L40x2: [qwen2.5-32b-instruct]
-    n3-A100x1: [qwen2.5-1.5b-instruct, qwen2.5-7b-instruct, qwen2.5-14b-instruct, qwen2.5-32b-instruct, qwen2.5-7b-instruct-1m-524k]
-    n3-A100x2: [qwen2.5-72b-instruct]
-    n3-A100x4: [qwen2.5-14b-instruct-1m]
-    n3-A100x8: [qwen2.5-14b-instruct-1m]
-    n3-H100x1: [qwen2.5-1.5b-instruct, qwen2.5-7b-instruct, qwen2.5-14b-instruct, qwen2.5-32b-instruct, qwen2.5-7b-instruct-1m-524k]
-    n3-H100x2: [qwen2.5-72b-instruct]
-    n3-H100x4: [qwen2.5-14b-instruct-1m]
-    n3-H100x8: [qwen2.5-14b-instruct-1m]
-    n3-H200-SXM5x8: [qwen2.5-14b-instruct-1m]
+    n3-RTX-A4000x1:
+    - qwen2.5-1.5b-instruct
+    n3-RTX-A6000x1:
+    - qwen2.5-1.5b-instruct
+    - qwen2.5-7b-instruct
+    - qwen2.5-14b-instruct
+    - llama-3.1-8b-instruct
+    - mistral-nemo-12b-instruct-2407
+    - qwen3-14b
+    - qwen3-8b
+    - gemma-3-12b-it
+    - gemma-3-4b-it
+    n3-RTX-A6000x2:
+    - qwen2.5-32b-instruct
+    - deepseek-r1-distill-qwen-32b
+    - llama-3.1-8b-instruct
+    - mistral-nemo-12b-instruct-2407
+    - qwen2.5-1.5b-instruct
+    - qwen2.5-14b-instruct
+    - qwen2.5-7b-instruct-1m-524k
+    - qwen2.5-7b-instruct-1m
+    - qwen2.5-7b-instruct
+    - qwen3-14b
+    - qwen3-32b
+    - qwen3-8b
+    - gemma-3-12b-it
+    - gemma-3-27b-it
+    - gemma-3-4b-it
+    n3-L40x1:
+    - qwen2.5-1.5b-instruct
+    - qwen2.5-7b-instruct
+    - qwen2.5-14b-instruct
+    - llama-3.1-8b-instruct
+    - mistral-nemo-12b-instruct-2407
+    - qwen3-14b
+    - qwen3-8b
+    - gemma-3-12b-it
+    - gemma-3-4b-it
+    n3-L40x2:
+    - qwen2.5-32b-instruct
+    - deepseek-r1-distill-qwen-32b
+    - llama-3.1-8b-instruct
+    - mistral-nemo-12b-instruct-2407
+    - qwen2.5-1.5b-instruct
+    - qwen2.5-14b-instruct
+    - qwen2.5-7b-instruct-1m-524k
+    - qwen2.5-7b-instruct-1m
+    - qwen2.5-7b-instruct
+    - qwen3-14b
+    - qwen3-32b
+    - qwen3-8b
+    - gemma-3-12b-it
+    - gemma-3-27b-it
+    - gemma-3-4b-it
+    n3-A100x1:
+    - qwen2.5-1.5b-instruct
+    - qwen2.5-7b-instruct
+    - qwen2.5-14b-instruct
+    - qwen2.5-32b-instruct
+    - qwen2.5-7b-instruct-1m-524k
+    - deepseek-r1-distill-qwen-32b
+    - llama-3.1-8b-instruct
+    - mistral-nemo-12b-instruct-2407
+    - qwen2.5-7b-instruct-1m
+    - qwen3-14b
+    - qwen3-32b
+    - qwen3-8b
+    - gemma-3-12b-it
+    - gemma-3-27b-it
+    - gemma-3-4b-it
+    n3-A100x2:
+    - qwen2.5-72b-instruct
+    - deepseek-r1-distill-qwen-32b
+    - llama-3.1-70b-instruct
+    - llama-3.1-8b-instruct
+    - llama-3.3-70b-instruct
+    - mistral-nemo-12b-instruct-2407
+    - qwen2.5-1.5b-instruct
+    - qwen2.5-14b-instruct
+    - qwen2.5-32b-instruct
+    - qwen2.5-7b-instruct-1m-524k
+    - qwen2.5-7b-instruct-1m
+    - qwen2.5-7b-instruct
+    - qwen3-14b
+    - qwen3-32b
+    - qwen3-8b
+    - gemma-3-12b-it
+    - gemma-3-27b-it
+    - gemma-3-4b-it
+    n3-A100x4:
+    - qwen2.5-14b-instruct-1m
+    - deepseek-r1-distill-qwen-32b
+    - llama-3.1-70b-instruct
+    - llama-3.1-8b-instruct
+    - llama-3.3-70b-instruct
+    - mistral-nemo-12b-instruct-2407
+    - qwen2.5-1.5b-instruct
+    - qwen2.5-14b-instruct
+    - qwen2.5-32b-instruct
+    - qwen2.5-72b-instruct
+    - qwen2.5-7b-instruct-1m-524k
+    - qwen2.5-7b-instruct-1m
+    - qwen2.5-7b-instruct
+    - qwen3-14b
+    - qwen3-32b
+    - qwen3-8b
+    - gemma-3-12b-it
+    - gemma-3-27b-it
+    - gemma-3-4b-it
+    n3-A100x8:
+    - qwen2.5-14b-instruct-1m
+    - deepseek-r1-distill-qwen-32b
+    - llama-3.1-70b-instruct
+    - llama-3.1-8b-instruct
+    - llama-3.3-70b-instruct
+    - mistral-nemo-12b-instruct-2407
+    - qwen2.5-1.5b-instruct
+    - qwen2.5-14b-instruct
+    - qwen2.5-32b-instruct
+    - qwen2.5-72b-instruct
+    - qwen2.5-7b-instruct-1m-524k
+    - qwen2.5-7b-instruct-1m
+    - qwen2.5-7b-instruct
+    - qwen3-14b
+    - qwen3-32b
+    - qwen3-8b
+    - gemma-3-12b-it
+    - gemma-3-27b-it
+    - gemma-3-4b-it
+    n3-H100x1:
+    - qwen2.5-1.5b-instruct
+    - qwen2.5-7b-instruct
+    - qwen2.5-14b-instruct
+    - qwen2.5-32b-instruct
+    - qwen2.5-7b-instruct-1m-524k
+    - deepseek-r1-distill-qwen-32b
+    - llama-3.1-8b-instruct
+    - mistral-nemo-12b-instruct-2407
+    - qwen2.5-7b-instruct-1m
+    - qwen3-14b
+    - qwen3-32b
+    - qwen3-8b
+    - gemma-3-12b-it
+    - gemma-3-27b-it
+    - gemma-3-4b-it
+    n3-H100x2:
+    - qwen2.5-72b-instruct
+    - deepseek-r1-distill-qwen-32b
+    - llama-3.1-70b-instruct
+    - llama-3.1-8b-instruct
+    - llama-3.3-70b-instruct
+    - mistral-nemo-12b-instruct-2407
+    - qwen2.5-1.5b-instruct
+    - qwen2.5-14b-instruct
+    - qwen2.5-32b-instruct
+    - qwen2.5-7b-instruct-1m-524k
+    - qwen2.5-7b-instruct-1m
+    - qwen2.5-7b-instruct
+    - qwen3-14b
+    - qwen3-32b
+    - qwen3-8b
+    - gemma-3-12b-it
+    - gemma-3-27b-it
+    - gemma-3-4b-it
+    n3-H100x4:
+    - qwen2.5-14b-instruct-1m
+    - deepseek-r1-distill-qwen-32b
+    - llama-3.1-70b-instruct
+    - llama-3.1-8b-instruct
+    - llama-3.3-70b-instruct
+    - mistral-nemo-12b-instruct-2407
+    - qwen2.5-1.5b-instruct
+    - qwen2.5-14b-instruct
+    - qwen2.5-32b-instruct
+    - qwen2.5-72b-instruct
+    - qwen2.5-7b-instruct-1m-524k
+    - qwen2.5-7b-instruct-1m
+    - qwen2.5-7b-instruct
+    - qwen3-14b
+    - qwen3-32b
+    - qwen3-8b
+    - gemma-3-12b-it
+    - gemma-3-27b-it
+    - gemma-3-4b-it
+    n3-H100x8:
+    - qwen2.5-14b-instruct-1m
+    - deepseek-r1-distill-qwen-32b
+    - llama-3.1-70b-instruct
+    - llama-3.1-8b-instruct
+    - llama-3.3-70b-instruct
+    - mistral-nemo-12b-instruct-2407
+    - qwen2.5-1.5b-instruct
+    - qwen2.5-14b-instruct
+    - qwen2.5-32b-instruct
+    - qwen2.5-72b-instruct
+    - qwen2.5-7b-instruct-1m-524k
+    - qwen2.5-7b-instruct-1m
+    - qwen2.5-7b-instruct
+    - qwen3-14b
+    - qwen3-32b
+    - qwen3-8b
+    - gemma-3-12b-it
+    - gemma-3-27b-it
+    - gemma-3-4b-it
+    n3-H200-SXM5x8:
+    - qwen2.5-14b-instruct-1m
+    - deepseek-r1-distill-qwen-32b
+    - llama-3.1-70b-instruct
+    - llama-3.1-8b-instruct
+    - llama-3.3-70b-instruct
+    - mistral-nemo-12b-instruct-2407
+    - qwen2.5-1.5b-instruct
+    - qwen2.5-14b-instruct
+    - qwen2.5-32b-instruct
+    - qwen2.5-72b-instruct
+    - qwen2.5-7b-instruct-1m-524k
+    - qwen2.5-7b-instruct-1m
+    - qwen2.5-7b-instruct
+    - qwen3-14b
+    - qwen3-32b
+    - qwen3-8b
+    - gemma-3-12b-it
+    - gemma-3-27b-it
+    - gemma-3-4b-it
