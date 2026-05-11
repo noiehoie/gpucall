@@ -1,38 +1,32 @@
-name: infer-extract-json-draft
-task: infer
+name: infer-extract-json-mega-draft
 recipe_schema_version: 3
+task: infer
 intent: extract_json
-context_budget_tokens: 32768
-resource_class: standard
-latency_class: standard
-quality_floor: standard
-cost_ceiling_usd: null
-auto_select: true
+auto_select: false
 data_classification: confidential
 allowed_modes:
-- sync
-timeout_seconds: 180
-lease_ttl_seconds: 240
+- async
+context_budget_tokens: 2097152
+resource_class: ultralong
+latency_class: long_running
+quality_floor: draft
+timeout_seconds: 600
+lease_ttl_seconds: 900
 token_estimation_profile: generic_utf8
-max_input_bytes: 33554432
+max_input_bytes: 1073741824
 allowed_mime_prefixes:
 - text/
-allowed_inline_mime_prefixes: []
 default_temperature: 0.7
 structured_temperature: 0.0
-system_prompt: Answer the user's request directly.
 structured_system_prompt: Return only valid JSON when response_format requests JSON.
   Do not include markdown fences or prose.
+system_prompt: Answer the user's request directly.
 stop_tokens:
 - <|im_end|>
 - <|endoftext|>
 repetition_penalty: 1.05
 guided_decoding: true
 output_validation_attempts: 1
-artifact_export: false
-requires_key_release: false
 required_model_capabilities:
 - structured_output
 output_contract: plain-text
-expected_cold_start_seconds: null
-cost_policy: null

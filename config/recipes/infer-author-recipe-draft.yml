@@ -1,7 +1,7 @@
-name: infer-extract-json-draft
+name: infer-author-recipe-draft
 task: infer
 recipe_schema_version: 3
-intent: extract_json
+intent: author_recipe
 context_budget_tokens: 32768
 resource_class: standard
 latency_class: standard
@@ -32,7 +32,7 @@ output_validation_attempts: 1
 artifact_export: false
 requires_key_release: false
 required_model_capabilities:
-- structured_output
+- instruction_following
 output_contract: plain-text
 expected_cold_start_seconds: null
 cost_policy: null

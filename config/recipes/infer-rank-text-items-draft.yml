@@ -2,14 +2,15 @@ name: infer-rank-text-items-draft
 recipe_schema_version: 3
 task: infer
 intent: rank_text_items
-auto_select: false
+auto_select: true
 data_classification: confidential
 allowed_modes:
+- sync
 - async
 context_budget_tokens: 65536
 resource_class: large
 latency_class: batch
-quality_floor: draft
+quality_floor: standard
 timeout_seconds: 600
 lease_ttl_seconds: 900
 token_estimation_profile: generic_utf8
@@ -32,6 +33,7 @@ artifact_export: false
 requires_key_release: false
 required_model_capabilities:
 - instruction_following
+- reasoning
 output_contract: plain-text
 expected_cold_start_seconds: 600
 cost_policy:
