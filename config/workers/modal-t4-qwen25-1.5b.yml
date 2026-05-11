@@ -1,0 +1,20 @@
+worker_ref: modal-t4-qwen25-1.5b
+account_ref: modal
+adapter: modal
+execution_surface: function_runtime
+model_ref: qwen2.5-1.5b-instruct
+engine_ref: modal-vllm
+modes:
+- sync
+- async
+input_contracts:
+- text
+- chat_messages
+- data_refs
+output_contract: plain-text
+stream_contract: none
+target: gpucall-worker-json:run_inference_on_modal_t4
+endpoint_contract: modal-function
+model: Qwen/Qwen2.5-1.5B-Instruct
+provider_params: {}
+declared_model_max_len: 32768

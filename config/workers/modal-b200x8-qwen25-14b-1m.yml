@@ -1,0 +1,23 @@
+worker_ref: modal-b200x8-qwen25-14b-1m
+account_ref: modal
+adapter: modal
+execution_surface: function_runtime
+model_ref: qwen2.5-14b-instruct-1m
+engine_ref: modal-vllm
+modes:
+- sync
+- async
+input_contracts:
+- text
+- chat_messages
+- data_refs
+output_contract: plain-text
+stream_contract: none
+target: gpucall-worker-json:run_inference_on_modal_b200x8
+stream_target: null
+endpoint_contract: modal-function
+model: Qwen/Qwen2.5-14B-Instruct-1M
+provider_params:
+  tensor_parallel_size: 8
+  long_context: true
+declared_model_max_len: 1048576

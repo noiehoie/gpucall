@@ -388,7 +388,8 @@ def test_standard_config_routes_news_sized_prompts_to_long_recipes(tmp_path) -> 
     assert artifact["selected_tuple"]["tuple"] == large_plan.tuple_chain[0]
     assert artifact["selected_tuple_hash"]
     assert ultralong_plan.recipe_name == "text-infer-ultralong"
-    assert ultralong_plan.tuple_chain[0] == "modal-h200x4-qwen25-14b-1m"
+    assert ultralong_plan.tuple_chain[0] == "modal-b200x2-qwen25-14b-1m"
+    assert "modal-b200x2-qwen25-14b-1m" in ultralong_plan.tuple_chain
     assert "modal-h200x4-qwen25-14b-1m" in ultralong_plan.tuple_chain
 
 

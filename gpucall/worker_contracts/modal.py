@@ -392,6 +392,10 @@ if modal is not None:
             "Qwen/Qwen2.5-14B-Instruct",
             "Qwen/Qwen2.5-32B-Instruct",
             "Qwen/Qwen2.5-14B-Instruct-1M",
+            "deepseek-ai/DeepSeek-R1-Distill-Qwen-1.5B",
+            "deepseek-ai/DeepSeek-R1-Distill-Qwen-7B",
+            "deepseek-ai/DeepSeek-R1-Distill-Qwen-14B",
+            "deepseek-ai/DeepSeek-R1-Distill-Qwen-32B",
             "Qwen/Qwen2-0.5B-Instruct",
             "Qwen/Qwen2-1.5B-Instruct",
             "facebook/opt-125m",
@@ -459,7 +463,7 @@ if modal is not None:
             return min(max_model_len, 2048)
         if model_id == "Qwen/Qwen2.5-14B-Instruct-1M":
             return min(max_model_len, 1010000)
-        if model_id.startswith("Qwen/"):
+        if model_id.startswith("Qwen/") or model_id.startswith("deepseek-ai/DeepSeek-R1-Distill-Qwen-"):
             return min(max_model_len, 32768)
         return min(max_model_len, 8192)
 
@@ -628,6 +632,7 @@ if modal is not None:
             "Salesforce/blip-vqa-base",
             "Qwen/Qwen2.5-VL-3B-Instruct",
             "Qwen/Qwen2.5-VL-7B-Instruct",
+            "Qwen/Qwen2.5-VL-32B-Instruct",
             "microsoft/Florence-2-large-ft",
         }
         if model_id not in allowed:
@@ -755,6 +760,28 @@ if modal is not None:
 
     @app.function(
         image=_VLLM_IMAGE,
+        gpu="T4",
+        timeout=1800,
+        scaledown_window=_env_int("GPUCALL_MODAL_T4_SCALEDOWN_WINDOW", 60),
+        min_containers=_env_int("GPUCALL_MODAL_T4_MIN_CONTAINERS", 0),
+    )
+    def run_inference_on_modal_t4(payload: dict[str, Any], workload: str = "infer", **kwargs) -> str:
+        payload = {**payload, "task": workload or payload.get("task")}
+        return _generate_text(payload, kwargs.get("model"), kwargs.get("max_model_len") or 32768)
+
+    @app.function(
+        image=_VLLM_IMAGE,
+        gpu="L4",
+        timeout=1800,
+        scaledown_window=_env_int("GPUCALL_MODAL_L4_SCALEDOWN_WINDOW", 60),
+        min_containers=_env_int("GPUCALL_MODAL_L4_MIN_CONTAINERS", 0),
+    )
+    def run_inference_on_modal_l4(payload: dict[str, Any], workload: str = "infer", **kwargs) -> str:
+        payload = {**payload, "task": workload or payload.get("task")}
+        return _generate_text(payload, kwargs.get("model"), kwargs.get("max_model_len") or 32768)
+
+    @app.function(
+        image=_VLLM_IMAGE,
         gpu="L40S",
         timeout=1800,
         scaledown_window=_env_int("GPUCALL_MODAL_L40S_SCALEDOWN_WINDOW", 60),
@@ -787,6 +814,39 @@ if modal is not None:
         return _generate_text(payload, kwargs.get("model"), kwargs.get("max_model_len") or 131072)
 
     @app.function(
+        image=_VLLM_IMAGE,
+        gpu="RTX-PRO-6000",
+        timeout=1800,
+        scaledown_window=_env_int("GPUCALL_MODAL_RTX_PRO_6000_SCALEDOWN_WINDOW", 60),
+        min_containers=_env_int("GPUCALL_MODAL_RTX_PRO_6000_MIN_CONTAINERS", 0),
+    )
+    def run_inference_on_modal_rtx_pro_6000(payload: dict[str, Any], workload: str = "infer", **kwargs) -> str:
+        payload = {**payload, "task": workload or payload.get("task")}
+        return _generate_text(payload, kwargs.get("model"), kwargs.get("max_model_len") or 131072)
+
+    @app.function(
+        image=_VLLM_IMAGE,
+        gpu="H200",
+        timeout=1800,
+        scaledown_window=_env_int("GPUCALL_MODAL_H200_SCALEDOWN_WINDOW", 60),
+        min_containers=_env_int("GPUCALL_MODAL_H200_MIN_CONTAINERS", 0),
+    )
+    def run_inference_on_modal_h200(payload: dict[str, Any], workload: str = "infer", **kwargs) -> str:
+        payload = {**payload, "task": workload or payload.get("task")}
+        return _generate_text(payload, kwargs.get("model"), kwargs.get("max_model_len") or 131072)
+
+    @app.function(
+        image=_VLLM_IMAGE,
+        gpu="B200",
+        timeout=1800,
+        scaledown_window=_env_int("GPUCALL_MODAL_B200_SCALEDOWN_WINDOW", 60),
+        min_containers=_env_int("GPUCALL_MODAL_B200_MIN_CONTAINERS", 0),
+    )
+    def run_inference_on_modal_b200(payload: dict[str, Any], workload: str = "infer", **kwargs) -> str:
+        payload = {**payload, "task": workload or payload.get("task")}
+        return _generate_text(payload, kwargs.get("model"), kwargs.get("max_model_len") or 131072)
+
+    @app.function(
         image=_QWEN_1M_IMAGE,
         gpu="H200:4",
         timeout=3600,
@@ -804,6 +864,74 @@ if modal is not None:
         )
 
     @app.function(
+        image=_QWEN_1M_IMAGE,
+        gpu="H200:8",
+        timeout=3600,
+        scaledown_window=_env_int("GPUCALL_MODAL_H200X8_SCALEDOWN_WINDOW", 300),
+        min_containers=_env_int("GPUCALL_MODAL_H200X8_MIN_CONTAINERS", 0),
+    )
+    def run_inference_on_modal_h200x8(payload: dict[str, Any], workload: str = "infer", **kwargs) -> str:
+        payload = {**payload, "task": workload or payload.get("task")}
+        return _generate_text(
+            payload,
+            kwargs.get("model"),
+            kwargs.get("max_model_len") or 1010000,
+            tensor_parallel_size=int(kwargs.get("tensor_parallel_size") or 8),
+            long_context=True,
+        )
+
+    @app.function(
+        image=_QWEN_1M_IMAGE,
+        gpu="B200:2",
+        timeout=3600,
+        scaledown_window=_env_int("GPUCALL_MODAL_B200X2_SCALEDOWN_WINDOW", 300),
+        min_containers=_env_int("GPUCALL_MODAL_B200X2_MIN_CONTAINERS", 0),
+    )
+    def run_inference_on_modal_b200x2(payload: dict[str, Any], workload: str = "infer", **kwargs) -> str:
+        payload = {**payload, "task": workload or payload.get("task")}
+        return _generate_text(
+            payload,
+            kwargs.get("model"),
+            kwargs.get("max_model_len") or 1010000,
+            tensor_parallel_size=int(kwargs.get("tensor_parallel_size") or 2),
+            long_context=True,
+        )
+
+    @app.function(
+        image=_QWEN_1M_IMAGE,
+        gpu="B200:4",
+        timeout=3600,
+        scaledown_window=_env_int("GPUCALL_MODAL_B200X4_SCALEDOWN_WINDOW", 300),
+        min_containers=_env_int("GPUCALL_MODAL_B200X4_MIN_CONTAINERS", 0),
+    )
+    def run_inference_on_modal_b200x4(payload: dict[str, Any], workload: str = "infer", **kwargs) -> str:
+        payload = {**payload, "task": workload or payload.get("task")}
+        return _generate_text(
+            payload,
+            kwargs.get("model"),
+            kwargs.get("max_model_len") or 1010000,
+            tensor_parallel_size=int(kwargs.get("tensor_parallel_size") or 4),
+            long_context=True,
+        )
+
+    @app.function(
+        image=_QWEN_1M_IMAGE,
+        gpu="B200:8",
+        timeout=3600,
+        scaledown_window=_env_int("GPUCALL_MODAL_B200X8_SCALEDOWN_WINDOW", 300),
+        min_containers=_env_int("GPUCALL_MODAL_B200X8_MIN_CONTAINERS", 0),
+    )
+    def run_inference_on_modal_b200x8(payload: dict[str, Any], workload: str = "infer", **kwargs) -> str:
+        payload = {**payload, "task": workload or payload.get("task")}
+        return _generate_text(
+            payload,
+            kwargs.get("model"),
+            kwargs.get("max_model_len") or 1010000,
+            tensor_parallel_size=int(kwargs.get("tensor_parallel_size") or 8),
+            long_context=True,
+        )
+
+    @app.function(
         image=_VISION_IMAGE,
         gpu="H100",
         timeout=1800,
@@ -811,6 +939,39 @@ if modal is not None:
         min_containers=_env_int("GPUCALL_MODAL_VISION_H100_MIN_CONTAINERS", 0),
     )
     def run_inference_on_modal_vision_h100(payload: dict[str, Any], workload: str = "vision", **kwargs) -> str:
+        payload = {**payload, "task": workload or payload.get("task")}
+        return _generate_vision_text(payload, kwargs.get("model"))
+
+    @app.function(
+        image=_VISION_IMAGE,
+        gpu="A10G",
+        timeout=1800,
+        scaledown_window=_env_int("GPUCALL_MODAL_VISION_A10G_SCALEDOWN_WINDOW", 60),
+        min_containers=_env_int("GPUCALL_MODAL_VISION_A10G_MIN_CONTAINERS", 0),
+    )
+    def run_inference_on_modal_vision_a10g(payload: dict[str, Any], workload: str = "vision", **kwargs) -> str:
+        payload = {**payload, "task": workload or payload.get("task")}
+        return _generate_vision_text(payload, kwargs.get("model"))
+
+    @app.function(
+        image=_VISION_IMAGE,
+        gpu="T4",
+        timeout=1800,
+        scaledown_window=_env_int("GPUCALL_MODAL_VISION_T4_SCALEDOWN_WINDOW", 60),
+        min_containers=_env_int("GPUCALL_MODAL_VISION_T4_MIN_CONTAINERS", 0),
+    )
+    def run_inference_on_modal_vision_t4(payload: dict[str, Any], workload: str = "vision", **kwargs) -> str:
+        payload = {**payload, "task": workload or payload.get("task")}
+        return _generate_vision_text(payload, kwargs.get("model"))
+
+    @app.function(
+        image=_VISION_IMAGE,
+        gpu="L4",
+        timeout=1800,
+        scaledown_window=_env_int("GPUCALL_MODAL_VISION_L4_SCALEDOWN_WINDOW", 60),
+        min_containers=_env_int("GPUCALL_MODAL_VISION_L4_MIN_CONTAINERS", 0),
+    )
+    def run_inference_on_modal_vision_l4(payload: dict[str, Any], workload: str = "vision", **kwargs) -> str:
         payload = {**payload, "task": workload or payload.get("task")}
         return _generate_vision_text(payload, kwargs.get("model"))
 
@@ -833,6 +994,39 @@ if modal is not None:
         min_containers=_env_int("GPUCALL_MODAL_VISION_A100_MIN_CONTAINERS", 0),
     )
     def run_inference_on_modal_vision_a100(payload: dict[str, Any], workload: str = "vision", **kwargs) -> str:
+        payload = {**payload, "task": workload or payload.get("task")}
+        return _generate_vision_text(payload, kwargs.get("model"))
+
+    @app.function(
+        image=_VISION_IMAGE,
+        gpu="RTX-PRO-6000",
+        timeout=1800,
+        scaledown_window=_env_int("GPUCALL_MODAL_VISION_RTX_PRO_6000_SCALEDOWN_WINDOW", 60),
+        min_containers=_env_int("GPUCALL_MODAL_VISION_RTX_PRO_6000_MIN_CONTAINERS", 0),
+    )
+    def run_inference_on_modal_vision_rtx_pro_6000(payload: dict[str, Any], workload: str = "vision", **kwargs) -> str:
+        payload = {**payload, "task": workload or payload.get("task")}
+        return _generate_vision_text(payload, kwargs.get("model"))
+
+    @app.function(
+        image=_VISION_IMAGE,
+        gpu="H200",
+        timeout=1800,
+        scaledown_window=_env_int("GPUCALL_MODAL_VISION_H200_SCALEDOWN_WINDOW", 60),
+        min_containers=_env_int("GPUCALL_MODAL_VISION_H200_MIN_CONTAINERS", 0),
+    )
+    def run_inference_on_modal_vision_h200(payload: dict[str, Any], workload: str = "vision", **kwargs) -> str:
+        payload = {**payload, "task": workload or payload.get("task")}
+        return _generate_vision_text(payload, kwargs.get("model"))
+
+    @app.function(
+        image=_VISION_IMAGE,
+        gpu="B200",
+        timeout=1800,
+        scaledown_window=_env_int("GPUCALL_MODAL_VISION_B200_SCALEDOWN_WINDOW", 60),
+        min_containers=_env_int("GPUCALL_MODAL_VISION_B200_MIN_CONTAINERS", 0),
+    )
+    def run_inference_on_modal_vision_b200(payload: dict[str, Any], workload: str = "vision", **kwargs) -> str:
         payload = {**payload, "task": workload or payload.get("task")}
         return _generate_vision_text(payload, kwargs.get("model"))
 

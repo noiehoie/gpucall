@@ -1,0 +1,28 @@
+name: qwen2.5-0.5b-instruct
+provider_model_id: Qwen/Qwen2.5-0.5B-Instruct
+capabilities:
+- instruction_following
+- summarization
+- translation
+- structured_output
+max_model_len: 32768
+min_vram_gb: 8
+supported_engines:
+- modal-vllm
+- runpod-vllm-openai
+input_contracts:
+- text
+- chat_messages
+- data_refs
+output_contracts:
+- plain-text
+- json_object
+- json_schema
+supports_vision: false
+supports_guided_decoding: true
+supports_streaming: true
+trust_remote_code: true
+source: https://huggingface.co/Qwen/Qwen2.5-0.5B-Instruct
+evidence:
+- Qwen2.5 model family includes a 0.5B instruction-tuned model for lightweight text inference.
+production_ready: false

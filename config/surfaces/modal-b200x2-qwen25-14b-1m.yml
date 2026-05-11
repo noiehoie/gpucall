@@ -1,0 +1,26 @@
+surface_ref: modal-b200x2-qwen25-14b-1m
+worker_ref: modal-b200x2-qwen25-14b-1m
+account_ref: modal
+adapter: modal
+execution_surface: function_runtime
+gpu: B200:2
+vram_gb: 360
+max_model_len: 1010000
+cost_per_second: 0.003472
+configured_price_source: https://modal.com/pricing
+configured_price_observed_at: '2026-05-12T00:00:00+00:00'
+configured_price_ttl_seconds: 604800
+stock_state: configured
+expected_cold_start_seconds: 600
+billing_granularity_seconds: 0
+max_data_classification: confidential
+scaledown_window_seconds: 300
+min_billable_seconds: 0
+trust_profile:
+  security_tier: encrypted_capsule
+  sovereign_jurisdiction: US
+  dedicated_gpu: false
+  requires_attestation: false
+  supports_key_release: false
+  allows_worker_s3_credentials: false
+supports_vision: false

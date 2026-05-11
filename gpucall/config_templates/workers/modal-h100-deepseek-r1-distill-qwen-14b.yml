@@ -1,0 +1,21 @@
+worker_ref: modal-h100-deepseek-r1-distill-qwen-14b
+account_ref: modal
+adapter: modal
+execution_surface: function_runtime
+model_ref: deepseek-r1-distill-qwen-14b
+engine_ref: modal-vllm
+modes:
+- sync
+- async
+input_contracts:
+- text
+- chat_messages
+- data_refs
+output_contract: plain-text
+stream_contract: none
+target: gpucall-worker-json:run_inference_on_modal_h100
+endpoint_contract: modal-function
+model: deepseek-ai/DeepSeek-R1-Distill-Qwen-14B
+provider_params:
+  trust_remote_code: true
+declared_model_max_len: 32768

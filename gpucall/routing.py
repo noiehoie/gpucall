@@ -132,6 +132,8 @@ def tuple_route_rejection_reason(
     if recipe.task == "vision" and "image" not in input_contracts:
         return "tuple does not declare image input support"
     if recipe.task == "infer":
+        if tuple.supports_vision or "image" in input_contracts:
+            return "vision tuple is not eligible for infer task"
         if input_contracts and "text" not in input_contracts and "chat_messages" not in input_contracts:
             return "tuple does not declare text or chat input support"
     if policy.tuples.allow and tuple.name not in policy.tuples.allow:
