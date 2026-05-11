@@ -95,12 +95,12 @@ def _runpod_family_candidates(
             "_path": f"{source_path}#{prefix}-{gpu['slug']}-{model['slug']}",
         }
         row.update(dict(family.get("candidate_defaults") or {}))
-        row.update(_worker_fields(family, model))
+        row.update(_worker_fields(family, model, gpu=gpu))
         generated.append(row)
     return generated
 
 
-def _worker_fields(family: Mapping[str, Any], model: Mapping[str, Any]) -> dict[str, Any]:
+def _worker_fields(family: Mapping[str, Any], model: Mapping[str, Any], *, gpu: Mapping[str, Any]) -> dict[str, Any]:
     provider_model_id = str(model["provider_model_id"])
     if family["endpoint_contract"] == "modal-function":
         return {
@@ -108,6 +108,7 @@ def _worker_fields(family: Mapping[str, Any], model: Mapping[str, Any]) -> dict[
         }
     if family["endpoint_contract"] == "hyperstack-vm":
         return {
+            "instance": str(gpu["ref"]),
             "model": provider_model_id,
         }
     if family["endpoint_contract"] == "runpod-flash-sdk":
