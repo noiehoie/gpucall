@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 
+from datetime import datetime, timezone
 from typing import Any
+from urllib.parse import urlparse
 
 from gpucall.domain import TupleError
 from gpucall.live_catalog import live_error, live_info, price_per_second_from_mapping
@@ -193,10 +195,11 @@ class RunpodVllmServerlessAdapter(TupleAdapter):
         raise TupleError("RunPod worker-vLLM streaming is not supported in v2.0", retryable=False, status_code=400)
 
     def _call_sync(self, plan: CompiledPlan) -> TupleResult:
-        if plan.input_refs:
-            raise TupleError("RunPod worker-vLLM does not fetch DataRef inputs; falling back", retryable=True, status_code=502)
+        if plan.input_refs and plan.task != "vision":
+            raise TupleError("RunPod worker-vLLM only accepts DataRef inputs for vision", retryable=True, status_code=502)
         if not plan.messages:
-            raise TupleError("RunPod worker-vLLM openai-chat-completions contract requires compiled messages", retryable=True, status_code=502)
+            if not plan.input_refs:
+                raise TupleError("RunPod worker-vLLM openai-chat-completions contract requires compiled messages", retryable=True, status_code=502)
         health = self._health_sync()
         if runpod_vllm_health_rejection_reason(health):
             raise TupleError(
@@ -230,10 +233,62 @@ class RunpodVllmServerlessAdapter(TupleAdapter):
                 payload["response_format"] = {"type": "json_schema", "json_schema": plan.response_format.json_schema}
         return payload
 
-    def _messages(self, plan: CompiledPlan) -> list[dict[str, str]]:
+    def _messages(self, plan: CompiledPlan) -> list[dict[str, Any]]:
+        if plan.input_refs:
+            return self._vision_messages(plan)
         if not plan.messages:
             raise TupleError("RunPod worker-vLLM requires compiled chat messages", retryable=False, status_code=400)
         return [{"role": message.role, "content": message.content} for message in plan.messages]
+
+    def _vision_messages(self, plan: CompiledPlan) -> list[dict[str, Any]]:
+        if plan.task != "vision":
+            raise TupleError("RunPod worker-vLLM only accepts DataRef inputs for vision", retryable=False, status_code=400)
+        image_refs = [ref for ref in plan.input_refs if str(ref.content_type or "").lower().startswith("image/")]
+        if not image_refs:
+            raise TupleError("RunPod worker-vLLM vision route requires image DataRef input", retryable=False, status_code=400)
+
+        messages: list[dict[str, Any]] = []
+        prompt_parts: list[str] = []
+        for message in plan.messages:
+            if message.role == "system":
+                messages.append({"role": "system", "content": message.content})
+            elif message.content:
+                prompt_parts.append(message.content)
+        for key in sorted(plan.inline_inputs):
+            value = plan.inline_inputs[key]
+            if value.value:
+                prompt_parts.append(value.value)
+
+        content: list[dict[str, Any]] = []
+        prompt = "\n".join(part for part in prompt_parts if part).strip()
+        if prompt:
+            content.append({"type": "text", "text": prompt})
+        for ref in image_refs:
+            content.append({"type": "image_url", "image_url": {"url": self._safe_image_ref_url(ref)}})
+        if not content:
+            raise TupleError("RunPod worker-vLLM vision route requires prompt or image content", retryable=False, status_code=400)
+        messages.append({"role": "user", "content": content})
+        return messages
+
+    def _safe_image_ref_url(self, ref: Any) -> str:
+        uri = str(ref.uri)
+        parsed = urlparse(uri)
+        if parsed.scheme not in {"http", "https"}:
+            raise TupleError("RunPod worker-vLLM vision DataRefs must be gateway-presigned http(s) URLs", retryable=False, status_code=400)
+        if ref.gateway_presigned is not True:
+            raise TupleError("RunPod worker-vLLM vision DataRefs must be gateway-presigned", retryable=False, status_code=400)
+        if not str(ref.content_type or "").lower().startswith("image/"):
+            raise TupleError("RunPod worker-vLLM vision DataRefs must have image content_type", retryable=False, status_code=400)
+        if ref.sha256 is None:
+            raise TupleError("RunPod worker-vLLM vision DataRefs require sha256 metadata", retryable=False, status_code=400)
+        max_bytes = int(os.getenv("GPUCALL_RUNPOD_VLLM_MAX_IMAGE_REF_BYTES", os.getenv("GPUCALL_WORKER_MAX_REF_BYTES", "16777216")))
+        if ref.bytes is None or int(ref.bytes) <= 0:
+            raise TupleError("RunPod worker-vLLM vision DataRefs require positive bytes metadata", retryable=False, status_code=400)
+        if int(ref.bytes) > max_bytes:
+            raise TupleError("RunPod worker-vLLM vision DataRef exceeds image byte limit", retryable=False, status_code=400)
+        if ref.expires_at is not None and ref.expires_at <= datetime.now(timezone.utc):
+            raise TupleError("RunPod worker-vLLM vision DataRef is expired", retryable=False, status_code=400)
+        return uri
 
     def _headers(self) -> dict[str, str]:
         return {"authorization": f"Bearer {self.api_key}", "content-type": "application/json", "accept": "application/json"}
@@ -277,8 +332,9 @@ def runpod_vllm_config_findings(tuple: Any) -> list[str]:
         findings.append(f"tuple {tuple.name!r} must declare official worker-vLLM image")
     elif not str(tuple.image).startswith("runpod/worker-v1-vllm:"):
         findings.append(f"tuple {tuple.name!r} image must be the official runpod/worker-v1-vllm image")
-    if "data_refs" in set(tuple.input_contracts or []):
-        findings.append(f"tuple {tuple.name!r} official worker-vLLM path must not declare DataRef input support")
+    input_contracts = set(tuple.input_contracts or [])
+    if "data_refs" in input_contracts and "image" not in input_contracts:
+        findings.append(f"tuple {tuple.name!r} official worker-vLLM path may declare DataRef support only for image vision inputs")
 
     worker_env = (tuple.provider_params or {}).get("worker_env")
     if not isinstance(worker_env, dict):

@@ -848,9 +848,17 @@ def _recipe_fit(resource: ResourceCatalogEntry, worker: WorkerContractSpec, reci
         reasons.append("worker input_contracts do not declare audio support")
     if recipe.task == "convert" and input_contracts and "document" not in input_contracts:
         reasons.append("worker input_contracts do not declare document support")
-    if recipe.output_contract and worker.output_contract and recipe.output_contract != worker.output_contract:
+    if recipe.output_contract and worker.output_contract and not _output_contract_compatible(recipe.output_contract, worker.output_contract):
         reasons.append("worker output_contract does not match recipe output_contract")
     return {"eligible": not reasons, "reasons": reasons}
+
+
+def _output_contract_compatible(recipe_contract: str, worker_contract: str) -> bool:
+    if recipe_contract == worker_contract:
+        return True
+    if worker_contract == "openai-chat-completions" and recipe_contract in {"plain-text", "json_object", "json_schema"}:
+        return True
+    return False
 
 
 def _config_hash(*, config: GpucallConfig, candidate_rows: list[Mapping[str, Any]]) -> str:

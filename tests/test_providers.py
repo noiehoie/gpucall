@@ -807,9 +807,9 @@ def test_runpod_worker_vllm_health_rejects_throttled_endpoint() -> None:
     assert runpod_vllm_health_rejection_reason(health) == "workers are throttled and no ready worker is available"
 
 
-async def test_runpod_vllm_official_route_rejects_data_refs_for_failover() -> None:
+async def test_runpod_vllm_official_route_rejects_non_vision_data_refs_for_failover() -> None:
     plan = plan_payload_plan().model_copy(
-        update={"input_refs": [{"uri": "https://example.com/input.txt", "sha256": "a" * 64, "bytes": 100}]}
+        update={"input_refs": [DataRef(uri="https://example.com/input.txt", sha256="a" * 64, bytes=100)]}
     )
     adapter = RunpodVllmServerlessAdapter(
         api_key="rk_test",
@@ -824,9 +824,113 @@ async def test_runpod_vllm_official_route_rejects_data_refs_for_failover() -> No
         await adapter.wait(handle, plan)
     except Exception as exc:
         assert getattr(exc, "retryable", None) is True
-        assert "does not fetch DataRef" in str(exc)
+        assert "only accepts DataRef inputs for vision" in str(exc)
     else:  # pragma: no cover
-        raise AssertionError("RunPod Flash official worker-vLLM unexpectedly accepted DataRef input")
+        raise AssertionError("RunPod worker-vLLM unexpectedly accepted non-vision DataRef input")
+
+
+async def test_runpod_vllm_vision_data_ref_uses_openai_image_url(monkeypatch) -> None:
+    calls: list[tuple[str, str, dict[str, object] | None]] = []
+
+    class FakeResponse:
+        status_code = 200
+        text = "{}"
+
+        def json(self) -> dict[str, object]:
+            return {
+                "choices": [{"message": {"content": "{\"articles\": []}"}}],
+                "usage": {"completion_tokens": 4},
+            }
+
+    class FakeHealthResponse:
+        status_code = 200
+        text = "{}"
+
+        def json(self) -> dict[str, object]:
+            return {"workers": {"ready": 1, "running": 0, "initializing": 0, "throttled": 0, "unhealthy": 0}}
+
+    class FakeSession:
+        def mount(self, *_args, **_kwargs) -> None:
+            return None
+
+        def get(self, url: str, **_kwargs):
+            calls.append(("GET", url, None))
+            return FakeHealthResponse()
+
+        def post(self, url: str, **kwargs):
+            calls.append(("POST", url, kwargs.get("json")))
+            return FakeResponse()
+
+    fake_requests = types.SimpleNamespace(Session=lambda: FakeSession())
+    fake_adapters = types.SimpleNamespace(HTTPAdapter=lambda **_kwargs: object())
+    fake_retry = types.SimpleNamespace(Retry=lambda **_kwargs: object())
+    monkeypatch.setitem(sys.modules, "requests", fake_requests)
+    monkeypatch.setitem(sys.modules, "requests.adapters", fake_adapters)
+    monkeypatch.setitem(sys.modules, "urllib3.util.retry", fake_retry)
+
+    adapter = RunpodVllmServerlessAdapter(
+        api_key="rk_test",
+        endpoint_id="endpoint-1",
+        image="runpod/worker-v1-vllm:v2.18.1",
+        endpoint_contract="openai-chat-completions",
+        model="Qwen/Qwen2.5-VL-7B-Instruct",
+    )
+    ref = DataRef(
+        uri="https://objects.example/image.png?signature=redacted",
+        sha256="a" * 64,
+        bytes=1024,
+        content_type="image/png",
+        gateway_presigned=True,
+    )
+    plan = plan_payload_plan().model_copy(
+        update={
+            "task": "vision",
+            "input_refs": [ref],
+            "messages": [ChatMessage(role="system", content="Return JSON."), ChatMessage(role="user", content="Read the page.")],
+        }
+    )
+
+    handle = await adapter.start(plan)
+    result = await adapter.wait(handle, plan)
+
+    assert result.value == "{\"articles\": []}"
+    body = calls[1][2]
+    assert body is not None
+    assert body["messages"] == [
+        {"role": "system", "content": "Return JSON."},
+        {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": "Read the page."},
+                {"type": "image_url", "image_url": {"url": "https://objects.example/image.png?signature=redacted"}},
+            ],
+        },
+    ]
+
+
+async def test_runpod_vllm_vision_data_ref_requires_gateway_presigned_url() -> None:
+    adapter = RunpodVllmServerlessAdapter(
+        api_key="rk_test",
+        endpoint_id="endpoint-1",
+        image="runpod/worker-v1-vllm:v2.18.1",
+        endpoint_contract="openai-chat-completions",
+        model="Qwen/Qwen2.5-VL-7B-Instruct",
+    )
+    plan = plan_payload_plan().model_copy(
+        update={
+            "task": "vision",
+            "input_refs": [
+                DataRef(uri="s3://bucket/image.png", sha256="a" * 64, bytes=1024, content_type="image/png")
+            ],
+        }
+    )
+
+    try:
+        adapter._messages(plan)
+    except TupleError as exc:
+        assert "gateway-presigned http(s) URLs" in str(exc)
+    else:  # pragma: no cover
+        raise AssertionError("RunPod worker-vLLM accepted a non-presigned vision DataRef")
 
 
 async def test_runpod_vllm_requires_official_worker_vllm_unless_experimental_enabled() -> None:

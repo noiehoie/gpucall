@@ -78,7 +78,7 @@ def _runpod_family_candidates(
             "engine_ref": family["engine_ref"],
             "modes": ["sync", "async"],
             "endpoint_contract": family["endpoint_contract"],
-            "input_contracts": list(family["input_contracts"]),
+            "input_contracts": list(model.get("input_contracts") or family["input_contracts"]),
             "output_contract": family["output_contract"],
             "stream_contract": family["stream_contract"],
             "max_data_classification": common.get("max_data_classification", "confidential"),

@@ -67,6 +67,13 @@ def test_runpod_candidates_are_generated_from_catalog_source() -> None:
         and row["gpu"] in {"ADA_80_PRO", "AMPERE_80", "HOPPER_141"}
         for row in runpod
     )
+    qwen_vl = next(
+        row
+        for row in runpod
+        if row["adapter"] == "runpod-vllm-serverless"
+        and row["model_ref"] == "qwen2.5-vl-7b-instruct"
+    )
+    assert qwen_vl["input_contracts"] == ["chat_messages", "image", "data_refs"]
 
 
 def test_hyperstack_multi_gpu_candidates_set_worker_parallelism() -> None:

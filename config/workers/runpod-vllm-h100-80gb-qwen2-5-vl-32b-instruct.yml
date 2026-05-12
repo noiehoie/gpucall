@@ -8,6 +8,8 @@ modes:
 - async
 input_contracts:
 - chat_messages
+- image
+- data_refs
 output_contract: openai-chat-completions
 stream_contract: none
 target: RUNPOD_ENDPOINT_ID_PLACEHOLDER
@@ -17,12 +19,12 @@ provider_params:
   model_storage:
     storage_kind: runpod_cached_model
     cached_model_ref: Qwen/Qwen2.5-VL-32B-Instruct
-    mount_path: /runpod-volume
+    mount_path: "/runpod-volume"
     cache_hit_required: true
   worker_env:
     MODEL_NAME: Qwen/Qwen2.5-VL-32B-Instruct
     OPENAI_SERVED_MODEL_NAME_OVERRIDE: Qwen/Qwen2.5-VL-32B-Instruct
     MAX_MODEL_LEN: '32768'
-    BASE_PATH: /runpod-volume
+    BASE_PATH: "/runpod-volume"
     GPU_MEMORY_UTILIZATION: '0.95'
     MAX_CONCURRENCY: '30'

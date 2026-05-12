@@ -136,6 +136,9 @@ def test_execution_catalog_recipe_fit_respects_worker_contracts() -> None:
     assert "worker input_contracts do not declare image support" in hyperstack.recipe_fit["reasons"]
     assert modal_vision.recipe_fit is not None
     assert modal_vision.recipe_fit["eligible"] is True
+    runpod_vl = next(item for item in vision_candidates if item.tuple_name == "runpod-vllm-ampere48-qwen2-5-vl-7b-instruct")
+    assert runpod_vl.recipe_fit is not None
+    assert runpod_vl.recipe_fit["eligible"] is True
 
 
 def test_execution_catalog_recipe_fit_reports_each_rejection_dimension() -> None:
