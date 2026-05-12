@@ -402,6 +402,9 @@ Mode and timeout rules:
 - Long-context, batch/long-running, high-cold-start, image/file, and large
   DataRef workloads should use async or must have a timeout budget that honestly
   covers cold start and queueing.
+- For async polling, start from a 600 second poll timeout unless the operator
+  handoff gives a larger value. A 60-90 second timeout is usually too short for
+  cold-start GPU routes and must not be reported as provider failure by itself.
 - Do not encode provider-specific cold-start assumptions in application code.
   Submit intent, size, mode preference, and timeout preference. The installed
   catalog and gateway recipes decide the execution surface.
@@ -451,6 +454,20 @@ Classify these correctly:
   after `200 OK`: do not fall back to direct hosted AI in production. Record a
   quality failure and submit `gpucall-recipe-draft quality`. For schema
   failures, include expected and observed schemas as metadata, never raw output.
+
+Circuit breaker contract:
+
+- Do not implement one global gpucall circuit breaker for the whole process.
+- The minimum circuit key is `task:intent:mode:transport`, for example
+  `vision:understand_document_image:sync:v2` or
+  `infer:extract_json:sync:v2`.
+- A Vision provider/runtime 5xx must not open the circuit for
+  `infer:extract_json`, `infer:summarize_text`, or any other unrelated intent.
+- `NO_AUTO_SELECTABLE_RECIPE`, `NO_ELIGIBLE_TUPLE`, caller-side timeout,
+  `MALFORMED_OUTPUT`, `EMPTY_OUTPUT`, and business-schema rejection do not open
+  provider circuits by default.
+- If using the Python SDK, prefer `GPUCallCircuitBreaker` and
+  `GPUCallCircuitScope` instead of hand-rolled global counters.
 
 For any gateway 5xx, the completion report must include only verified facts:
 HTTP status, response body if available, endpoint, request class, whether
@@ -511,6 +528,10 @@ Add or update tests proving:
 - `NO_AUTO_SELECTABLE_RECIPE` is classified as recipe-intake-needed
 - `NO_ELIGIBLE_TUPLE` is not treated as direct provider failure
 - timeout is not counted as provider circuit failure by default
+- circuit breaker state is separated by `task:intent:mode:transport`
+- a Vision 5xx does not block text `infer` intents
+- async poll timeout is at least 600 seconds for cold-start routes unless the
+  operator handoff explicitly says otherwise
 - image, file, confidential input, and over-limit text use DataRef / presigned
   upload or fail closed
 - every image/file caller path has a DataRef production path

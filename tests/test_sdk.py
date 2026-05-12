@@ -3,18 +3,23 @@ from __future__ import annotations
 import httpx
 import pytest
 import json
+import inspect
 
 from gpucall_sdk import (
     AsyncGPUCallClient,
     GPUCallCallerRoutingError,
+    GPUCallCircuitBreaker,
+    GPUCallCircuitOpenError,
+    GPUCallCircuitScope,
     GPUCallColdStartTimeout,
     GPUCallClient,
     GPUCallEmptyOutputError,
     GPUCallJSONParseError,
     GPUCallNoEligibleTupleError,
     GPUCallNoRecipeError,
+    GPUCallProviderRuntimeError,
 )
-from gpucall_sdk.client import DEFAULT_AUTO_UPLOAD_THRESHOLD_BYTES
+from gpucall_sdk.client import DEFAULT_ASYNC_POLL_TIMEOUT_SECONDS, DEFAULT_AUTO_UPLOAD_THRESHOLD_BYTES
 
 
 def test_python_sdk_uploads_file_and_sends_data_ref(tmp_path, monkeypatch) -> None:
@@ -322,6 +327,47 @@ def test_python_sdk_timeout_maps_to_cold_start_timeout() -> None:
         client.infer()
 
 
+def test_python_sdk_circuit_breaker_is_scoped_by_task_intent_mode_transport() -> None:
+    breaker = GPUCallCircuitBreaker(failure_threshold=2, recovery_timeout_seconds=60)
+    vision_scope = GPUCallCircuitScope(task="vision", intent="understand_document_image", mode="sync", transport="v2")
+    extract_scope = GPUCallCircuitScope(task="infer", intent="extract_json", mode="sync", transport="v2")
+    err = GPUCallProviderRuntimeError("provider exhausted", status_code=503, code="PROVIDER_RESOURCE_EXHAUSTED")
+
+    breaker.record_exception(vision_scope, err)
+    breaker.record_exception(vision_scope, err)
+
+    with pytest.raises(GPUCallCircuitOpenError):
+        breaker.before_request(vision_scope)
+    breaker.before_request(extract_scope)
+    assert breaker.failure_count(extract_scope) == 0
+
+
+def test_python_sdk_circuit_breaker_ignores_governance_and_timeout_errors() -> None:
+    breaker = GPUCallCircuitBreaker(failure_threshold=1)
+    scope = GPUCallCircuitScope(task="infer", intent="rank_text_items", mode="async", transport="v2")
+
+    breaker.record_exception(scope, GPUCallNoEligibleTupleError("no tuple", status_code=503, code="NO_ELIGIBLE_TUPLE"))
+    breaker.record_exception(scope, GPUCallColdStartTimeout("poll timeout"))
+
+    breaker.before_request(scope)
+    assert breaker.failure_count(scope) == 0
+
+
+def test_python_sdk_circuit_breaker_rejects_global_scope() -> None:
+    breaker = GPUCallCircuitBreaker()
+
+    with pytest.raises(ValueError, match="task:intent:mode:transport"):
+        breaker.before_request("global")
+    with pytest.raises(ValueError, match="requires task"):
+        GPUCallCircuitScope(task="vision", intent="", mode="sync", transport="v2").key()
+
+
+def test_python_sdk_async_poll_default_is_cold_start_safe() -> None:
+    assert DEFAULT_ASYNC_POLL_TIMEOUT_SECONDS >= 600
+    client = GPUCallClient("http://gpucall.test", transport=httpx.MockTransport(lambda request: httpx.Response(500)))
+    assert inspect.signature(client.poll_job).parameters["timeout"].default >= 600
+
+
 def test_python_sdk_redacts_presigned_urls_from_http_logs() -> None:
     import logging
 
@@ -398,6 +444,48 @@ async def test_async_python_sdk_polls_accepted_job() -> None:
 
     assert calls == 1
     assert result["state"] == "COMPLETED"
+
+
+async def test_async_python_sdk_uploads_presigned_url_without_api_auth(monkeypatch) -> None:
+    seen_upload_auth = "not-called"
+
+    class UploadClient:
+        def __init__(self, **kwargs):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return None
+
+        async def put(self, url, *, content, headers):
+            nonlocal seen_upload_auth
+            seen_upload_auth = headers.get("authorization")
+            assert url == "https://bucket.example/upload"
+            return httpx.Response(200)
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/v2/objects/presign-put":
+            assert request.headers.get("authorization") == "Bearer api-key"
+            return httpx.Response(
+                200,
+                json={
+                    "upload_url": "https://bucket.example/upload",
+                    "method": "PUT",
+                    "data_ref": {"uri": "s3://bucket/key", "sha256": "a" * 64, "bytes": 4},
+                },
+            )
+        return httpx.Response(200, json={"result": {"kind": "inline", "value": "ok"}})
+
+    client = AsyncGPUCallClient("http://gpucall.test", api_key="api-key", transport=httpx.MockTransport(handler))
+    monkeypatch.setattr(httpx, "AsyncClient", UploadClient)
+    try:
+        await client.upload_bytes(b"data", name="data.txt", content_type="text/plain")
+    finally:
+        await client.close()
+
+    assert seen_upload_auth is None
 
 
 async def test_async_python_sdk_streams_chunks() -> None:

@@ -7,6 +7,7 @@ import mimetypes
 import os
 import time
 import warnings
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlsplit, urlunsplit
@@ -14,6 +15,7 @@ from urllib.parse import urlsplit, urlunsplit
 import httpx
 
 DEFAULT_AUTO_UPLOAD_THRESHOLD_BYTES = 8 * 1024
+DEFAULT_ASYNC_POLL_TIMEOUT_SECONDS = 600.0
 SUPPORTED_TASKS = {"infer", "vision", "transcribe", "convert", "train", "fine-tune", "split-infer"}
 
 
@@ -73,6 +75,95 @@ class GPUCallColdStartTimeout(TimeoutError):
     def __init__(self, message: str, *, original: Exception | None = None) -> None:
         super().__init__(message)
         self.original = original
+
+
+class GPUCallCircuitOpenError(RuntimeError):
+    pass
+
+
+@dataclass(frozen=True)
+class GPUCallCircuitScope:
+    task: str
+    intent: str
+    mode: str
+    transport: str
+
+    def key(self) -> str:
+        parts = {
+            "task": self.task,
+            "intent": self.intent,
+            "mode": self.mode,
+            "transport": self.transport,
+        }
+        missing = [name for name, value in parts.items() if not str(value or "").strip()]
+        if missing:
+            raise ValueError("circuit breaker scope requires task, intent, mode, and transport")
+        return ":".join(str(parts[name]).strip() for name in ("task", "intent", "mode", "transport"))
+
+
+class GPUCallCircuitBreaker:
+    """Small caller-side circuit breaker keyed by task/intent/mode/transport.
+
+    This helper is optional. It deliberately rejects global circuits because a
+    vision provider outage must not stop unrelated infer/extract_json calls.
+    """
+
+    def __init__(self, *, failure_threshold: int = 5, recovery_timeout_seconds: float = 60.0) -> None:
+        if failure_threshold < 1:
+            raise ValueError("failure_threshold must be >= 1")
+        if recovery_timeout_seconds < 0:
+            raise ValueError("recovery_timeout_seconds must be >= 0")
+        self.failure_threshold = failure_threshold
+        self.recovery_timeout_seconds = recovery_timeout_seconds
+        self._states: dict[str, dict[str, float | int]] = {}
+
+    @staticmethod
+    def scope_key(*, task: str, intent: str, mode: str, transport: str) -> str:
+        return GPUCallCircuitScope(task=task, intent=intent, mode=mode, transport=transport).key()
+
+    def before_request(self, scope: GPUCallCircuitScope | str) -> None:
+        key = self._coerce_key(scope)
+        state = self._states.get(key)
+        if not state:
+            return
+        opened_at = float(state.get("opened_at") or 0.0)
+        if not opened_at:
+            return
+        if time.monotonic() - opened_at >= self.recovery_timeout_seconds:
+            state["opened_at"] = 0.0
+            return
+        raise GPUCallCircuitOpenError(f"gpucall circuit open for scope {key}")
+
+    def record_success(self, scope: GPUCallCircuitScope | str) -> None:
+        self._states.pop(self._coerce_key(scope), None)
+
+    def record_exception(self, scope: GPUCallCircuitScope | str, exc: BaseException) -> None:
+        if not self.is_provider_failure(exc):
+            return
+        key = self._coerce_key(scope)
+        state = self._states.setdefault(key, {"failures": 0, "opened_at": 0.0})
+        failures = int(state.get("failures") or 0) + 1
+        state["failures"] = failures
+        if failures >= self.failure_threshold:
+            state["opened_at"] = time.monotonic()
+
+    def failure_count(self, scope: GPUCallCircuitScope | str) -> int:
+        return int(self._states.get(self._coerce_key(scope), {}).get("failures") or 0)
+
+    @staticmethod
+    def is_provider_failure(exc: BaseException) -> bool:
+        if isinstance(exc, GPUCallProviderRuntimeError):
+            return exc.status_code >= 500
+        return False
+
+    @staticmethod
+    def _coerce_key(scope: GPUCallCircuitScope | str) -> str:
+        if isinstance(scope, GPUCallCircuitScope):
+            return scope.key()
+        key = str(scope).strip()
+        if key.count(":") < 3:
+            raise ValueError("circuit breaker scope key must include task:intent:mode:transport")
+        return key
 
 
 class GPUCallClient:
@@ -139,6 +230,7 @@ class GPUCallClient:
         auto_upload: bool = True,
         poll: bool = True,
         poll_interval: float = 1.0,
+        poll_timeout: float = DEFAULT_ASYNC_POLL_TIMEOUT_SECONDS,
     ) -> dict[str, Any]:
         payload = self._task_payload(
             task=task,
@@ -162,7 +254,7 @@ class GPUCallClient:
         self._raise_for_status(response)
         data = response.json()
         if response.status_code == 202 and poll:
-            return self.poll_job(data["job_id"], interval=poll_interval)
+            return self.poll_job(data["job_id"], interval=poll_interval, timeout=poll_timeout)
         return data
 
     def vision(
@@ -176,6 +268,7 @@ class GPUCallClient:
         metadata: dict[str, Any] | None = None,
         response_format: dict[str, Any] | None = None,
         poll: bool = True,
+        poll_timeout: float = DEFAULT_ASYNC_POLL_TIMEOUT_SECONDS,
     ) -> dict[str, Any]:
         return self.infer(
             prompt=prompt,
@@ -187,6 +280,7 @@ class GPUCallClient:
             metadata=metadata,
             response_format=response_format,
             poll=poll,
+            poll_timeout=poll_timeout,
         )
 
     def stream(
@@ -213,7 +307,7 @@ class GPUCallClient:
                 if chunk:
                     yield chunk
 
-    def poll_job(self, job_id: str, *, interval: float = 1.0, timeout: float = 300.0) -> dict[str, Any]:
+    def poll_job(self, job_id: str, *, interval: float = 1.0, timeout: float = DEFAULT_ASYNC_POLL_TIMEOUT_SECONDS) -> dict[str, Any]:
         deadline = time.monotonic() + timeout
         while time.monotonic() < deadline:
             response = self.client.get(f"/v2/jobs/{job_id}")
@@ -326,6 +420,7 @@ class AsyncGPUCallClient:
         auto_upload: bool = True,
         poll: bool = True,
         poll_interval: float = 1.0,
+        poll_timeout: float = DEFAULT_ASYNC_POLL_TIMEOUT_SECONDS,
     ) -> dict[str, Any]:
         payload = await self._task_payload(
             task=task,
@@ -349,7 +444,7 @@ class AsyncGPUCallClient:
         _raise_for_status(response)
         data = response.json()
         if response.status_code == 202 and poll:
-            return await self.poll_job(data["job_id"], interval=poll_interval)
+            return await self.poll_job(data["job_id"], interval=poll_interval, timeout=poll_timeout)
         return data
 
     async def vision(
@@ -363,6 +458,7 @@ class AsyncGPUCallClient:
         metadata: dict[str, Any] | None = None,
         response_format: dict[str, Any] | None = None,
         poll: bool = True,
+        poll_timeout: float = DEFAULT_ASYNC_POLL_TIMEOUT_SECONDS,
     ) -> dict[str, Any]:
         return await self.infer(
             prompt=prompt,
@@ -374,6 +470,7 @@ class AsyncGPUCallClient:
             metadata=metadata,
             response_format=response_format,
             poll=poll,
+            poll_timeout=poll_timeout,
         )
 
     async def stream(
@@ -414,12 +511,13 @@ class AsyncGPUCallClient:
         )
         _raise_for_status(response)
         presign = response.json()
-        upload = await self.client.put(str(presign["upload_url"]), content=body, headers={"content-type": mime})
+        async with httpx.AsyncClient(timeout=self.client.timeout) as upload_client:
+            upload = await upload_client.put(str(presign["upload_url"]), content=body, headers={"content-type": mime})
         if upload.status_code >= 400:
             raise RuntimeError(f"object upload failed: {upload.status_code}")
         return presign["data_ref"]
 
-    async def poll_job(self, job_id: str, *, interval: float = 1.0, timeout: float = 300.0) -> dict[str, Any]:
+    async def poll_job(self, job_id: str, *, interval: float = 1.0, timeout: float = DEFAULT_ASYNC_POLL_TIMEOUT_SECONDS) -> dict[str, Any]:
         deadline = time.monotonic() + timeout
         while time.monotonic() < deadline:
             response = await self.client.get(f"/v2/jobs/{job_id}")
@@ -508,6 +606,7 @@ class _ChatCompletionsResource:
         auto_upload: bool = True,
         parse_json: bool = False,
         poll_interval: float = 1.0,
+        poll_timeout: float = DEFAULT_ASYNC_POLL_TIMEOUT_SECONDS,
         **extra: Any,
     ) -> dict[str, Any]:
         message_payload = _normalize_messages(messages)
@@ -540,6 +639,7 @@ class _ChatCompletionsResource:
             metadata=request_metadata,
             poll=True,
             poll_interval=poll_interval,
+            poll_timeout=poll_timeout,
         )
         value = _extract_result_text(result)
         _raise_if_empty_output(value)
@@ -588,6 +688,7 @@ class _AsyncChatCompletionsResource:
         auto_upload: bool = True,
         parse_json: bool = False,
         poll_interval: float = 1.0,
+        poll_timeout: float = DEFAULT_ASYNC_POLL_TIMEOUT_SECONDS,
         **extra: Any,
     ) -> dict[str, Any]:
         message_payload = _normalize_messages(messages)
@@ -620,6 +721,7 @@ class _AsyncChatCompletionsResource:
             metadata=request_metadata,
             poll=True,
             poll_interval=poll_interval,
+            poll_timeout=poll_timeout,
         )
         value = _extract_result_text(result)
         _raise_if_empty_output(value)

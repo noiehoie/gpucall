@@ -1,17 +1,33 @@
 from gpucall_sdk.client import (
     AsyncGPUCallClient,
     GPUCallCallerRoutingError,
+    GPUCallCircuitBreaker,
+    GPUCallCircuitOpenError,
+    GPUCallCircuitScope,
+    GPUCallColdStartTimeout,
     GPUCallClient,
     GPUCallEmptyOutputError,
+    GPUCallHTTPError,
     GPUCallJSONParseError,
+    GPUCallNoEligibleTupleError,
+    GPUCallNoRecipeError,
+    GPUCallProviderRuntimeError,
     GPUCallWarning,
 )
 
 __all__ = [
     "AsyncGPUCallClient",
     "GPUCallCallerRoutingError",
+    "GPUCallCircuitBreaker",
+    "GPUCallCircuitOpenError",
+    "GPUCallCircuitScope",
+    "GPUCallColdStartTimeout",
     "GPUCallClient",
     "GPUCallEmptyOutputError",
+    "GPUCallHTTPError",
     "GPUCallJSONParseError",
+    "GPUCallNoEligibleTupleError",
+    "GPUCallNoRecipeError",
+    "GPUCallProviderRuntimeError",
     "GPUCallWarning",
 ]

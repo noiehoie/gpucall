@@ -417,6 +417,12 @@ minimum timeout and the caller chooses a shorter timeout, that timeout is a
 caller-side integration issue. It should not be counted as provider failure by
 default.
 
+For async polling, use a cold-start-safe timeout. The default recommendation is
+600 seconds unless the operator handoff or live readiness report says a larger
+timeout is needed. Short 60-90 second poll windows are canary probes, not
+production readiness proof, and should be reported as caller timeout rather
+than provider failure.
+
 ### 6. Classify failures correctly
 
 | Condition | Meaning | Correct response |
@@ -429,6 +435,30 @@ default.
 | malformed output / business validator failure after `200 OK` | quality feedback, not necessarily routing failure | submit `gpucall-recipe-draft quality` |
 | provider 5xx without governance code | provider/runtime failure | retry/circuit according to local policy |
 | gpucall not configured | application not ready for gpucall production | fail closed; do not call hosted AI by default |
+
+Circuit breaker scope is part of the integration contract. A process-global
+gpucall circuit breaker is forbidden because it lets one workload class poison
+unrelated work. Scope every circuit at least by:
+
+```text
+task:intent:mode:transport
+```
+
+Examples:
+
+```text
+vision:understand_document_image:sync:v2
+infer:extract_json:sync:v2
+infer:rank_text_items:async:v2
+```
+
+A `vision` provider/runtime 5xx may count against
+`vision:understand_document_image:sync:v2`; it must not count against
+`infer:extract_json:sync:v2` or `infer:summarize_text:sync:v2`.
+`NO_AUTO_SELECTABLE_RECIPE`, `NO_ELIGIBLE_TUPLE`, cold-start timeout,
+`MALFORMED_OUTPUT`, `EMPTY_OUTPUT`, and business-schema rejection do not open
+provider circuits by default. Python callers can use the SDK's
+`GPUCallCircuitBreaker` and `GPUCallCircuitScope` helper to enforce this key.
 
 For structured JSON workloads, distinguish JSON syntax from business schema.
 `response_format={"type":"json_object"}` guarantees only a JSON object. If the
@@ -499,6 +529,11 @@ Every integration should leave tests for:
 - `NO_AUTO_SELECTABLE_RECIPE` does not open a provider circuit;
 - `NO_ELIGIBLE_TUPLE` does not open a provider circuit;
 - timeout is not counted as provider failure by default;
+- circuit breaker counters are keyed by `task:intent:mode:transport`, not
+  process-global state;
+- a Vision 5xx does not block unrelated text or JSON intents;
+- async poll timeout is at least 600 seconds for cold-start-capable routes
+  unless the operator handoff explicitly says otherwise;
 - async completion without inline result is handled gracefully;
 - stream heartbeat is not treated as an error.
 

@@ -298,6 +298,27 @@ The status output includes only processing state, decision, task, intent,
 quality kind, safe blockers/warnings, and next actions. It does not return raw
 prompt text, raw model output, DataRef URIs, presigned URLs, or API keys.
 
+## Caller Circuit Breakers
+
+`gpucall-recipe-draft` is for sanitized intake and quality feedback. It is not
+the runtime circuit breaker. If the caller application has its own breaker, the
+breaker must follow the same failure taxonomy used by this tool:
+
+- no process-global gpucall breaker;
+- minimum scope key: `task:intent:mode:transport`;
+- provider/runtime 5xx may open only that scoped circuit;
+- `NO_AUTO_SELECTABLE_RECIPE` and `NO_ELIGIBLE_TUPLE` are governance/intake
+  signals, not direct provider failures;
+- cold-start timeout is caller timeout unless paired with a verified provider
+  runtime failure;
+- malformed output, empty output, and business-schema rejection become quality
+  feedback, not provider circuit events.
+
+Python callers can use `GPUCallCircuitBreaker` and `GPUCallCircuitScope` from
+`gpucall_sdk` to avoid accidental cross-contamination between Vision and text
+intents. For async jobs, use a poll timeout of at least 600 seconds for
+cold-start-capable routes unless the operator handoff says otherwise.
+
 ## Caller-Facing Intents
 
 Callers should describe intent at a high level. They should not specify GPU names, provider names, model names, or gpucall-internal capability labels.
