@@ -1,3 +1,4 @@
+---
 worker_ref: runpod-vllm-ampere48-phi-4-multimodal-instruct
 adapter: runpod-vllm-serverless
 execution_surface: managed_endpoint
@@ -7,6 +8,7 @@ modes:
 - sync
 - async
 input_contracts:
+- text
 - chat_messages
 - image
 - data_refs

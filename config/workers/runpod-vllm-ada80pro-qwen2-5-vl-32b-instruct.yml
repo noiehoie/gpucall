@@ -1,3 +1,4 @@
+---
 worker_ref: runpod-vllm-ada80pro-qwen2-5-vl-32b-instruct
 adapter: runpod-vllm-serverless
 execution_surface: managed_endpoint
@@ -7,6 +8,7 @@ modes:
 - sync
 - async
 input_contracts:
+- text
 - chat_messages
 - image
 - data_refs
