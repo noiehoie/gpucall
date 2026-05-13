@@ -365,6 +365,12 @@ tuple 起動前に admission control を適用します。
 - request 内 fallback 上限: `GPUCALL_MAX_FALLBACK_ATTEMPTS`
 - request 内 provider-family attempt 上限: `GPUCALL_MAX_PROVIDER_FAMILY_ATTEMPTS`
 
+provider temporary failure は失敗した tuple を必ず cooldown します。
+provider family cooldown は maintenance、upstream/control-plane unavailable、
+rate limit、account quota exhausted など family-wide condition を表す error
+class にだけ適用されます。tuple-local capacity miss は同じ provider family の
+全 tuple をデフォルトでは抑制しません。
+
 `GPUCALL_DATABASE_URL` が Postgres を指している場合、gateway jobs、
 idempotency、admission leases/suppressions は Postgres で共有されます。
 これにより multi-process / multi-container gateway が同じ in-flight と

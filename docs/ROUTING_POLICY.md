@@ -160,10 +160,19 @@ gateway owns this failover.
 The compiled tuple chain is not treated as live capacity. Before each tuple
 start, runtime admission checks tuple concurrency, provider-family concurrency,
 task/intent/mode workload-scope concurrency, provider-family cooldown, and
-per-request fallback attempt caps. A provider temporary failure suppresses both
-the tuple and its provider family for a bounded cooldown so concurrent plans do
-not stampede through the same failing route. Admission rejection is a routing
-state, not an application parse error.
+per-request fallback attempt caps. A provider temporary failure always suppresses
+the failed tuple for a bounded cooldown so concurrent plans do not stampede
+through the same failing route. Provider-family suppression is narrower: it is
+used only for failures that describe account, control-plane, maintenance, rate,
+quota, or other family-wide conditions as declared by
+`ProviderErrorClass.suppress_provider_family`. Tuple-local capacity misses such
+as `PROVIDER_RESOURCE_EXHAUSTED` and `PROVIDER_CAPACITY_UNAVAILABLE` do not
+suppress the whole provider family by default, so another tuple in the same
+family can still be tried when policy and per-request family-attempt caps allow
+it. Codes with `fallback_eligible: false`, such as `PROVIDER_QUOTA_EXCEEDED` and
+`PROVIDER_CANCELLED`, stop blind fallback and return a structured
+`failure_artifact` instead. Admission rejection is a routing state, not an
+application parse error.
 
 In production-like deployments with `GPUCALL_DATABASE_URL=postgresql://...`,
 admission leases and provider-family suppression state are stored in Postgres

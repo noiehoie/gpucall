@@ -414,9 +414,9 @@ provider code and fallback/cancel metadata.
 
 Static catalog eligibility and live executability are separate. A tuple can be
 valid for a recipe and still be unavailable right now because it is already
-running work, its provider family is cooling down after a temporary failure, or
-the workload scope has reached its configured concurrency limit. The gateway
-therefore applies admission control before every tuple start:
+running work, its provider family is cooling down after a family-wide temporary
+failure, or the workload scope has reached its configured concurrency limit. The
+gateway therefore applies admission control before every tuple start:
 
 - per tuple: `GPUCALL_TUPLE_CONCURRENCY_LIMIT`
 - per provider family: `GPUCALL_PROVIDER_FAMILY_CONCURRENCY_LIMIT`
@@ -424,6 +424,12 @@ therefore applies admission control before every tuple start:
 - provider temporary cooldown: `GPUCALL_PROVIDER_TEMPORARY_COOLDOWN_SECONDS`
 - per-request fallback cap: `GPUCALL_MAX_FALLBACK_ATTEMPTS`
 - per-request provider-family attempt cap: `GPUCALL_MAX_PROVIDER_FAMILY_ATTEMPTS`
+
+Provider temporary failures always cool down the failed tuple. Provider-family
+cooldown is applied only to error classes that declare a family-wide condition,
+such as maintenance, upstream/control-plane unavailability, rate limit, or
+account quota exhaustion. Tuple-local capacity misses do not suppress every
+tuple in the same provider family by default.
 
 When `GPUCALL_DATABASE_URL` points to Postgres, gateway jobs, idempotency, and
 admission leases/suppressions are shared through Postgres so multi-process or
