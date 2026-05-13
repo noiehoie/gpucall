@@ -144,6 +144,32 @@ outside the gateway SLA. Callers that cannot wait for the advertised sync
 timeout should use `mode=async` and poll job state instead of lowering the
 client timeout.
 
+Provider temporary-unavailable codes are immediate failover signals. When a
+tuple returns any `PROVIDER_*` temporary code declared by
+`gpucall.domain.ProviderErrorCode`, the dispatcher records the observation,
+runs remote cleanup/cancel for the handle, and advances to the next eligible
+tuple in the already compiled deterministic chain. These codes include provider
+resource exhaustion, endpoint capacity misses, provisioning stock misses, queue
+saturation, worker initializing/throttling/unhealthy states, provider/job/poll
+timeouts, cancellation, preemption, maintenance, upstream unavailability, rate
+or quota limits, region unavailability, image/model loading delay, concurrency
+limits, lease expiry, stale accepted jobs, and unclassified retryable provider
+errors. Application code must not choose the alternate provider itself; the
+gateway owns this failover.
+
+The compiled tuple chain is not treated as live capacity. Before each tuple
+start, runtime admission checks tuple concurrency, provider-family concurrency,
+task/intent/mode workload-scope concurrency, provider-family cooldown, and
+per-request fallback attempt caps. A provider temporary failure suppresses both
+the tuple and its provider family for a bounded cooldown so concurrent plans do
+not stampede through the same failing route. Admission rejection is a routing
+state, not an application parse error.
+
+Operators and callers that need a live answer should not infer it from
+`/readyz`. Use `/v2/readiness/intents/{intent}` or `gpucall readiness` to compare
+static eligible tuples with live-ready tuples and to see suppressed families,
+in-flight counts, recommended mode, and caller action.
+
 ## Controlled Runtime Preference
 
 gpucall treats operator-controlled execution as a first-class execution surface.

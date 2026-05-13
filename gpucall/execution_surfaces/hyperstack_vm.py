@@ -12,7 +12,7 @@ from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
-from gpucall.domain import ArtifactManifest, CompiledPlan, TupleError, TupleResult
+from gpucall.domain import ArtifactManifest, CompiledPlan, ProviderErrorCode, TupleError, TupleResult
 from gpucall.config import default_state_dir
 from gpucall.execution.base import TupleAdapter, RemoteHandle
 from gpucall.execution.payloads import plan_payload
@@ -286,7 +286,12 @@ class HyperstackAdapter(TupleAdapter):
             except OSError:
                 time.sleep(5)
         if not ready:
-            raise TupleError(f"SSH port not open on {ip_address}", retryable=True, status_code=504)
+            raise TupleError(
+                f"SSH port not open on {ip_address}",
+                retryable=True,
+                status_code=504,
+                code=ProviderErrorCode.PROVIDER_BOOTING,
+            )
         ssh = paramiko.SSHClient()
         known_hosts = os.getenv("GPUCALL_HYPERSTACK_KNOWN_HOSTS")
         if known_hosts:
@@ -781,7 +786,17 @@ def _hyperstack_response_error(response: Any, *, action: str, retryable: bool | 
         retryable = response.status_code in {404, 409, 423, 429, 500, 502, 503, 504}
         if _hyperstack_error_is_capacity_unavailable(detail):
             retryable = True
-    code = "PROVIDER_PROVISION_UNAVAILABLE" if retryable else "PROVIDER_PROVISION_FAILED"
+    code = ProviderErrorCode.PROVIDER_PROVISION_UNAVAILABLE
+    if _hyperstack_error_is_capacity_unavailable(detail):
+        code = ProviderErrorCode.PROVIDER_REGION_UNAVAILABLE
+    elif response.status_code == 429:
+        code = ProviderErrorCode.PROVIDER_RATE_LIMITED
+    elif response.status_code == 423:
+        code = ProviderErrorCode.PROVIDER_CONCURRENCY_LIMIT
+    elif response.status_code in {502, 503, 504}:
+        code = ProviderErrorCode.PROVIDER_UPSTREAM_UNAVAILABLE
+    elif not retryable:
+        code = "PROVIDER_PROVISION_FAILED"
     raw = _redacted_hyperstack_error_body(response)
     message = f"Hyperstack {action} failed: {response.status_code}"
     if detail:

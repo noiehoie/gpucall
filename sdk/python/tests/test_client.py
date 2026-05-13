@@ -55,6 +55,26 @@ def test_chat_completions_sends_no_recipe_or_provider() -> None:
     assert response["parsed"] == {"answer": 2}
 
 
+def test_chat_completions_preserves_usage_in_openai_like_response() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={
+                "result": {
+                    "kind": "inline",
+                    "value": "ok",
+                    "usage": {"prompt_tokens": 3, "completion_tokens": 2, "total_tokens": 5},
+                }
+            },
+        )
+
+    client = GPUCallClient("http://gpucall.test", transport=httpx.MockTransport(handler))
+
+    response = client.chat.completions.create(messages=[{"role": "user", "content": "hello"}])
+
+    assert response["usage"] == {"prompt_tokens": 3, "completion_tokens": 2, "total_tokens": 5}
+
+
 def test_chat_completions_sends_intent_and_openai_hints_as_metadata() -> None:
     sent_payload = {}
 

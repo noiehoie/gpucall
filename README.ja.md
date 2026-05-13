@@ -353,6 +353,41 @@ Cloudflare R2 または S3-compatible buckets では、gpucall prefix に lifecy
 
 Provider outages、remote capacity exhaustion、authentication failures、provider-side queueing は gateway SLA の外です。gateway は retryability を記録し、circuit breakers を開き、deterministic fallback chain を進みます。
 
+Static catalog eligibility と live executability は別物です。tuple が recipe
+上は有効でも、今この瞬間には in-flight、provider family cooldown、workload
+scope concurrency limit によって実行不能な場合があります。そのため gateway は
+tuple 起動前に admission control を適用します。
+
+- tuple 単位: `GPUCALL_TUPLE_CONCURRENCY_LIMIT`
+- provider family 単位: `GPUCALL_PROVIDER_FAMILY_CONCURRENCY_LIMIT`
+- task/intent/mode workload scope 単位: `GPUCALL_WORKLOAD_SCOPE_CONCURRENCY_LIMIT`
+- provider temporary cooldown: `GPUCALL_PROVIDER_TEMPORARY_COOLDOWN_SECONDS`
+- request 内 fallback 上限: `GPUCALL_MAX_FALLBACK_ATTEMPTS`
+- request 内 provider-family attempt 上限: `GPUCALL_MAX_PROVIDER_FAMILY_ATTEMPTS`
+
+`GET /readyz` は process readiness だけを返します。本番 routing readiness は
+`GET /v2/readiness/intents/{intent}` を使います。この endpoint は static
+eligible tuples、live-ready tuples、live-blocked tuples、suppressed provider
+families、inflight counts、recommended mode、caller action を返します。
+
+provider 側の一時実行不能は application error ではなく routing evidence
+です。tuple が `PROVIDER_RESOURCE_EXHAUSTED`,
+`PROVIDER_CAPACITY_UNAVAILABLE`, `PROVIDER_PROVISION_UNAVAILABLE`,
+`PROVIDER_QUEUE_SATURATED`, `PROVIDER_WORKER_INITIALIZING`,
+`PROVIDER_WORKER_THROTTLED`, `PROVIDER_TIMEOUT`,
+`PROVIDER_POLL_TIMEOUT`, `PROVIDER_JOB_FAILED`, `PROVIDER_CANCELLED`,
+`PROVIDER_UNHEALTHY`, `PROVIDER_BOOTING`, `PROVIDER_PREEMPTED`,
+`PROVIDER_MAINTENANCE`, `PROVIDER_UPSTREAM_UNAVAILABLE`,
+`PROVIDER_RATE_LIMITED`, `PROVIDER_QUOTA_EXCEEDED`,
+`PROVIDER_REGION_UNAVAILABLE`, `PROVIDER_IMAGE_PULL_DELAY`,
+`PROVIDER_MODEL_LOADING`, `PROVIDER_CONCURRENCY_LIMIT`,
+`PROVIDER_LEASE_EXPIRED`, `PROVIDER_STALE_JOB`, `PROVIDER_ERROR` の
+いずれかを返した場合、gpucall はその tuple での実行継続を止め、
+remote handle の cleanup/cancel を実行し、routing evidence に記録して、
+deterministic chain の次の eligible tuple へ即座に進みます。全候補が失敗した場合、
+caller には provider code と fallback/cancel metadata を含む redacted
+`failure_artifact` が `provider_temporary_unavailable` として返ります。
+
 ## Launch Checks
 
 ```bash

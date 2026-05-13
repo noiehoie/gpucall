@@ -33,6 +33,7 @@ class TenantUsageLedger:
                     tuple TEXT,
                     recipe TEXT,
                     plan_id TEXT,
+                    status TEXT NOT NULL DEFAULT 'reserved',
                     recorded_at TEXT NOT NULL
                 )
                 """
@@ -53,6 +54,7 @@ class TenantUsageLedger:
             "tuple": "TEXT",
             "recipe": "TEXT",
             "plan_id": "TEXT",
+            "status": "TEXT NOT NULL DEFAULT 'committed'",
         }
         for column, declaration in required.items():
             if column not in columns:
@@ -65,8 +67,8 @@ class TenantUsageLedger:
         with self._connect() as conn:
             conn.execute(
                 """
-                INSERT INTO tenant_usage (tenant_id, estimated_cost_usd, tuple, recipe, plan_id, recorded_at)
-                VALUES (?, ?, ?, ?, ?, ?)
+                INSERT INTO tenant_usage (tenant_id, estimated_cost_usd, tuple, recipe, plan_id, status, recorded_at)
+                VALUES (?, ?, ?, ?, ?, 'reserved', ?)
                 """,
                 (tenant_id, estimated_cost_usd, tuple, recipe, plan_id, datetime.now(timezone.utc).isoformat()),
             )
@@ -75,12 +77,18 @@ class TenantUsageLedger:
         if not plan_id:
             return
         with self._connect() as conn:
-            conn.execute("DELETE FROM tenant_usage WHERE plan_id = ?", (plan_id,))
+            conn.execute("UPDATE tenant_usage SET status = 'released' WHERE plan_id = ? AND status = 'reserved'", (plan_id,))
+
+    def commit_plan(self, plan_id: str | None) -> None:
+        if not plan_id:
+            return
+        with self._connect() as conn:
+            conn.execute("UPDATE tenant_usage SET status = 'committed' WHERE plan_id = ? AND status = 'reserved'", (plan_id,))
 
     def spend_since(self, tenant_id: str, since: datetime) -> float:
         with self._connect() as conn:
             row = conn.execute(
-                "SELECT COALESCE(SUM(estimated_cost_usd), 0) FROM tenant_usage WHERE tenant_id = ? AND recorded_at >= ?",
+                "SELECT COALESCE(SUM(estimated_cost_usd), 0) FROM tenant_usage WHERE tenant_id = ? AND recorded_at >= ? AND status IN ('reserved', 'committed')",
                 (tenant_id, since.isoformat()),
             ).fetchone()
         return float(row[0] or 0)

@@ -644,7 +644,7 @@ class _ChatCompletionsResource:
         value = _extract_result_text(result)
         _raise_if_empty_output(value)
         output_validated = _extract_output_validated(result)
-        response = _openai_like_response(model, value, output_validated=output_validated)
+        response = _openai_like_response(model, value, usage=_extract_usage(result), output_validated=output_validated)
         if parse_json:
             if output_validated is False:
                 raise GPUCallJSONParseError("gpucall returned unvalidated JSON output", raw_text=value)
@@ -726,7 +726,7 @@ class _AsyncChatCompletionsResource:
         value = _extract_result_text(result)
         _raise_if_empty_output(value)
         output_validated = _extract_output_validated(result)
-        response = _openai_like_response(model, value, output_validated=output_validated)
+        response = _openai_like_response(model, value, usage=_extract_usage(result), output_validated=output_validated)
         if parse_json:
             if output_validated is False:
                 raise GPUCallJSONParseError("gpucall returned unvalidated JSON output", raw_text=value)
@@ -831,7 +831,13 @@ def _extract_output_validated(result: dict[str, Any]) -> bool | None:
     return value if isinstance(value, bool) else None
 
 
-def _openai_like_response(model: str, content: str, *, output_validated: bool | None) -> dict[str, Any]:
+def _extract_usage(result: dict[str, Any]) -> dict[str, int]:
+    payload = result.get("result") or {}
+    usage = payload.get("usage")
+    return usage if isinstance(usage, dict) else {}
+
+
+def _openai_like_response(model: str, content: str, *, usage: dict[str, int], output_validated: bool | None) -> dict[str, Any]:
     response: dict[str, Any] = {
         "id": f"chatcmpl-{hashlib.sha256(f'{time.time()}:{content}'.encode()).hexdigest()[:24]}",
         "object": "chat.completion",
@@ -844,6 +850,7 @@ def _openai_like_response(model: str, content: str, *, output_validated: bool | 
                 "finish_reason": "stop",
             }
         ],
+        "usage": usage,
     }
     if output_validated is not None:
         response["output_validated"] = output_validated

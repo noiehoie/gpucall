@@ -21,12 +21,15 @@ class ResponseFormatType(StrEnum):
 
 
 class JobState(StrEnum):
+    QUEUED = "QUEUED"
     PENDING = "PENDING"
     RUNNING = "RUNNING"
+    SUCCEEDED = "SUCCEEDED"
     COMPLETED = "COMPLETED"
     FAILED = "FAILED"
     CANCELLED = "CANCELLED"
     EXPIRED = "EXPIRED"
+    COMPLETED_AFTER_CALLER_TIMEOUT = "COMPLETED_AFTER_CALLER_TIMEOUT"
 
 
 class DataClassification(StrEnum):
@@ -68,6 +71,35 @@ class PriceFreshness(StrEnum):
     FRESH = "fresh"
     STALE = "stale"
     UNKNOWN = "unknown"
+
+
+class ProviderErrorCode(StrEnum):
+    """Provider-side temporary execution failure codes."""
+
+    PROVIDER_RESOURCE_EXHAUSTED = "PROVIDER_RESOURCE_EXHAUSTED"
+    PROVIDER_CAPACITY_UNAVAILABLE = "PROVIDER_CAPACITY_UNAVAILABLE"
+    PROVIDER_PROVISION_UNAVAILABLE = "PROVIDER_PROVISION_UNAVAILABLE"
+    PROVIDER_QUEUE_SATURATED = "PROVIDER_QUEUE_SATURATED"
+    PROVIDER_WORKER_INITIALIZING = "PROVIDER_WORKER_INITIALIZING"
+    PROVIDER_WORKER_THROTTLED = "PROVIDER_WORKER_THROTTLED"
+    PROVIDER_TIMEOUT = "PROVIDER_TIMEOUT"
+    PROVIDER_POLL_TIMEOUT = "PROVIDER_POLL_TIMEOUT"
+    PROVIDER_JOB_FAILED = "PROVIDER_JOB_FAILED"
+    PROVIDER_CANCELLED = "PROVIDER_CANCELLED"
+    PROVIDER_UNHEALTHY = "PROVIDER_UNHEALTHY"
+    PROVIDER_BOOTING = "PROVIDER_BOOTING"
+    PROVIDER_PREEMPTED = "PROVIDER_PREEMPTED"
+    PROVIDER_MAINTENANCE = "PROVIDER_MAINTENANCE"
+    PROVIDER_UPSTREAM_UNAVAILABLE = "PROVIDER_UPSTREAM_UNAVAILABLE"
+    PROVIDER_RATE_LIMITED = "PROVIDER_RATE_LIMITED"
+    PROVIDER_QUOTA_EXCEEDED = "PROVIDER_QUOTA_EXCEEDED"
+    PROVIDER_REGION_UNAVAILABLE = "PROVIDER_REGION_UNAVAILABLE"
+    PROVIDER_IMAGE_PULL_DELAY = "PROVIDER_IMAGE_PULL_DELAY"
+    PROVIDER_MODEL_LOADING = "PROVIDER_MODEL_LOADING"
+    PROVIDER_CONCURRENCY_LIMIT = "PROVIDER_CONCURRENCY_LIMIT"
+    PROVIDER_LEASE_EXPIRED = "PROVIDER_LEASE_EXPIRED"
+    PROVIDER_STALE_JOB = "PROVIDER_STALE_JOB"
+    PROVIDER_ERROR = "PROVIDER_ERROR"
 
 
 class ApiKeyHandoffMode(StrEnum):
@@ -730,13 +762,13 @@ class TupleError(Exception):
         *,
         retryable: bool,
         status_code: int = 502,
-        code: str | None = None,
+        code: str | ProviderErrorCode | None = None,
         raw_output: str | None = None,
     ) -> None:
         super().__init__(message)
         self.retryable = retryable
         self.status_code = status_code
-        self.code = code
+        self.code = str(code) if code is not None else None
         self.raw_output = raw_output
 
 
@@ -816,3 +848,4 @@ class JobRecord(BaseModel):
     result_ref: DataRef | None = None
     result: TupleResult | None = None
     error: str | None = None
+    provider_error_code: ProviderErrorCode | None = None

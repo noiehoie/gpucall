@@ -17,6 +17,7 @@ from gpucall.domain import (
     DataRef,
     ExecutionMode,
     InlineValue,
+    ProviderErrorCode,
     TupleError,
     TupleResult,
     ResponseFormat,
@@ -35,6 +36,24 @@ class FailingTuple(EchoTuple):
         raise TupleError("failed", retryable=self.retryable, status_code=401 if not self.retryable else 502)
 
 
+class ProviderCodeFailingTuple(EchoTuple):
+    def __init__(self, name: str, code: ProviderErrorCode) -> None:
+        super().__init__(name=name)
+        self.code = code
+        self.cancelled_handles: list[str] = []
+
+    async def wait(self, handle: RemoteHandle, plan: CompiledPlan) -> TupleResult:
+        raise TupleError("provider temporarily unavailable", retryable=False, status_code=503, code=self.code)
+
+    async def cancel_remote(self, handle: RemoteHandle) -> None:
+        self.cancelled_handles.append(handle.remote_id)
+
+
+class HangingCleanupProviderTuple(ProviderCodeFailingTuple):
+    async def cancel_remote(self, handle: RemoteHandle) -> None:
+        await asyncio.sleep(60)
+
+
 class BuggyTuple(EchoTuple):
     async def wait(self, handle: RemoteHandle, plan: CompiledPlan) -> TupleResult:
         raise RuntimeError("sdk exploded")
@@ -44,6 +63,12 @@ class HangingTuple(EchoTuple):
     async def wait(self, handle: RemoteHandle, plan: CompiledPlan) -> TupleResult:
         await asyncio.sleep(60)
         return TupleResult(kind="inline", value="late")
+
+
+class SlowTuple(EchoTuple):
+    async def wait(self, handle: RemoteHandle, plan: CompiledPlan) -> TupleResult:
+        await asyncio.sleep(0.05)
+        return TupleResult(kind="inline", value=f"ok:{plan.task}:{self.name}")
 
 
 class SequenceTuple(EchoTuple):
@@ -152,6 +177,151 @@ async def test_dispatcher_fails_over_retryable_provider(tmp_path) -> None:
     result = await dispatcher.execute_sync(plan(["bad", "good"]))
 
     assert result.value == "ok:infer:good"
+
+
+@pytest.mark.asyncio
+async def test_dispatcher_fails_over_all_provider_temporary_unavailable_codes(tmp_path) -> None:
+    for code in ProviderErrorCode:
+        bad = ProviderCodeFailingTuple("bad", code)
+        dispatcher = Dispatcher(
+            adapters={"bad": bad, "good": EchoTuple("good")},
+            registry=ObservedRegistry(),
+            audit=AuditTrail(tmp_path / f"audit-{code.value}.jsonl"),
+            jobs=JobStore(),
+        )
+
+        result = await dispatcher.execute_sync(plan(["bad", "good"]))
+
+        assert result.value == "ok:infer:good"
+        assert bad.cancelled_handles
+
+
+@pytest.mark.asyncio
+async def test_dispatcher_admission_prevents_tuple_stampede(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("GPUCALL_TUPLE_CONCURRENCY_LIMIT", "1")
+    dispatcher = Dispatcher(
+        adapters={"busy": SlowTuple("busy"), "fallback": EchoTuple("fallback")},
+        registry=ObservedRegistry(),
+        audit=AuditTrail(tmp_path / "audit.jsonl"),
+        jobs=JobStore(),
+    )
+
+    first, second = await asyncio.gather(
+        dispatcher.execute_sync(plan(["busy", "fallback"])),
+        dispatcher.execute_sync(plan(["busy", "fallback"])),
+    )
+
+    values = {first.value, second.value}
+    assert values == {"ok:infer:busy", "ok:infer:fallback"}
+    assert '"event_type":"tuple.admission_rejected"' in (tmp_path / "audit.jsonl").read_text(encoding="utf-8")
+
+
+@pytest.mark.asyncio
+async def test_provider_temporary_failure_suppresses_tuple_for_later_plans(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("GPUCALL_PROVIDER_TEMPORARY_COOLDOWN_SECONDS", "60")
+    bad = ProviderCodeFailingTuple("bad", ProviderErrorCode.PROVIDER_RESOURCE_EXHAUSTED)
+    dispatcher = Dispatcher(
+        adapters={"bad": bad, "good": EchoTuple("good")},
+        registry=ObservedRegistry(),
+        audit=AuditTrail(tmp_path / "audit.jsonl"),
+        jobs=JobStore(),
+    )
+
+    first = await dispatcher.execute_sync(plan(["bad", "good"]))
+    second = await dispatcher.execute_sync(plan(["bad", "good"]))
+
+    assert first.value == "ok:infer:good"
+    assert second.value == "ok:infer:good"
+    assert len(bad.cancelled_handles) == 1
+    assert '"reason":"tuple_suppressed"' in (tmp_path / "audit.jsonl").read_text(encoding="utf-8")
+
+
+@pytest.mark.asyncio
+async def test_dispatcher_admission_limits_same_workload_scope(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("GPUCALL_TUPLE_CONCURRENCY_LIMIT", "10")
+    monkeypatch.setenv("GPUCALL_PROVIDER_FAMILY_CONCURRENCY_LIMIT", "10")
+    monkeypatch.setenv("GPUCALL_WORKLOAD_SCOPE_CONCURRENCY_LIMIT", "1")
+    dispatcher = Dispatcher(
+        adapters={"a": SlowTuple("a"), "b": SlowTuple("b")},
+        registry=ObservedRegistry(),
+        audit=AuditTrail(tmp_path / "audit.jsonl"),
+        jobs=JobStore(),
+    )
+
+    async def run(item):
+        try:
+            return await dispatcher.execute_sync(item)
+        except TupleError as exc:
+            return exc
+
+    results = await asyncio.gather(run(plan(["a"])), run(plan(["b"])))
+
+    assert sum(isinstance(item, TupleResult) for item in results) == 1
+    failures = [item for item in results if isinstance(item, TupleError)]
+    assert len(failures) == 1
+    assert failures[0].code == ProviderErrorCode.PROVIDER_CAPACITY_UNAVAILABLE
+    assert '"reason":"workload_scope_inflight_limit"' in (tmp_path / "audit.jsonl").read_text(encoding="utf-8")
+
+
+@pytest.mark.asyncio
+async def test_dispatcher_stops_fallback_after_attempt_limit(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("GPUCALL_MAX_FALLBACK_ATTEMPTS", "1")
+    bad = ProviderCodeFailingTuple("bad", ProviderErrorCode.PROVIDER_RESOURCE_EXHAUSTED)
+    dispatcher = Dispatcher(
+        adapters={"bad": bad, "good": EchoTuple("good")},
+        registry=ObservedRegistry(),
+        audit=AuditTrail(tmp_path / "audit.jsonl"),
+        jobs=JobStore(),
+    )
+
+    with pytest.raises(TupleError) as caught:
+        await dispatcher.execute_sync(plan(["bad", "good"]))
+
+    assert caught.value.code == ProviderErrorCode.PROVIDER_RESOURCE_EXHAUSTED
+    raw = (tmp_path / "audit.jsonl").read_text(encoding="utf-8")
+    assert '"event_type":"plan.fallback_exhausted"' in raw
+    assert '"event_type":"plan.completed"' not in raw
+
+
+@pytest.mark.asyncio
+async def test_async_failed_job_releases_reserved_budget_callback(tmp_path) -> None:
+    released: list[str] = []
+    dispatcher = Dispatcher(
+        adapters={"bad": ProviderCodeFailingTuple("bad", ProviderErrorCode.PROVIDER_RESOURCE_EXHAUSTED)},
+        registry=ObservedRegistry(),
+        audit=AuditTrail(tmp_path / "audit.jsonl"),
+        jobs=JobStore(),
+        on_async_terminal_failure=lambda p: released.append(p.plan_id),
+    )
+
+    job = await dispatcher.submit_async(plan(["bad"]))
+    await dispatcher._job_tasks[job.job_id]
+
+    stored = await dispatcher.jobs.get(job.job_id)
+    assert stored.state == "FAILED"
+    assert released == [stored.plan.plan_id]
+
+
+@pytest.mark.asyncio
+async def test_dispatcher_cleanup_timeout_does_not_block_failover(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("GPUCALL_REMOTE_CLEANUP_TIMEOUT_SECONDS", "0.001")
+    audit_path = tmp_path / "audit.jsonl"
+    dispatcher = Dispatcher(
+        adapters={
+            "bad": HangingCleanupProviderTuple("bad", ProviderErrorCode.PROVIDER_RESOURCE_EXHAUSTED),
+            "good": EchoTuple("good"),
+        },
+        registry=ObservedRegistry(),
+        audit=AuditTrail(audit_path),
+        jobs=JobStore(),
+    )
+
+    result = await dispatcher.execute_sync(plan(["bad", "good"]))
+
+    assert result.value == "ok:infer:good"
+    raw = audit_path.read_text(encoding="utf-8")
+    assert '"event_type":"lease.cleanup_failed"' in raw
+    assert '"event_type":"plan.completed"' in raw
 
 
 @pytest.mark.asyncio

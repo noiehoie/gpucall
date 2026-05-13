@@ -24,6 +24,7 @@ from gpucall.app_helpers import (
     _allow_unauthenticated_gateway,
     _public_metrics_enabled,
     compiled_plan_hash,
+    commit_request_budget,
     enforce_gateway_owned_routing,
     enforce_request_budget,
     refund_request_budget,
@@ -59,6 +60,7 @@ from gpucall.audit import AuditTrail
 from gpucall.compiler import GovernanceCompiler, GovernanceError
 from gpucall.config import ConfigError, default_config_dir, default_state_dir, load_config
 from gpucall.credentials import credentials_path, load_credentials, save_credentials
+from gpucall.admission import AdmissionController
 from gpucall.dispatcher import Dispatcher, JobStore, LeaseReaper, TupleReconciler
 from gpucall.domain import ApiKeyHandoffMode, ChatMessage, DataRef, ExecutionMode, InlineValue, JobRecord, JobState, TenantSpec, TupleError, ResponseFormat, TaskRequest, recipe_requirements
 from gpucall.domain import PresignGetRequest, PresignGetResponse, PresignPutRequest, PresignPutResponse
@@ -66,6 +68,7 @@ from gpucall.object_store import ObjectStore
 from gpucall.execution.factory import build_adapters
 from gpucall.handoff import handoff_payload as _bootstrap_handoff_payload
 from gpucall.postgres_store import PostgresIdempotencyStore, PostgresJobStore
+from gpucall.readiness import build_readiness_report
 from gpucall.registry import ObservedRegistry
 from gpucall.routing import route_warning_tags
 from gpucall.tuple_catalog import live_tuple_catalog_evidence
@@ -97,7 +100,7 @@ class Runtime(BaseModel):
 
 
 class OpenAIChatMessage(BaseModel):
-    role: Literal["system", "user", "assistant", "tool"] = "user"
+    role: Literal["system", "developer", "user", "assistant", "tool", "function"] = "user"
     content: str | list[dict[str, Any]]
 
 
@@ -115,11 +118,17 @@ class OpenAIChatCompletionRequest(BaseModel):
     seed: int | None = None
     tools: list[dict[str, Any]] | None = None
     tool_choice: str | dict[str, Any] | None = None
+    functions: list[dict[str, Any]] | None = None
+    function_call: str | dict[str, Any] | None = None
     user: str | None = None
     presence_penalty: float | None = None
     frequency_penalty: float | None = None
     n: int | None = Field(default=None, gt=0)
     stream: bool = False
+    stream_options: dict[str, Any] | None = None
+    logprobs: bool | None = None
+    top_logprobs: int | None = None
+    logit_bias: dict[str, float] | None = None
     metadata: dict[str, Any] = Field(default_factory=dict)
     intent: str | None = None
     task_family: str | None = None
@@ -269,6 +278,7 @@ def build_runtime(config_dir: Path) -> Runtime:
     object_store = ObjectStore(config.object_store) if config.object_store is not None else None
     jobs = _job_store(state_dir)
     adapters = build_adapters(tuples)
+    admission = AdmissionController(tuples)
     compiler = GovernanceCompiler(
         policy=policy,
         recipes=recipes,
@@ -284,6 +294,9 @@ def build_runtime(config_dir: Path) -> Runtime:
         jobs=jobs,
         tuple_costs={name: float(tuple.cost_per_second) for name, tuple in tuples.items()},
         artifact_registry=artifact_registry,
+        admission=admission,
+        on_async_success=lambda plan: TenantUsageLedger(state_dir / "tenant_usage.db").commit_plan(plan.plan_id),
+        on_async_terminal_failure=lambda plan: TenantUsageLedger(state_dir / "tenant_usage.db").release_plan(plan.plan_id),
     )
     reaper = LeaseReaper(jobs=jobs, audit=audit, cancel_job=dispatcher.cancel_job)
     reconciler = TupleReconciler(adapters=adapters, audit=audit)
@@ -337,7 +350,7 @@ def create_app(config_dir: Path | None = None) -> FastAPI:
     rate_limit_identity_max = int(os.getenv("GPUCALL_RATE_LIMIT_IDENTITY_MAX", "10000"))
 
     @app.exception_handler(RequestValidationError)
-    async def sanitized_validation_error(_request: Request, exc: RequestValidationError) -> JSONResponse:
+    async def sanitized_validation_error(request: Request, exc: RequestValidationError) -> JSONResponse:
         errors = []
         for error in exc.errors():
             errors.append(
@@ -346,6 +359,12 @@ def create_app(config_dir: Path | None = None) -> FastAPI:
                     "loc": list(error.get("loc", [])),
                     "msg": error.get("msg"),
                 }
+            )
+        if request.url.path.startswith("/v1/"):
+            return openai_error_response(
+                422,
+                "Invalid OpenAI-compatible request",
+                code="invalid_request_error",
             )
         return JSONResponse(status_code=422, content={"detail": errors})
 
@@ -482,6 +501,7 @@ def create_app(config_dir: Path | None = None) -> FastAPI:
                 }
                 for name, tuple in sorted(runtime.compiler.tuples.items())
             },
+            "runtime_admission": runtime.dispatcher.admission.snapshot(),
         }
 
     @app.get("/readyz")
@@ -491,6 +511,46 @@ def create_app(config_dir: Path | None = None) -> FastAPI:
     @app.get("/readyz/details")
     async def readyz_details(runtime: Runtime = Depends(runtime_dep)) -> dict[str, object]:
         return _readyz_details(runtime)
+
+    @app.get("/v2/readiness/intents/{intent}")
+    async def intent_readiness(intent: str, runtime: Runtime = Depends(runtime_dep)) -> dict[str, object]:
+        report = build_readiness_report(config_dir=root, intent=intent, config=runtime.compiler)
+        admission = runtime.dispatcher.admission.snapshot()
+        suppressed_tuples = admission.get("suppressed_tuples") if isinstance(admission.get("suppressed_tuples"), dict) else {}
+        suppressed_families = admission.get("suppressed_provider_families") if isinstance(admission.get("suppressed_provider_families"), dict) else {}
+        tuple_inflight = admission.get("tuple_inflight") if isinstance(admission.get("tuple_inflight"), dict) else {}
+        family_inflight = admission.get("provider_family_inflight") if isinstance(admission.get("provider_family_inflight"), dict) else {}
+        tuple_limit = int(admission.get("tuple_limit") or 0)
+        family_limit = int(admission.get("provider_family_limit") or 0)
+        for recipe in report.get("recipes", []):
+            eligible = recipe.get("eligible_tuples") if isinstance(recipe, dict) else None
+            if not isinstance(eligible, list):
+                continue
+            live_ready = []
+            blocked = []
+            for item in eligible:
+                if not isinstance(item, dict):
+                    continue
+                tuple_name = item.get("tuple")
+                family = runtime.dispatcher.admission.family_for(str(tuple_name))
+                if tuple_name in suppressed_tuples:
+                    blocked.append({**item, "live_reason": "tuple_suppressed"})
+                elif family in suppressed_families:
+                    blocked.append({**item, "live_reason": "provider_family_suppressed", "provider_family": family})
+                elif tuple_limit > 0 and int(tuple_inflight.get(tuple_name, 0) or 0) >= tuple_limit:
+                    blocked.append({**item, "live_reason": "tuple_inflight_limit"})
+                elif family_limit > 0 and int(family_inflight.get(family, 0) or 0) >= family_limit:
+                    blocked.append({**item, "live_reason": "provider_family_inflight_limit", "provider_family": family})
+                else:
+                    live_ready.append(item)
+            recipe["live_ready_tuple_count"] = len(live_ready)
+            recipe["live_ready_tuples"] = live_ready
+            recipe["live_blocked_tuples"] = blocked
+            recipe["runtime_admission"] = admission
+            recipe["recommended_mode"] = "async" if recipe.get("async_only_recommended") else ("sync" if recipe.get("sync_eligible") else "none")
+            recipe["current_caller_action"] = "send_request" if live_ready else "retry_later_or_contact_gpucall_admin"
+        report["runtime_admission"] = admission
+        return report
 
     def _metrics_payload(runtime: Runtime) -> dict[str, object]:
         latencies = runtime.metrics.get("latency_ms", [])
@@ -580,6 +640,7 @@ def create_app(config_dir: Path | None = None) -> FastAPI:
                 request = worker_readable_request(request, runtime, tenant_prefix=tenant_prefix)
                 plan = plan_with_worker_refs(plan, request.input_refs, split_learning=request.split_learning)
                 result = await runtime.dispatcher.execute_sync(plan)
+                commit_request_budget(runtime, plan)
                 headers = warning_headers(plan, runtime.compiler.tuples)
                 content = {
                     "plan_id": plan.plan_id,
@@ -616,6 +677,9 @@ def create_app(config_dir: Path | None = None) -> FastAPI:
         http_request: Request,
         runtime: Runtime = Depends(runtime_dep),
     ) -> Any:
+        unsupported = _openai_unsupported_request_error(request)
+        if unsupported is not None:
+            return unsupported
         messages = [_openai_message_to_chat_message(message) for message in request.messages]
         message_bytes = sum(len(message.content.encode("utf-8")) for message in messages)
         if message_bytes > runtime.compiler.policy.inline_bytes_limit:
@@ -639,18 +703,23 @@ def create_app(config_dir: Path | None = None) -> FastAPI:
             plan = runtime.compiler.compile(task_request)
             await enforce_request_budget(runtime, http_request, plan)
             if request.stream:
+                response_model = _openai_response_model(request.model, plan, runtime.compiler.tuples)
                 async def events():
                     yielded = False
+                    stream_id = f"chatcmpl-{uuid4().hex}"
                     try:
                         async for event in runtime.dispatcher.execute_stream(plan):
-                            for chunk in _openai_stream_chunks(request.model, event, yielded):
+                            for chunk in _openai_stream_chunks(response_model, event, yielded, stream_id=stream_id):
                                 yielded = True
                                 yield chunk
+                        commit_request_budget(runtime, plan)
                     except TupleError as exc:
                         refund_request_budget(runtime, plan)
                         record_error_code(runtime, exc.code or "TUPLE_ERROR")
                         yield "data: " + json.dumps({"error": {"message": public_tuple_error(exc), "code": exc.code or "tuple_error"}}, separators=(",", ":")) + "\n\n"
-                    yield "data: " + json.dumps(_openai_stream_chunk(request.model, "", finish_reason="stop"), separators=(",", ":")) + "\n\n"
+                        yield "data: [DONE]\n\n"
+                        return
+                    yield "data: " + json.dumps(_openai_stream_chunk(response_model, "", stream_id=stream_id, finish_reason="stop"), separators=(",", ":")) + "\n\n"
                     yield "data: [DONE]\n\n"
 
                 return StreamingResponse(
@@ -660,6 +729,7 @@ def create_app(config_dir: Path | None = None) -> FastAPI:
                     headers=tenant_headers(warning_headers(plan, runtime.compiler.tuples), http_request),
                 )
             result = await runtime.dispatcher.execute_sync(plan)
+            commit_request_budget(runtime, plan)
             headers = warning_headers(plan, runtime.compiler.tuples)
             if result.output_validated is not None:
                 headers["X-GPUCall-Output-Validated"] = "true" if result.output_validated else "false"
@@ -667,7 +737,7 @@ def create_app(config_dir: Path | None = None) -> FastAPI:
                 status_code=200,
                 headers=tenant_headers(headers, http_request),
                 content=openai_chat_response(
-                    request.model,
+                    _openai_response_model(request.model, plan, runtime.compiler.tuples),
                     result.value or "",
                     result.usage,
                     gpucall=public_plan_summary(plan, runtime.compiler.tuples),
@@ -790,6 +860,7 @@ def create_app(config_dir: Path | None = None) -> FastAPI:
             try:
                 async for event in runtime.dispatcher.execute_stream(plan):
                     yield event
+                commit_request_budget(runtime, plan)
             except TupleError as exc:
                 refund_request_budget(runtime, plan)
                 record_error_code(runtime, exc.code or "TUPLE_ERROR")
@@ -823,6 +894,7 @@ def create_app(config_dir: Path | None = None) -> FastAPI:
                 worker_request = worker_readable_request(item, runtime, tenant_prefix=tenant_prefix)
                 plan = plan_with_worker_refs(plan, worker_request.input_refs, split_learning=worker_request.split_learning)
                 result = await runtime.dispatcher.execute_sync(plan)
+                commit_request_budget(runtime, plan)
                 results.append(
                     {
                         "index": index,
@@ -863,6 +935,19 @@ def create_app(config_dir: Path | None = None) -> FastAPI:
             raise HTTPException(status_code=404, detail="job not found")
         return job
 
+    @app.post("/v2/jobs/{job_id}/cancel")
+    async def cancel_job(job_id: str, http_request: Request, runtime: Runtime = Depends(runtime_dep)) -> JSONResponse:
+        job = await runtime.jobs.get(job_id)
+        if job is None:
+            raise HTTPException(status_code=404, detail="job not found")
+        if job.owner_identity is not None and job.owner_identity != idempotency_identity(http_request):
+            raise HTTPException(status_code=404, detail="job not found")
+        if job.state in {JobState.COMPLETED, JobState.FAILED, JobState.CANCELLED, JobState.EXPIRED}:
+            return JSONResponse({"job_id": job.job_id, "state": job.state, "cancelled": False})
+        runtime.dispatcher.cancel_job(job_id)
+        updated = await runtime.jobs.get(job_id)
+        return JSONResponse({"job_id": job.job_id, "state": updated.state if updated else job.state, "cancelled": True})
+
     @app.post("/v2/objects/presign-put")
     async def presign_put(request: PresignPutRequest, http_request: Request, runtime: Runtime = Depends(runtime_dep)) -> PresignPutResponse:
         if runtime.object_store is None:
@@ -900,7 +985,57 @@ async def recover_interrupted_jobs(runtime: Runtime) -> None:
 
 
 def _openai_message_to_chat_message(message: OpenAIChatMessage) -> ChatMessage:
-    return ChatMessage(role=message.role, content=_message_content_to_text(message.content))
+    role = "system" if message.role == "developer" else message.role
+    if role == "function":
+        raise HTTPException(status_code=400, detail="OpenAI function-role messages are not supported; use tool messages only when tool calling is supported")
+    return ChatMessage(role=role, content=_message_content_to_text(message.content))
+
+
+def _openai_response_model(requested_model: str, plan: Any, tuples: dict[str, Any]) -> str:
+    chain = list(getattr(plan, "tuple_chain", []) or [])
+    selected = tuples.get(chain[0]) if chain else None
+    actual = getattr(selected, "model", None) if selected is not None else None
+    if isinstance(actual, str) and actual.strip():
+        return actual.strip()
+    if requested_model.startswith("gpucall:"):
+        return requested_model
+    return "gpucall:auto"
+
+
+def _openai_unsupported_request_error(request: OpenAIChatCompletionRequest) -> JSONResponse | None:
+    unsupported: list[str] = []
+    if request.tools:
+        unsupported.append("tools")
+    if request.tool_choice is not None:
+        unsupported.append("tool_choice")
+    if request.functions:
+        unsupported.append("functions")
+    if request.function_call is not None:
+        unsupported.append("function_call")
+    if request.n not in (None, 1):
+        unsupported.append("n")
+    if request.logprobs is not None:
+        unsupported.append("logprobs")
+    if request.top_logprobs is not None:
+        unsupported.append("top_logprobs")
+    if request.logit_bias:
+        unsupported.append("logit_bias")
+    if request.stream_options:
+        unsupported.append("stream_options")
+    if request.top_p is not None:
+        unsupported.append("top_p")
+    if request.stop is not None:
+        unsupported.append("stop")
+    if request.seed is not None:
+        unsupported.append("seed")
+    if request.presence_penalty is not None:
+        unsupported.append("presence_penalty")
+    if request.frequency_penalty is not None:
+        unsupported.append("frequency_penalty")
+    if not unsupported:
+        return None
+    fields = ", ".join(sorted(unsupported))
+    return openai_error_response(400, f"OpenAI facade does not support these fields yet: {fields}", code="unsupported_openai_field")
 
 
 def _openai_request_intent(request: OpenAIChatCompletionRequest) -> str | None:
@@ -931,10 +1066,16 @@ def _openai_request_metadata(request: OpenAIChatCompletionRequest) -> dict[str, 
         "openai.seed": request.seed,
         "openai.tools": request.tools,
         "openai.tool_choice": request.tool_choice,
+        "openai.functions": request.functions,
+        "openai.function_call": request.function_call,
         "openai.presence_penalty": request.presence_penalty,
         "openai.frequency_penalty": request.frequency_penalty,
         "openai.n": request.n,
         "openai.max_completion_tokens": request.max_completion_tokens,
+        "openai.stream_options": request.stream_options,
+        "openai.logprobs": request.logprobs,
+        "openai.top_logprobs": request.top_logprobs,
+        "openai.logit_bias": request.logit_bias,
     }
     for key, value in optional_fields.items():
         if value is not None:
@@ -957,13 +1098,23 @@ def _metadata_value(value: Any) -> str:
 def _message_content_to_text(content: str | list[dict[str, Any]]) -> str:
     if isinstance(content, str):
         return content
+    parts: list[str] = []
+    unsupported: list[str] = []
+    for item in content:
+        kind = str(item.get("type") or "")
+        if kind == "text" and isinstance(item.get("text"), str):
+            parts.append(item["text"])
+            continue
+        unsupported.append(kind or "<missing>")
+    if parts and not unsupported:
+        return "\n".join(parts)
     raise HTTPException(
         status_code=400,
-        detail="OpenAI facade accepts string message content only; use gpucall DataRef APIs for structured or multimodal inputs",
+        detail="OpenAI facade accepts string or text-only content parts; use gpucall DataRef APIs for image/file inputs",
     )
 
 
-def _openai_stream_chunks(model: str, event: str, already_started: bool):
+def _openai_stream_chunks(model: str, event: str, already_started: bool, *, stream_id: str):
     for line in event.splitlines():
         if not line.startswith("data:"):
             continue
@@ -971,18 +1122,18 @@ def _openai_stream_chunks(model: str, event: str, already_started: bool):
         if not content or content == "[DONE]":
             continue
         if not already_started:
-            yield "data: " + json.dumps(_openai_stream_chunk(model, "", role="assistant"), separators=(",", ":")) + "\n\n"
-        yield "data: " + json.dumps(_openai_stream_chunk(model, content), separators=(",", ":")) + "\n\n"
+            yield "data: " + json.dumps(_openai_stream_chunk(model, "", stream_id=stream_id, role="assistant"), separators=(",", ":")) + "\n\n"
+        yield "data: " + json.dumps(_openai_stream_chunk(model, content, stream_id=stream_id), separators=(",", ":")) + "\n\n"
 
 
-def _openai_stream_chunk(model: str, content: str, *, role: str | None = None, finish_reason: str | None = None) -> dict[str, Any]:
+def _openai_stream_chunk(model: str, content: str, *, stream_id: str | None = None, role: str | None = None, finish_reason: str | None = None) -> dict[str, Any]:
     delta: dict[str, str] = {}
     if role is not None:
         delta["role"] = role
     if content:
         delta["content"] = content
     return {
-        "id": f"chatcmpl-{uuid4().hex}",
+        "id": stream_id or f"chatcmpl-{uuid4().hex}",
         "object": "chat.completion.chunk",
         "created": int(time.time()),
         "model": model,

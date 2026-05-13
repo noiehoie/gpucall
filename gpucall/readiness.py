@@ -18,9 +18,10 @@ def build_readiness_report(
     intent: str | None = None,
     recipe: str | None = None,
     validation_dir: str | Path | None = None,
+    config: Any | None = None,
 ) -> dict[str, Any]:
     root = Path(config_dir)
-    config = load_config(root)
+    config = config or load_config(root)
     recipes = _selected_recipes(config.recipes, intent=intent, recipe=recipe)
     report = {
         "schema_version": 1,

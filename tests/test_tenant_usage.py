@@ -33,12 +33,12 @@ def test_tenant_usage_ledger_migrates_legacy_provider_column(tmp_path) -> None:
 
     with sqlite3.connect(path) as conn:
         columns = {str(row[1]) for row in conn.execute("PRAGMA table_info(tenant_usage)").fetchall()}
-        rows = conn.execute("SELECT tenant_id, estimated_cost_usd, tuple, recipe, plan_id FROM tenant_usage ORDER BY id").fetchall()
+        rows = conn.execute("SELECT tenant_id, estimated_cost_usd, tuple, recipe, plan_id, status FROM tenant_usage ORDER BY id").fetchall()
 
-    assert "tuple" in columns
+    assert {"tuple", "status"}.issubset(columns)
     assert rows == [
-        ("tenant-a", 1.25, "legacy-tuple", "recipe-a", "plan-a"),
-        ("tenant-a", 0.5, "new-tuple", "recipe-b", "plan-b"),
+        ("tenant-a", 1.25, "legacy-tuple", "recipe-a", "plan-a", "committed"),
+        ("tenant-a", 0.5, "new-tuple", "recipe-b", "plan-b", "reserved"),
     ]
 
 
@@ -61,7 +61,29 @@ def test_tenant_usage_ledger_adds_missing_optional_columns(tmp_path) -> None:
 
     with sqlite3.connect(path) as conn:
         columns = {str(row[1]) for row in conn.execute("PRAGMA table_info(tenant_usage)").fetchall()}
-        row = conn.execute("SELECT tuple, recipe, plan_id FROM tenant_usage").fetchone()
+        row = conn.execute("SELECT tuple, recipe, plan_id, status FROM tenant_usage").fetchone()
 
-    assert {"tuple", "recipe", "plan_id"}.issubset(columns)
-    assert row == ("tuple-a", "recipe-a", "plan-a")
+    assert {"tuple", "recipe", "plan_id", "status"}.issubset(columns)
+    assert row == ("tuple-a", "recipe-a", "plan-a", "reserved")
+
+
+def test_tenant_usage_release_excludes_reserved_plan_from_spend(tmp_path) -> None:
+    from datetime import datetime, timezone
+
+    ledger = TenantUsageLedger(tmp_path / "tenant_usage.db")
+    ledger.reserve("tenant-a", 2.0, tuple="tuple-a", recipe="recipe-a", plan_id="plan-a")
+    assert ledger.spend_since("tenant-a", datetime(2026, 1, 1, tzinfo=timezone.utc)) == 2.0
+
+    ledger.release_plan("plan-a")
+
+    assert ledger.spend_since("tenant-a", datetime(2026, 1, 1, tzinfo=timezone.utc)) == 0.0
+
+
+def test_tenant_usage_commit_keeps_reserved_plan_in_spend(tmp_path) -> None:
+    from datetime import datetime, timezone
+
+    ledger = TenantUsageLedger(tmp_path / "tenant_usage.db")
+    ledger.reserve("tenant-a", 2.0, tuple="tuple-a", recipe="recipe-a", plan_id="plan-a")
+    ledger.commit_plan("plan-a")
+
+    assert ledger.spend_since("tenant-a", datetime(2026, 1, 1, tzinfo=timezone.utc)) == 2.0

@@ -30,7 +30,11 @@ from gpucall.execution.base import RemoteHandle
 from gpucall.execution.payloads import gpucall_tuple_result, plan_payload
 from gpucall.execution_surfaces.function_runtime import RunpodVllmFlashBootAdapter
 from gpucall.execution_surfaces.managed_endpoint import RunpodServerlessAdapter
-from gpucall.execution_surfaces.managed_endpoint import RunpodVllmServerlessAdapter, runpod_vllm_health_rejection_reason
+from gpucall.execution_surfaces.managed_endpoint import (
+    RunpodVllmServerlessAdapter,
+    runpod_vllm_health_rejection_code,
+    runpod_vllm_health_rejection_reason,
+)
 from gpucall.local_dataref_worker import run_dataref_openai_request
 
 
@@ -804,7 +808,28 @@ async def test_runpod_vllm_official_route_uses_openai_chat_route(monkeypatch) ->
 def test_runpod_worker_vllm_health_rejects_throttled_endpoint() -> None:
     health = {"workers": {"idle": 0, "initializing": 0, "ready": 0, "running": 0, "throttled": 1, "unhealthy": 0}}
 
-    assert runpod_vllm_health_rejection_reason(health) == "workers are throttled and no ready worker is available"
+    reason = runpod_vllm_health_rejection_reason(health)
+    assert reason == "workers are throttled and no ready worker is available"
+    assert runpod_vllm_health_rejection_code(reason) == "PROVIDER_WORKER_THROTTLED"
+
+
+def test_runpod_worker_vllm_health_classifies_initializing_and_unhealthy() -> None:
+    assert (
+        runpod_vllm_health_rejection_code(
+            runpod_vllm_health_rejection_reason(
+                {"workers": {"ready": 0, "running": 0, "initializing": 1, "throttled": 0, "unhealthy": 0}}
+            )
+        )
+        == "PROVIDER_WORKER_INITIALIZING"
+    )
+    assert (
+        runpod_vllm_health_rejection_code(
+            runpod_vllm_health_rejection_reason(
+                {"workers": {"ready": 0, "running": 0, "initializing": 0, "throttled": 0, "unhealthy": 1}}
+            )
+        )
+        == "PROVIDER_UNHEALTHY"
+    )
 
 
 async def test_runpod_vllm_official_route_rejects_non_vision_data_refs_for_failover() -> None:
@@ -1017,6 +1042,43 @@ def test_runpod_serverless_uses_rest_policy_and_cancel(monkeypatch) -> None:
     assert calls[1][1] == "https://api.runpod.ai/v2/endpoint-1/runsync"
     assert calls[1][2]["policy"] == {"executionTimeout": 5000, "ttl": 10000}
     assert calls[2][1] == "https://api.runpod.ai/v2/endpoint-1/cancel/job-1"
+
+
+def test_runpod_serverless_in_queue_saturates_for_fast_failover(monkeypatch) -> None:
+    class FakeResponse:
+        status_code = 200
+        text = '{"status":"IN_QUEUE"}'
+
+        def json(self) -> dict[str, object]:
+            return {"status": "IN_QUEUE"}
+
+    class FakeSession:
+        def mount(self, *_args, **_kwargs) -> None:
+            return None
+
+        def get(self, _url: str, **_kwargs):
+            return FakeResponse()
+
+    fake_requests = types.SimpleNamespace(Session=lambda: FakeSession())
+    fake_adapters = types.SimpleNamespace(HTTPAdapter=lambda **_kwargs: object())
+    fake_retry = types.SimpleNamespace(Retry=lambda **_kwargs: object())
+    monkeypatch.setitem(sys.modules, "requests", fake_requests)
+    monkeypatch.setitem(sys.modules, "requests.adapters", fake_adapters)
+    monkeypatch.setitem(sys.modules, "urllib3.util.retry", fake_retry)
+    monkeypatch.setenv("GPUCALL_PROVIDER_QUEUE_SATURATION_SECONDS", "1")
+    clock = iter([0.0, 0.0, 0.0, 2.0])
+    monkeypatch.setattr("gpucall.execution_surfaces.managed_endpoint.time.monotonic", lambda: next(clock))
+    monkeypatch.setattr("gpucall.execution_surfaces.managed_endpoint.time.sleep", lambda _seconds: None)
+
+    adapter = RunpodServerlessAdapter(api_key="rk_test", endpoint_id="endpoint-1", model="Qwen/Qwen2.5-1.5B-Instruct")
+    plan = plan_payload_plan()
+    handle = RemoteHandle(tuple="runpod", remote_id="job-queued", expires_at=plan.expires_at(), meta={})
+
+    with pytest.raises(TupleError) as exc_info:
+        adapter._wait_sync(handle, plan)
+
+    assert exc_info.value.code == "PROVIDER_QUEUE_SATURATED"
+    assert exc_info.value.retryable is True
 
 
 def test_gpucall_tuple_result_rejects_heuristic_output_shapes() -> None:
@@ -1504,7 +1566,7 @@ def test_hyperstack_stock_400_is_retryable_capacity_unavailable(monkeypatch, tmp
     except Exception as exc:
         assert getattr(exc, "retryable", None) is True
         assert getattr(exc, "status_code", None) == 503
-        assert getattr(exc, "code", None) == "PROVIDER_PROVISION_UNAVAILABLE"
+        assert getattr(exc, "code", None) == "PROVIDER_REGION_UNAVAILABLE"
         assert "Not Enough Stock" in getattr(exc, "raw_output", "")
     else:  # pragma: no cover
         raise AssertionError("Hyperstack stock failure unexpectedly provisioned")

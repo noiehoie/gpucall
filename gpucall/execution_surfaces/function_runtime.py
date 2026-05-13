@@ -12,8 +12,8 @@ from contextlib import ExitStack, contextmanager
 from typing import Any, Iterator
 from uuid import uuid4
 
-from gpucall.domain import ArtifactManifest, CompiledPlan, TupleError, TupleResult
-from gpucall.execution_surfaces.managed_endpoint import RUNPOD_API_BASE, json_or_error, requests_session
+from gpucall.domain import ArtifactManifest, CompiledPlan, ProviderErrorCode, TupleError, TupleResult
+from gpucall.execution_surfaces.managed_endpoint import RUNPOD_API_BASE, _queue_saturation_seconds, json_or_error, requests_session
 from gpucall.execution.base import TupleAdapter, RemoteHandle
 from gpucall.execution.payloads import gpucall_tuple_result, plan_payload, plain_text_result
 from gpucall.execution.registry import TupleAdapterDescriptor, register_adapter
@@ -101,6 +101,14 @@ def _modal_exception_to_tuple_error(exc: Exception) -> TupleError | None:
             code="PROVIDER_RESOURCE_EXHAUSTED",
         )
     return None
+
+
+def _runpod_terminal_status_code(status: str | None) -> ProviderErrorCode:
+    if status == "TIMED_OUT":
+        return ProviderErrorCode.PROVIDER_TIMEOUT
+    if status == "CANCELLED":
+        return ProviderErrorCode.PROVIDER_CANCELLED
+    return ProviderErrorCode.PROVIDER_JOB_FAILED
 
 
 def _start_modal_call(remote: Any, *args: Any, **kwargs: Any) -> Any:
@@ -541,12 +549,12 @@ class RunpodVllmFlashBootAdapter(TupleAdapter):
                 job = EndpointJob(value, endpoint)
                 await job.wait(timeout=max(float(plan.timeout_seconds), 300.0))
                 if job.error:
-                    raise TupleError("RunPod Flash job failed", retryable=True, status_code=502, code="PROVIDER_JOB_FAILED")
+                    raise TupleError("RunPod Flash job failed", retryable=True, status_code=502, code=ProviderErrorCode.PROVIDER_JOB_FAILED)
                 return job.output
             if hasattr(value, "wait") and hasattr(value, "output"):
                 await value.wait(timeout=max(float(plan.timeout_seconds), 300.0))
                 if getattr(value, "error", None):
-                    raise TupleError("RunPod Flash job failed", retryable=True, status_code=502, code="PROVIDER_JOB_FAILED")
+                    raise TupleError("RunPod Flash job failed", retryable=True, status_code=502, code=ProviderErrorCode.PROVIDER_JOB_FAILED)
                 return value.output
             if isinstance(value, dict) and value.get("status") == "COMPLETED" and "output" in value:
                 return value["output"]
@@ -570,8 +578,8 @@ class RunpodVllmFlashBootAdapter(TupleAdapter):
     def _extract_runsync_output(self, data: dict[str, Any], plan: CompiledPlan) -> Any:
         status = data.get("status")
         if status in {"FAILED", "CANCELLED", "TIMED_OUT"}:
-            code = "PROVIDER_TIMEOUT" if status == "TIMED_OUT" else "PROVIDER_JOB_FAILED"
-            raise TupleError(f"RunPod Flash job failed: {status}", retryable=status == "TIMED_OUT", status_code=502, code=code)
+            code = _runpod_terminal_status_code(status)
+            raise TupleError(f"RunPod Flash job failed: {status}", retryable=True, status_code=502, code=code)
         if status == "COMPLETED" and "output" in data:
             return data["output"]
         if "output" in data and status is None:
@@ -580,11 +588,13 @@ class RunpodVllmFlashBootAdapter(TupleAdapter):
         if job_id:
             return self._poll_endpoint_job_sync(str(job_id), plan)
         if "error" in data:
-            raise TupleError("RunPod Flash job failed", retryable=True, status_code=502, code="PROVIDER_JOB_FAILED")
+            raise TupleError("RunPod Flash job failed", retryable=True, status_code=502, code=ProviderErrorCode.PROVIDER_JOB_FAILED)
         return data
 
     def _poll_endpoint_job_sync(self, job_id: str, plan: CompiledPlan) -> Any:
         deadline = time.monotonic() + plan.timeout_seconds
+        queue_seen_at: float | None = None
+        queue_limit = _queue_saturation_seconds(plan.timeout_seconds)
         while time.monotonic() < deadline:
             response = requests_session().get(f"{self.base_url}/{self.endpoint_id}/status/{job_id}", headers=self._headers(), timeout=10)
             data = json_or_error(response, "RunPod Flash status failed")
@@ -592,10 +602,21 @@ class RunpodVllmFlashBootAdapter(TupleAdapter):
             if status == "COMPLETED" and "output" in data:
                 return data["output"]
             if status in {"FAILED", "CANCELLED", "TIMED_OUT"}:
-                code = "PROVIDER_TIMEOUT" if status == "TIMED_OUT" else "PROVIDER_JOB_FAILED"
-                raise TupleError(f"RunPod Flash job failed: {status}", retryable=status == "TIMED_OUT", status_code=502, code=code)
+                code = _runpod_terminal_status_code(status)
+                raise TupleError(f"RunPod Flash job failed: {status}", retryable=True, status_code=502, code=code)
+            if status == "IN_QUEUE":
+                queue_seen_at = queue_seen_at or time.monotonic()
+                if time.monotonic() - queue_seen_at >= queue_limit:
+                    raise TupleError(
+                        "RunPod Flash queue saturated",
+                        retryable=True,
+                        status_code=503,
+                        code=ProviderErrorCode.PROVIDER_QUEUE_SATURATED,
+                    )
+            else:
+                queue_seen_at = None
             time.sleep(2.0)
-        raise TupleError("RunPod Flash polling timed out", retryable=True, status_code=504)
+        raise TupleError("RunPod Flash polling timed out", retryable=True, status_code=504, code=ProviderErrorCode.PROVIDER_POLL_TIMEOUT)
 
     def _headers(self) -> dict[str, str]:
         return {"authorization": f"Bearer {self.api_key}", "content-type": "application/json", "accept": "application/json"}

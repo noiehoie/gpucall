@@ -4,11 +4,13 @@ import asyncio
 import hashlib
 import hmac
 import json
+import os
 from datetime import datetime, timezone
 from time import monotonic
 from typing import Callable
 from uuid import uuid4
 
+from gpucall.admission import AdmissionController, AdmissionLease
 from gpucall.audit import AuditTrail, redacted_plan_for_audit
 from gpucall.artifacts import SQLiteArtifactRegistry
 from gpucall.domain import (
@@ -16,12 +18,14 @@ from gpucall.domain import (
     CompiledPlan,
     JobRecord,
     JobState,
+    ProviderErrorCode,
     TupleError,
     TupleObservation,
     TupleResult,
     ResponseFormatType,
 )
 from gpucall.execution.base import TupleAdapter, RemoteHandle
+from gpucall.provider_errors import is_provider_temporary_unavailable
 from gpucall.registry import ObservedRegistry
 
 
@@ -61,6 +65,9 @@ class Dispatcher:
         jobs: JobStore,
         tuple_costs: dict[str, float] | None = None,
         artifact_registry: SQLiteArtifactRegistry | None = None,
+        admission: AdmissionController | None = None,
+        on_async_success: Callable[[CompiledPlan], None] | None = None,
+        on_async_terminal_failure: Callable[[CompiledPlan], None] | None = None,
     ) -> None:
         self.adapters = adapters
         self.registry = registry
@@ -68,12 +75,20 @@ class Dispatcher:
         self.jobs = jobs
         self.tuple_costs = tuple_costs or {}
         self.artifact_registry = artifact_registry
+        self.admission = admission or AdmissionController()
+        self.on_async_success = on_async_success
+        self.on_async_terminal_failure = on_async_terminal_failure
         self._job_tasks: dict[str, asyncio.Task[None]] = {}
         self._job_plans: dict[str, CompiledPlan] = {}
 
     async def execute_sync(self, plan: CompiledPlan) -> TupleResult:
         self.audit.append("plan.accepted", redacted_plan_for_audit(plan))
         last_error: TupleError | None = None
+        workload_scope = _admission_workload_scope(plan)
+        started_attempts = 0
+        family_attempts: dict[str, int] = {}
+        max_fallback_attempts = _max_fallback_attempts()
+        max_family_attempts = _max_provider_family_attempts()
         for tuple in plan.tuple_chain:
             if not self.registry.is_available(tuple):
                 continue
@@ -82,9 +97,56 @@ class Dispatcher:
                 continue
             attempts = _output_validation_attempts(plan)
             for attempt in range(1, attempts + 1):
+                if max_fallback_attempts > 0 and started_attempts >= max_fallback_attempts:
+                    self.audit.append(
+                        "plan.fallback_exhausted",
+                        {"plan_id": plan.plan_id, "max_attempts": max_fallback_attempts},
+                    )
+                    break
+                family = self.admission.family_for(tuple)
+                if max_family_attempts > 0 and family_attempts.get(family, 0) >= max_family_attempts:
+                    self.audit.append(
+                        "tuple.admission_rejected",
+                        {
+                            "plan_id": plan.plan_id,
+                            "tuple": tuple,
+                            "reason": "provider_family_attempt_limit",
+                            "provider_family": family,
+                        },
+                    )
+                    last_error = TupleError(
+                        "provider family fallback attempt limit reached",
+                        retryable=True,
+                        status_code=503,
+                        code=ProviderErrorCode.PROVIDER_CAPACITY_UNAVAILABLE,
+                    )
+                    break
                 started = monotonic()
                 handle: RemoteHandle | None = None
+                admission_lease: AdmissionLease | None = None
                 try:
+                    decision = await self.admission.acquire(tuple, workload_scope=workload_scope)
+                    if not decision.allowed:
+                        self.audit.append(
+                            "tuple.admission_rejected",
+                            {
+                                "plan_id": plan.plan_id,
+                                "tuple": tuple,
+                                "reason": decision.reason,
+                                "workload_scope": workload_scope,
+                                "suppressed_until_seconds": decision.suppressed_until_seconds,
+                            },
+                        )
+                        last_error = TupleError(
+                            "tuple is temporarily unavailable due to runtime admission constraints",
+                            retryable=True,
+                            status_code=503,
+                            code=ProviderErrorCode.PROVIDER_CAPACITY_UNAVAILABLE,
+                        )
+                        break
+                    admission_lease = decision.lease
+                    started_attempts += 1
+                    family_attempts[family] = family_attempts.get(family, 0) + 1
                     _enforce_pre_execution_security_gate(plan)
                     handle = await adapter.start(plan)
                     self.audit.append(
@@ -125,22 +187,38 @@ class Dispatcher:
                     self.registry.record(
                         self._observation(tuple, started, success=False)
                     )
+                    is_provider_error = is_provider_temporary_unavailable(exc.code)
+                    if is_provider_error:
+                        await self.admission.suppress(tuple, code=exc.code)
+
+                    event_type = "tuple.provider_temporary_failure" if is_provider_error else "tuple.failed"
                     self.audit.append(
-                        "tuple.failed",
+                        event_type,
                         {"plan_id": plan.plan_id, "tuple": tuple, "error": _tuple_error_audit(exc)},
                     )
-                    if not exc.retryable:
+
+                    if not exc.retryable and not is_provider_error:
                         raise
                     break
                 except asyncio.TimeoutError as exc:
-                    last_error = TupleError("tuple timed out", retryable=True, status_code=504)
+                    last_error = TupleError(
+                        "tuple timed out",
+                        retryable=True,
+                        status_code=504,
+                        code=ProviderErrorCode.PROVIDER_POLL_TIMEOUT,
+                    )
                     self.registry.record(
                         self._observation(tuple, started, success=False)
                     )
                     self.audit.append("tuple.timeout", {"plan_id": plan.plan_id, "tuple": tuple})
                     break
                 except Exception as exc:
-                    last_error = TupleError("tuple raised unexpected exception", retryable=True, status_code=502)
+                    last_error = TupleError(
+                        "tuple raised unexpected exception",
+                        retryable=True,
+                        status_code=502,
+                        code=ProviderErrorCode.PROVIDER_ERROR,
+                    )
                     self.registry.record(
                         self._observation(tuple, started, success=False)
                     )
@@ -156,6 +234,7 @@ class Dispatcher:
                 finally:
                     if handle is not None:
                         await self._cleanup_remote(adapter, handle, plan_id=plan.plan_id, tuple=tuple, attempt=attempt)
+                    await self.admission.release(admission_lease)
         if last_error is not None:
             raise last_error
         raise TupleError("no tuple adapter available", retryable=False, status_code=503)
@@ -163,15 +242,67 @@ class Dispatcher:
     async def execute_stream(self, plan: CompiledPlan):
         self.audit.append("plan.accepted", redacted_plan_for_audit(plan))
         last_error: TupleError | None = None
+        workload_scope = _admission_workload_scope(plan)
+        started_attempts = 0
+        family_attempts: dict[str, int] = {}
+        max_fallback_attempts = _max_fallback_attempts()
+        max_family_attempts = _max_provider_family_attempts()
         for tuple in plan.tuple_chain:
             if not self.registry.is_available(tuple):
                 continue
             adapter = self.adapters.get(tuple)
             if adapter is None:
                 continue
+            if max_fallback_attempts > 0 and started_attempts >= max_fallback_attempts:
+                self.audit.append(
+                    "plan.fallback_exhausted",
+                    {"plan_id": plan.plan_id, "max_attempts": max_fallback_attempts},
+                )
+                break
+            family = self.admission.family_for(tuple)
+            if max_family_attempts > 0 and family_attempts.get(family, 0) >= max_family_attempts:
+                self.audit.append(
+                    "tuple.admission_rejected",
+                    {
+                        "plan_id": plan.plan_id,
+                        "tuple": tuple,
+                        "reason": "provider_family_attempt_limit",
+                        "provider_family": family,
+                    },
+                )
+                last_error = TupleError(
+                    "provider family fallback attempt limit reached",
+                    retryable=True,
+                    status_code=503,
+                    code=ProviderErrorCode.PROVIDER_CAPACITY_UNAVAILABLE,
+                )
+                continue
             started = monotonic()
             handle: RemoteHandle | None = None
+            admission_lease: AdmissionLease | None = None
             try:
+                decision = await self.admission.acquire(tuple, workload_scope=workload_scope)
+                if not decision.allowed:
+                    self.audit.append(
+                        "tuple.admission_rejected",
+                        {
+                            "plan_id": plan.plan_id,
+                            "tuple": tuple,
+                            "reason": decision.reason,
+                            "workload_scope": workload_scope,
+                            "suppressed_until_seconds": decision.suppressed_until_seconds,
+                        },
+                    )
+                    last_error = TupleError(
+                        "tuple is temporarily unavailable due to runtime admission constraints",
+                        retryable=True,
+                        status_code=503,
+                        code=ProviderErrorCode.PROVIDER_CAPACITY_UNAVAILABLE,
+                    )
+                    continue
+                admission_lease = decision.lease
+                started_attempts += 1
+                family_attempts[family] = family_attempts.get(family, 0) + 1
                 _enforce_pre_execution_security_gate(plan)
                 handle = await adapter.start(plan)
                 self.audit.append("lease.started", {**_lease_audit(handle), "plan_id": plan.plan_id, "tuple": tuple})
@@ -187,14 +318,25 @@ class Dispatcher:
                 self.registry.record(
                     self._observation(tuple, started, success=False)
                 )
+                is_provider_error = is_provider_temporary_unavailable(exc.code)
+                if is_provider_error:
+                    await self.admission.suppress(tuple, code=exc.code)
+
+                event_type = "tuple.provider_temporary_failure" if is_provider_error else "tuple.failed"
                 self.audit.append(
-                    "tuple.failed",
+                    event_type,
                     {"plan_id": plan.plan_id, "tuple": tuple, "error": _tuple_error_audit(exc)},
                 )
-                if not exc.retryable:
+
+                if not exc.retryable and not is_provider_error:
                     raise
             except Exception as exc:
-                last_error = TupleError("tuple raised unexpected exception", retryable=True, status_code=502)
+                last_error = TupleError(
+                    "tuple raised unexpected exception",
+                    retryable=True,
+                    status_code=502,
+                    code=ProviderErrorCode.PROVIDER_ERROR,
+                )
                 self.registry.record(
                     self._observation(tuple, started, success=False)
                 )
@@ -205,6 +347,7 @@ class Dispatcher:
             finally:
                 if handle is not None:
                     await self._cleanup_remote(adapter, handle, plan_id=plan.plan_id, tuple=tuple)
+                await self.admission.release(admission_lease)
         if last_error is not None:
             raise last_error
         raise TupleError("no tuple adapter available", retryable=False, status_code=503)
@@ -227,7 +370,7 @@ class Dispatcher:
         if attempt is not None:
             payload["attempt"] = attempt
         try:
-            await adapter.cancel_remote(handle)
+            await asyncio.wait_for(adapter.cancel_remote(handle), timeout=_remote_cleanup_timeout_seconds())
         except Exception as exc:
             self.audit.append("lease.cleanup_failed", {**payload, "error": _exception_audit(exc, retryable=True)})
             return
@@ -261,6 +404,7 @@ class Dispatcher:
             result_ref = result.ref
             await self.jobs.update(job_id, state=JobState.COMPLETED, result_ref=result_ref, result=result)
             self.audit.append("job.completed", {"job_id": job_id, "result_kind": result.kind})
+            self._commit_async_budget(plan)
         except asyncio.CancelledError:
             current = await self.jobs.get(job_id)
             if current is not None and current.state not in {
@@ -271,13 +415,43 @@ class Dispatcher:
             }:
                 await self.jobs.update(job_id, state=JobState.CANCELLED, error="job cancelled")
             self.audit.append("job.cancelled", {"job_id": job_id})
+            self._release_async_budget(plan)
             raise
         except TupleError as exc:
-            await self.jobs.update(job_id, state=JobState.FAILED, error=_job_error_message(exc), result=None)
+            provider_error_code = None
+            if exc.code:
+                try:
+                    provider_error_code = ProviderErrorCode(exc.code)
+                except ValueError:
+                    pass
+            await self.jobs.update(
+                job_id,
+                state=JobState.FAILED,
+                error=_job_error_message(exc),
+                result=None,
+                provider_error_code=provider_error_code,
+            )
             self.audit.append("job.failed", {"job_id": job_id, "error": _tuple_error_audit(exc)})
+            self._release_async_budget(plan)
         finally:
             self._job_tasks.pop(job_id, None)
             self._job_plans.pop(job_id, None)
+
+    def _release_async_budget(self, plan: CompiledPlan) -> None:
+        if self.on_async_terminal_failure is None:
+            return
+        try:
+            self.on_async_terminal_failure(plan)
+        except Exception as exc:
+            self.audit.append("job.budget_release_failed", {"plan_id": plan.plan_id, "error": _exception_audit(exc, retryable=True)})
+
+    def _commit_async_budget(self, plan: CompiledPlan) -> None:
+        if self.on_async_success is None:
+            return
+        try:
+            self.on_async_success(plan)
+        except Exception as exc:
+            self.audit.append("job.budget_commit_failed", {"plan_id": plan.plan_id, "error": _exception_audit(exc, retryable=True)})
 
 
 def _storage_safe_plan(plan: CompiledPlan) -> CompiledPlan:
@@ -330,6 +504,34 @@ def _requires_checked_inline_output(plan: CompiledPlan) -> bool:
 
 def _output_validation_attempts(plan: CompiledPlan) -> int:
     return max(int(getattr(plan, "output_validation_attempts", 1) or 1), 1)
+
+
+def _admission_workload_scope(plan: CompiledPlan) -> str:
+    intent = (
+        plan.metadata.get("intent")
+        or plan.metadata.get("task_family")
+        or plan.metadata.get("gpucall_intent")
+        or plan.recipe_name
+    )
+    return f"{plan.task}:{intent}:{plan.mode.value}"
+
+
+def _max_fallback_attempts() -> int:
+    return _env_non_negative_int("GPUCALL_MAX_FALLBACK_ATTEMPTS", 16)
+
+
+def _max_provider_family_attempts() -> int:
+    return _env_non_negative_int("GPUCALL_MAX_PROVIDER_FAMILY_ATTEMPTS", 4)
+
+
+def _env_non_negative_int(name: str, default: int) -> int:
+    raw = os.getenv(name)
+    if raw is None or not raw.strip():
+        return default
+    try:
+        return max(int(raw), 0)
+    except ValueError:
+        return default
 
 
 def _enforce_pre_execution_security_gate(plan: CompiledPlan) -> None:
@@ -542,6 +744,14 @@ def _tuple_error_audit(exc: TupleError) -> dict[str, object]:
         payload["raw_output_sha256"] = hashlib.sha256(exc.raw_output.encode("utf-8")).hexdigest()
         payload["raw_output_bytes"] = len(exc.raw_output.encode("utf-8"))
     return payload
+
+
+def _remote_cleanup_timeout_seconds() -> float:
+    raw = os.getenv("GPUCALL_REMOTE_CLEANUP_TIMEOUT_SECONDS", "30")
+    try:
+        return max(float(raw), 0.001)
+    except ValueError:
+        return 30.0
 
 
 def _exception_audit(exc: Exception, *, retryable: bool) -> dict[str, object]:

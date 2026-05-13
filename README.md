@@ -393,6 +393,45 @@ For Cloudflare R2 or S3-compatible buckets, configure lifecycle expiration for t
 
 Provider outages, remote capacity exhaustion, authentication failures, and provider-side queueing are outside the gateway SLA. The gateway records retryability, opens circuit breakers, and moves through the deterministic fallback chain.
 
+Provider-side temporary unavailability is first-class routing evidence, not an
+application error. When a tuple returns one of the provider temporary codes
+(`PROVIDER_RESOURCE_EXHAUSTED`, `PROVIDER_CAPACITY_UNAVAILABLE`,
+`PROVIDER_PROVISION_UNAVAILABLE`, `PROVIDER_QUEUE_SATURATED`,
+`PROVIDER_WORKER_INITIALIZING`, `PROVIDER_WORKER_THROTTLED`,
+`PROVIDER_TIMEOUT`, `PROVIDER_POLL_TIMEOUT`, `PROVIDER_JOB_FAILED`,
+`PROVIDER_CANCELLED`, `PROVIDER_UNHEALTHY`, `PROVIDER_BOOTING`,
+`PROVIDER_PREEMPTED`, `PROVIDER_MAINTENANCE`,
+`PROVIDER_UPSTREAM_UNAVAILABLE`, `PROVIDER_RATE_LIMITED`,
+`PROVIDER_QUOTA_EXCEEDED`, `PROVIDER_REGION_UNAVAILABLE`,
+`PROVIDER_IMAGE_PULL_DELAY`, `PROVIDER_MODEL_LOADING`,
+`PROVIDER_CONCURRENCY_LIMIT`, `PROVIDER_LEASE_EXPIRED`,
+`PROVIDER_STALE_JOB`, or `PROVIDER_ERROR`), gpucall treats the tuple as unable
+to continue this request, runs cleanup/cancel for the remote handle, records the
+failure in routing evidence, and immediately advances to the next eligible tuple
+in the deterministic chain. If every eligible tuple fails, the caller receives a
+redacted `failure_artifact` marked `provider_temporary_unavailable` with the
+provider code and fallback/cancel metadata.
+
+Static catalog eligibility and live executability are separate. A tuple can be
+valid for a recipe and still be unavailable right now because it is already
+running work, its provider family is cooling down after a temporary failure, or
+the workload scope has reached its configured concurrency limit. The gateway
+therefore applies admission control before every tuple start:
+
+- per tuple: `GPUCALL_TUPLE_CONCURRENCY_LIMIT`
+- per provider family: `GPUCALL_PROVIDER_FAMILY_CONCURRENCY_LIMIT`
+- per task/intent/mode workload scope: `GPUCALL_WORKLOAD_SCOPE_CONCURRENCY_LIMIT`
+- provider temporary cooldown: `GPUCALL_PROVIDER_TEMPORARY_COOLDOWN_SECONDS`
+- per-request fallback cap: `GPUCALL_MAX_FALLBACK_ATTEMPTS`
+- per-request provider-family attempt cap: `GPUCALL_MAX_PROVIDER_FAMILY_ATTEMPTS`
+
+`GET /readyz` only reports process readiness. Use
+`GET /v2/readiness/intents/{intent}` for production routing readiness: it
+reports static eligible tuples, live-ready tuples, live-blocked tuples,
+suppressed provider families, inflight counts, recommended mode, and caller
+action. That endpoint is the operator/caller coordination surface for "can this
+intent run now?" checks.
+
 ## Launch Checks
 
 ```bash

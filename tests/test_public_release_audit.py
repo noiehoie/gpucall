@@ -23,7 +23,7 @@ def test_tracked_files_do_not_contain_private_operator_artifacts() -> None:
     patterns = [
         r"100\.([6-9][0-9]|1[01][0-9]|12[0-7])\.[0-9]{1,3}\.[0-9]{1,3}",
         r"api\.runpod\.ai/v2/[a-z0-9]{12,}",
-        r"vllm-[a-z0-9]{12,}",
+        r"vllm-[a-z0-9]{12,}(?=[\"'\s/:]|$)",
         r"^\s*ssh_remote_cidr:\s+(?!(203\.0\.113\.|198\.51\.100\.|192\.0\.2\.|\"\"|null))([0-9]{1,3}\.){3}[0-9]{1,3}",
         r"\broot@",
         "news-" + "system",

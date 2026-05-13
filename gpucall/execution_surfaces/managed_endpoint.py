@@ -2,6 +2,8 @@ from __future__ import annotations
 
 
 from datetime import datetime, timezone
+import os
+import time
 from typing import Any
 from urllib.parse import urlparse
 
@@ -29,11 +31,32 @@ def json_or_error(response: Any, message: str) -> dict[str, Any]:
         data = response.json()
         return data if isinstance(data, dict) else {"output": data}
     retryable = response.status_code in {408, 409, 425, 429, 500, 502, 503, 504}
+    code = _provider_http_error_code(response.status_code, response.text)
     raise TupleError(
         f"{message}: {response.status_code}",
         retryable=retryable,
         status_code=502 if response.status_code >= 500 else response.status_code,
+        code=code,
     )
+
+
+def _provider_http_error_code(status_code: int, body: str | None = None) -> str | None:
+    lowered = (body or "").lower()
+    if status_code == 429:
+        if "quota" in lowered or "spend" in lowered or "limit" in lowered:
+            return "PROVIDER_QUOTA_EXCEEDED"
+        return "PROVIDER_RATE_LIMITED"
+    if status_code in {408, 504}:
+        return "PROVIDER_TIMEOUT"
+    if status_code in {409, 425}:
+        return "PROVIDER_CONCURRENCY_LIMIT"
+    if status_code in {502, 503}:
+        if "maintenance" in lowered:
+            return "PROVIDER_MAINTENANCE"
+        return "PROVIDER_UPSTREAM_UNAVAILABLE"
+    if status_code >= 500:
+        return "PROVIDER_UPSTREAM_UNAVAILABLE"
+    return None
 
 
 def runpod_endpoint_catalog_findings(tuples: list[Any], credentials: dict[str, dict[str, str]]) -> list[dict[str, Any]]:
@@ -201,12 +224,13 @@ class RunpodVllmServerlessAdapter(TupleAdapter):
             if not plan.input_refs:
                 raise TupleError("RunPod worker-vLLM openai-chat-completions contract requires compiled messages", retryable=True, status_code=502)
         health = self._health_sync()
-        if runpod_vllm_health_rejection_reason(health):
+        rejection_reason = runpod_vllm_health_rejection_reason(health)
+        if rejection_reason:
             raise TupleError(
-                "RunPod worker-vLLM endpoint is not ready: " + runpod_vllm_health_rejection_reason(health),
+                "RunPod worker-vLLM endpoint is not ready: " + rejection_reason,
                 retryable=True,
                 status_code=503,
-                code="PROVIDER_CAPACITY_UNAVAILABLE",
+                code=runpod_vllm_health_rejection_code(rejection_reason),
             )
         response = requests_session().post(
             f"{self.base_url}/{self.endpoint_id}/openai/v1/chat/completions",
@@ -320,6 +344,37 @@ def runpod_vllm_health_rejection_reason(health: dict[str, Any]) -> str | None:
     if throttled > 0:
         return "workers are throttled and no ready worker is available"
     return "no ready worker is available"
+
+
+def runpod_vllm_health_rejection_code(reason: str | None) -> str:
+    if reason is None:
+        return "PROVIDER_CAPACITY_UNAVAILABLE"
+    lowered = reason.lower()
+    if "unhealthy" in lowered:
+        return "PROVIDER_UNHEALTHY"
+    if "initializing" in lowered:
+        return "PROVIDER_WORKER_INITIALIZING"
+    if "throttled" in lowered:
+        return "PROVIDER_WORKER_THROTTLED"
+    return "PROVIDER_CAPACITY_UNAVAILABLE"
+
+
+def _runpod_terminal_status_code(status: str | None) -> str:
+    if status == "TIMED_OUT":
+        return "PROVIDER_TIMEOUT"
+    if status == "CANCELLED":
+        return "PROVIDER_CANCELLED"
+    return "PROVIDER_JOB_FAILED"
+
+
+def _queue_saturation_seconds(timeout_seconds: int | float) -> float:
+    raw = os.getenv("GPUCALL_PROVIDER_QUEUE_SATURATION_SECONDS")
+    if raw:
+        try:
+            return max(float(raw), 1.0)
+        except ValueError:
+            pass
+    return min(max(float(timeout_seconds) * 0.1, 10.0), 60.0)
 
 
 def runpod_vllm_config_findings(tuple: Any) -> list[str]:
@@ -503,8 +558,8 @@ class RunpodServerlessAdapter(TupleAdapter):
         data = json_or_error(response, "RunPod runsync failed")
         status = data.get("status")
         if status in {"FAILED", "CANCELLED", "TIMED_OUT"}:
-            code = "PROVIDER_TIMEOUT" if status == "TIMED_OUT" else "PROVIDER_JOB_FAILED"
-            raise TupleError(f"RunPod status: {status}", retryable=status == "TIMED_OUT", status_code=502, code=code)
+            code = _runpod_terminal_status_code(status)
+            raise TupleError(f"RunPod status: {status}", retryable=True, status_code=502, code=code)
         if "output" in data and status in {None, "COMPLETED"}:
             return {"job_id": str(data.get("id") or data.get("job_id") or f"runsync-{plan.plan_id}"), "completed_output": data["output"]}
         job_id = data.get("id") or data.get("job_id")
@@ -516,6 +571,8 @@ class RunpodServerlessAdapter(TupleAdapter):
         if "completed_output" in handle.meta:
             return gpucall_tuple_result(handle.meta["completed_output"])
         deadline = time.monotonic() + plan.timeout_seconds
+        queue_seen_at: float | None = None
+        queue_limit = _queue_saturation_seconds(plan.timeout_seconds)
         while time.monotonic() < deadline:
             response = requests_session().get(
                 f"{self.base_url}/{self.endpoint_id}/status/{handle.remote_id}",
@@ -527,9 +584,25 @@ class RunpodServerlessAdapter(TupleAdapter):
             if status == "COMPLETED":
                 return gpucall_tuple_result(data.get("output"))
             if status in {"FAILED", "CANCELLED", "TIMED_OUT"}:
-                raise TupleError(f"RunPod status: {status}", retryable=status == "TIMED_OUT", status_code=502)
+                raise TupleError(
+                    f"RunPod status: {status}",
+                    retryable=True,
+                    status_code=502,
+                    code=_runpod_terminal_status_code(status),
+                )
+            if status == "IN_QUEUE":
+                queue_seen_at = queue_seen_at or time.monotonic()
+                if time.monotonic() - queue_seen_at >= queue_limit:
+                    raise TupleError(
+                        "RunPod queue saturated",
+                        retryable=True,
+                        status_code=503,
+                        code="PROVIDER_QUEUE_SATURATED",
+                    )
+            else:
+                queue_seen_at = None
             time.sleep(self.poll_interval_seconds)
-        raise TupleError("RunPod polling timed out", retryable=True, status_code=504)
+        raise TupleError("RunPod polling timed out", retryable=True, status_code=504, code="PROVIDER_POLL_TIMEOUT")
 
     def _cancel_sync(self, job_id: str) -> None:
         response = requests_session().post(

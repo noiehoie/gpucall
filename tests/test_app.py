@@ -227,6 +227,22 @@ def test_readyz_is_minimal_and_details_report_recipe_and_provider_capacity(tmp_p
     assert payload["tuples"]["local-echo"]["max_model_len"] == 32768
 
 
+def test_intent_readiness_separates_static_eligible_from_live_blocked(tmp_path) -> None:
+    import asyncio
+
+    with TestClient(create_app(copy_config(tmp_path))) as client:
+        asyncio.run(client.app.state.runtime.dispatcher.admission.suppress("local-echo", code="PROVIDER_RESOURCE_EXHAUSTED"))
+        response = client.get("/v2/readiness/intents/standard_text_inference")
+
+    assert response.status_code == 200
+    recipe = response.json()["recipes"][0]
+    assert recipe["eligible_tuple_count"] == 1
+    assert recipe["live_ready_tuple_count"] == 0
+    assert recipe["live_blocked_tuples"][0]["tuple"] == "local-echo"
+    assert recipe["live_blocked_tuples"][0]["live_reason"] == "tuple_suppressed"
+    assert recipe["current_caller_action"] == "retry_later_or_contact_gpucall_admin"
+
+
 def test_runtime_state_uses_xdg_state_dir(tmp_path, monkeypatch) -> None:
     state_dir = tmp_path / "state"
     config_dir = copy_config(tmp_path)
@@ -1019,7 +1035,8 @@ def test_openai_chat_completions_facade_accepts_external_model_as_hint(tmp_path)
         )
 
     assert response.status_code == 200
-    assert response.json()["model"] == "gpt-4o-mini"
+    assert response.json()["model"] == "gpucall:auto"
+    assert response.json()["gpucall"]["requested_model"] == "gpt-4o-mini"
 
 
 def test_openai_chat_completions_promotes_metadata_intent_and_preserves_hints(tmp_path, monkeypatch) -> None:
@@ -1039,9 +1056,6 @@ def test_openai_chat_completions_promotes_metadata_intent_and_preserves_hints(tm
                 "messages": [{"role": "user", "content": "return json"}],
                 "response_format": {"type": "json_object"},
                 "metadata": {"task_family": "standard_text_inference", "caller": "editorial_checker"},
-                "top_p": 0.9,
-                "seed": 7,
-                "tools": [{"type": "function", "function": {"name": "noop"}}],
                 "ignored_by_gpucall": "kept-as-extra-key",
             },
         )
@@ -1051,10 +1065,40 @@ def test_openai_chat_completions_promotes_metadata_intent_and_preserves_hints(tm
     assert captured["metadata"]["task_family"] == "standard_text_inference"
     assert captured["metadata"]["intent"] == "standard_text_inference"
     assert captured["metadata"]["openai.model"] == "gpt-4o-mini"
-    assert captured["metadata"]["openai.top_p"] == "0.9"
-    assert captured["metadata"]["openai.seed"] == "7"
-    assert "openai.tools" in captured["metadata"]
     assert captured["metadata"]["openai.extra_keys"] == "ignored_by_gpucall"
+
+
+def test_openai_facade_rejects_unsupported_tool_calling_instead_of_ignoring(tmp_path) -> None:
+    with TestClient(create_app(copy_config(tmp_path))) as client:
+        response = client.post(
+            "/v1/chat/completions",
+            json={
+                "model": "gpt-4o-mini",
+                "messages": [{"role": "user", "content": "call tool"}],
+                "tools": [{"type": "function", "function": {"name": "noop"}}],
+            },
+        )
+
+    assert response.status_code == 400
+    assert response.json()["error"]["code"] == "unsupported_openai_field"
+    assert "tools" in response.json()["error"]["message"]
+
+
+def test_openai_facade_rejects_unsupported_sampling_fields_instead_of_ignoring(tmp_path) -> None:
+    with TestClient(create_app(copy_config(tmp_path))) as client:
+        response = client.post(
+            "/v1/chat/completions",
+            json={
+                "model": "gpt-4o-mini",
+                "messages": [{"role": "user", "content": "hello"}],
+                "top_p": 0.9,
+                "seed": 7,
+            },
+        )
+
+    assert response.status_code == 400
+    assert response.json()["error"]["code"] == "unsupported_openai_field"
+    assert "top_p" in response.json()["error"]["message"]
 
 
 def test_openai_chat_completions_accepts_openai_json_schema_wrapper(tmp_path, monkeypatch) -> None:
@@ -1103,7 +1147,28 @@ def test_openai_facade_prompt_does_not_add_user_prefix(tmp_path, monkeypatch) ->
     assert captured["prompt"] == "hello"
 
 
-def test_openai_facade_rejects_structured_message_content(tmp_path) -> None:
+def test_openai_facade_accepts_text_content_parts(tmp_path) -> None:
+    with TestClient(create_app(copy_config(tmp_path))) as client:
+        response = client.post(
+            "/v1/chat/completions",
+            json={
+                "model": "gpucall:auto",
+                "messages": [
+                    {
+                        "role": "user",
+                        "content": [
+                            {"type": "text", "text": "look"},
+                        ],
+                    }
+                ],
+            },
+        )
+
+    assert response.status_code == 200
+    assert response.json()["choices"][0]["message"]["content"] == "ok:infer:local-echo"
+
+
+def test_openai_facade_rejects_multimodal_content_parts(tmp_path) -> None:
     with TestClient(create_app(copy_config(tmp_path))) as client:
         response = client.post(
             "/v1/chat/completions",
@@ -1122,7 +1187,7 @@ def test_openai_facade_rejects_structured_message_content(tmp_path) -> None:
         )
 
     assert response.status_code == 400
-    assert "string message content only" in response.json()["detail"]
+    assert "DataRef APIs" in response.json()["detail"]
 
 
 def test_tuple_error_response_does_not_expose_internal_detail(tmp_path, monkeypatch) -> None:
@@ -1150,6 +1215,51 @@ def test_tuple_error_response_does_not_expose_internal_detail(tmp_path, monkeypa
     assert artifact["retryable"] is True
     assert artifact["caller_action"] == "retry_later"
     assert artifact["redaction_guarantee"]["tuple_raw_output_included"] is False
+
+
+def test_provider_temporary_failure_artifact_marks_fallback_and_cancel(tmp_path, monkeypatch) -> None:
+    async def fake_execute_sync(_plan):
+        from gpucall.domain import TupleError
+
+        raise TupleError(
+            "provider queue saturated",
+            retryable=True,
+            status_code=503,
+            code="PROVIDER_QUEUE_SATURATED",
+        )
+
+    with TestClient(create_app(copy_config(tmp_path))) as client:
+        monkeypatch.setattr(client.app.state.runtime.dispatcher, "execute_sync", fake_execute_sync)
+        response = client.post("/v2/tasks/sync", json={"task": "infer", "mode": "sync"})
+
+    assert response.status_code == 503
+    artifact = response.json()["failure_artifact"]
+    assert artifact["failure_kind"] == "provider_temporary_unavailable"
+    assert artifact["fallback_eligible"] is True
+    assert artifact["cancel_remote"] is True
+    assert artifact["provider_error_class"]["typical_state"] == "IN_QUEUE"
+
+
+def test_provider_quota_failure_artifact_is_not_blind_fallback(tmp_path, monkeypatch) -> None:
+    async def fake_execute_sync(_plan):
+        from gpucall.domain import TupleError
+
+        raise TupleError(
+            "provider quota exceeded",
+            retryable=True,
+            status_code=503,
+            code="PROVIDER_QUOTA_EXCEEDED",
+        )
+
+    with TestClient(create_app(copy_config(tmp_path))) as client:
+        monkeypatch.setattr(client.app.state.runtime.dispatcher, "execute_sync", fake_execute_sync)
+        response = client.post("/v2/tasks/sync", json={"task": "infer", "mode": "sync"})
+
+    assert response.status_code == 503
+    artifact = response.json()["failure_artifact"]
+    assert artifact["failure_kind"] == "provider_temporary_unavailable"
+    assert artifact["fallback_eligible"] is False
+    assert artifact["caller_action"] == "contact_gpucall_admin_or_use_a_different_provider_account"
 
 
 def test_tuple_error_response_does_not_expose_raw_output(tmp_path, monkeypatch) -> None:
@@ -1203,7 +1313,8 @@ def test_openai_validation_error_response_does_not_expose_message_content(tmp_pa
 
     assert response.status_code == 422
     assert "secret message content" not in response.text
-    assert all("input" not in error for error in response.json()["detail"])
+    assert response.json()["error"]["code"] == "invalid_request_error"
+    assert "detail" not in response.json()
 
 
 def test_async_failed_job_does_not_expose_raw_output(tmp_path, monkeypatch) -> None:

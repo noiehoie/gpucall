@@ -15,6 +15,7 @@ from fastapi.responses import JSONResponse
 
 from gpucall.compiler import GovernanceError
 from gpucall.domain import DataRef, PresignGetRequest, TaskRequest, TupleError
+from gpucall.provider_errors import provider_error_class
 from gpucall.routing import route_warning_tags
 from gpucall.sqlite_store import SQLiteIdempotencyStore
 from gpucall.tenant import TenantBudgetError, enforce_tenant_budget, tenant_identity
@@ -66,6 +67,11 @@ async def enforce_request_budget(runtime: Runtime, request: Request, plan: Any) 
 def refund_request_budget(runtime: Runtime, plan: Any | None) -> None:
     if plan is not None:
         runtime.tenant_usage.release_plan(getattr(plan, "plan_id", None))
+
+
+def commit_request_budget(runtime: Runtime, plan: Any | None) -> None:
+    if plan is not None:
+        runtime.tenant_usage.commit_plan(getattr(plan, "plan_id", None))
 
 
 def object_tenant_prefix(runtime: Runtime, request: Request) -> str | None:
@@ -216,21 +222,29 @@ def build_governance_failure_artifact(exc: GovernanceError, request: TaskRequest
 
 
 def build_provider_failure_artifact(exc: TupleError, request: TaskRequest | None = None) -> dict[str, Any]:
+    provider_class = provider_error_class(exc.code)
     artifact: dict[str, Any] = {
         "schema_version": 1,
         "failure_id": f"pf-{uuid4().hex}",
-        "failure_kind": "tuple_runtime",
+        "failure_kind": "provider_temporary_unavailable" if provider_class is not None else "tuple_runtime",
         "code": exc.code or "PROVIDER_ERROR",
         "status_code": exc.status_code,
         "message": public_tuple_error(exc),
         "retryable": exc.retryable,
+        "fallback_eligible": bool(provider_class.fallback_eligible) if provider_class is not None else exc.retryable,
+        "cancel_remote": bool(provider_class.cancel_remote) if provider_class is not None else exc.retryable,
         "recipe_request_recommended": False,
-        "caller_action": "retry_later" if exc.retryable else "contact_gpucall_admin",
+        "caller_action": provider_class.caller_action if provider_class is not None else ("retry_later" if exc.retryable else "contact_gpucall_admin"),
         "safe_request_summary": safe_request_summary(request),
         "capability_gap": None,
         "rejection_matrix": {},
         "redaction_guarantee": redaction_guarantee(),
     }
+    if provider_class is not None:
+        artifact["provider_error_class"] = {
+            "meaning": provider_class.meaning,
+            "typical_state": provider_class.typical_state,
+        }
     if exc.raw_output is not None and tuple_error_body_is_safe_for_artifact(exc):
         artifact["tuple_error_body_redacted"] = exc.raw_output
         artifact["tuple_error_body_sha256"] = hashlib.sha256(exc.raw_output.encode("utf-8")).hexdigest()
@@ -525,11 +539,13 @@ def public_plan_summary(plan: Any, tuples: dict[str, Any] | None = None) -> dict
     selected_tuple = chain[0] if chain else None
     selected_spec = tuples.get(selected_tuple) if tuples and selected_tuple else None
     attestations = getattr(plan, "attestations", {}) or {}
+    metadata = getattr(plan, "metadata", {}) or {}
     return {
         "recipe_name": getattr(plan, "recipe_name", None),
         "tuple_chain": chain,
         "selected_tuple": selected_tuple,
         "selected_tuple_model": getattr(selected_spec, "model", None) if selected_spec is not None else None,
+        "requested_model": metadata.get("openai.model"),
         "governance_hash": attestations.get("governance_hash"),
         "system_prompt_transform": attestations.get("system_prompt_transform"),
         "output_validation_attempts": getattr(plan, "output_validation_attempts", None),

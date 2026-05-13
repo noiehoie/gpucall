@@ -9,7 +9,7 @@ from uuid import uuid4
 
 import httpx
 
-from gpucall.domain import CompiledPlan, TupleError, TupleResult
+from gpucall.domain import CompiledPlan, ProviderErrorCode, TupleError, TupleResult
 from gpucall.execution.base import TupleAdapter, RemoteHandle
 from gpucall.execution.payloads import gpucall_tuple_result
 from gpucall.execution.payloads import openai_chat_completion_result
@@ -40,7 +40,12 @@ class EchoTuple(TupleAdapter):
 
     async def wait(self, handle: RemoteHandle, plan: CompiledPlan) -> TupleResult:
         if datetime.now(timezone.utc) >= handle.expires_at:
-            raise TupleError("lease expired before completion", retryable=True, status_code=504)
+            raise TupleError(
+                "lease expired before completion",
+                retryable=True,
+                status_code=504,
+                code=ProviderErrorCode.PROVIDER_LEASE_EXPIRED,
+            )
         await asyncio.sleep(self.latency_seconds)
         if handle.remote_id in self.cancelled:
             raise TupleError("remote execution cancelled", retryable=False, status_code=499)
@@ -116,12 +121,27 @@ class LocalOllamaAdapter(TupleAdapter):
         except TupleError:
             raise
         except httpx.ConnectError as exc:
-            raise TupleError("local Ollama is unavailable", retryable=True, status_code=503) from exc
+            raise TupleError(
+                "local Ollama is unavailable",
+                retryable=True,
+                status_code=503,
+                code=ProviderErrorCode.PROVIDER_UPSTREAM_UNAVAILABLE,
+            ) from exc
         except httpx.HTTPStatusError as exc:
             retryable = exc.response.status_code >= 500
-            raise TupleError(f"local Ollama failed: {exc.response.status_code}", retryable=retryable, status_code=502) from exc
+            raise TupleError(
+                f"local Ollama failed: {exc.response.status_code}",
+                retryable=retryable,
+                status_code=502,
+                code=ProviderErrorCode.PROVIDER_UPSTREAM_UNAVAILABLE if retryable else None,
+            ) from exc
         except httpx.TimeoutException as exc:
-            raise TupleError("local Ollama timed out", retryable=True, status_code=504) from exc
+            raise TupleError(
+                "local Ollama timed out",
+                retryable=True,
+                status_code=504,
+                code=ProviderErrorCode.PROVIDER_TIMEOUT,
+            ) from exc
 
     async def cancel_remote(self, handle: RemoteHandle) -> None:
         return None
@@ -205,12 +225,27 @@ class LocalOpenAICompatibleAdapter(TupleAdapter):
         except TupleError:
             raise
         except httpx.ConnectError as exc:
-            raise TupleError("local OpenAI-compatible server is unavailable", retryable=True, status_code=503) from exc
+            raise TupleError(
+                "local OpenAI-compatible server is unavailable",
+                retryable=True,
+                status_code=503,
+                code=ProviderErrorCode.PROVIDER_UPSTREAM_UNAVAILABLE,
+            ) from exc
         except httpx.HTTPStatusError as exc:
             retryable = exc.response.status_code >= 500
-            raise TupleError(f"local OpenAI-compatible server failed: {exc.response.status_code}", retryable=retryable, status_code=502) from exc
+            raise TupleError(
+                f"local OpenAI-compatible server failed: {exc.response.status_code}",
+                retryable=retryable,
+                status_code=502,
+                code=ProviderErrorCode.PROVIDER_UPSTREAM_UNAVAILABLE if retryable else None,
+            ) from exc
         except httpx.TimeoutException as exc:
-            raise TupleError("local OpenAI-compatible server timed out", retryable=True, status_code=504) from exc
+            raise TupleError(
+                "local OpenAI-compatible server timed out",
+                retryable=True,
+                status_code=504,
+                code=ProviderErrorCode.PROVIDER_TIMEOUT,
+            ) from exc
 
     async def stream(self, handle: RemoteHandle, plan: CompiledPlan):
         if plan.input_refs:
@@ -232,12 +267,27 @@ class LocalOpenAICompatibleAdapter(TupleAdapter):
         except TupleError:
             raise
         except httpx.ConnectError as exc:
-            raise TupleError("local OpenAI-compatible server is unavailable", retryable=True, status_code=503) from exc
+            raise TupleError(
+                "local OpenAI-compatible server is unavailable",
+                retryable=True,
+                status_code=503,
+                code=ProviderErrorCode.PROVIDER_UPSTREAM_UNAVAILABLE,
+            ) from exc
         except httpx.HTTPStatusError as exc:
             retryable = exc.response.status_code >= 500
-            raise TupleError(f"local OpenAI-compatible server failed: {exc.response.status_code}", retryable=retryable, status_code=502) from exc
+            raise TupleError(
+                f"local OpenAI-compatible server failed: {exc.response.status_code}",
+                retryable=retryable,
+                status_code=502,
+                code=ProviderErrorCode.PROVIDER_UPSTREAM_UNAVAILABLE if retryable else None,
+            ) from exc
         except httpx.TimeoutException as exc:
-            raise TupleError("local OpenAI-compatible server timed out", retryable=True, status_code=504) from exc
+            raise TupleError(
+                "local OpenAI-compatible server timed out",
+                retryable=True,
+                status_code=504,
+                code=ProviderErrorCode.PROVIDER_TIMEOUT,
+            ) from exc
 
     async def cancel_remote(self, handle: RemoteHandle) -> None:
         return None
@@ -340,12 +390,27 @@ class LocalDataRefOpenAIWorkerAdapter(TupleAdapter):
         except TupleError:
             raise
         except httpx.ConnectError as exc:
-            raise TupleError("local DataRef OpenAI worker is unavailable", retryable=True, status_code=503) from exc
+            raise TupleError(
+                "local DataRef OpenAI worker is unavailable",
+                retryable=True,
+                status_code=503,
+                code=ProviderErrorCode.PROVIDER_UPSTREAM_UNAVAILABLE,
+            ) from exc
         except httpx.HTTPStatusError as exc:
             retryable = exc.response.status_code >= 500
-            raise TupleError(f"local DataRef OpenAI worker failed: {exc.response.status_code}", retryable=retryable, status_code=502) from exc
+            raise TupleError(
+                f"local DataRef OpenAI worker failed: {exc.response.status_code}",
+                retryable=retryable,
+                status_code=502,
+                code=ProviderErrorCode.PROVIDER_UPSTREAM_UNAVAILABLE if retryable else None,
+            ) from exc
         except httpx.TimeoutException as exc:
-            raise TupleError("local DataRef OpenAI worker timed out", retryable=True, status_code=504) from exc
+            raise TupleError(
+                "local DataRef OpenAI worker timed out",
+                retryable=True,
+                status_code=504,
+                code=ProviderErrorCode.PROVIDER_TIMEOUT,
+            ) from exc
 
     async def cancel_remote(self, handle: RemoteHandle) -> None:
         return None
