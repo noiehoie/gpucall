@@ -1,8 +1,9 @@
 from __future__ import annotations
 
+import re
 from typing import Any
 
-from gpucall.domain import CompiledPlan, TupleResult
+from gpucall.domain import CompiledPlan, ResponseFormatType, TupleResult
 from gpucall.domain import TupleError
 
 
@@ -75,12 +76,35 @@ def openai_chat_payload_from_plan(
         "functions": plan.functions,
         "function_call": plan.function_call,
         "stream_options": plan.stream_options,
-        "response_format": plan.response_format.model_dump(mode="json") if plan.response_format is not None else None,
+        "response_format": _openai_response_format(plan) if plan.response_format is not None else None,
     }
     for key, value in optional.items():
         if value is not None:
             payload[key] = value
     return payload
+
+
+def _openai_response_format(plan: CompiledPlan) -> dict[str, Any]:
+    response_format = plan.response_format
+    if response_format is None:
+        raise TupleError("OpenAI response_format requested without response format", retryable=False, status_code=400)
+    if response_format.type is not ResponseFormatType.JSON_SCHEMA:
+        return response_format.model_dump(mode="json")
+    if response_format.json_schema is None:
+        raise TupleError("json_schema response_format requires schema", retryable=False, status_code=400)
+    return {
+        "type": "json_schema",
+        "json_schema": {
+            "name": _schema_name(plan.recipe_name),
+            "strict": bool(response_format.strict),
+            "schema": response_format.json_schema,
+        },
+    }
+
+
+def _schema_name(recipe_name: str) -> str:
+    name = re.sub(r"[^a-zA-Z0-9_-]+", "_", recipe_name).strip("_")
+    return name[:64] or "gpucall_response"
 
 
 def _openai_messages_from_plan(plan: CompiledPlan) -> list[dict[str, Any]]:

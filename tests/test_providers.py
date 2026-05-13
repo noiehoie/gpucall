@@ -11,7 +11,7 @@ import httpx
 import pytest
 import yaml
 
-from gpucall.domain import ChatMessage, CompiledPlan, DataRef, ExecutionMode, InlineValue, ExecutionTupleSpec, TupleError
+from gpucall.domain import ChatMessage, CompiledPlan, DataRef, ExecutionMode, InlineValue, ExecutionTupleSpec, ResponseFormat, ResponseFormatType, TupleError
 from gpucall.domain import ArtifactExportSpec, DataClassification
 from gpucall.execution_surfaces.iaas_vm import DEFAULT_HYPERSTACK_IMAGE, HyperstackAdapter
 from gpucall.execution import (
@@ -27,7 +27,7 @@ from gpucall.execution import (
     build_adapters,
 )
 from gpucall.execution.base import RemoteHandle
-from gpucall.execution.payloads import gpucall_tuple_result, openai_chat_completion_result, plan_payload
+from gpucall.execution.payloads import gpucall_tuple_result, openai_chat_completion_result, openai_chat_payload_from_plan, plan_payload
 from gpucall.execution_surfaces.function_runtime import RunpodVllmFlashBootAdapter
 from gpucall.execution_surfaces.managed_endpoint import RunpodServerlessAdapter
 from gpucall.execution_surfaces.managed_endpoint import (
@@ -429,6 +429,62 @@ async def test_local_openai_compatible_adapter_calls_chat_completions() -> None:
     assert body["messages"][0] == {"role": "system", "content": "Answer directly."}
     assert body["messages"][1] == {"role": "user", "content": "hello"}
     assert body["stream"] is False
+
+
+def test_openai_worker_payload_wraps_normalized_json_schema_response_format() -> None:
+    schema = {"type": "object", "required": ["articles"], "properties": {"articles": {"type": "array"}}}
+    plan = CompiledPlan(
+        policy_version="test",
+        recipe_name="vision-understand-document-image-draft",
+        task="vision",
+        mode=ExecutionMode.SYNC,
+        tuple_chain=["runpod-vllm"],
+        timeout_seconds=2,
+        lease_ttl_seconds=10,
+        token_estimation_profile="generic_utf8",
+        token_budget=100,
+        max_tokens=64,
+        temperature=0.0,
+        input_refs=[],
+        inline_inputs={"prompt": InlineValue(value="return json")},
+        response_format=ResponseFormat(
+            type=ResponseFormatType.JSON_SCHEMA,
+            json_schema={"name": "ignored_after_internal_normalization", "strict": False, "schema": schema},
+        ),
+    )
+
+    payload = openai_chat_payload_from_plan(plan, model="Qwen/Qwen2.5-VL-7B-Instruct", stream=False)
+
+    assert payload["response_format"] == {
+        "type": "json_schema",
+        "json_schema": {
+            "name": "vision-understand-document-image-draft",
+            "strict": False,
+            "schema": schema,
+        },
+    }
+
+
+def test_internal_worker_payload_keeps_normalized_json_schema_response_format() -> None:
+    schema = {"type": "object", "required": ["ok"], "properties": {"ok": {"type": "boolean"}}}
+    plan = CompiledPlan(
+        policy_version="test",
+        recipe_name="infer-extract-json-efficient",
+        task="infer",
+        mode=ExecutionMode.SYNC,
+        tuple_chain=["modal"],
+        timeout_seconds=2,
+        lease_ttl_seconds=10,
+        token_estimation_profile="generic_utf8",
+        token_budget=100,
+        input_refs=[],
+        inline_inputs={"prompt": InlineValue(value="return json")},
+        response_format=ResponseFormat(type=ResponseFormatType.JSON_SCHEMA, json_schema={"schema": schema, "strict": True}),
+    )
+
+    payload = plan_payload(plan)
+
+    assert payload["response_format"] == {"type": "json_schema", "json_schema": schema, "strict": True}
 
 
 @pytest.mark.asyncio

@@ -1,0 +1,39 @@
+name: infer-summarize-text-light
+recipe_schema_version: 3
+task: infer
+intent: summarize_text
+auto_select: true
+data_classification: confidential
+allowed_modes:
+- sync
+- async
+context_budget_tokens: 8192
+resource_class: light
+latency_class: standard
+quality_floor: standard
+timeout_seconds: 120
+lease_ttl_seconds: 180
+token_estimation_profile: generic_utf8
+max_input_bytes: 8388608
+allowed_mime_prefixes:
+- text/
+allowed_inline_mime_prefixes: []
+default_temperature: 0.7
+structured_temperature: 0.0
+structured_system_prompt: Return only valid JSON when response_format requests JSON.
+  Do not include markdown fences or prose.
+system_prompt: Summarize the supplied text according to the caller's instructions.
+stop_tokens:
+- <|im_end|>
+- <|endoftext|>
+repetition_penalty: 1.05
+guided_decoding: true
+output_validation_attempts: 1
+artifact_export: false
+requires_key_release: false
+required_model_capabilities:
+- summarization
+output_contract: plain-text
+expected_cold_start_seconds: 120
+cost_policy:
+  max_estimated_cost_usd: 2.0
