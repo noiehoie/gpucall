@@ -17,6 +17,14 @@ import httpx
 DEFAULT_AUTO_UPLOAD_THRESHOLD_BYTES = 8 * 1024
 DEFAULT_ASYNC_POLL_TIMEOUT_SECONDS = 600.0
 SUPPORTED_TASKS = {"infer", "vision", "transcribe", "convert", "train", "fine-tune", "split-infer"}
+TERMINAL_JOB_STATES = {
+    "SUCCEEDED",
+    "COMPLETED",
+    "FAILED",
+    "CANCELLED",
+    "EXPIRED",
+    "COMPLETED_AFTER_CALLER_TIMEOUT",
+}
 
 
 class GPUCallWarning(Warning):
@@ -314,7 +322,7 @@ class GPUCallClient:
             self._emit_warnings(response)
             self._raise_for_status(response)
             job = response.json()
-            if job["state"] in {"COMPLETED", "FAILED", "CANCELLED", "EXPIRED"}:
+            if job["state"] in TERMINAL_JOB_STATES:
                 return job
             time.sleep(interval)
         raise TimeoutError(f"job {job_id} did not finish within {timeout}s")
@@ -524,7 +532,7 @@ class AsyncGPUCallClient:
             _emit_warnings(response)
             _raise_for_status(response)
             job = response.json()
-            if job["state"] in {"COMPLETED", "FAILED", "CANCELLED", "EXPIRED"}:
+            if job["state"] in TERMINAL_JOB_STATES:
                 return job
             await _sleep(interval)
         raise TimeoutError(f"job {job_id} did not finish within {timeout}s")

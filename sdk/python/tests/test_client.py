@@ -384,6 +384,16 @@ def test_circuit_breaker_rejects_global_scope_and_async_poll_default_is_600s() -
     assert DEFAULT_ASYNC_POLL_TIMEOUT_SECONDS >= 600
 
 
+def test_poll_job_accepts_expanded_terminal_states() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.path == "/v2/jobs/job-1"
+        return httpx.Response(200, json={"job_id": "job-1", "state": "COMPLETED_AFTER_CALLER_TIMEOUT"})
+
+    client = GPUCallClient("http://gpucall.test", transport=httpx.MockTransport(handler))
+
+    assert client.poll_job("job-1")["state"] == "COMPLETED_AFTER_CALLER_TIMEOUT"
+
+
 async def test_async_upload_uses_clean_presigned_put_client(monkeypatch) -> None:
     seen_upload_auth = "not-called"
 
