@@ -1,0 +1,141 @@
+{
+  "gpucall_policy": {
+    "fail_closed_fields": [
+      "audio",
+      "logit_bias",
+      "logprobs",
+      "modalities",
+      "parallel_tool_calls",
+      "prediction",
+      "prompt_cache_key",
+      "prompt_cache_retention",
+      "reasoning_effort",
+      "safety_identifier",
+      "service_tier",
+      "store",
+      "top_logprobs",
+      "verbosity",
+      "web_search_options"
+    ],
+    "feature_gated_fields": [
+      "n",
+      "stream.response_format",
+      "stream_options.include_obfuscation",
+      "stream_options.include_usage"
+    ],
+    "supported_fields": [
+      "frequency_penalty",
+      "function_call",
+      "functions",
+      "max_completion_tokens",
+      "max_tokens",
+      "messages",
+      "metadata",
+      "model",
+      "n",
+      "presence_penalty",
+      "response_format",
+      "seed",
+      "stop",
+      "stream",
+      "stream_options",
+      "temperature",
+      "tool_choice",
+      "tools",
+      "top_p",
+      "user"
+    ]
+  },
+  "request": {
+    "fields": [
+      "audio",
+      "frequency_penalty",
+      "function_call",
+      "functions",
+      "logit_bias",
+      "logprobs",
+      "max_completion_tokens",
+      "max_tokens",
+      "messages",
+      "metadata",
+      "modalities",
+      "model",
+      "n",
+      "parallel_tool_calls",
+      "prediction",
+      "presence_penalty",
+      "prompt_cache_key",
+      "prompt_cache_retention",
+      "reasoning_effort",
+      "response_format",
+      "safety_identifier",
+      "seed",
+      "service_tier",
+      "stop",
+      "store",
+      "stream",
+      "stream_options",
+      "temperature",
+      "tool_choice",
+      "tools",
+      "top_logprobs",
+      "top_p",
+      "user",
+      "verbosity",
+      "web_search_options"
+    ],
+    "required": [
+      "messages",
+      "model"
+    ],
+    "schema": "CreateChatCompletionRequest"
+  },
+  "response": {
+    "fields": [
+      "choices",
+      "created",
+      "id",
+      "model",
+      "object",
+      "service_tier",
+      "system_fingerprint",
+      "usage"
+    ],
+    "required": [
+      "choices",
+      "created",
+      "id",
+      "model",
+      "object"
+    ],
+    "schema": "CreateChatCompletionResponse"
+  },
+  "source": {
+    "license": "MIT",
+    "name": "openai-openapi documented OpenAPI spec",
+    "operation_id": "createChatCompletion",
+    "path": "/chat/completions",
+    "spec_sha256": "5f70b1bac739d240b1c51e2e8c3e69734bf26f9110a1ba357c177bd05a2f573c",
+    "url": "https://app.stainless.com/api/spec/documented/openai/openapi.documented.yml"
+  },
+  "stream_response": {
+    "fields": [
+      "choices",
+      "created",
+      "id",
+      "model",
+      "object",
+      "service_tier",
+      "system_fingerprint",
+      "usage"
+    ],
+    "required": [
+      "choices",
+      "created",
+      "id",
+      "model",
+      "object"
+    ],
+    "schema": "CreateChatCompletionStreamResponse"
+  }
+}

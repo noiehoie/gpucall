@@ -14,6 +14,11 @@ from urllib.parse import urlsplit, urlunsplit
 
 import httpx
 
+from gpucall_sdk.openai_contract import (
+    OPENAI_CHAT_COMPLETIONS_FAIL_CLOSED_FIELDS,
+    OPENAI_CHAT_COMPLETIONS_FIELDS,
+)
+
 DEFAULT_AUTO_UPLOAD_THRESHOLD_BYTES = 8 * 1024
 DEFAULT_ASYNC_POLL_TIMEOUT_SECONDS = 600.0
 SUPPORTED_TASKS = {"infer", "vision", "transcribe", "convert", "train", "fine-tune", "split-infer"}
@@ -1004,8 +1009,16 @@ def _openai_metadata(
 
 
 def _reject_extra_openai_fields(extra: dict[str, Any]) -> None:
-    if extra:
-        fields = ", ".join(sorted(str(key) for key in extra))
+    unsupported: list[str] = []
+    for key in sorted(str(key) for key in extra):
+        if key in OPENAI_CHAT_COMPLETIONS_FAIL_CLOSED_FIELDS:
+            unsupported.append(key)
+        elif key in OPENAI_CHAT_COMPLETIONS_FIELDS:
+            unsupported.append(key)
+        else:
+            unsupported.append(f"unknown.{key}")
+    if unsupported:
+        fields = ", ".join(unsupported)
         raise GPUCallCallerRoutingError(f"unsupported OpenAI chat.completions fields: {fields}")
 
 

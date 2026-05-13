@@ -1236,6 +1236,41 @@ def test_openai_facade_rejects_unknown_openai_fields(tmp_path) -> None:
     assert "unknown.unknown_openai_field" in response.json()["error"]["message"]
 
 
+def test_openai_facade_rejects_official_but_unsupported_openai_fields_as_known(tmp_path) -> None:
+    with TestClient(create_app(copy_config(tmp_path))) as client:
+        response = client.post(
+            "/v1/chat/completions",
+            json={
+                "model": "gpt-4o-mini",
+                "messages": [{"role": "user", "content": "hello"}],
+                "modalities": ["text"],
+                "web_search_options": {},
+            },
+        )
+
+    assert response.status_code == 400
+    message = response.json()["error"]["message"]
+    assert "modalities" in message
+    assert "web_search_options" in message
+    assert "unknown.modalities" not in message
+    assert "unknown.web_search_options" not in message
+
+
+def test_openai_facade_rejects_empty_logit_bias(tmp_path) -> None:
+    with TestClient(create_app(copy_config(tmp_path))) as client:
+        response = client.post(
+            "/v1/chat/completions",
+            json={
+                "model": "gpt-4o-mini",
+                "messages": [{"role": "user", "content": "hello"}],
+                "logit_bias": {},
+            },
+        )
+
+    assert response.status_code == 400
+    assert "logit_bias" in response.json()["error"]["message"]
+
+
 def test_openai_facade_preserves_sampling_fields_in_plan(tmp_path, monkeypatch) -> None:
     captured = {}
 

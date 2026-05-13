@@ -2,6 +2,20 @@
 
 This file records the official execution contracts used by gpucall surfaces. It is not a substitute for billable live validation; it is the source map for code-level conformance tests.
 
+## OpenAI Chat Completions Contract
+
+- Vendored spec: `third_party/openai/openapi.documented.yml`
+- Source URL: `https://app.stainless.com/api/spec/documented/openai/openapi.documented.yml`
+- License: MIT, recorded in `third_party/openai/LICENSE`
+- Generated gateway contract: `gpucall/openai_contract/chat_completions.json`
+- Generated SDK contract: `sdk/python/gpucall_sdk/openai_contract/chat_completions.json`
+- Regeneration command: `uv run python scripts/generate_openai_contract.py`
+
+The generated contract is the source of truth for top-level Chat Completions
+request field classification. Hand-written gateway validation may narrow
+support, but it must not silently accept fields absent from the vendored OpenAI
+spec.
+
 ## Modal
 
 - Module: `gpucall.execution_surfaces.function_runtime`

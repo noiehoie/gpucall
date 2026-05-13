@@ -67,6 +67,11 @@ from gpucall.domain import PresignGetRequest, PresignGetResponse, PresignPutRequ
 from gpucall.object_store import ObjectStore
 from gpucall.execution.factory import build_adapters
 from gpucall.handoff import handoff_payload as _bootstrap_handoff_payload
+from gpucall.openai_contract import (
+    OPENAI_CHAT_COMPLETIONS_FAIL_CLOSED_FIELDS,
+    OPENAI_CHAT_COMPLETIONS_FIELDS,
+    OPENAI_CHAT_COMPLETIONS_FEATURE_GATED_FIELDS,
+)
 from gpucall.postgres_store import PostgresIdempotencyStore, PostgresJobStore
 from gpucall.readiness import build_readiness_report
 from gpucall.registry import ObservedRegistry
@@ -1062,7 +1067,13 @@ def _openai_response_model(requested_model: str, plan: Any, tuples: dict[str, An
 
 def _openai_unsupported_request_error(request: OpenAIChatCompletionRequest) -> JSONResponse | None:
     unsupported: list[str] = []
-    unsupported.extend(f"unknown.{key}" for key in sorted((request.model_extra or {}).keys()))
+    for key in sorted(str(key) for key in (request.model_extra or {}).keys()):
+        if key in OPENAI_CHAT_COMPLETIONS_FAIL_CLOSED_FIELDS:
+            unsupported.append(key)
+        elif key in OPENAI_CHAT_COMPLETIONS_FIELDS:
+            unsupported.append(key)
+        else:
+            unsupported.append(f"unknown.{key}")
     if request.n not in (None, 1):
         unsupported.append("n > 1")
     if (
@@ -1075,10 +1086,14 @@ def _openai_unsupported_request_error(request: OpenAIChatCompletionRequest) -> J
         unsupported.append("logprobs")
     if request.top_logprobs is not None:
         unsupported.append("top_logprobs")
-    if request.logit_bias:
+    if request.logit_bias is not None:
         unsupported.append("logit_bias")
     if request.stream_options:
-        allowed = {"include_usage", "include_obfuscation"}
+        allowed = {
+            str(field).removeprefix("stream_options.")
+            for field in OPENAI_CHAT_COMPLETIONS_FEATURE_GATED_FIELDS
+            if str(field).startswith("stream_options.")
+        }
         for key in sorted(str(key) for key in request.stream_options if str(key) not in allowed):
             unsupported.append(f"stream_options.{key}")
         if not request.stream:

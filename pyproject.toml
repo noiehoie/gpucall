@@ -24,6 +24,7 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = [
+  "openai>=2.0",
   "pytest>=8.2",
   "pytest-asyncio>=0.23",
 ]
@@ -57,7 +58,7 @@ gpucall-migrate = "gpucall.migrate:main"
 include = ["gpucall", "gpucall.*"]
 
 [tool.setuptools.package-data]
-gpucall = ["config_templates/**/*.yml", "config_templates/**/*.example"]
+gpucall = ["config_templates/**/*.yml", "config_templates/**/*.example", "openai_contract/*.json"]
 
 [tool.uv]
 package = true

@@ -123,6 +123,13 @@ def test_chat_completions_rejects_unknown_openai_fields() -> None:
         client.chat.completions.create(messages=[{"role": "user", "content": "hello"}], custom_openai_field=True)
 
 
+def test_chat_completions_classifies_official_unsupported_fields_as_known() -> None:
+    client = GPUCallClient("http://gpucall.test", transport=httpx.MockTransport(lambda request: httpx.Response(500)))
+
+    with pytest.raises(GPUCallCallerRoutingError, match=r"modalities"):
+        client.chat.completions.create(messages=[{"role": "user", "content": "hello"}], modalities=["text"])
+
+
 def test_chat_completions_rejects_unknown_message_fields() -> None:
     client = GPUCallClient("http://gpucall.test", transport=httpx.MockTransport(lambda request: httpx.Response(500)))
 

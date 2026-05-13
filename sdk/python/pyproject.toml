@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "gpucall-sdk"
-version = "2.0.14"
+version = "2.0.15"
 description = "Lightweight Python SDK for gpucall v2.0 Gateway"
 readme = "README.md"
 requires-python = ">=3.11"
@@ -23,6 +23,9 @@ gpucall-recipe-draft = "gpucall_recipe_draft.cli:main"
 
 [tool.setuptools.packages.find]
 include = ["gpucall_sdk*", "gpucall_recipe_draft*"]
+
+[tool.setuptools.package-data]
+gpucall_sdk = ["openai_contract/*.json"]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"

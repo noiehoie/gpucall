@@ -46,6 +46,19 @@ hints, stop sequences, `response_format`, `tools`, `tool_choice`, legacy
 uses an OpenAI-compatible worker contract. Non-text multimodal OpenAI message
 parts are rejected here; use the gpucall DataRef APIs for image/file inputs.
 
+The top-level Chat Completions request field contract is generated from the
+vendored official OpenAI OpenAPI specification at
+`third_party/openai/openapi.documented.yml`. Regenerate the gateway and SDK
+snapshots with:
+
+```bash
+uv run python scripts/generate_openai_contract.py
+```
+
+The generated contract classifies every official request field as supported,
+feature-gated, or fail-closed. Unknown fields are rejected as unknown; official
+but unsupported fields are rejected by their official field name.
+
 The v2.0 facade still fails closed for unsupported OpenAI fields instead of
 silently dropping them. In particular, `n > 1`, `logprobs`, `top_logprobs`,
 `logit_bias`, `stream_options.include_usage`, `stream_options.include_obfuscation`,
