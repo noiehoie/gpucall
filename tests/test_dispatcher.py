@@ -7,6 +7,7 @@ from datetime import datetime, timedelta, timezone
 import pytest
 
 from gpucall.audit import AuditTrail
+from gpucall.admission import AdmissionController
 from gpucall.artifacts import SQLiteArtifactRegistry
 from gpucall.dispatcher import Dispatcher, JobStore, _storage_safe_plan
 from gpucall.domain import (
@@ -234,6 +235,40 @@ async def test_provider_temporary_failure_suppresses_tuple_for_later_plans(tmp_p
     assert second.value == "ok:infer:good"
     assert len(bad.cancelled_handles) == 1
     assert '"reason":"tuple_suppressed"' in (tmp_path / "audit.jsonl").read_text(encoding="utf-8")
+
+
+@pytest.mark.asyncio
+async def test_capacity_failure_does_not_suppress_provider_family(monkeypatch) -> None:
+    monkeypatch.setenv("GPUCALL_PROVIDER_TEMPORARY_COOLDOWN_SECONDS", "60")
+    admission = AdmissionController(cooldown_seconds=60)
+    admission.tuple_families = {"modal-a": "modal:function_runtime:modal", "modal-b": "modal:function_runtime:modal"}
+
+    await admission.suppress("modal-a", code="PROVIDER_RESOURCE_EXHAUSTED", suppress_family=False)
+
+    first = await admission.acquire("modal-a")
+    second = await admission.acquire("modal-b")
+
+    assert first.allowed is False
+    assert first.reason == "tuple_suppressed"
+    assert second.allowed is True
+    await admission.release(second.lease)
+
+
+@pytest.mark.asyncio
+async def test_upstream_failure_suppresses_provider_family(monkeypatch) -> None:
+    monkeypatch.setenv("GPUCALL_PROVIDER_TEMPORARY_COOLDOWN_SECONDS", "60")
+    admission = AdmissionController(cooldown_seconds=60)
+    admission.tuple_families = {"modal-a": "modal:function_runtime:modal", "modal-b": "modal:function_runtime:modal"}
+
+    await admission.suppress("modal-a", code="PROVIDER_UPSTREAM_UNAVAILABLE", suppress_family=True)
+
+    first = await admission.acquire("modal-a")
+    second = await admission.acquire("modal-b")
+
+    assert first.allowed is False
+    assert first.reason == "tuple_suppressed"
+    assert second.allowed is False
+    assert second.reason == "provider_family_suppressed"
 
 
 @pytest.mark.asyncio

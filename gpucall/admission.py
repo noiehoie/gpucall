@@ -104,12 +104,13 @@ class AdmissionController:
             if lease.workload_scope:
                 _decrement(self._workload_scope_inflight, lease.workload_scope)
 
-    async def suppress(self, tuple_name: str, *, code: str | None = None) -> None:
+    async def suppress(self, tuple_name: str, *, code: str | None = None, suppress_family: bool = False) -> None:
         family = self.family_for(tuple_name)
         until = monotonic() + self.cooldown_seconds
         async with self._lock:
             self._tuple_suppressed_until[tuple_name] = max(self._tuple_suppressed_until.get(tuple_name, 0.0), until)
-            self._family_suppressed_until[family] = max(self._family_suppressed_until.get(family, 0.0), until)
+            if suppress_family:
+                self._family_suppressed_until[family] = max(self._family_suppressed_until.get(family, 0.0), until)
 
     def family_for(self, tuple_name: str) -> str:
         return self.tuple_families.get(tuple_name, tuple_name)
@@ -235,14 +236,17 @@ class PostgresAdmissionController(AdmissionController):
             cur.execute("DELETE FROM gpucall_admission_leases WHERE lease_id = %s", (lease_id,))
         self._conn.commit()
 
-    async def suppress(self, tuple_name: str, *, code: str | None = None) -> None:
-        await asyncio.to_thread(self._suppress_sync, tuple_name, code)
+    async def suppress(self, tuple_name: str, *, code: str | None = None, suppress_family: bool = False) -> None:
+        await asyncio.to_thread(self._suppress_sync, tuple_name, code, suppress_family)
 
-    def _suppress_sync(self, tuple_name: str, code: str | None) -> None:
+    def _suppress_sync(self, tuple_name: str, code: str | None, suppress_family: bool) -> None:
         family = self.family_for(tuple_name)
         until = datetime.now(timezone.utc) + timedelta(seconds=self.cooldown_seconds)
+        rows = [("tuple", tuple_name)]
+        if suppress_family:
+            rows.append(("family", family))
         with self._thread_lock, self._conn.cursor() as cur:
-            for kind, key in (("tuple", tuple_name), ("family", family)):
+            for kind, key in rows:
                 cur.execute(
                     """
                     INSERT INTO gpucall_admission_suppression(kind, key, suppressed_until, code)

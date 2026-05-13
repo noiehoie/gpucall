@@ -25,7 +25,7 @@ from gpucall.domain import (
     ResponseFormatType,
 )
 from gpucall.execution.base import TupleAdapter, RemoteHandle
-from gpucall.provider_errors import is_provider_temporary_unavailable
+from gpucall.provider_errors import is_provider_temporary_unavailable, should_suppress_provider_family
 from gpucall.registry import ObservedRegistry
 
 
@@ -189,7 +189,11 @@ class Dispatcher:
                     )
                     is_provider_error = is_provider_temporary_unavailable(exc.code)
                     if is_provider_error:
-                        await self.admission.suppress(tuple, code=exc.code)
+                        await self.admission.suppress(
+                            tuple,
+                            code=exc.code,
+                            suppress_family=should_suppress_provider_family(exc.code),
+                        )
 
                     event_type = "tuple.provider_temporary_failure" if is_provider_error else "tuple.failed"
                     self.audit.append(
@@ -320,7 +324,11 @@ class Dispatcher:
                 )
                 is_provider_error = is_provider_temporary_unavailable(exc.code)
                 if is_provider_error:
-                    await self.admission.suppress(tuple, code=exc.code)
+                    await self.admission.suppress(
+                        tuple,
+                        code=exc.code,
+                        suppress_family=should_suppress_provider_family(exc.code),
+                    )
 
                 event_type = "tuple.provider_temporary_failure" if is_provider_error else "tuple.failed"
                 self.audit.append(

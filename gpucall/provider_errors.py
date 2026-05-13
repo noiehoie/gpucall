@@ -13,6 +13,7 @@ class ProviderErrorClass:
     fallback_eligible: bool = True
     cancel_remote: bool = True
     caller_action: str = "retry_later_or_wait_for_gpucall_fallback"
+    suppress_provider_family: bool = False
 
 
 PROVIDER_TEMPORARY_UNAVAILABLE_ERRORS: dict[str, ProviderErrorClass] = {
@@ -38,15 +39,26 @@ PROVIDER_TEMPORARY_UNAVAILABLE_ERRORS: dict[str, ProviderErrorClass] = {
         ProviderErrorClass("PROVIDER_UNHEALTHY", "provider worker health is unhealthy", "unhealthy"),
         ProviderErrorClass("PROVIDER_BOOTING", "endpoint, pod, or container is booting", "starting/booting"),
         ProviderErrorClass("PROVIDER_PREEMPTED", "spot or provider host preempted the job", "preempted/terminated"),
-        ProviderErrorClass("PROVIDER_MAINTENANCE", "provider surface is in maintenance", "503/maintenance"),
-        ProviderErrorClass("PROVIDER_UPSTREAM_UNAVAILABLE", "provider API, queue engine, or control plane is unavailable", "502/503"),
-        ProviderErrorClass("PROVIDER_RATE_LIMITED", "provider API rate limit was reached", "429"),
+        ProviderErrorClass(
+            "PROVIDER_MAINTENANCE",
+            "provider surface is in maintenance",
+            "503/maintenance",
+            suppress_provider_family=True,
+        ),
+        ProviderErrorClass(
+            "PROVIDER_UPSTREAM_UNAVAILABLE",
+            "provider API, queue engine, or control plane is unavailable",
+            "502/503",
+            suppress_provider_family=True,
+        ),
+        ProviderErrorClass("PROVIDER_RATE_LIMITED", "provider API rate limit was reached", "429", suppress_provider_family=True),
         ProviderErrorClass(
             "PROVIDER_QUOTA_EXCEEDED",
             "provider account quota, spend, or service limit was reached",
             "403/429",
             fallback_eligible=False,
             caller_action="contact_gpucall_admin_or_use_a_different_provider_account",
+            suppress_provider_family=True,
         ),
         ProviderErrorClass("PROVIDER_REGION_UNAVAILABLE", "requested provider region or zone has no usable GPU", "409/503"),
         ProviderErrorClass("PROVIDER_IMAGE_PULL_DELAY", "image or container pull is delaying startup", "initializing/timeout"),
@@ -72,3 +84,8 @@ def is_provider_temporary_unavailable(code: str | None) -> bool:
 
 def provider_error_class(code: str | None) -> ProviderErrorClass | None:
     return PROVIDER_TEMPORARY_UNAVAILABLE_ERRORS.get(code or "PROVIDER_ERROR")
+
+
+def should_suppress_provider_family(code: str | None) -> bool:
+    provider_class = provider_error_class(code)
+    return bool(provider_class and provider_class.suppress_provider_family)
