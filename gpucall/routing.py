@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import math
 import os
 
@@ -40,15 +41,48 @@ def token_budget(request: TaskRequest, policy: Policy) -> int | None:
 def required_model_len(request: TaskRequest, recipe: Recipe, policy: Policy) -> int:
     output_budget = token_budget(request, policy) or 0
     inline_bytes = sum(len(item.value.encode("utf-8")) for item in request.inline_inputs.values())
-    message_bytes = sum(len(message.content.encode("utf-8")) for message in request.messages)
+    message_bytes = sum(_chat_message_bytes(message) for message in request.messages)
+    openai_control_bytes = _message_bytes(
+        {
+            key: value
+            for key, value in {
+                "tools": request.tools,
+                "tool_choice": request.tool_choice,
+                "functions": request.functions,
+                "function_call": request.function_call,
+                "stream_options": request.stream_options,
+            }.items()
+            if value is not None
+        }
+    )
     if recipe.task == "vision":
         image_refs = [ref for ref in request.input_refs if str(ref.content_type or "").startswith("image/")]
         non_image_bytes = sum(int(ref.bytes or 0) for ref in request.input_refs if ref not in image_refs)
-        estimated_input_tokens = math.ceil((inline_bytes + message_bytes + non_image_bytes) * float(policy.tokenizer_safety_multiplier))
+        estimated_input_tokens = math.ceil((inline_bytes + message_bytes + openai_control_bytes + non_image_bytes) * float(policy.tokenizer_safety_multiplier))
         return max(1, estimated_input_tokens + (256 * len(image_refs)) + output_budget)
     ref_bytes = sum(int(ref.bytes or 0) for ref in request.input_refs)
-    estimated_input_tokens = math.ceil((inline_bytes + message_bytes + ref_bytes) * float(policy.tokenizer_safety_multiplier))
+    estimated_input_tokens = math.ceil((inline_bytes + message_bytes + openai_control_bytes + ref_bytes) * float(policy.tokenizer_safety_multiplier))
     return max(1, estimated_input_tokens + output_budget)
+
+
+def _message_bytes(content: object) -> int:
+    if isinstance(content, str):
+        return len(content.encode("utf-8"))
+    if content is None:
+        return 0
+    if isinstance(content, dict) and not content:
+        return 0
+    return len(json.dumps(content, sort_keys=True, separators=(",", ":")).encode("utf-8"))
+
+
+def _chat_message_bytes(message: object) -> int:
+    if hasattr(message, "model_dump"):
+        payload = message.model_dump(mode="json", exclude_none=True)
+    elif isinstance(message, dict):
+        payload = {key: value for key, value in message.items() if value is not None}
+    else:
+        return _message_bytes(getattr(message, "content", None))
+    return len(json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8"))
 
 
 def requested_output_contract(request: TaskRequest, recipe: Recipe) -> str | None:
@@ -59,6 +93,15 @@ def requested_output_contract(request: TaskRequest, recipe: Recipe) -> str | Non
     if request.response_format.type is ResponseFormatType.JSON_SCHEMA:
         return "json_schema"
     return recipe.output_contract
+
+
+def requires_openai_chat_contract(request: TaskRequest) -> bool:
+    if request.tools or request.tool_choice is not None or request.functions or request.function_call is not None:
+        return True
+    for message in request.messages:
+        if message.tool_calls or message.tool_call_id or message.function_call or message.role in {"tool", "function"}:
+            return True
+    return False
 
 
 def is_production_route_candidate(
@@ -113,6 +156,7 @@ def tuple_route_rejection_reason(
     required_len: int | None = None,
     required_input_contracts: set[str] | None = None,
     required_output_contract: str | None = None,
+    require_openai_chat_contract: bool = False,
     auto_selected: bool = True,
     require_auto_select: bool = False,
     allow_fake: bool | None = None,
@@ -125,6 +169,16 @@ def tuple_route_rejection_reason(
         if route_reason is not None:
             return route_reason
     input_contracts = set(tuple.input_contracts)
+    if require_openai_chat_contract:
+        descriptor = adapter_descriptor(tuple)
+        contracts = {
+            tuple.endpoint_contract,
+            tuple.output_contract,
+            descriptor.endpoint_contract if descriptor is not None else None,
+            descriptor.output_contract if descriptor is not None else None,
+        }
+        if "openai-chat-completions" not in contracts:
+            return "tuple does not declare OpenAI chat completions tool/function contract"
     if required_input_contracts and input_contracts:
         missing = required_input_contracts - input_contracts
         if missing:

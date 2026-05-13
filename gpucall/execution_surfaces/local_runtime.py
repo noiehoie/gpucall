@@ -302,17 +302,49 @@ class LocalOpenAICompatibleAdapter(TupleAdapter):
             payload["max_tokens"] = plan.max_tokens
         if plan.temperature is not None:
             payload["temperature"] = plan.temperature
+        if plan.top_p is not None:
+            payload["top_p"] = plan.top_p
+        if plan.seed is not None:
+            payload["seed"] = plan.seed
+        if plan.presence_penalty is not None:
+            payload["presence_penalty"] = plan.presence_penalty
+        if plan.frequency_penalty is not None:
+            payload["frequency_penalty"] = plan.frequency_penalty
+        if plan.stop_tokens:
+            payload["stop"] = plan.stop_tokens
+        if plan.tools:
+            payload["tools"] = plan.tools
+        if plan.tool_choice:
+            payload["tool_choice"] = plan.tool_choice
+        if plan.functions:
+            payload["functions"] = plan.functions
+        if plan.function_call:
+            payload["function_call"] = plan.function_call
+        if plan.stream_options:
+            payload["stream_options"] = plan.stream_options
         if plan.response_format is not None:
             payload["response_format"] = plan.response_format.model_dump(mode="json")
         return payload
 
-    def _messages_from_plan(self, plan: CompiledPlan) -> list[dict[str, str]]:
-        messages: list[dict[str, str]] = []
+    def _messages_from_plan(self, plan: CompiledPlan) -> list[dict[str, Any]]:
+        messages: list[dict[str, Any]] = []
         has_system_message = any(message.role == "system" for message in plan.messages)
         if plan.system_prompt and not has_system_message:
             messages.append({"role": "system", "content": plan.system_prompt})
         if plan.messages:
-            messages.extend({"role": message.role, "content": message.content} for message in plan.messages)
+            for message in plan.messages:
+                m: dict[str, Any] = {"role": message.role}
+                if message.content is not None:
+                    m["content"] = message.content
+                if message.name is not None:
+                    m["name"] = message.name
+                if message.tool_calls is not None:
+                    m["tool_calls"] = message.tool_calls
+                if message.tool_call_id is not None:
+                    m["tool_call_id"] = message.tool_call_id
+                if message.function_call is not None:
+                    m["function_call"] = message.function_call
+                messages.append(m)
         elif "prompt" in plan.inline_inputs:
             messages.append({"role": "user", "content": plan.inline_inputs["prompt"].value})
         elif plan.inline_inputs:

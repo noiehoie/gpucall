@@ -40,8 +40,18 @@ Structured output validation is returned in:
 X-GPUCall-Output-Validated: true
 ```
 
-`stream: true`, tools, function calling, and Anthropic-compatible `/v1/messages`
-are not part of the v2.0 MVP.
+The facade preserves standard chat roles, text-only content parts, sampling
+hints, stop sequences, `response_format`, `tools`, `tool_choice`, legacy
+`functions` / `function_call`, and backend `tool_calls` when the selected tuple
+uses an OpenAI-compatible worker contract. Non-text multimodal OpenAI message
+parts are rejected here; use the gpucall DataRef APIs for image/file inputs.
+
+The v2.0 facade still fails closed for unsupported OpenAI fields instead of
+silently dropping them. In particular, `n > 1`, `logprobs`, `top_logprobs`,
+`logit_bias`, `stream_options.include_usage`, `stream_options.include_obfuscation`,
+and `stream + response_format` are rejected until the gateway can return a
+truthful compatible contract. Anthropic-compatible `/v1/messages` is not part of
+the v2.0 MVP.
 
 ## Level 2: gpucall Python SDK
 

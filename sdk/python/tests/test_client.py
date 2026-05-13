@@ -90,13 +90,23 @@ def test_chat_completions_sends_intent_and_openai_hints_as_metadata() -> None:
         messages=[{"role": "user", "content": "return json"}],
         task_family="extract_json",
         top_p=0.9,
+        stop=["<stop>"],
         seed=7,
+        presence_penalty=0.25,
+        frequency_penalty=0.5,
         tools=[{"type": "function", "function": {"name": "noop"}}],
-        custom_openai_field=True,
+        tool_choice="auto",
     )
 
     assert sent_payload["task"] == "infer"
     assert sent_payload["intent"] == "extract_json"
+    assert sent_payload["top_p"] == 0.9
+    assert sent_payload["stop"] == ["<stop>"]
+    assert sent_payload["seed"] == 7
+    assert sent_payload["presence_penalty"] == 0.25
+    assert sent_payload["frequency_penalty"] == 0.5
+    assert sent_payload["tools"] == [{"type": "function", "function": {"name": "noop"}}]
+    assert sent_payload["tool_choice"] == "auto"
     assert "recipe" not in sent_payload
     assert "requested_tuple" not in sent_payload
     assert sent_payload["metadata"]["task_family"] == "extract_json"
@@ -104,7 +114,27 @@ def test_chat_completions_sends_intent_and_openai_hints_as_metadata() -> None:
     assert sent_payload["metadata"]["openai.top_p"] == "0.9"
     assert sent_payload["metadata"]["openai.seed"] == "7"
     assert "openai.tools" in sent_payload["metadata"]
-    assert sent_payload["metadata"]["openai.extra_keys"] == "custom_openai_field"
+
+
+def test_chat_completions_rejects_unknown_openai_fields() -> None:
+    client = GPUCallClient("http://gpucall.test", transport=httpx.MockTransport(lambda request: httpx.Response(500)))
+
+    with pytest.raises(GPUCallCallerRoutingError, match="unsupported OpenAI"):
+        client.chat.completions.create(messages=[{"role": "user", "content": "hello"}], custom_openai_field=True)
+
+
+def test_chat_completions_rejects_unknown_message_fields() -> None:
+    client = GPUCallClient("http://gpucall.test", transport=httpx.MockTransport(lambda request: httpx.Response(500)))
+
+    with pytest.raises(GPUCallCallerRoutingError, match="unsupported OpenAI message fields"):
+        client.chat.completions.create(messages=[{"role": "user", "contnet": "typo"}])
+
+
+def test_chat_completions_rejects_user_message_without_content() -> None:
+    client = GPUCallClient("http://gpucall.test", transport=httpx.MockTransport(lambda request: httpx.Response(500)))
+
+    with pytest.raises(GPUCallCallerRoutingError, match="message content is required"):
+        client.chat.completions.create(messages=[{"role": "user"}])
 
 
 def test_vision_sends_vision_task_with_intent() -> None:
@@ -151,18 +181,114 @@ def test_sdk_rejects_intent_name_as_task() -> None:
         client.infer(task="extract_json", messages=[{"role": "user", "content": "json"}])
 
 
-def test_chat_completions_rejects_structured_message_content_without_flattening() -> None:
+def test_chat_completions_accepts_text_content_parts() -> None:
+    sent_payload = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal sent_payload
+        sent_payload = json.loads(request.read())
+        return httpx.Response(200, json={"result": {"kind": "inline", "value": "ok"}})
+
+    client = GPUCallClient("http://gpucall.test", transport=httpx.MockTransport(handler))
+
+    client.chat.completions.create(messages=[{"role": "user", "content": [{"type": "text", "text": "look"}]}])
+
+    assert sent_payload["messages"] == [{"role": "user", "content": "look"}]
+
+
+def test_chat_completions_preserves_empty_and_tool_call_messages() -> None:
+    sent_payload = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal sent_payload
+        sent_payload = json.loads(request.read())
+        return httpx.Response(200, json={"result": {"kind": "inline", "value": "ok"}})
+
+    client = GPUCallClient("http://gpucall.test", transport=httpx.MockTransport(handler))
+
+    client.chat.completions.create(
+        messages=[
+            {"role": "user", "content": ""},
+            {
+                "role": "assistant",
+                "content": None,
+                "tool_calls": [{"id": "call_1", "type": "function", "function": {"name": "noop", "arguments": "{}"}}],
+            },
+            {"role": "tool", "tool_call_id": "call_1", "content": "{}"},
+        ]
+    )
+
+    assert sent_payload["messages"] == [
+        {"role": "user", "content": ""},
+        {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [{"id": "call_1", "type": "function", "function": {"name": "noop", "arguments": "{}"}}],
+        },
+        {"role": "tool", "content": "{}", "tool_call_id": "call_1"},
+    ]
+
+
+def test_chat_completions_accepts_tool_calls_only_response() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={
+                "result": {
+                    "kind": "inline",
+                    "value": None,
+                    "tool_calls": [{"id": "call_1", "type": "function", "function": {"name": "noop", "arguments": "{}"}}],
+                    "finish_reason": "tool_calls",
+                }
+            },
+        )
+
+    client = GPUCallClient("http://gpucall.test", transport=httpx.MockTransport(handler))
+
+    response = client.chat.completions.create(messages=[{"role": "user", "content": "call tool"}])
+
+    assert response["choices"][0]["finish_reason"] == "tool_calls"
+    assert response["choices"][0]["message"]["content"] is None
+    assert response["choices"][0]["message"]["tool_calls"][0]["function"]["name"] == "noop"
+
+
+def test_chat_completions_accepts_legacy_function_call_response() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={
+                "result": {
+                    "kind": "inline",
+                    "value": None,
+                    "function_call": {"name": "legacy_noop", "arguments": "{}"},
+                }
+            },
+        )
+
+    client = GPUCallClient("http://gpucall.test", transport=httpx.MockTransport(handler))
+
+    response = client.chat.completions.create(messages=[{"role": "user", "content": "call function"}])
+
+    assert response["choices"][0]["finish_reason"] == "function_call"
+    assert response["choices"][0]["message"]["content"] is None
+    assert response["choices"][0]["message"]["function_call"]["name"] == "legacy_noop"
+
+
+def test_chat_completions_rejects_multimodal_message_content() -> None:
     client = GPUCallClient("http://gpucall.test", transport=httpx.MockTransport(lambda request: httpx.Response(500)))
 
-    for content in (
-        [
-            {"type": "text", "text": "look"},
-            {"type": "image_url", "image_url": {"url": "data:image/png;base64,AAAA"}},
-        ],
-        {"type": "text", "text": "look"},
-    ):
-        with pytest.raises(GPUCallCallerRoutingError, match="structured or multimodal"):
-            client.chat.completions.create(messages=[{"role": "user", "content": content}])
+    with pytest.raises(GPUCallCallerRoutingError, match="structured or multimodal"):
+        client.chat.completions.create(
+            messages=[
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": "look"},
+                        {"type": "image_url", "image_url": {"url": "data:image/png;base64,AAAA"}},
+                    ],
+                }
+            ]
+        )
 
 
 def test_chat_completions_rejects_legacy_structured_message_content() -> None:

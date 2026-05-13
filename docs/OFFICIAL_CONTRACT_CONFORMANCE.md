@@ -37,7 +37,7 @@ This file records the official execution contracts used by gpucall surfaces. It 
   - Base URL: `https://api.runpod.ai/v2/<endpoint_id>/openai/v1`
   - Chat route: `POST /chat/completions`
   - `Authorization: Bearer <RUNPOD_API_KEY>`
-  - OpenAI-compatible `model`, `messages`, `stream`, `temperature`, `max_tokens`, and `response_format` payload fields
+  - OpenAI-compatible `model`, `messages`, `stream`, `temperature`, `max_tokens`, `top_p`, `stop`, `seed`, penalty, `response_format`, `tools`, `tool_choice`, `functions`, and `function_call` payload fields
 
 ## RunPod FlashBoot
 

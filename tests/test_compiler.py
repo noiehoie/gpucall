@@ -162,7 +162,7 @@ def test_compiler_preserves_chat_messages_and_recipe_generation_contract() -> No
         )
     )
 
-    assert [message.model_dump() for message in plan.messages] == [
+    assert [message.model_dump(exclude_none=True) for message in plan.messages] == [
         {"role": "system", "content": "Return JSON only."},
         {"role": "system", "content": "caller sys"},
         {"role": "user", "content": "hello"},
@@ -178,6 +178,50 @@ def test_compiler_preserves_chat_messages_and_recipe_generation_contract() -> No
     assert snapshot["structured_system_prompt"]["redacted"] is True
     assert "Answer directly." not in str(snapshot)
     assert "Return JSON only." not in str(snapshot)
+
+
+def test_compiler_counts_tool_calls_in_context_estimate() -> None:
+    compiler = build_compiler()
+    compiler.recipes["r1"] = compiler.recipes["r1"].model_copy(update={"context_budget_tokens": 1000})
+    compiler.tuples = {
+        name: spec.model_copy(
+            update={
+                "max_model_len": 1000,
+                "endpoint_contract": "openai-chat-completions",
+                "output_contract": "openai-chat-completions",
+            }
+        )
+        for name, spec in compiler.tuples.items()
+    }
+    base = compiler.compile(
+        TaskRequest(
+            task="infer",
+            mode="sync",
+            messages=[{"role": "user", "content": "hello"}],
+        )
+    )
+    with_tool_call = compiler.compile(
+        TaskRequest(
+            task="infer",
+            mode="sync",
+            messages=[
+                {"role": "user", "content": "hello"},
+                {
+                    "role": "assistant",
+                    "content": None,
+                    "tool_calls": [
+                        {
+                            "id": "call_1",
+                            "type": "function",
+                            "function": {"name": "lookup", "arguments": "{\"query\":\"long context accounting\"}"},
+                        }
+                    ],
+                },
+            ],
+        )
+    )
+
+    assert with_tool_call.attestations["context_estimate"]["required_model_len"] > base.attestations["context_estimate"]["required_model_len"]
 
 
 def test_compiler_auto_selects_smallest_capable_recipe_for_weight() -> None:
@@ -562,13 +606,17 @@ def test_compiler_carries_generation_params_into_plan() -> None:
     assert plan.temperature == 0.0
 
 
-def test_compiler_rejects_response_format_for_stream_mode() -> None:
+def test_compiler_rejects_response_format_for_stream_mode_until_validated_streaming_exists() -> None:
     compiler = build_compiler()
     recipe = compiler.recipes["r1"].model_copy(update={"allowed_modes": [ExecutionMode.STREAM]})
     compiler.recipes = {"r1": recipe}
+    compiler.tuples = {
+        name: spec.model_copy(update={"modes": [ExecutionMode.STREAM], "stream_target": "app:stream", "stream_contract": "token-incremental"})
+        for name, spec in compiler.tuples.items()
+    }
     request = TaskRequest(task="infer", mode="stream", recipe="r1", response_format={"type": "json_object"})
 
-    with pytest.raises(GovernanceError, match="response_format"):
+    with pytest.raises(GovernanceError, match="response_format is not supported for stream mode"):
         compiler.compile(request)
 
 

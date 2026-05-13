@@ -26,7 +26,7 @@ from gpucall.domain import ChatMessage, ResponseFormatType
 from gpucall.execution.contracts import account_ref_for_spec
 from gpucall.price_freshness import tuple_configured_price_freshness
 from gpucall.registry import ObservedRegistry
-from gpucall.routing import classification_rank, is_production_route_candidate, requested_output_contract, tuple_route_rejection_reason, required_model_len, token_budget
+from gpucall.routing import classification_rank, is_production_route_candidate, requested_output_contract, requires_openai_chat_contract, tuple_route_rejection_reason, required_model_len, token_budget
 from gpucall.targeting import is_configured_target
 
 
@@ -98,6 +98,13 @@ class GovernanceCompiler:
             compiled_temperature = recipe.structured_temperature if structured else recipe.default_temperature
         effective_system_prompt = recipe.structured_system_prompt if structured and recipe.structured_system_prompt else recipe.system_prompt
         compiled_messages = self._compiled_messages(request, effective_system_prompt)
+
+        compiled_stop_tokens = list(recipe.stop_tokens)
+        if isinstance(request.stop, str):
+            compiled_stop_tokens.append(request.stop)
+        elif isinstance(request.stop, list):
+            compiled_stop_tokens.extend(str(s) for s in request.stop)
+
         plan = CompiledPlan(
             policy_version=self.policy.version,
             recipe_name=recipe.name,
@@ -111,6 +118,15 @@ class GovernanceCompiler:
             token_budget=compiled_token_budget,
             max_tokens=request.max_tokens,
             temperature=compiled_temperature,
+            top_p=request.top_p,
+            seed=request.seed,
+            presence_penalty=request.presence_penalty,
+            frequency_penalty=request.frequency_penalty,
+            tools=request.tools,
+            tool_choice=request.tool_choice,
+            functions=request.functions,
+            function_call=request.function_call,
+            stream_options=request.stream_options,
             input_refs=request.input_refs,
             inline_inputs=request.inline_inputs,
             messages=compiled_messages,
@@ -119,7 +135,7 @@ class GovernanceCompiler:
             artifact_export=request.artifact_export,
             split_learning=request.split_learning,
             system_prompt=effective_system_prompt,
-            stop_tokens=recipe.stop_tokens,
+            stop_tokens=compiled_stop_tokens,
             repetition_penalty=recipe.repetition_penalty,
             guided_decoding=recipe.guided_decoding,
             output_validation_attempts=recipe.output_validation_attempts,
@@ -243,7 +259,7 @@ class GovernanceCompiler:
         if request.mode not in recipe.allowed_modes:
             raise GovernanceError(f"mode {request.mode} is not allowed for recipe {recipe.name}")
         if request.mode is ExecutionMode.STREAM and request.response_format is not None:
-            raise GovernanceError("response_format is not supported for stream mode in v2.0 MVP")
+            raise GovernanceError("response_format is not supported for stream mode until streaming output validation is available")
         if request.messages and (request.inline_inputs or request.input_refs):
             raise GovernanceError("messages cannot be combined with inline_inputs or input_refs in v2.0")
         if recipe.task == "vision" and not _has_image_ref(request):
@@ -388,6 +404,7 @@ class GovernanceCompiler:
                 required_len=self._required_model_len(request, recipe),
                 required_input_contracts=self._required_input_contracts(request),
                 required_output_contract=requested_output_contract(request, recipe),
+                require_openai_chat_contract=requires_openai_chat_contract(request),
                 auto_selected=auto_selected,
             )
             if reason is not None:
@@ -417,6 +434,7 @@ class GovernanceCompiler:
                 required_len=self._required_model_len(request, recipe),
                 required_input_contracts=self._required_input_contracts(request),
                 required_output_contract=requested_output_contract(request, recipe),
+                require_openai_chat_contract=requires_openai_chat_contract(request),
                 auto_selected=auto_selected,
             )
             if reason is None and not self.registry.is_available(name):

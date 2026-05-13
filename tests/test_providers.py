@@ -27,7 +27,7 @@ from gpucall.execution import (
     build_adapters,
 )
 from gpucall.execution.base import RemoteHandle
-from gpucall.execution.payloads import gpucall_tuple_result, plan_payload
+from gpucall.execution.payloads import gpucall_tuple_result, openai_chat_completion_result, plan_payload
 from gpucall.execution_surfaces.function_runtime import RunpodVllmFlashBootAdapter
 from gpucall.execution_surfaces.managed_endpoint import RunpodServerlessAdapter
 from gpucall.execution_surfaces.managed_endpoint import (
@@ -69,6 +69,37 @@ def test_router_core_does_not_hardcode_builtin_tuple_implementations() -> None:
                 offenders.append(f"{path.relative_to(root)}:{token}")
 
     assert offenders == []
+
+
+def test_openai_chat_completion_result_preserves_finish_reason_and_function_calls() -> None:
+    result = openai_chat_completion_result(
+        {
+            "choices": [
+                {
+                    "finish_reason": "function_call",
+                    "message": {"role": "assistant", "content": None, "function_call": {"name": "noop", "arguments": "{}"}},
+                }
+            ]
+        }
+    )
+
+    assert result.value is None
+    assert result.function_call == {"name": "noop", "arguments": "{}"}
+    assert result.finish_reason == "function_call"
+
+
+def test_openai_chat_completion_result_rejects_malformed_tool_call() -> None:
+    with pytest.raises(TupleError, match="invalid tool_calls"):
+        openai_chat_completion_result(
+            {
+                "choices": [
+                    {
+                        "finish_reason": "tool_calls",
+                        "message": {"role": "assistant", "content": None, "tool_calls": [{"type": "function"}]},
+                    }
+                ]
+            }
+        )
 
 
 def test_provider_contract_modules_are_separated_and_sourced() -> None:

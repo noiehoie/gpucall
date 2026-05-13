@@ -19,6 +19,15 @@ def plan_payload(plan: CompiledPlan) -> dict[str, Any]:
         "token_budget": plan.token_budget,
         "max_tokens": plan.max_tokens,
         "temperature": plan.temperature,
+        "top_p": plan.top_p,
+        "seed": plan.seed,
+        "presence_penalty": plan.presence_penalty,
+        "frequency_penalty": plan.frequency_penalty,
+        "tools": plan.tools,
+        "tool_choice": plan.tool_choice,
+        "functions": plan.functions,
+        "function_call": plan.function_call,
+        "stream_options": plan.stream_options,
         "input_refs": [ref.model_dump(mode="json") for ref in plan.input_refs],
         "inline_inputs": {key: value.model_dump(mode="json") for key, value in plan.inline_inputs.items()},
         "messages": [message.model_dump(mode="json") for message in plan.messages],
@@ -65,14 +74,43 @@ def openai_chat_completion_result(value: Any) -> TupleResult:
     first = choices[0]
     if not isinstance(first, dict):
         raise TupleError("OpenAI-compatible response has invalid choice", retryable=True, status_code=502)
+    finish_reason = first.get("finish_reason")
+    if finish_reason is not None and not isinstance(finish_reason, str):
+        raise TupleError("OpenAI-compatible response has invalid finish_reason", retryable=True, status_code=502)
     message = first.get("message")
     content: Any = None
+    tool_calls: Any = None
+    function_call: Any = None
     if isinstance(message, dict):
         content = message.get("content")
-    if not isinstance(content, str):
-        raise TupleError("OpenAI-compatible response missing assistant content", retryable=True, status_code=502)
+        tool_calls = message.get("tool_calls")
+        function_call = message.get("function_call")
+    if content is not None and not isinstance(content, str):
+        raise TupleError("OpenAI-compatible response has non-string assistant content", retryable=True, status_code=502)
+    if tool_calls is not None and not isinstance(tool_calls, list):
+        raise TupleError("OpenAI-compatible response has invalid tool_calls", retryable=True, status_code=502)
+    if isinstance(tool_calls, list):
+        for item in tool_calls:
+            if not _is_openai_tool_call(item):
+                raise TupleError("OpenAI-compatible response has invalid tool_calls", retryable=True, status_code=502)
+    if function_call is not None and not isinstance(function_call, dict):
+        raise TupleError("OpenAI-compatible response has invalid function_call", retryable=True, status_code=502)
+    if content is None and not tool_calls and not function_call:
+        raise TupleError("OpenAI-compatible response missing assistant content, tool_calls, or function_call", retryable=True, status_code=502)
+
     usage: dict[str, int] = {}
     raw_usage = value.get("usage")
     if isinstance(raw_usage, dict):
         usage = {str(k): v for k, v in raw_usage.items() if isinstance(v, int) and not isinstance(v, bool)}
-    return TupleResult(kind="inline", value=content, usage=usage)
+    return TupleResult(kind="inline", value=content, usage=usage, tool_calls=tool_calls, function_call=function_call, finish_reason=finish_reason)
+
+
+def _is_openai_tool_call(value: Any) -> bool:
+    if not isinstance(value, dict):
+        return False
+    if not isinstance(value.get("id"), str) or not isinstance(value.get("type"), str):
+        return False
+    function = value.get("function")
+    if not isinstance(function, dict):
+        return False
+    return isinstance(function.get("name"), str) and isinstance(function.get("arguments"), str)

@@ -1065,7 +1065,6 @@ def test_openai_chat_completions_promotes_metadata_intent_and_preserves_hints(tm
                 "messages": [{"role": "user", "content": "return json"}],
                 "response_format": {"type": "json_object"},
                 "metadata": {"task_family": "standard_text_inference", "caller": "editorial_checker"},
-                "ignored_by_gpucall": "kept-as-extra-key",
             },
         )
 
@@ -1074,10 +1073,124 @@ def test_openai_chat_completions_promotes_metadata_intent_and_preserves_hints(tm
     assert captured["metadata"]["task_family"] == "standard_text_inference"
     assert captured["metadata"]["intent"] == "standard_text_inference"
     assert captured["metadata"]["openai.model"] == "gpt-4o-mini"
-    assert captured["metadata"]["openai.extra_keys"] == "ignored_by_gpucall"
 
 
-def test_openai_facade_rejects_unsupported_tool_calling_instead_of_ignoring(tmp_path) -> None:
+def test_openai_facade_preserves_developer_role(tmp_path, monkeypatch) -> None:
+    captured = {}
+
+    async def fake_execute_sync(plan):
+        captured["roles"] = [message.role for message in plan.messages]
+        return TupleResult(kind="inline", value="ok")
+
+    with TestClient(create_app(copy_config(tmp_path))) as client:
+        monkeypatch.setattr(client.app.state.runtime.dispatcher, "execute_sync", fake_execute_sync)
+        response = client.post(
+            "/v1/chat/completions",
+            json={
+                "model": "gpt-4o-mini",
+                "messages": [
+                    {"role": "developer", "content": "follow policy"},
+                    {"role": "user", "content": "hello"},
+                ],
+            },
+        )
+
+    assert response.status_code == 200
+    assert captured["roles"][-2:] == ["developer", "user"]
+
+
+def test_openai_facade_rejects_conflicting_max_token_fields(tmp_path) -> None:
+    with TestClient(create_app(copy_config(tmp_path))) as client:
+        response = client.post(
+            "/v1/chat/completions",
+            json={
+                "model": "gpt-4o-mini",
+                "messages": [{"role": "user", "content": "hello"}],
+                "max_tokens": 32,
+                "max_completion_tokens": 64,
+            },
+        )
+
+    assert response.status_code == 400
+    assert "max_tokens and max_completion_tokens conflict" in response.json()["error"]["message"]
+
+
+def test_openai_facade_preserves_advisory_tool_fields(tmp_path, monkeypatch) -> None:
+    captured = {}
+
+    async def fake_execute_sync(plan):
+        captured["tools"] = plan.tools
+        captured["tool_choice"] = plan.tool_choice
+        captured["metadata"] = plan.metadata
+        return TupleResult(kind="inline", value="ok")
+
+    config_dir = copy_config(tmp_path)
+    worker_path = config_dir / "workers" / "local-echo.yml"
+    worker = yaml.safe_load(worker_path.read_text(encoding="utf-8"))
+    worker["endpoint_contract"] = "openai-chat-completions"
+    worker["output_contract"] = "openai-chat-completions"
+    worker_path.write_text(yaml.safe_dump(worker, sort_keys=False), encoding="utf-8")
+
+    with TestClient(create_app(config_dir)) as client:
+        monkeypatch.setattr(client.app.state.runtime.dispatcher, "execute_sync", fake_execute_sync)
+        response = client.post(
+            "/v1/chat/completions",
+            json={
+                "model": "gpt-4o-mini",
+                "messages": [{"role": "user", "content": "call tool"}],
+                "tools": [{"type": "function", "function": {"name": "noop"}}],
+                "tool_choice": "auto",
+            },
+        )
+
+    assert response.status_code == 200
+    assert captured["tools"] == [{"type": "function", "function": {"name": "noop"}}]
+    assert captured["tool_choice"] == "auto"
+    assert captured["metadata"]["openai.tools"] == '[{"function":{"name":"noop"},"type":"function"}]'
+    assert captured["metadata"]["openai.tool_choice"] == "auto"
+
+
+def test_openai_facade_surfaces_backend_tool_calls(tmp_path, monkeypatch) -> None:
+    async def fake_execute_sync(_plan):
+        return TupleResult(
+            kind="inline",
+            value=None,
+            tool_calls=[
+                {
+                    "id": "call_1",
+                    "type": "function",
+                    "function": {"name": "noop", "arguments": "{}"},
+                }
+            ],
+        )
+
+    config_dir = copy_config(tmp_path)
+    worker_path = config_dir / "workers" / "local-echo.yml"
+    worker = yaml.safe_load(worker_path.read_text(encoding="utf-8"))
+    worker["endpoint_contract"] = "openai-chat-completions"
+    worker["output_contract"] = "openai-chat-completions"
+    worker_path.write_text(yaml.safe_dump(worker, sort_keys=False), encoding="utf-8")
+
+    with TestClient(create_app(config_dir)) as client:
+        monkeypatch.setattr(client.app.state.runtime.dispatcher, "execute_sync", fake_execute_sync)
+        response = client.post(
+            "/v1/chat/completions",
+            json={
+                "model": "gpt-4o-mini",
+                "messages": [{"role": "user", "content": "call tool"}],
+                "tools": [{"type": "function", "function": {"name": "noop"}}],
+                "tool_choice": "required",
+            },
+        )
+
+    payload = response.json()
+    assert response.status_code == 200
+    assert payload["choices"][0]["finish_reason"] == "tool_calls"
+    assert payload["choices"][0]["message"]["content"] is None
+    assert payload["choices"][0]["message"]["tool_calls"][0]["function"]["name"] == "noop"
+
+
+def test_openai_facade_rejects_tools_when_no_tuple_declares_openai_chat_contract(tmp_path) -> None:
     with TestClient(create_app(copy_config(tmp_path))) as client:
         response = client.post(
             "/v1/chat/completions",
@@ -1085,16 +1198,57 @@ def test_openai_facade_rejects_unsupported_tool_calling_instead_of_ignoring(tmp_
                 "model": "gpt-4o-mini",
                 "messages": [{"role": "user", "content": "call tool"}],
                 "tools": [{"type": "function", "function": {"name": "noop"}}],
+                "tool_choice": "required",
+            },
+        )
+
+    assert response.status_code == 503
+    assert "OpenAI chat completions tool/function contract" in response.text
+
+
+def test_openai_facade_rejects_message_without_content_or_tool_call(tmp_path) -> None:
+    with TestClient(create_app(copy_config(tmp_path))) as client:
+        response = client.post(
+            "/v1/chat/completions",
+            json={
+                "model": "gpt-4o-mini",
+                "messages": [{"role": "user", "contnet": "typo"}],
+            },
+        )
+
+    assert response.status_code == 422
+    assert response.json()["error"]["code"] == "invalid_request_error"
+
+
+def test_openai_facade_rejects_unknown_openai_fields(tmp_path) -> None:
+    with TestClient(create_app(copy_config(tmp_path))) as client:
+        response = client.post(
+            "/v1/chat/completions",
+            json={
+                "model": "gpt-4o-mini",
+                "messages": [{"role": "user", "content": "hello"}],
+                "unknown_openai_field": True,
             },
         )
 
     assert response.status_code == 400
     assert response.json()["error"]["code"] == "unsupported_openai_field"
-    assert "tools" in response.json()["error"]["message"]
+    assert "unknown.unknown_openai_field" in response.json()["error"]["message"]
 
 
-def test_openai_facade_rejects_unsupported_sampling_fields_instead_of_ignoring(tmp_path) -> None:
+def test_openai_facade_preserves_sampling_fields_in_plan(tmp_path, monkeypatch) -> None:
+    captured = {}
+
+    async def fake_execute_sync(plan):
+        captured["top_p"] = plan.top_p
+        captured["seed"] = plan.seed
+        captured["presence_penalty"] = plan.presence_penalty
+        captured["frequency_penalty"] = plan.frequency_penalty
+        captured["stop_tokens"] = plan.stop_tokens
+        return TupleResult(kind="inline", value="ok")
+
     with TestClient(create_app(copy_config(tmp_path))) as client:
+        monkeypatch.setattr(client.app.state.runtime.dispatcher, "execute_sync", fake_execute_sync)
         response = client.post(
             "/v1/chat/completions",
             json={
@@ -1102,12 +1256,18 @@ def test_openai_facade_rejects_unsupported_sampling_fields_instead_of_ignoring(t
                 "messages": [{"role": "user", "content": "hello"}],
                 "top_p": 0.9,
                 "seed": 7,
+                "presence_penalty": 0.25,
+                "frequency_penalty": 0.5,
+                "stop": ["<stop>"],
             },
         )
 
-    assert response.status_code == 400
-    assert response.json()["error"]["code"] == "unsupported_openai_field"
-    assert "top_p" in response.json()["error"]["message"]
+    assert response.status_code == 200
+    assert captured["top_p"] == 0.9
+    assert captured["seed"] == 7
+    assert captured["presence_penalty"] == 0.25
+    assert captured["frequency_penalty"] == 0.5
+    assert "<stop>" in captured["stop_tokens"]
 
 
 def test_openai_chat_completions_accepts_openai_json_schema_wrapper(tmp_path, monkeypatch) -> None:

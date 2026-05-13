@@ -286,6 +286,26 @@ class RunpodVllmServerlessAdapter(TupleAdapter):
             payload["temperature"] = plan.temperature
         if plan.max_tokens is not None:
             payload["max_tokens"] = plan.max_tokens
+        if plan.top_p is not None:
+            payload["top_p"] = plan.top_p
+        if plan.seed is not None:
+            payload["seed"] = plan.seed
+        if plan.presence_penalty is not None:
+            payload["presence_penalty"] = plan.presence_penalty
+        if plan.frequency_penalty is not None:
+            payload["frequency_penalty"] = plan.frequency_penalty
+        if plan.stop_tokens:
+            payload["stop"] = plan.stop_tokens
+        if plan.tools:
+            payload["tools"] = plan.tools
+        if plan.tool_choice:
+            payload["tool_choice"] = plan.tool_choice
+        if plan.functions:
+            payload["functions"] = plan.functions
+        if plan.function_call:
+            payload["function_call"] = plan.function_call
+        if plan.stream_options:
+            payload["stream_options"] = plan.stream_options
         if plan.response_format is not None:
             if plan.response_format.type.value == "json_object":
                 payload["response_format"] = {"type": "json_object"}
@@ -298,7 +318,22 @@ class RunpodVllmServerlessAdapter(TupleAdapter):
             return self._vision_messages(plan)
         if not plan.messages:
             raise TupleError("RunPod worker-vLLM requires compiled chat messages", retryable=False, status_code=400)
-        return [{"role": message.role, "content": message.content} for message in plan.messages]
+
+        messages: list[dict[str, Any]] = []
+        for message in plan.messages:
+            m: dict[str, Any] = {"role": message.role}
+            if message.content is not None:
+                m["content"] = message.content
+            if message.name is not None:
+                m["name"] = message.name
+            if message.tool_calls is not None:
+                m["tool_calls"] = message.tool_calls
+            if message.tool_call_id is not None:
+                m["tool_call_id"] = message.tool_call_id
+            if message.function_call is not None:
+                m["function_call"] = message.function_call
+            messages.append(m)
+        return messages
 
     def _vision_messages(self, plan: CompiledPlan) -> list[dict[str, Any]]:
         if plan.task != "vision":

@@ -341,8 +341,29 @@ class ResponseFormat(BaseModel):
 class ChatMessage(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    role: Literal["system", "user", "assistant", "tool"] = "user"
-    content: str
+    role: Literal["system", "developer", "user", "assistant", "tool", "function"] = "user"
+    content: str | list[dict[str, Any]] | None = None
+    name: str | None = None
+    tool_calls: list[dict[str, Any]] | None = None
+    tool_call_id: str | None = None
+    function_call: dict[str, Any] | None = None
+
+    @model_validator(mode="after")
+    def validate_openai_message_contract(self) -> "ChatMessage":
+        has_content = self.content is not None
+        if self.role == "tool":
+            if not self.tool_call_id or not has_content:
+                raise ValueError("tool messages require content and tool_call_id")
+            return self
+        if self.role == "function":
+            if not self.name or not has_content:
+                raise ValueError("function messages require content and name")
+            return self
+        if self.role == "assistant" and (self.tool_calls or self.function_call):
+            return self
+        if not has_content:
+            raise ValueError("message content is required unless assistant tool_calls/function_call is present")
+        return self
 
 
 class TaskRequest(BaseModel):
@@ -358,6 +379,16 @@ class TaskRequest(BaseModel):
     requested_tuple: str | None = None
     max_tokens: PositiveInt | None = None
     temperature: float | None = Field(default=None, ge=0.0, le=2.0)
+    top_p: float | None = Field(default=None, ge=0.0, le=1.0)
+    stop: str | list[str] | None = None
+    seed: int | None = None
+    presence_penalty: float | None = Field(default=None, ge=-2.0, le=2.0)
+    frequency_penalty: float | None = Field(default=None, ge=-2.0, le=2.0)
+    tools: list[dict[str, Any]] | None = None
+    tool_choice: str | dict[str, Any] | None = None
+    functions: list[dict[str, Any]] | None = None
+    function_call: str | dict[str, Any] | None = None
+    stream_options: dict[str, Any] | None = None
     timeout_seconds: PositiveInt | None = None
     lease_ttl_seconds: PositiveInt | None = None
     response_format: ResponseFormat | None = None
@@ -737,6 +768,15 @@ class CompiledPlan(BaseModel):
     token_budget: PositiveInt | None
     max_tokens: PositiveInt | None = None
     temperature: float | None = None
+    top_p: float | None = None
+    seed: int | None = None
+    presence_penalty: float | None = None
+    frequency_penalty: float | None = None
+    tools: list[dict[str, Any]] | None = None
+    tool_choice: str | dict[str, Any] | None = None
+    functions: list[dict[str, Any]] | None = None
+    function_call: str | dict[str, Any] | None = None
+    stream_options: dict[str, Any] | None = None
     input_refs: list[DataRef]
     inline_inputs: dict[str, InlineValue]
     messages: list[ChatMessage] = Field(default_factory=list)
@@ -782,6 +822,9 @@ class TupleResult(BaseModel):
     artifact_manifest: ArtifactManifest | None = None
     usage: dict[str, int] = Field(default_factory=dict)
     output_validated: bool | None = None
+    tool_calls: list[dict[str, Any]] | None = None
+    function_call: dict[str, Any] | None = None
+    finish_reason: str | None = None
 
 
 def _context_budget_for(payload: dict[str, Any]) -> int:

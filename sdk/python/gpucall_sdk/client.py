@@ -231,6 +231,16 @@ class GPUCallClient:
         response_format: dict[str, Any] | None = None,
         max_tokens: int | None = None,
         temperature: float | None = None,
+        top_p: float | None = None,
+        stop: str | list[str] | None = None,
+        seed: int | None = None,
+        presence_penalty: float | None = None,
+        frequency_penalty: float | None = None,
+        tools: list[dict[str, Any]] | None = None,
+        tool_choice: str | dict[str, Any] | None = None,
+        functions: list[dict[str, Any]] | None = None,
+        function_call: str | dict[str, Any] | None = None,
+        stream_options: dict[str, Any] | None = None,
         messages: list[dict[str, Any]] | None = None,
         intent: str | None = None,
         task_family: str | None = None,
@@ -248,6 +258,16 @@ class GPUCallClient:
             response_format=response_format,
             max_tokens=max_tokens,
             temperature=temperature,
+            top_p=top_p,
+            stop=stop,
+            seed=seed,
+            presence_penalty=presence_penalty,
+            frequency_penalty=frequency_penalty,
+            tools=tools,
+            tool_choice=tool_choice,
+            functions=functions,
+            function_call=function_call,
+            stream_options=stream_options,
             messages=messages,
             intent=intent,
             task_family=task_family,
@@ -337,6 +357,16 @@ class GPUCallClient:
         response_format: dict[str, Any] | None,
         max_tokens: int | None,
         temperature: float | None,
+        top_p: float | None = None,
+        stop: str | list[str] | None = None,
+        seed: int | None = None,
+        presence_penalty: float | None = None,
+        frequency_penalty: float | None = None,
+        tools: list[dict[str, Any]] | None = None,
+        tool_choice: str | dict[str, Any] | None = None,
+        functions: list[dict[str, Any]] | None = None,
+        function_call: str | dict[str, Any] | None = None,
+        stream_options: dict[str, Any] | None = None,
         messages: list[dict[str, Any]] | None = None,
         intent: str | None = None,
         task_family: str | None = None,
@@ -366,6 +396,21 @@ class GPUCallClient:
             payload["max_tokens"] = max_tokens
         if temperature is not None:
             payload["temperature"] = temperature
+        optional = {
+            "top_p": top_p,
+            "stop": stop,
+            "seed": seed,
+            "presence_penalty": presence_penalty,
+            "frequency_penalty": frequency_penalty,
+            "tools": tools,
+            "tool_choice": tool_choice,
+            "functions": functions,
+            "function_call": function_call,
+            "stream_options": stream_options,
+        }
+        for key, value in optional.items():
+            if value is not None:
+                payload[key] = value
         if mode == "async":
             payload["webhook_url"] = None
         return payload
@@ -421,6 +466,16 @@ class AsyncGPUCallClient:
         response_format: dict[str, Any] | None = None,
         max_tokens: int | None = None,
         temperature: float | None = None,
+        top_p: float | None = None,
+        stop: str | list[str] | None = None,
+        seed: int | None = None,
+        presence_penalty: float | None = None,
+        frequency_penalty: float | None = None,
+        tools: list[dict[str, Any]] | None = None,
+        tool_choice: str | dict[str, Any] | None = None,
+        functions: list[dict[str, Any]] | None = None,
+        function_call: str | dict[str, Any] | None = None,
+        stream_options: dict[str, Any] | None = None,
         messages: list[dict[str, Any]] | None = None,
         intent: str | None = None,
         task_family: str | None = None,
@@ -438,6 +493,16 @@ class AsyncGPUCallClient:
             response_format=response_format,
             max_tokens=max_tokens,
             temperature=temperature,
+            top_p=top_p,
+            stop=stop,
+            seed=seed,
+            presence_penalty=presence_penalty,
+            frequency_penalty=frequency_penalty,
+            tools=tools,
+            tool_choice=tool_choice,
+            functions=functions,
+            function_call=function_call,
+            stream_options=stream_options,
             messages=messages,
             intent=intent,
             task_family=task_family,
@@ -547,6 +612,16 @@ class AsyncGPUCallClient:
         response_format: dict[str, Any] | None,
         max_tokens: int | None,
         temperature: float | None,
+        top_p: float | None = None,
+        stop: str | list[str] | None = None,
+        seed: int | None = None,
+        presence_penalty: float | None = None,
+        frequency_penalty: float | None = None,
+        tools: list[dict[str, Any]] | None = None,
+        tool_choice: str | dict[str, Any] | None = None,
+        functions: list[dict[str, Any]] | None = None,
+        function_call: str | dict[str, Any] | None = None,
+        stream_options: dict[str, Any] | None = None,
         messages: list[dict[str, Any]] | None = None,
         intent: str | None = None,
         task_family: str | None = None,
@@ -576,6 +651,21 @@ class AsyncGPUCallClient:
             payload["max_tokens"] = max_tokens
         if temperature is not None:
             payload["temperature"] = temperature
+        optional = {
+            "top_p": top_p,
+            "stop": stop,
+            "seed": seed,
+            "presence_penalty": presence_penalty,
+            "frequency_penalty": frequency_penalty,
+            "tools": tools,
+            "tool_choice": tool_choice,
+            "functions": functions,
+            "function_call": function_call,
+            "stream_options": stream_options,
+        }
+        for key, value in optional.items():
+            if value is not None:
+                payload[key] = value
         if mode == "async":
             payload["webhook_url"] = None
         return payload
@@ -606,6 +696,9 @@ class _ChatCompletionsResource:
         seed: int | None = None,
         tools: list[dict[str, Any]] | None = None,
         tool_choice: str | dict[str, Any] | None = None,
+        functions: list[dict[str, Any]] | None = None,
+        function_call: str | dict[str, Any] | None = None,
+        stream_options: dict[str, Any] | None = None,
         user: str | None = None,
         presence_penalty: float | None = None,
         frequency_penalty: float | None = None,
@@ -617,6 +710,7 @@ class _ChatCompletionsResource:
         poll_timeout: float = DEFAULT_ASYNC_POLL_TIMEOUT_SECONDS,
         **extra: Any,
     ) -> dict[str, Any]:
+        _reject_extra_openai_fields(extra)
         message_payload = _normalize_messages(messages)
         request_metadata = _openai_metadata(
             metadata=metadata,
@@ -628,6 +722,8 @@ class _ChatCompletionsResource:
             seed=seed,
             tools=tools,
             tool_choice=tool_choice,
+            functions=functions,
+            function_call=function_call,
             user=user,
             presence_penalty=presence_penalty,
             frequency_penalty=frequency_penalty,
@@ -642,6 +738,16 @@ class _ChatCompletionsResource:
             max_tokens=max_tokens,
             auto_upload=auto_upload,
             temperature=temperature,
+            top_p=top_p,
+            stop=stop,
+            seed=seed,
+            presence_penalty=presence_penalty,
+            frequency_penalty=frequency_penalty,
+            tools=tools,
+            tool_choice=tool_choice,
+            functions=functions,
+            function_call=function_call,
+            stream_options=stream_options,
             intent=intent,
             task_family=task_family,
             metadata=request_metadata,
@@ -650,9 +756,19 @@ class _ChatCompletionsResource:
             poll_timeout=poll_timeout,
         )
         value = _extract_result_text(result)
-        _raise_if_empty_output(value)
+        tool_calls = _extract_tool_calls(result)
+        function_call = _extract_function_call(result)
+        _raise_if_empty_output(value, tool_calls=tool_calls, function_call=function_call)
         output_validated = _extract_output_validated(result)
-        response = _openai_like_response(model, value, usage=_extract_usage(result), output_validated=output_validated)
+        response = _openai_like_response(
+            model,
+            value,
+            usage=_extract_usage(result),
+            output_validated=output_validated,
+            tool_calls=tool_calls,
+            function_call=function_call,
+            finish_reason=_extract_finish_reason(result),
+        )
         if parse_json:
             if output_validated is False:
                 raise GPUCallJSONParseError("gpucall returned unvalidated JSON output", raw_text=value)
@@ -688,6 +804,9 @@ class _AsyncChatCompletionsResource:
         seed: int | None = None,
         tools: list[dict[str, Any]] | None = None,
         tool_choice: str | dict[str, Any] | None = None,
+        functions: list[dict[str, Any]] | None = None,
+        function_call: str | dict[str, Any] | None = None,
+        stream_options: dict[str, Any] | None = None,
         user: str | None = None,
         presence_penalty: float | None = None,
         frequency_penalty: float | None = None,
@@ -699,6 +818,7 @@ class _AsyncChatCompletionsResource:
         poll_timeout: float = DEFAULT_ASYNC_POLL_TIMEOUT_SECONDS,
         **extra: Any,
     ) -> dict[str, Any]:
+        _reject_extra_openai_fields(extra)
         message_payload = _normalize_messages(messages)
         request_metadata = _openai_metadata(
             metadata=metadata,
@@ -710,6 +830,8 @@ class _AsyncChatCompletionsResource:
             seed=seed,
             tools=tools,
             tool_choice=tool_choice,
+            functions=functions,
+            function_call=function_call,
             user=user,
             presence_penalty=presence_penalty,
             frequency_penalty=frequency_penalty,
@@ -724,6 +846,16 @@ class _AsyncChatCompletionsResource:
             max_tokens=max_tokens,
             auto_upload=auto_upload,
             temperature=temperature,
+            top_p=top_p,
+            stop=stop,
+            seed=seed,
+            presence_penalty=presence_penalty,
+            frequency_penalty=frequency_penalty,
+            tools=tools,
+            tool_choice=tool_choice,
+            functions=functions,
+            function_call=function_call,
+            stream_options=stream_options,
             intent=intent,
             task_family=task_family,
             metadata=request_metadata,
@@ -732,9 +864,19 @@ class _AsyncChatCompletionsResource:
             poll_timeout=poll_timeout,
         )
         value = _extract_result_text(result)
-        _raise_if_empty_output(value)
+        tool_calls = _extract_tool_calls(result)
+        function_call = _extract_function_call(result)
+        _raise_if_empty_output(value, tool_calls=tool_calls, function_call=function_call)
         output_validated = _extract_output_validated(result)
-        response = _openai_like_response(model, value, usage=_extract_usage(result), output_validated=output_validated)
+        response = _openai_like_response(
+            model,
+            value,
+            usage=_extract_usage(result),
+            output_validated=output_validated,
+            tool_calls=tool_calls,
+            function_call=function_call,
+            finish_reason=_extract_finish_reason(result),
+        )
         if parse_json:
             if output_validated is False:
                 raise GPUCallJSONParseError("gpucall returned unvalidated JSON output", raw_text=value)
@@ -745,20 +887,65 @@ class _AsyncChatCompletionsResource:
         return response
 
 
-def _normalize_messages(messages: list[dict[str, Any]]) -> list[dict[str, str]]:
-    normalized: list[dict[str, str]] = []
+def _normalize_messages(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    normalized: list[dict[str, Any]] = []
+    allowed_keys = {"role", "content", "name", "tool_calls", "tool_call_id", "function_call"}
     for message in messages:
+        extra = sorted(set(message) - allowed_keys)
+        if extra:
+            raise GPUCallCallerRoutingError(f"unsupported OpenAI message fields: {', '.join(extra)}")
         role = str(message.get("role", "user"))
-        content = message.get("content", "")
-        if not isinstance(content, str):
-            raise GPUCallCallerRoutingError(
-                "structured or multimodal message content is not supported by this SDK method; "
-                "use explicit gpucall DataRef APIs instead"
-            )
-        text = content
-        if text:
-            normalized.append({"role": role, "content": text})
+        has_content = "content" in message
+        content = _normalize_message_content(message.get("content") if has_content else "")
+        _validate_openai_message(role=role, content=content, message=message, has_content=has_content)
+        item: dict[str, Any] = {"role": role}
+        if has_content or not any(message.get(key) is not None for key in ("tool_calls", "tool_call_id", "function_call")):
+            item["content"] = content
+        for key in ("name", "tool_calls", "tool_call_id", "function_call"):
+            if message.get(key) is not None:
+                item[key] = message[key]
+        normalized.append(item)
     return normalized
+
+
+def _validate_openai_message(*, role: str, content: str | None, message: dict[str, Any], has_content: bool) -> None:
+    if role == "tool":
+        if not has_content or content is None or not isinstance(message.get("tool_call_id"), str):
+            raise GPUCallCallerRoutingError("tool messages require content and tool_call_id")
+        return
+    if role == "function":
+        if not has_content or content is None or not isinstance(message.get("name"), str):
+            raise GPUCallCallerRoutingError("function messages require content and name")
+        return
+    if role == "assistant" and (message.get("tool_calls") is not None or message.get("function_call") is not None):
+        return
+    if not has_content or content is None:
+        raise GPUCallCallerRoutingError("message content is required unless assistant tool_calls/function_call is present")
+
+
+def _normalize_message_content(content: Any) -> str | None:
+    if content is None:
+        return None
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        parts: list[str] = []
+        unsupported: list[str] = []
+        for item in content:
+            if not isinstance(item, dict):
+                unsupported.append(type(item).__name__)
+                continue
+            kind = str(item.get("type") or "")
+            if kind in {"text", "input_text"} and isinstance(item.get("text"), str):
+                parts.append(item["text"])
+                continue
+            unsupported.append(kind or "<missing>")
+        if parts and not unsupported:
+            return "\n".join(parts)
+    raise GPUCallCallerRoutingError(
+        "structured or multimodal message content is not supported by this SDK method; "
+        "use explicit gpucall DataRef APIs instead"
+    )
 
 
 def _validate_task(task: str) -> None:
@@ -781,6 +968,8 @@ def _openai_metadata(
     seed: int | None,
     tools: list[dict[str, Any]] | None,
     tool_choice: str | dict[str, Any] | None,
+    functions: list[dict[str, Any]] | None,
+    function_call: str | dict[str, Any] | None,
     user: str | None,
     presence_penalty: float | None,
     frequency_penalty: float | None,
@@ -799,6 +988,8 @@ def _openai_metadata(
         "openai.seed": seed,
         "openai.tools": tools,
         "openai.tool_choice": tool_choice,
+        "openai.functions": functions,
+        "openai.function_call": function_call,
         "openai.user": user,
         "openai.presence_penalty": presence_penalty,
         "openai.frequency_penalty": frequency_penalty,
@@ -810,6 +1001,12 @@ def _openai_metadata(
     if extra:
         result["openai.extra_keys"] = ",".join(sorted(extra))
     return result
+
+
+def _reject_extra_openai_fields(extra: dict[str, Any]) -> None:
+    if extra:
+        fields = ", ".join(sorted(str(key) for key in extra))
+        raise GPUCallCallerRoutingError(f"unsupported OpenAI chat.completions fields: {fields}")
 
 
 def _metadata_value(value: Any) -> str:
@@ -828,8 +1025,13 @@ def _extract_result_text(result: dict[str, Any]) -> str:
     return value if isinstance(value, str) else ""
 
 
-def _raise_if_empty_output(value: str) -> None:
-    if not value.strip():
+def _raise_if_empty_output(
+    value: str,
+    *,
+    tool_calls: list[dict[str, Any]] | None = None,
+    function_call: dict[str, Any] | None = None,
+) -> None:
+    if not value.strip() and not tool_calls and not function_call:
         raise GPUCallEmptyOutputError("gpucall returned an empty output")
 
 
@@ -845,7 +1047,43 @@ def _extract_usage(result: dict[str, Any]) -> dict[str, int]:
     return usage if isinstance(usage, dict) else {}
 
 
-def _openai_like_response(model: str, content: str, *, usage: dict[str, int], output_validated: bool | None) -> dict[str, Any]:
+def _extract_tool_calls(result: dict[str, Any]) -> list[dict[str, Any]] | None:
+    payload = result.get("result") or {}
+    tool_calls = payload.get("tool_calls")
+    return tool_calls if isinstance(tool_calls, list) else None
+
+
+def _extract_function_call(result: dict[str, Any]) -> dict[str, Any] | None:
+    payload = result.get("result") or {}
+    function_call = payload.get("function_call")
+    return function_call if isinstance(function_call, dict) else None
+
+
+def _extract_finish_reason(result: dict[str, Any]) -> str | None:
+    payload = result.get("result") or {}
+    finish_reason = payload.get("finish_reason")
+    return finish_reason if isinstance(finish_reason, str) else None
+
+
+def _openai_like_response(
+    model: str,
+    content: str,
+    *,
+    usage: dict[str, int],
+    output_validated: bool | None,
+    tool_calls: list[dict[str, Any]] | None = None,
+    function_call: dict[str, Any] | None = None,
+    finish_reason: str | None = None,
+) -> dict[str, Any]:
+    message: dict[str, Any] = {
+        "role": "assistant",
+        "content": content if content else (None if tool_calls or function_call else ""),
+    }
+    if tool_calls:
+        message["tool_calls"] = tool_calls
+    if function_call:
+        message["function_call"] = function_call
+    resolved_finish_reason = finish_reason or ("tool_calls" if tool_calls else ("function_call" if function_call else "stop"))
     response: dict[str, Any] = {
         "id": f"chatcmpl-{hashlib.sha256(f'{time.time()}:{content}'.encode()).hexdigest()[:24]}",
         "object": "chat.completion",
@@ -854,8 +1092,8 @@ def _openai_like_response(model: str, content: str, *, usage: dict[str, int], ou
         "choices": [
             {
                 "index": 0,
-                "message": {"role": "assistant", "content": content},
-                "finish_reason": "stop",
+                "message": message,
+                "finish_reason": resolved_finish_reason,
             }
         ],
         "usage": usage,
