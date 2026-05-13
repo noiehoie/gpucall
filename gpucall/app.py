@@ -11,14 +11,14 @@ import json
 import re
 from contextlib import asynccontextmanager
 from pathlib import Path, PurePosixPath
-from typing import Any, Literal
+from typing import Any
 from uuid import uuid4
 import yaml
 
 from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse, PlainTextResponse, StreamingResponse
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, Field
 
 from gpucall.app_helpers import (
     _allow_unauthenticated_gateway,
@@ -41,7 +41,6 @@ from gpucall.app_helpers import (
     idempotency_store,
     metric_route_path,
     object_tenant_prefix,
-    openai_chat_response,
     openai_error_response,
     plan_with_worker_refs,
     prune_rate_limit,
@@ -62,15 +61,17 @@ from gpucall.config import ConfigError, default_config_dir, default_state_dir, l
 from gpucall.credentials import credentials_path, load_credentials, save_credentials
 from gpucall.admission import AdmissionController, PostgresAdmissionController
 from gpucall.dispatcher import Dispatcher, JobStore, LeaseReaper, TupleReconciler, is_terminal_job_state
-from gpucall.domain import ApiKeyHandoffMode, ChatMessage, DataRef, ExecutionMode, InlineValue, JobRecord, JobState, TenantSpec, TupleError, ResponseFormat, TaskRequest, recipe_requirements
+from gpucall.domain import ApiKeyHandoffMode, ExecutionMode, JobRecord, JobState, TenantSpec, TupleError, TaskRequest, recipe_requirements
 from gpucall.domain import PresignGetRequest, PresignGetResponse, PresignPutRequest, PresignPutResponse
 from gpucall.object_store import ObjectStore
 from gpucall.execution.factory import build_adapters
 from gpucall.handoff import handoff_payload as _bootstrap_handoff_payload
-from gpucall.openai_contract import (
-    OPENAI_CHAT_COMPLETIONS_FAIL_CLOSED_FIELDS,
-    OPENAI_CHAT_COMPLETIONS_FIELDS,
-    OPENAI_CHAT_COMPLETIONS_FEATURE_GATED_FIELDS,
+from gpucall.openai_facade import (
+    OpenAIProtocolError,
+    admit_openai_chat_completion,
+    openai_chat_response,
+    openai_stream_chunk,
+    openai_stream_chunks,
 )
 from gpucall.postgres_store import PostgresIdempotencyStore, PostgresJobStore
 from gpucall.readiness import build_readiness_report
@@ -102,64 +103,6 @@ class Runtime(BaseModel):
     tenants: dict[str, TenantSpec] = {}
     tenant_usage: TenantUsageLedger
     metrics: dict[str, Any] = {}
-
-
-class OpenAIChatMessage(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    role: Literal["system", "developer", "user", "assistant", "tool", "function"] = "user"
-    content: str | list[dict[str, Any]] | None = None
-    name: str | None = None
-    tool_calls: list[dict[str, Any]] | None = None
-    tool_call_id: str | None = None
-    function_call: dict[str, Any] | None = None
-
-    @model_validator(mode="after")
-    def validate_openai_message_contract(self) -> "OpenAIChatMessage":
-        has_content = self.content is not None
-        if self.role == "tool":
-            if not self.tool_call_id or not has_content:
-                raise ValueError("tool messages require content and tool_call_id")
-            return self
-        if self.role == "function":
-            if not self.name or not has_content:
-                raise ValueError("function messages require content and name")
-            return self
-        if self.role == "assistant" and (self.tool_calls or self.function_call):
-            return self
-        if not has_content:
-            raise ValueError("message content is required unless assistant tool_calls/function_call is present")
-        return self
-
-
-class OpenAIChatCompletionRequest(BaseModel):
-    model_config = ConfigDict(extra="allow")
-
-    model: str = "gpucall:auto"
-    messages: list[OpenAIChatMessage] = Field(min_length=1)
-    response_format: ResponseFormat | None = None
-    temperature: float | None = Field(default=None, ge=0.0, le=2.0)
-    max_tokens: int | None = Field(default=None, gt=0)
-    max_completion_tokens: int | None = Field(default=None, gt=0)
-    top_p: float | None = Field(default=None, ge=0.0, le=1.0)
-    stop: str | list[str] | None = None
-    seed: int | None = None
-    tools: list[dict[str, Any]] | None = None
-    tool_choice: str | dict[str, Any] | None = None
-    functions: list[dict[str, Any]] | None = None
-    function_call: str | dict[str, Any] | None = None
-    user: str | None = None
-    presence_penalty: float | None = Field(default=None, ge=-2.0, le=2.0)
-    frequency_penalty: float | None = Field(default=None, ge=-2.0, le=2.0)
-    n: int | None = Field(default=None, gt=0)
-    stream: bool = False
-    stream_options: dict[str, Any] | None = None
-    logprobs: bool | None = None
-    top_logprobs: int | None = None
-    logit_bias: dict[str, float] | None = None
-    metadata: dict[str, Any] = Field(default_factory=dict)
-    intent: str | None = None
-    task_family: str | None = None
 
 
 class BatchTaskRequest(BaseModel):
@@ -711,54 +654,32 @@ def create_app(config_dir: Path | None = None) -> FastAPI:
 
     @app.post("/v1/chat/completions", response_model=None)
     async def openai_chat_completions(
-        request: OpenAIChatCompletionRequest,
         http_request: Request,
         runtime: Runtime = Depends(runtime_dep),
     ) -> Any:
-        unsupported = _openai_unsupported_request_error(request)
-        if unsupported is not None:
-            return unsupported
-        messages = [_openai_message_to_chat_message(message) for message in request.messages]
-        message_bytes = _openai_chat_message_bytes(messages)
-        if message_bytes > runtime.compiler.policy.inline_bytes_limit:
-            return openai_error_response(
-                413,
-                "OpenAI facade inline prompt exceeds policy limit; use the gpucall SDK DataRef upload path for large inputs",
-                code="payload_too_large",
-            )
-        task_request = TaskRequest(
-            task="infer",
-            mode=ExecutionMode.STREAM if request.stream else ExecutionMode.SYNC,
-            intent=_openai_request_intent(request),
-            messages=messages,
-            max_tokens=request.max_tokens or request.max_completion_tokens,
-            temperature=request.temperature,
-            top_p=request.top_p,
-            stop=request.stop,
-            seed=request.seed,
-            presence_penalty=request.presence_penalty,
-            frequency_penalty=request.frequency_penalty,
-            tools=request.tools,
-            tool_choice=request.tool_choice,
-            functions=request.functions,
-            function_call=request.function_call,
-            stream_options=request.stream_options,
-            response_format=request.response_format,
-            metadata=_openai_request_metadata(request),
-        )
+        try:
+            payload = await http_request.json()
+            if not isinstance(payload, dict):
+                raise OpenAIProtocolError("OpenAI chat.completions request body must be a JSON object")
+            admission = admit_openai_chat_completion(payload, inline_bytes_limit=runtime.compiler.policy.inline_bytes_limit)
+        except json.JSONDecodeError:
+            return openai_error_response(400, "OpenAI chat.completions request body must be valid JSON", code="invalid_request_error")
+        except OpenAIProtocolError as exc:
+            return openai_error_response(exc.status_code, str(exc), code=exc.code)
+        task_request = admission.task_request
         plan = None
         try:
             plan = runtime.compiler.compile(task_request)
             await enforce_request_budget(runtime, http_request, plan)
-            if request.stream:
-                response_model = _openai_response_model(request.model, plan, runtime.compiler.tuples)
+            if admission.stream:
+                response_model = _openai_response_model(admission.requested_model, plan, runtime.compiler.tuples)
                 async def events():
                     yielded = False
                     terminal_seen = False
                     stream_id = f"chatcmpl-{uuid4().hex}"
                     try:
                         async for event in runtime.dispatcher.execute_stream(plan):
-                            for chunk, chunk_terminal in _openai_stream_chunks(
+                            for chunk, chunk_terminal in openai_stream_chunks(
                                 response_model,
                                 event,
                                 yielded,
@@ -775,7 +696,7 @@ def create_app(config_dir: Path | None = None) -> FastAPI:
                         yield "data: [DONE]\n\n"
                         return
                     if not terminal_seen:
-                        yield "data: " + json.dumps(_openai_stream_chunk(response_model, "", stream_id=stream_id, finish_reason="stop"), separators=(",", ":")) + "\n\n"
+                        yield "data: " + json.dumps(openai_stream_chunk(response_model, "", stream_id=stream_id, finish_reason="stop"), separators=(",", ":")) + "\n\n"
                     yield "data: [DONE]\n\n"
 
                 return StreamingResponse(
@@ -793,7 +714,7 @@ def create_app(config_dir: Path | None = None) -> FastAPI:
                 status_code=200,
                 headers=tenant_headers(headers, http_request),
                 content=openai_chat_response(
-                    _openai_response_model(request.model, plan, runtime.compiler.tuples),
+                    _openai_response_model(admission.requested_model, plan, runtime.compiler.tuples),
                     result.value,
                     result.usage,
                     tool_calls=result.tool_calls,
@@ -1043,17 +964,6 @@ async def recover_interrupted_jobs(runtime: Runtime) -> None:
         runtime.dispatcher.audit.append("job.interrupted", {"job_id": job.job_id, "plan_id": job.plan.plan_id})
 
 
-def _openai_message_to_chat_message(message: OpenAIChatMessage) -> ChatMessage:
-    return ChatMessage(
-        role=message.role,
-        content=_message_content_to_text(message.content) if message.content is not None else None,
-        name=message.name,
-        tool_calls=message.tool_calls,
-        tool_call_id=message.tool_call_id,
-        function_call=message.function_call,
-    )
-
-
 def _openai_response_model(requested_model: str, plan: Any, tuples: dict[str, Any]) -> str:
     chain = list(getattr(plan, "tuple_chain", []) or [])
     selected = tuples.get(chain[0]) if chain else None
@@ -1063,193 +973,6 @@ def _openai_response_model(requested_model: str, plan: Any, tuples: dict[str, An
     if requested_model.startswith("gpucall:"):
         return requested_model
     return "gpucall:auto"
-
-
-def _openai_unsupported_request_error(request: OpenAIChatCompletionRequest) -> JSONResponse | None:
-    unsupported: list[str] = []
-    for key in sorted(str(key) for key in (request.model_extra or {}).keys()):
-        if key in OPENAI_CHAT_COMPLETIONS_FAIL_CLOSED_FIELDS:
-            unsupported.append(key)
-        elif key in OPENAI_CHAT_COMPLETIONS_FIELDS:
-            unsupported.append(key)
-        else:
-            unsupported.append(f"unknown.{key}")
-    if request.n not in (None, 1):
-        unsupported.append("n > 1")
-    if (
-        request.max_tokens is not None
-        and request.max_completion_tokens is not None
-        and request.max_tokens != request.max_completion_tokens
-    ):
-        unsupported.append("max_tokens and max_completion_tokens conflict")
-    if request.logprobs is not None:
-        unsupported.append("logprobs")
-    if request.top_logprobs is not None:
-        unsupported.append("top_logprobs")
-    if request.logit_bias is not None:
-        unsupported.append("logit_bias")
-    if request.stream_options:
-        allowed = {
-            str(field).removeprefix("stream_options.")
-            for field in OPENAI_CHAT_COMPLETIONS_FEATURE_GATED_FIELDS
-            if str(field).startswith("stream_options.")
-        }
-        for key in sorted(str(key) for key in request.stream_options if str(key) not in allowed):
-            unsupported.append(f"stream_options.{key}")
-        if not request.stream:
-            unsupported.append("stream_options_without_stream")
-        if "include_usage" in request.stream_options and not isinstance(request.stream_options.get("include_usage"), bool):
-            unsupported.append("stream_options.include_usage")
-        if request.stream_options.get("include_usage") is True:
-            unsupported.append("stream_options.include_usage")
-        if "include_obfuscation" in request.stream_options and not isinstance(request.stream_options.get("include_obfuscation"), bool):
-            unsupported.append("stream_options.include_obfuscation")
-        if request.stream_options.get("include_obfuscation") is True:
-            unsupported.append("stream_options.include_obfuscation")
-    if not unsupported:
-        return None
-    fields = ", ".join(sorted(unsupported))
-    return openai_error_response(400, f"OpenAI facade does not support these fields yet: {fields}", code="unsupported_openai_field")
-
-def _openai_request_intent(request: OpenAIChatCompletionRequest) -> str | None:
-    for value in (
-        request.intent,
-        request.task_family,
-        request.metadata.get("intent"),
-        request.metadata.get("task_family"),
-        request.metadata.get("gpucall_intent"),
-        request.metadata.get("gpucall_task_family"),
-    ):
-        if isinstance(value, str) and value.strip():
-            return value.strip()
-    return None
-
-
-def _openai_request_metadata(request: OpenAIChatCompletionRequest) -> dict[str, str]:
-    metadata: dict[str, str] = {}
-    for key, value in request.metadata.items():
-        if value is None:
-            continue
-        metadata[str(key)] = _metadata_value(value)
-    metadata["openai.model"] = request.model
-    optional_fields = {
-        "openai.user": request.user,
-        "openai.top_p": request.top_p,
-        "openai.stop": request.stop,
-        "openai.seed": request.seed,
-        "openai.tools": request.tools,
-        "openai.tool_choice": request.tool_choice,
-        "openai.functions": request.functions,
-        "openai.function_call": request.function_call,
-        "openai.presence_penalty": request.presence_penalty,
-        "openai.frequency_penalty": request.frequency_penalty,
-        "openai.n": request.n,
-        "openai.max_completion_tokens": request.max_completion_tokens,
-        "openai.stream_options": request.stream_options,
-        "openai.logprobs": request.logprobs,
-        "openai.top_logprobs": request.top_logprobs,
-        "openai.logit_bias": request.logit_bias,
-    }
-    for key, value in optional_fields.items():
-        if value is not None:
-            metadata[key] = _metadata_value(value)
-    extra = sorted((request.model_extra or {}).keys())
-    if extra:
-        metadata["openai.extra_keys"] = ",".join(extra)
-    intent = _openai_request_intent(request)
-    if intent:
-        metadata.setdefault("intent", intent)
-    return metadata
-
-
-def _metadata_value(value: Any) -> str:
-    if isinstance(value, str):
-        return value
-    return json.dumps(value, sort_keys=True, separators=(",", ":"))
-
-
-def _message_content_to_text(content: str | list[dict[str, Any]] | None) -> str:
-    if content is None:
-        return ""
-    if isinstance(content, str):
-        return content
-    parts: list[str] = []
-    unsupported: list[str] = []
-    for item in content:
-        kind = str(item.get("type") or "")
-        if kind in {"text", "input_text"} and isinstance(item.get("text"), str):
-            parts.append(item["text"])
-            continue
-        unsupported.append(kind or "<missing>")
-    if parts and not unsupported:
-        return "\n".join(parts)
-    raise HTTPException(
-        status_code=400,
-        detail="OpenAI facade accepts string or text-only content parts; use gpucall DataRef APIs for image/file inputs",
-    )
-
-
-def _openai_chat_message_bytes(messages: list[ChatMessage]) -> int:
-    total = 0
-    for message in messages:
-        payload = message.model_dump(mode="json", exclude_none=True)
-        total += len(json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8"))
-    return total
-
-
-def _openai_stream_chunks(model: str, event: str, already_started: bool, *, stream_id: str):
-    for line in event.splitlines():
-        if not line.startswith("data:"):
-            continue
-        raw_data = line.removeprefix("data:").strip()
-        if not raw_data or raw_data == "[DONE]":
-            continue
-
-        try:
-            chunk_data = json.loads(raw_data)
-            if isinstance(chunk_data, dict) and "choices" in chunk_data:
-                # Already OpenAI-shaped; normalize required identity fields.
-                chunk_data["id"] = stream_id
-                chunk_data.setdefault("object", "chat.completion.chunk")
-                chunk_data.setdefault("created", int(time.time()))
-                chunk_data["model"] = model
-                yield "data: " + json.dumps(chunk_data, separators=(",", ":")) + "\n\n", _openai_chunk_is_terminal(chunk_data)
-                continue
-        except json.JSONDecodeError:
-            pass
-
-        if not already_started:
-            yield "data: " + json.dumps(_openai_stream_chunk(model, "", stream_id=stream_id, role="assistant"), separators=(",", ":")) + "\n\n", False
-        yield "data: " + json.dumps(_openai_stream_chunk(model, raw_data, stream_id=stream_id), separators=(",", ":")) + "\n\n", False
-
-
-def _openai_chunk_is_terminal(chunk: dict[str, Any]) -> bool:
-    choices = chunk.get("choices")
-    if not isinstance(choices, list):
-        return False
-    return any(isinstance(choice, dict) and choice.get("finish_reason") is not None for choice in choices)
-
-
-def _openai_stream_chunk(
-    model: str,
-    content: str,
-    *,
-    stream_id: str | None = None,
-    role: str | None = None,
-    finish_reason: str | None = None,
-) -> dict[str, Any]:
-    delta: dict[str, str] = {}
-    if role is not None:
-        delta["role"] = role
-    if content:
-        delta["content"] = content
-    return {
-        "id": stream_id or f"chatcmpl-{uuid4().hex}",
-        "object": "chat.completion.chunk",
-        "created": int(time.time()),
-        "model": model,
-        "choices": [{"index": 0, "delta": delta, "finish_reason": finish_reason}],
-    }
 
 
 def _prometheus_metrics_text(payload: dict[str, object]) -> str:

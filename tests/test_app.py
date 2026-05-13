@@ -1216,7 +1216,7 @@ def test_openai_facade_rejects_message_without_content_or_tool_call(tmp_path) ->
             },
         )
 
-    assert response.status_code == 422
+    assert response.status_code == 400
     assert response.json()["error"]["code"] == "invalid_request_error"
 
 
@@ -1391,7 +1391,7 @@ def test_openai_facade_rejects_multimodal_content_parts(tmp_path) -> None:
         )
 
     assert response.status_code == 400
-    assert "DataRef APIs" in response.json()["detail"]
+    assert "DataRef APIs" in response.json()["error"]["message"]
 
 
 def test_tuple_error_response_does_not_expose_internal_detail(tmp_path, monkeypatch) -> None:
@@ -1532,7 +1532,7 @@ def test_openai_validation_error_response_does_not_expose_message_content(tmp_pa
             },
         )
 
-    assert response.status_code == 422
+    assert response.status_code == 400
     assert "secret message content" not in response.text
     assert response.json()["error"]["code"] == "invalid_request_error"
     assert "detail" not in response.json()

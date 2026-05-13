@@ -4,7 +4,6 @@ import asyncio
 import hashlib
 import json
 import os
-import time
 from contextlib import asynccontextmanager
 from pathlib import PurePosixPath
 from typing import TYPE_CHECKING, Any
@@ -502,46 +501,6 @@ def idempotency_request_hash(request: TaskRequest) -> str:
 
 def error_response(status_code: int, detail: str, *, code: str | None = None) -> JSONResponse:
     return JSONResponse(status_code=status_code, content={"error": {"code": code or detail.replace(" ", "_"), "message": detail}})
-
-
-def openai_chat_response(
-    model: str,
-    content: str | None,
-    usage: dict[str, int],
-    *,
-    tool_calls: list[dict[str, Any]] | None = None,
-    function_call: dict[str, Any] | None = None,
-    finish_reason: str | None = None,
-    gpucall: dict[str, Any] | None = None,
-    output_validated: bool | None = None,
-) -> dict[str, Any]:
-    now = int(time.time())
-    message: dict[str, Any] = {"role": "assistant", "content": content if content is not None else (None if tool_calls or function_call else "")}
-    if tool_calls:
-        message["tool_calls"] = tool_calls
-    if function_call:
-        message["function_call"] = function_call
-    resolved_finish_reason = finish_reason or ("tool_calls" if tool_calls else ("function_call" if function_call else "stop"))
-
-    payload: dict[str, Any] = {
-        "id": f"chatcmpl-{uuid4().hex}",
-        "object": "chat.completion",
-        "created": now,
-        "model": model,
-        "choices": [
-            {
-                "index": 0,
-                "message": message,
-                "finish_reason": resolved_finish_reason,
-            }
-        ],
-        "usage": usage,
-    }
-    if gpucall is not None:
-        payload["gpucall"] = gpucall
-    if output_validated is not None:
-        payload["output_validated"] = output_validated
-    return payload
 
 
 def public_plan_summary(plan: Any, tuples: dict[str, Any] | None = None) -> dict[str, Any]:

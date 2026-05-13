@@ -102,6 +102,18 @@ def test_openai_chat_completion_result_rejects_malformed_tool_call() -> None:
         )
 
 
+def test_openai_chat_completion_result_rejects_multiple_choices() -> None:
+    with pytest.raises(TupleError, match="multiple choices"):
+        openai_chat_completion_result(
+            {
+                "choices": [
+                    {"message": {"role": "assistant", "content": "one"}},
+                    {"message": {"role": "assistant", "content": "two"}},
+                ]
+            }
+        )
+
+
 def test_provider_contract_modules_are_separated_and_sourced() -> None:
     from gpucall.execution.registry import adapter_descriptor
 

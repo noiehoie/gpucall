@@ -44,6 +44,62 @@ def plan_payload(plan: CompiledPlan) -> dict[str, Any]:
     }
 
 
+def openai_chat_payload_from_plan(
+    plan: CompiledPlan,
+    *,
+    model: str,
+    stream: bool,
+    messages: list[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
+    """Build the OpenAI-compatible worker request from a compiled plan.
+
+    Generation is delegated to vLLM/OpenAI-compatible workers; gateway code only
+    forwards the official fields it accepted at the facade boundary plus
+    gpucall-selected model/route information.
+    """
+    payload: dict[str, Any] = {
+        "model": model,
+        "messages": messages if messages is not None else _openai_messages_from_plan(plan),
+        "stream": stream,
+    }
+    optional = {
+        "temperature": plan.temperature,
+        "max_tokens": plan.max_tokens,
+        "top_p": plan.top_p,
+        "seed": plan.seed,
+        "presence_penalty": plan.presence_penalty,
+        "frequency_penalty": plan.frequency_penalty,
+        "stop": plan.stop_tokens if plan.stop_tokens else None,
+        "tools": plan.tools,
+        "tool_choice": plan.tool_choice,
+        "functions": plan.functions,
+        "function_call": plan.function_call,
+        "stream_options": plan.stream_options,
+        "response_format": plan.response_format.model_dump(mode="json") if plan.response_format is not None else None,
+    }
+    for key, value in optional.items():
+        if value is not None:
+            payload[key] = value
+    return payload
+
+
+def _openai_messages_from_plan(plan: CompiledPlan) -> list[dict[str, Any]]:
+    messages: list[dict[str, Any]] = []
+    has_system_message = any(message.role == "system" for message in plan.messages)
+    if plan.system_prompt and not has_system_message:
+        messages.append({"role": "system", "content": plan.system_prompt})
+    for message in plan.messages:
+        item = message.model_dump(mode="json", exclude_none=True)
+        messages.append(item)
+    if plan.messages:
+        return messages
+    if "prompt" in plan.inline_inputs:
+        return [*messages, {"role": "user", "content": plan.inline_inputs["prompt"].value}]
+    if plan.inline_inputs:
+        return [*messages, {"role": "user", "content": "\n".join(value.value for value in plan.inline_inputs.values())}]
+    return messages or [{"role": "user", "content": ""}]
+
+
 def gpucall_tuple_result(value: Any) -> TupleResult:
     if isinstance(value, TupleResult):
         return value
@@ -71,6 +127,8 @@ def openai_chat_completion_result(value: Any) -> TupleResult:
     choices = value.get("choices")
     if not isinstance(choices, list) or not choices:
         raise TupleError("OpenAI-compatible response missing choices", retryable=True, status_code=502)
+    if len(choices) != 1:
+        raise TupleError("OpenAI-compatible response returned multiple choices; n > 1 is not supported", retryable=False, status_code=502)
     first = choices[0]
     if not isinstance(first, dict):
         raise TupleError("OpenAI-compatible response has invalid choice", retryable=True, status_code=502)

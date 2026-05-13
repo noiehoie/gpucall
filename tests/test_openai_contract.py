@@ -20,6 +20,9 @@ def test_generated_openai_chat_contract_matches_vendored_spec() -> None:
     assert OPENAI_CHAT_COMPLETIONS_FIELDS == frozenset(fields)
     assert OPENAI_CHAT_COMPLETIONS_CONTRACT["request"]["required"] == required
     assert {"model", "messages", "tools", "response_format", "stream_options"} <= OPENAI_CHAT_COMPLETIONS_FIELDS
+    assert OPENAI_CHAT_COMPLETIONS_CONTRACT["request"]["json_schema"]["$schema"] == "https://json-schema.org/draft/2020-12/schema"
+    assert "$defs" in OPENAI_CHAT_COMPLETIONS_CONTRACT["request"]["json_schema"]
+    assert "ChatCompletionRequestMessage" in OPENAI_CHAT_COMPLETIONS_CONTRACT["request"]["json_schema"]["$defs"]
 
 
 def test_gpucall_openai_policy_classifies_every_official_request_field() -> None:

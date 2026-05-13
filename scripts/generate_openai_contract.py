@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import copy
 import hashlib
 import json
 from pathlib import Path
@@ -28,6 +29,9 @@ def main() -> None:
     request_props, request_required = _collect_schema(spec, schemas["CreateChatCompletionRequest"])
     response_props, response_required = _collect_schema(spec, schemas["CreateChatCompletionResponse"])
     stream_props, stream_required = _collect_schema(spec, schemas["CreateChatCompletionStreamResponse"])
+    request_json_schema = _json_schema_document(spec, "CreateChatCompletionRequest")
+    response_json_schema = _json_schema_document(spec, "CreateChatCompletionResponse")
+    stream_json_schema = _json_schema_document(spec, "CreateChatCompletionStreamResponse")
 
     request_fields = sorted(request_props)
     contract = {
@@ -43,16 +47,19 @@ def main() -> None:
             "schema": "CreateChatCompletionRequest",
             "required": request_required,
             "fields": request_fields,
+            "json_schema": request_json_schema,
         },
         "response": {
             "schema": "CreateChatCompletionResponse",
             "required": response_required,
             "fields": sorted(response_props),
+            "json_schema": response_json_schema,
         },
         "stream_response": {
             "schema": "CreateChatCompletionStreamResponse",
             "required": stream_required,
             "fields": sorted(stream_props),
+            "json_schema": stream_json_schema,
         },
         "gpucall_policy": {
             "supported_fields": sorted(
@@ -147,6 +154,84 @@ def _validate_policy_subset(contract: dict[str, Any]) -> None:
     unclassified = sorted(request_fields - policy_fields)
     if unclassified:
         raise SystemExit(f"OpenAI request fields are not classified by gpucall policy: {unclassified}")
+
+
+def _json_schema_document(spec: dict[str, Any], schema_name: str) -> dict[str, Any]:
+    """Return a compact JSON Schema document with the referenced OpenAI schema closure.
+
+    The vendored OpenAI document is OpenAPI-flavoured. Runtime validation uses
+    jsonschema, so the generated contract translates local component refs to
+    `$defs` and normalizes OpenAPI `nullable: true` into JSON Schema types.
+    """
+    refs = _schema_ref_closure(spec, schema_name)
+    defs = {
+        name: _normalize_json_schema(copy.deepcopy(spec["components"]["schemas"][name]))
+        for name in sorted(refs)
+        if name != schema_name
+    }
+    root = _normalize_json_schema(copy.deepcopy(spec["components"]["schemas"][schema_name]))
+    root["$schema"] = "https://json-schema.org/draft/2020-12/schema"
+    if defs:
+        root["$defs"] = defs
+    return root
+
+
+def _schema_ref_closure(spec: dict[str, Any], schema_name: str) -> set[str]:
+    seen: set[str] = set()
+    pending = [schema_name]
+    schemas = spec["components"]["schemas"]
+    while pending:
+        current = pending.pop()
+        if current in seen:
+            continue
+        seen.add(current)
+        for ref in _iter_local_component_refs(schemas[current]):
+            if ref not in seen:
+                pending.append(ref)
+    return seen
+
+
+def _iter_local_component_refs(value: Any):
+    if isinstance(value, dict):
+        ref = value.get("$ref")
+        if isinstance(ref, str) and ref.startswith("#/components/schemas/"):
+            yield ref.rsplit("/", 1)[-1]
+        for item in value.values():
+            yield from _iter_local_component_refs(item)
+    elif isinstance(value, list):
+        for item in value:
+            yield from _iter_local_component_refs(item)
+
+
+def _normalize_json_schema(value: Any) -> Any:
+    if isinstance(value, list):
+        return [_normalize_json_schema(item) for item in value]
+    if not isinstance(value, dict):
+        return value
+
+    normalized: dict[str, Any] = {}
+    for key, item in value.items():
+        if key == "nullable":
+            continue
+        if key == "$ref" and isinstance(item, str) and item.startswith("#/components/schemas/"):
+            normalized[key] = "#/$defs/" + item.rsplit("/", 1)[-1]
+            continue
+        normalized[key] = _normalize_json_schema(item)
+
+    if value.get("nullable") is True:
+        existing_type = normalized.get("type")
+        if isinstance(existing_type, str):
+            normalized["type"] = sorted({existing_type, "null"})
+        elif isinstance(existing_type, list):
+            normalized["type"] = sorted({str(item) for item in existing_type} | {"null"})
+        elif "$ref" in normalized:
+            ref = normalized.pop("$ref")
+            normalized["anyOf"] = [{"$ref": ref}, {"type": "null"}]
+        elif "oneOf" in normalized:
+            normalized["oneOf"] = [*normalized["oneOf"], {"type": "null"}]
+        elif "anyOf" in normalized:
+            normalized["anyOf"] = [*normalized["anyOf"], {"type": "null"}]
+    return normalized
 
 
 if __name__ == "__main__":

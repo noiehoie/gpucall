@@ -19,6 +19,7 @@ def test_tracked_files_do_not_contain_private_operator_artifacts() -> None:
         "docs/PUBLIC_RELEASE_CHECKLIST.md",
         "scripts/public_release_audit.sh",
         "tests/test_public_release_audit.py",
+        "third_party/openai/openapi.documented.yml",
     }
     patterns = [
         r"100\.([6-9][0-9]|1[01][0-9]|12[0-7])\.[0-9]{1,3}\.[0-9]{1,3}",

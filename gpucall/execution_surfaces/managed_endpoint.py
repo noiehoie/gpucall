@@ -189,6 +189,7 @@ from typing import Any
 
 from gpucall.domain import CompiledPlan, TupleError, TupleResult
 from gpucall.execution.base import TupleAdapter, RemoteHandle
+from gpucall.execution.payloads import openai_chat_payload_from_plan
 from gpucall.execution.payloads import openai_chat_completion_result
 from gpucall.execution.registry import TupleAdapterDescriptor, register_adapter
 
@@ -277,41 +278,7 @@ class RunpodVllmServerlessAdapter(TupleAdapter):
         return openai_chat_completion_result(json_or_error(response, "RunPod worker-vLLM chat completion failed"))
 
     def _payload(self, plan: CompiledPlan) -> dict[str, Any]:
-        payload: dict[str, Any] = {
-            "model": self.model,
-            "messages": self._messages(plan),
-            "stream": False,
-        }
-        if plan.temperature is not None:
-            payload["temperature"] = plan.temperature
-        if plan.max_tokens is not None:
-            payload["max_tokens"] = plan.max_tokens
-        if plan.top_p is not None:
-            payload["top_p"] = plan.top_p
-        if plan.seed is not None:
-            payload["seed"] = plan.seed
-        if plan.presence_penalty is not None:
-            payload["presence_penalty"] = plan.presence_penalty
-        if plan.frequency_penalty is not None:
-            payload["frequency_penalty"] = plan.frequency_penalty
-        if plan.stop_tokens:
-            payload["stop"] = plan.stop_tokens
-        if plan.tools:
-            payload["tools"] = plan.tools
-        if plan.tool_choice:
-            payload["tool_choice"] = plan.tool_choice
-        if plan.functions:
-            payload["functions"] = plan.functions
-        if plan.function_call:
-            payload["function_call"] = plan.function_call
-        if plan.stream_options:
-            payload["stream_options"] = plan.stream_options
-        if plan.response_format is not None:
-            if plan.response_format.type.value == "json_object":
-                payload["response_format"] = {"type": "json_object"}
-            elif plan.response_format.type.value == "json_schema":
-                payload["response_format"] = {"type": "json_schema", "json_schema": plan.response_format.json_schema}
-        return payload
+        return openai_chat_payload_from_plan(plan, model=self.model, stream=False, messages=self._messages(plan))
 
     def _messages(self, plan: CompiledPlan) -> list[dict[str, Any]]:
         if plan.input_refs:
