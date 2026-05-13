@@ -25,7 +25,7 @@ from gpucall.domain import (
     ResponseFormatType,
 )
 from gpucall.execution import EchoTuple, RemoteHandle
-from gpucall.provider_errors import provider_error_class
+from gpucall.provider_errors import provider_error_class, should_suppress_provider_family
 from gpucall.registry import ObservedRegistry
 
 
@@ -245,20 +245,45 @@ async def test_provider_temporary_failure_suppresses_tuple_for_later_plans(tmp_p
 
 
 @pytest.mark.asyncio
-async def test_capacity_failure_does_not_suppress_provider_family(monkeypatch) -> None:
+async def test_resource_exhaustion_suppresses_provider_family(monkeypatch) -> None:
     monkeypatch.setenv("GPUCALL_PROVIDER_TEMPORARY_COOLDOWN_SECONDS", "60")
     admission = AdmissionController(cooldown_seconds=60)
     admission.tuple_families = {"modal-a": "modal:function_runtime:modal", "modal-b": "modal:function_runtime:modal"}
 
-    await admission.suppress("modal-a", code="PROVIDER_RESOURCE_EXHAUSTED", suppress_family=False)
+    await admission.suppress(
+        "modal-a",
+        code="PROVIDER_RESOURCE_EXHAUSTED",
+        suppress_family=should_suppress_provider_family("PROVIDER_RESOURCE_EXHAUSTED"),
+    )
 
     first = await admission.acquire("modal-a")
     second = await admission.acquire("modal-b")
 
     assert first.allowed is False
     assert first.reason == "tuple_suppressed"
-    assert second.allowed is True
+    assert second.allowed is False
+    assert second.reason == "provider_family_suppressed"
     assert 0 < first.suppressed_until_seconds <= 60
+
+
+@pytest.mark.asyncio
+async def test_endpoint_capacity_failure_only_suppresses_tuple(monkeypatch) -> None:
+    monkeypatch.setenv("GPUCALL_PROVIDER_TEMPORARY_COOLDOWN_SECONDS", "60")
+    admission = AdmissionController(cooldown_seconds=60)
+    admission.tuple_families = {"runpod-a": "runpod:serverless:runpod", "runpod-b": "runpod:serverless:runpod"}
+
+    await admission.suppress(
+        "runpod-a",
+        code="PROVIDER_CAPACITY_UNAVAILABLE",
+        suppress_family=should_suppress_provider_family("PROVIDER_CAPACITY_UNAVAILABLE"),
+    )
+
+    first = await admission.acquire("runpod-a")
+    second = await admission.acquire("runpod-b")
+
+    assert first.allowed is False
+    assert first.reason == "tuple_suppressed"
+    assert second.allowed is True
     await admission.release(second.lease)
 
 
@@ -304,6 +329,25 @@ async def test_dispatcher_admission_limits_same_workload_scope(tmp_path, monkeyp
     assert len(failures) == 1
     assert failures[0].code == ProviderErrorCode.PROVIDER_CAPACITY_UNAVAILABLE
     assert '"reason":"workload_scope_inflight_limit"' in (tmp_path / "audit.jsonl").read_text(encoding="utf-8")
+
+
+@pytest.mark.asyncio
+async def test_dispatcher_waits_for_workload_scope_slot(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("GPUCALL_TUPLE_CONCURRENCY_LIMIT", "10")
+    monkeypatch.setenv("GPUCALL_PROVIDER_FAMILY_CONCURRENCY_LIMIT", "10")
+    monkeypatch.setenv("GPUCALL_WORKLOAD_SCOPE_CONCURRENCY_LIMIT", "1")
+    monkeypatch.setenv("GPUCALL_ADMISSION_WAIT_SECONDS", "1")
+    dispatcher = Dispatcher(
+        adapters={"a": SlowTuple("a"), "b": SlowTuple("b")},
+        registry=ObservedRegistry(),
+        audit=AuditTrail(tmp_path / "audit.jsonl"),
+        jobs=JobStore(),
+    )
+
+    results = await asyncio.gather(dispatcher.execute_sync(plan(["a"])), dispatcher.execute_sync(plan(["b"])))
+
+    assert {item.value for item in results} == {"ok:infer:a", "ok:infer:b"}
+    assert '"reason":"workload_scope_inflight_limit"' not in (tmp_path / "audit.jsonl").read_text(encoding="utf-8")
 
 
 @pytest.mark.asyncio

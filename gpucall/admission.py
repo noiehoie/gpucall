@@ -95,6 +95,20 @@ class AdmissionController:
                 self._workload_scope_inflight[workload_scope] = self._workload_scope_inflight.get(workload_scope, 0) + 1
             return AdmissionDecision(True, lease=AdmissionLease(tuple=tuple_name, family=family, workload_scope=workload_scope))
 
+    async def acquire_with_wait(
+        self,
+        tuple_name: str,
+        *,
+        workload_scope: str | None = None,
+        wait_seconds: float = 0.0,
+    ) -> AdmissionDecision:
+        deadline = monotonic() + max(float(wait_seconds), 0.0)
+        while True:
+            decision = await self.acquire(tuple_name, workload_scope=workload_scope)
+            if decision.allowed or decision.reason not in _INFLIGHT_LIMIT_REASONS or monotonic() >= deadline:
+                return decision
+            await asyncio.sleep(min(0.1, max(deadline - monotonic(), 0.0)))
+
     async def release(self, lease: AdmissionLease | None) -> None:
         if lease is None:
             return
@@ -333,6 +347,13 @@ def _tuple_family(spec: ExecutionTupleSpec) -> str:
     surface = spec.execution_surface.value if spec.execution_surface is not None else spec.adapter
     region = spec.region or spec.zone or ""
     return ":".join(part for part in (account, surface, region) if part)
+
+
+_INFLIGHT_LIMIT_REASONS = {
+    "tuple_inflight_limit",
+    "provider_family_inflight_limit",
+    "workload_scope_inflight_limit",
+}
 
 
 def _decrement(values: dict[str, int], key: str) -> None:

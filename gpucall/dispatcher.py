@@ -125,7 +125,11 @@ class Dispatcher:
                 handle: RemoteHandle | None = None
                 admission_lease: AdmissionLease | None = None
                 try:
-                    decision = await self.admission.acquire(tuple, workload_scope=workload_scope)
+                    decision = await self.admission.acquire_with_wait(
+                        tuple,
+                        workload_scope=workload_scope,
+                        wait_seconds=_admission_wait_seconds(plan),
+                    )
                     if not decision.allowed:
                         self.audit.append(
                             "tuple.admission_rejected",
@@ -290,7 +294,11 @@ class Dispatcher:
             handle: RemoteHandle | None = None
             admission_lease: AdmissionLease | None = None
             try:
-                decision = await self.admission.acquire(tuple, workload_scope=workload_scope)
+                decision = await self.admission.acquire_with_wait(
+                    tuple,
+                    workload_scope=workload_scope,
+                    wait_seconds=_admission_wait_seconds(plan),
+                )
                 if not decision.allowed:
                     self.audit.append(
                         "tuple.admission_rejected",
@@ -550,12 +558,29 @@ def _max_provider_family_attempts() -> int:
     return _env_non_negative_int("GPUCALL_MAX_PROVIDER_FAMILY_ATTEMPTS", 4)
 
 
+def _admission_wait_seconds(plan: CompiledPlan) -> float:
+    configured = _env_non_negative_float("GPUCALL_ADMISSION_WAIT_SECONDS", 0.0)
+    if configured <= 0:
+        return 0.0
+    return min(configured, max(float(plan.timeout_seconds) - 1.0, 0.0))
+
+
 def _env_non_negative_int(name: str, default: int) -> int:
     raw = os.getenv(name)
     if raw is None or not raw.strip():
         return default
     try:
         return max(int(raw), 0)
+    except ValueError:
+        return default
+
+
+def _env_non_negative_float(name: str, default: float) -> float:
+    raw = os.getenv(name)
+    if raw is None or not raw.strip():
+        return default
+    try:
+        return max(float(raw), 0.0)
     except ValueError:
         return default
 

@@ -19,12 +19,22 @@ class ProviderErrorClass:
 PROVIDER_TEMPORARY_UNAVAILABLE_ERRORS: dict[str, ProviderErrorClass] = {
     item.code: item
     for item in (
-        ProviderErrorClass("PROVIDER_RESOURCE_EXHAUSTED", "provider GPU, queue, quota, or rate capacity is exhausted", "429/503"),
+        ProviderErrorClass(
+            "PROVIDER_RESOURCE_EXHAUSTED",
+            "provider GPU, queue, quota, or rate capacity is exhausted",
+            "429/503",
+            suppress_provider_family=True,
+        ),
         ProviderErrorClass("PROVIDER_CAPACITY_UNAVAILABLE", "endpoint exists but no ready worker is available", "503"),
         ProviderErrorClass("PROVIDER_PROVISION_UNAVAILABLE", "VM, worker, or container cannot be started now", "409/423/429/503/504"),
         ProviderErrorClass("PROVIDER_QUEUE_SATURATED", "accepted job remains queued beyond the gateway tolerance", "IN_QUEUE"),
         ProviderErrorClass("PROVIDER_WORKER_INITIALIZING", "worker, container, or model is still initializing", "initializing/cold_start"),
-        ProviderErrorClass("PROVIDER_WORKER_THROTTLED", "worker is throttled and no execution slot is available", "throttled"),
+        ProviderErrorClass(
+            "PROVIDER_WORKER_THROTTLED",
+            "worker is throttled and no execution slot is available",
+            "throttled",
+            suppress_provider_family=True,
+        ),
         ProviderErrorClass("PROVIDER_TIMEOUT", "provider-side job timeout", "TIMED_OUT/504"),
         ProviderErrorClass("PROVIDER_POLL_TIMEOUT", "gateway timed out polling a provider job", "504"),
         ProviderErrorClass("PROVIDER_JOB_FAILED", "provider job failed with no finer temporary classification", "FAILED"),
@@ -63,7 +73,12 @@ PROVIDER_TEMPORARY_UNAVAILABLE_ERRORS: dict[str, ProviderErrorClass] = {
         ProviderErrorClass("PROVIDER_REGION_UNAVAILABLE", "requested provider region or zone has no usable GPU", "409/503"),
         ProviderErrorClass("PROVIDER_IMAGE_PULL_DELAY", "image or container pull is delaying startup", "initializing/timeout"),
         ProviderErrorClass("PROVIDER_MODEL_LOADING", "model load is still in progress", "health_initializing"),
-        ProviderErrorClass("PROVIDER_CONCURRENCY_LIMIT", "provider max workers or max concurrency was reached", "429/503/throttled"),
+        ProviderErrorClass(
+            "PROVIDER_CONCURRENCY_LIMIT",
+            "provider max workers or max concurrency was reached",
+            "429/503/throttled",
+            suppress_provider_family=True,
+        ),
         ProviderErrorClass("PROVIDER_LEASE_EXPIRED", "lease or TTL expired before execution completed", "expired/504"),
         ProviderErrorClass("PROVIDER_STALE_JOB", "accepted job stopped reporting progress", "no_heartbeat"),
         ProviderErrorClass("PROVIDER_ERROR", "unclassified retryable provider runtime failure", "502/503"),
