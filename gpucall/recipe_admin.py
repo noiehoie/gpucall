@@ -641,6 +641,7 @@ def _validate_authoring_patch_against_recipe(proposal: Mapping[str, Any], recipe
 
 def _run_authoring_recipe(*, config_dir: Path, authoring_recipe: str, bundle: Mapping[str, Any]) -> str:
     from gpucall.app import build_runtime
+    from gpucall.dispatcher import is_terminal_job_state
     from gpucall.domain import ChatMessage, ExecutionMode, JobState, ResponseFormat, ResponseFormatType, TaskRequest
 
     runtime = build_runtime(config_dir)
@@ -672,7 +673,7 @@ def _run_authoring_recipe(*, config_dir: Path, authoring_recipe: str, bundle: Ma
                 loaded = await runtime.jobs.get(job.job_id)
                 if loaded is not None:
                     current = loaded
-                    if loaded.state in {JobState.COMPLETED, JobState.FAILED, JobState.CANCELLED, JobState.EXPIRED}:
+                    if is_terminal_job_state(loaded.state):
                         break
                 await asyncio.sleep(1.0)
             if current.state is not JobState.COMPLETED or current.result is None:

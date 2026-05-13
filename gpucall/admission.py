@@ -1,9 +1,12 @@
 from __future__ import annotations
 
 import os
+import threading
 from dataclasses import dataclass
+from datetime import datetime, timedelta, timezone
 from time import monotonic
-from typing import Mapping
+from typing import Any, Mapping
+from uuid import uuid4
 import asyncio
 
 from gpucall.domain import ExecutionTupleSpec
@@ -14,6 +17,7 @@ class AdmissionLease:
     tuple: str
     family: str
     workload_scope: str | None = None
+    lease_id: str | None = None
 
 
 @dataclass(frozen=True)
@@ -113,6 +117,7 @@ class AdmissionController:
     def snapshot(self) -> dict[str, object]:
         now = monotonic()
         return {
+            "backend": "memory",
             "tuple_limit": self.tuple_limit,
             "provider_family_limit": self.family_limit,
             "workload_scope_limit": self.workload_scope_limit,
@@ -131,6 +136,192 @@ class AdmissionController:
                 if until > now
             },
         }
+
+
+class PostgresAdmissionController(AdmissionController):
+    """Postgres-backed admission control for multi-gateway deployments."""
+
+    def __init__(self, dsn: str, tuples: Mapping[str, ExecutionTupleSpec] | None = None, **kwargs: Any) -> None:
+        super().__init__(tuples, **kwargs)
+        import psycopg
+
+        self._psycopg = psycopg
+        self._conn = psycopg.connect(dsn)
+        self._thread_lock = threading.RLock()
+        self.lease_ttl_seconds = _env_float("GPUCALL_ADMISSION_LEASE_TTL_SECONDS", 3600.0)
+        self._init_schema()
+
+    def _init_schema(self) -> None:
+        with self._thread_lock, self._conn.cursor() as cur:
+            cur.execute(
+                """
+                CREATE TABLE IF NOT EXISTS gpucall_admission_leases (
+                  lease_id TEXT NOT NULL,
+                  kind TEXT NOT NULL,
+                  key TEXT NOT NULL,
+                  expires_at TIMESTAMPTZ NOT NULL,
+                  PRIMARY KEY(lease_id, kind, key)
+                )
+                """
+            )
+            cur.execute(
+                """
+                CREATE TABLE IF NOT EXISTS gpucall_admission_suppression (
+                  kind TEXT NOT NULL,
+                  key TEXT NOT NULL,
+                  suppressed_until TIMESTAMPTZ NOT NULL,
+                  code TEXT,
+                  PRIMARY KEY(kind, key)
+                )
+                """
+            )
+            cur.execute("CREATE INDEX IF NOT EXISTS gpucall_admission_leases_kind_key_idx ON gpucall_admission_leases(kind, key, expires_at)")
+        self._conn.commit()
+
+    async def acquire(self, tuple_name: str, *, workload_scope: str | None = None) -> AdmissionDecision:
+        return await asyncio.to_thread(self._acquire_sync, tuple_name, workload_scope)
+
+    def _acquire_sync(self, tuple_name: str, workload_scope: str | None) -> AdmissionDecision:
+        family = self.family_for(tuple_name)
+        now = datetime.now(timezone.utc)
+        with self._thread_lock:
+            try:
+                with self._conn.cursor() as cur:
+                    cur.execute("SELECT pg_advisory_xact_lock(917380642)")
+                    self._cleanup_expired(cur, now)
+                    tuple_until = self._suppressed_until(cur, "tuple", tuple_name)
+                    family_until = self._suppressed_until(cur, "family", family)
+                    if tuple_until and tuple_until > now:
+                        self._conn.commit()
+                        return AdmissionDecision(False, reason="tuple_suppressed", suppressed_until_seconds=(tuple_until - now).total_seconds())
+                    if family_until and family_until > now:
+                        self._conn.commit()
+                        return AdmissionDecision(False, reason="provider_family_suppressed", suppressed_until_seconds=(family_until - now).total_seconds())
+                    if self.tuple_limit > 0 and self._lease_count(cur, "tuple", tuple_name) >= self.tuple_limit:
+                        self._conn.commit()
+                        return AdmissionDecision(False, reason="tuple_inflight_limit")
+                    if self.family_limit > 0 and self._lease_count(cur, "family", family) >= self.family_limit:
+                        self._conn.commit()
+                        return AdmissionDecision(False, reason="provider_family_inflight_limit")
+                    if workload_scope and self.workload_scope_limit > 0 and self._lease_count(cur, "workload_scope", workload_scope) >= self.workload_scope_limit:
+                        self._conn.commit()
+                        return AdmissionDecision(False, reason="workload_scope_inflight_limit")
+                    lease_id = uuid4().hex
+                    expires_at = now + timedelta(seconds=self.lease_ttl_seconds)
+                    rows = [("tuple", tuple_name), ("family", family)]
+                    if workload_scope:
+                        rows.append(("workload_scope", workload_scope))
+                    for kind, key in rows:
+                        cur.execute(
+                            "INSERT INTO gpucall_admission_leases(lease_id, kind, key, expires_at) VALUES (%s, %s, %s, %s)",
+                            (lease_id, kind, key, expires_at),
+                        )
+                self._conn.commit()
+                return AdmissionDecision(True, lease=AdmissionLease(tuple=tuple_name, family=family, workload_scope=workload_scope, lease_id=lease_id))
+            except Exception:
+                self._conn.rollback()
+                raise
+
+    async def release(self, lease: AdmissionLease | None) -> None:
+        if lease is None:
+            return
+        if not lease.lease_id:
+            await super().release(lease)
+            return
+        await asyncio.to_thread(self._release_sync, lease.lease_id)
+
+    def _release_sync(self, lease_id: str) -> None:
+        with self._thread_lock, self._conn.cursor() as cur:
+            cur.execute("DELETE FROM gpucall_admission_leases WHERE lease_id = %s", (lease_id,))
+        self._conn.commit()
+
+    async def suppress(self, tuple_name: str, *, code: str | None = None) -> None:
+        await asyncio.to_thread(self._suppress_sync, tuple_name, code)
+
+    def _suppress_sync(self, tuple_name: str, code: str | None) -> None:
+        family = self.family_for(tuple_name)
+        until = datetime.now(timezone.utc) + timedelta(seconds=self.cooldown_seconds)
+        with self._thread_lock, self._conn.cursor() as cur:
+            for kind, key in (("tuple", tuple_name), ("family", family)):
+                cur.execute(
+                    """
+                    INSERT INTO gpucall_admission_suppression(kind, key, suppressed_until, code)
+                    VALUES (%s, %s, %s, %s)
+                    ON CONFLICT(kind, key) DO UPDATE SET
+                      suppressed_until = GREATEST(gpucall_admission_suppression.suppressed_until, excluded.suppressed_until),
+                      code = excluded.code
+                    """,
+                    (kind, key, until, code),
+                )
+        self._conn.commit()
+
+    def snapshot(self) -> dict[str, object]:
+        return self._snapshot_sync()
+
+    def _snapshot_sync(self) -> dict[str, object]:
+        now = datetime.now(timezone.utc)
+        with self._thread_lock, self._conn.cursor() as cur:
+            self._cleanup_expired(cur, now)
+            cur.execute("SELECT kind, key, count(*) FROM gpucall_admission_leases GROUP BY kind, key ORDER BY kind, key")
+            lease_rows = cur.fetchall()
+            cur.execute(
+                "SELECT kind, key, suppressed_until FROM gpucall_admission_suppression WHERE suppressed_until > %s ORDER BY kind, key",
+                (now,),
+            )
+            suppressed_rows = cur.fetchall()
+        self._conn.commit()
+        tuple_inflight: dict[str, int] = {}
+        family_inflight: dict[str, int] = {}
+        workload_scope_inflight: dict[str, int] = {}
+        for kind, key, count in lease_rows:
+            target = {
+                "tuple": tuple_inflight,
+                "family": family_inflight,
+                "workload_scope": workload_scope_inflight,
+            }.get(str(kind))
+            if target is not None:
+                target[str(key)] = int(count)
+        suppressed_tuples: dict[str, float] = {}
+        suppressed_families: dict[str, float] = {}
+        for kind, key, until in suppressed_rows:
+            remaining = round((until - now).total_seconds(), 3)
+            if kind == "tuple":
+                suppressed_tuples[str(key)] = remaining
+            elif kind == "family":
+                suppressed_families[str(key)] = remaining
+        return {
+            "backend": "postgres",
+            "tuple_limit": self.tuple_limit,
+            "provider_family_limit": self.family_limit,
+            "workload_scope_limit": self.workload_scope_limit,
+            "cooldown_seconds": self.cooldown_seconds,
+            "lease_ttl_seconds": self.lease_ttl_seconds,
+            "tuple_inflight": tuple_inflight,
+            "provider_family_inflight": family_inflight,
+            "workload_scope_inflight": workload_scope_inflight,
+            "suppressed_tuples": suppressed_tuples,
+            "suppressed_provider_families": suppressed_families,
+        }
+
+    def close(self) -> None:
+        self._conn.close()
+
+    @staticmethod
+    def _cleanup_expired(cur: Any, now: datetime) -> None:
+        cur.execute("DELETE FROM gpucall_admission_leases WHERE expires_at <= %s", (now,))
+        cur.execute("DELETE FROM gpucall_admission_suppression WHERE suppressed_until <= %s", (now,))
+
+    @staticmethod
+    def _lease_count(cur: Any, kind: str, key: str) -> int:
+        cur.execute("SELECT count(*) FROM gpucall_admission_leases WHERE kind = %s AND key = %s", (kind, key))
+        row = cur.fetchone()
+        return int(row[0] if row else 0)
+
+    @staticmethod
+    def _suppressed_until(cur: Any, kind: str, key: str) -> datetime | None:
+        cur.execute("SELECT suppressed_until FROM gpucall_admission_suppression WHERE kind = %s AND key = %s", (kind, key))
+        row = cur.fetchone()
+        return row[0] if row else None
 
 
 def _tuple_family(spec: ExecutionTupleSpec) -> str:

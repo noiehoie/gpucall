@@ -118,12 +118,19 @@ def test_database_url_selects_postgres_stores(monkeypatch, tmp_path) -> None:
         def __init__(self, dsn):
             self.dsn = dsn
 
+    class FakePostgresAdmissionController:
+        def __init__(self, dsn, tuples):
+            self.dsn = dsn
+            self.tuples = tuples
+
     monkeypatch.setattr(app_module, "PostgresJobStore", FakePostgresJobStore)
     monkeypatch.setattr(app_module, "PostgresIdempotencyStore", FakePostgresIdempotencyStore)
+    monkeypatch.setattr(app_module, "PostgresAdmissionController", FakePostgresAdmissionController)
     monkeypatch.setenv("GPUCALL_DATABASE_URL", "postgresql://user:pass@db/gpucall")
 
     assert app_module._job_store(tmp_path).dsn == "postgresql://user:pass@db/gpucall"
     assert app_module._idempotency_store(tmp_path).dsn == "postgresql://user:pass@db/gpucall"
+    assert app_module._admission_controller({}).dsn == "postgresql://user:pass@db/gpucall"
 
 
 def test_sync_endpoint_auto_selects_recipe(tmp_path) -> None:
@@ -264,6 +271,7 @@ def test_async_endpoint_returns_202_and_job_id(tmp_path) -> None:
 
     assert response.status_code == 202
     assert response.json()["job_id"]
+    assert response.json()["state"] == "QUEUED"
     assert response.json()["status_url"].startswith("/v2/jobs/")
 
 
@@ -317,6 +325,7 @@ async def test_sqlite_job_store_persists_inline_result(tmp_path) -> None:
         )
     )
 
+    assert job.state is JobState.QUEUED
     await store.update(job.job_id, state=JobState.COMPLETED, result=TupleResult(kind="inline", value="ok"))
     loaded = await SQLiteJobStore(tmp_path / "state.db").get(job.job_id)
 

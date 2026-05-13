@@ -34,7 +34,7 @@ class SQLiteJobStore(JobStore):
         self._conn.commit()
 
     async def create(self, plan: CompiledPlan, *, owner_identity: str | None = None) -> JobRecord:
-        job = JobRecord(job_id=uuid4().hex, state=JobState.PENDING, plan=plan, owner_identity=owner_identity)
+        job = JobRecord(job_id=uuid4().hex, state=JobState.QUEUED, plan=plan, owner_identity=owner_identity)
         async with self._lock:
             self._upsert(job)
         return job

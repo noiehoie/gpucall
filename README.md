@@ -425,6 +425,11 @@ therefore applies admission control before every tuple start:
 - per-request fallback cap: `GPUCALL_MAX_FALLBACK_ATTEMPTS`
 - per-request provider-family attempt cap: `GPUCALL_MAX_PROVIDER_FAMILY_ATTEMPTS`
 
+When `GPUCALL_DATABASE_URL` points to Postgres, gateway jobs, idempotency, and
+admission leases/suppressions are shared through Postgres so multi-process or
+multi-container gateways see the same in-flight and cooldown state. If the
+variable is unset, SQLite/in-memory state remains the local dev/test fallback.
+
 `GET /readyz` only reports process readiness. Use
 `GET /v2/readiness/intents/{intent}` for production routing readiness: it
 reports static eligible tuples, live-ready tuples, live-blocked tuples,

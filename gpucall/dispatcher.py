@@ -35,7 +35,7 @@ class JobStore:
         self._lock = asyncio.Lock()
 
     async def create(self, plan: CompiledPlan, *, owner_identity: str | None = None) -> JobRecord:
-        job = JobRecord(job_id=uuid4().hex, state=JobState.PENDING, plan=plan, owner_identity=owner_identity)
+        job = JobRecord(job_id=uuid4().hex, state=JobState.QUEUED, plan=plan, owner_identity=owner_identity)
         async with self._lock:
             self._jobs[job.job_id] = job
         return job
@@ -407,12 +407,7 @@ class Dispatcher:
             self._commit_async_budget(plan)
         except asyncio.CancelledError:
             current = await self.jobs.get(job_id)
-            if current is not None and current.state not in {
-                JobState.COMPLETED,
-                JobState.FAILED,
-                JobState.CANCELLED,
-                JobState.EXPIRED,
-            }:
+            if current is not None and not is_terminal_job_state(current.state):
                 await self.jobs.update(job_id, state=JobState.CANCELLED, error="job cancelled")
             self.audit.append("job.cancelled", {"job_id": job_id})
             self._release_async_budget(plan)
@@ -460,6 +455,17 @@ def _storage_safe_plan(plan: CompiledPlan) -> CompiledPlan:
     return plan.model_copy(
         update={"input_refs": [], "inline_inputs": {}, "messages": [], "system_prompt": None, "attestations": attestations}
     )
+
+
+def is_terminal_job_state(state: JobState) -> bool:
+    return state in {
+        JobState.SUCCEEDED,
+        JobState.COMPLETED,
+        JobState.FAILED,
+        JobState.CANCELLED,
+        JobState.EXPIRED,
+        JobState.COMPLETED_AFTER_CALLER_TIMEOUT,
+    }
 
 
 def _lease_audit(handle: RemoteHandle) -> dict[str, object]:
@@ -678,7 +684,7 @@ class LeaseReaper:
             await asyncio.sleep(self.interval_seconds)
             now = datetime.now(timezone.utc)
             for job in await self.jobs.all():
-                if job.state in {JobState.COMPLETED, JobState.FAILED, JobState.CANCELLED, JobState.EXPIRED}:
+                if is_terminal_job_state(job.state):
                     continue
                 if job.created_at.timestamp() + job.plan.lease_ttl_seconds <= now.timestamp():
                     await self.jobs.update(job.job_id, state=JobState.EXPIRED, error="lease expired")

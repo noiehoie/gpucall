@@ -5,9 +5,10 @@ The bundled Compose database is the production-like default. SQLite remains a
 lightweight fallback for local development and tests when `GPUCALL_DATABASE_URL`
 is unset.
 
-- Jobs and idempotency: Postgres with `GPUCALL_DATABASE_URL`, seeded by `deploy/postgres/001_init.sql`.
+- Jobs, idempotency, and admission leases/suppressions: Postgres with `GPUCALL_DATABASE_URL`, seeded by `deploy/postgres/001_init.sql` plus gateway-managed admission tables.
 - Local fallback jobs: SQLite WAL at `$XDG_STATE_HOME/gpucall/state.db`.
 - Observed registry and circuit breakers: SQLite WAL at `$XDG_STATE_HOME/gpucall/registry.db`.
+- Local fallback admission: in-process memory, suitable only for a single local gateway process.
 - Audit: JSONL hash chain at `$XDG_STATE_HOME/gpucall/audit/trail.jsonl`.
 
 The registry loader migrates legacy `registry.jsonl` observations into `registry.db` when the SQLite database is empty.

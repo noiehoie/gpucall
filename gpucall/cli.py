@@ -55,6 +55,7 @@ from gpucall.targeting import has_configured_endpoint_or_target, is_configured_c
 from gpucall.sqlite_store import SQLiteJobStore
 from gpucall.tenant import TenantUsageLedger
 from gpucall.validator_plan import build_validator_plan, dumps_validator_plan
+from gpucall.dispatcher import is_terminal_job_state
 
 
 def main() -> None:
@@ -1598,7 +1599,7 @@ async def provider_smoke_command(
                 loaded = await runtime.jobs.get(job.job_id)
                 if loaded is not None:
                     current = loaded
-                    if loaded.state in {JobState.COMPLETED, JobState.FAILED, JobState.CANCELLED, JobState.EXPIRED}:
+                    if is_terminal_job_state(loaded.state):
                         break
                 await asyncio.sleep(1.0)
             summary = {
@@ -2181,7 +2182,7 @@ async def jobs_command(job_id: str | None, limit: int, *, scrub_inputs: bool = F
         expired = 0
         now = datetime.now(timezone.utc)
         for job in await store.all():
-            if job.state not in {JobState.PENDING, JobState.RUNNING}:
+            if job.state not in {JobState.QUEUED, JobState.PENDING, JobState.RUNNING}:
                 continue
             if job.created_at.timestamp() + job.plan.lease_ttl_seconds <= now.timestamp():
                 await store.update(job.job_id, state=JobState.EXPIRED, error="lease expired")

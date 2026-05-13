@@ -365,6 +365,12 @@ tuple 起動前に admission control を適用します。
 - request 内 fallback 上限: `GPUCALL_MAX_FALLBACK_ATTEMPTS`
 - request 内 provider-family attempt 上限: `GPUCALL_MAX_PROVIDER_FAMILY_ATTEMPTS`
 
+`GPUCALL_DATABASE_URL` が Postgres を指している場合、gateway jobs、
+idempotency、admission leases/suppressions は Postgres で共有されます。
+これにより multi-process / multi-container gateway が同じ in-flight と
+cooldown state を見ます。未設定時は local dev/test 用の SQLite/in-memory
+fallback です。
+
 `GET /readyz` は process readiness だけを返します。本番 routing readiness は
 `GET /v2/readiness/intents/{intent}` を使います。この endpoint は static
 eligible tuples、live-ready tuples、live-blocked tuples、suppressed provider

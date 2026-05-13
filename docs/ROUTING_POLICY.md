@@ -165,6 +165,12 @@ the tuple and its provider family for a bounded cooldown so concurrent plans do
 not stampede through the same failing route. Admission rejection is a routing
 state, not an application parse error.
 
+In production-like deployments with `GPUCALL_DATABASE_URL=postgresql://...`,
+admission leases and provider-family suppression state are stored in Postgres
+beside jobs and idempotency records. This makes live capacity control shared
+across gateway processes/containers. Without `GPUCALL_DATABASE_URL`, admission
+falls back to in-process memory for local development and tests.
+
 Operators and callers that need a live answer should not infer it from
 `/readyz`. Use `/v2/readiness/intents/{intent}` or `gpucall readiness` to compare
 static eligible tuples with live-ready tuples and to see suppressed families,

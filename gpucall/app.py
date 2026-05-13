@@ -60,8 +60,8 @@ from gpucall.audit import AuditTrail
 from gpucall.compiler import GovernanceCompiler, GovernanceError
 from gpucall.config import ConfigError, default_config_dir, default_state_dir, load_config
 from gpucall.credentials import credentials_path, load_credentials, save_credentials
-from gpucall.admission import AdmissionController
-from gpucall.dispatcher import Dispatcher, JobStore, LeaseReaper, TupleReconciler
+from gpucall.admission import AdmissionController, PostgresAdmissionController
+from gpucall.dispatcher import Dispatcher, JobStore, LeaseReaper, TupleReconciler, is_terminal_job_state
 from gpucall.domain import ApiKeyHandoffMode, ChatMessage, DataRef, ExecutionMode, InlineValue, JobRecord, JobState, TenantSpec, TupleError, ResponseFormat, TaskRequest, recipe_requirements
 from gpucall.domain import PresignGetRequest, PresignGetResponse, PresignPutRequest, PresignPutResponse
 from gpucall.object_store import ObjectStore
@@ -165,6 +165,13 @@ def _idempotency_store(state_dir: Path):
     if database_url and database_url.startswith(("postgres://", "postgresql://")):
         return PostgresIdempotencyStore(database_url)
     return SQLiteIdempotencyStore(state_dir / "idempotency.db")
+
+
+def _admission_controller(tuples: dict[str, Any]) -> AdmissionController:
+    database_url = _database_url()
+    if database_url and database_url.startswith(("postgres://", "postgresql://")):
+        return PostgresAdmissionController(database_url, tuples)
+    return AdmissionController(tuples)
 
 
 _BOOTSTRAP_TENANT_NAME_RE = re.compile(r"^[a-z0-9][a-z0-9._-]{1,62}$")
@@ -278,7 +285,7 @@ def build_runtime(config_dir: Path) -> Runtime:
     object_store = ObjectStore(config.object_store) if config.object_store is not None else None
     jobs = _job_store(state_dir)
     adapters = build_adapters(tuples)
-    admission = AdmissionController(tuples)
+    admission = _admission_controller(tuples)
     compiler = GovernanceCompiler(
         policy=policy,
         recipes=recipes,
@@ -335,6 +342,9 @@ def create_app(config_dir: Path | None = None) -> FastAPI:
             close_jobs = getattr(runtime.jobs, "close", None)
             if callable(close_jobs):
                 close_jobs()
+            close_admission = getattr(runtime.dispatcher.admission, "close", None)
+            if callable(close_admission):
+                close_admission()
             idempotency_cache.close()
 
     app = FastAPI(title="gpucall v2.0", version="2.0.1", lifespan=lifespan)
@@ -942,7 +952,7 @@ def create_app(config_dir: Path | None = None) -> FastAPI:
             raise HTTPException(status_code=404, detail="job not found")
         if job.owner_identity is not None and job.owner_identity != idempotency_identity(http_request):
             raise HTTPException(status_code=404, detail="job not found")
-        if job.state in {JobState.COMPLETED, JobState.FAILED, JobState.CANCELLED, JobState.EXPIRED}:
+        if is_terminal_job_state(job.state):
             return JSONResponse({"job_id": job.job_id, "state": job.state, "cancelled": False})
         runtime.dispatcher.cancel_job(job_id)
         updated = await runtime.jobs.get(job_id)
@@ -978,7 +988,7 @@ def create_app(config_dir: Path | None = None) -> FastAPI:
 
 async def recover_interrupted_jobs(runtime: Runtime) -> None:
     for job in await runtime.jobs.all():
-        if job.state not in {JobState.PENDING, JobState.RUNNING}:
+        if job.state not in {JobState.QUEUED, JobState.PENDING, JobState.RUNNING}:
             continue
         await runtime.jobs.update(job.job_id, state=JobState.EXPIRED, error="gateway restarted before job completion")
         runtime.dispatcher.audit.append("job.interrupted", {"job_id": job.job_id, "plan_id": job.plan.plan_id})
