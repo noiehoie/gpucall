@@ -805,6 +805,53 @@ async def test_runpod_vllm_official_route_uses_openai_chat_route(monkeypatch) ->
     assert calls[1][2]["stream"] is False
 
 
+async def test_runpod_vllm_requests_timeout_is_provider_timeout(monkeypatch) -> None:
+    class ReadTimeout(Exception):
+        pass
+
+    ReadTimeout.__module__ = "requests.exceptions"
+
+    class FakeHealthResponse:
+        status_code = 200
+        text = "{}"
+
+        def json(self) -> dict[str, object]:
+            return {"workers": {"ready": 1, "running": 0, "initializing": 0, "throttled": 0, "unhealthy": 0}}
+
+    class FakeSession:
+        def mount(self, *_args, **_kwargs) -> None:
+            return None
+
+        def get(self, *_args, **_kwargs):
+            return FakeHealthResponse()
+
+        def post(self, *_args, **_kwargs):
+            raise ReadTimeout("read timed out")
+
+    fake_requests = types.SimpleNamespace(Session=lambda: FakeSession())
+    fake_adapters = types.SimpleNamespace(HTTPAdapter=lambda **_kwargs: object())
+    fake_retry = types.SimpleNamespace(Retry=lambda **_kwargs: object())
+    monkeypatch.setitem(sys.modules, "requests", fake_requests)
+    monkeypatch.setitem(sys.modules, "requests.adapters", fake_adapters)
+    monkeypatch.setitem(sys.modules, "urllib3.util.retry", fake_retry)
+
+    adapter = RunpodVllmServerlessAdapter(
+        api_key="rk_test",
+        endpoint_id="endpoint-1",
+        image="runpod/worker-v1-vllm:v2.18.1",
+        endpoint_contract="openai-chat-completions",
+        model="Qwen/Qwen2.5-1.5B-Instruct",
+    )
+    plan = plan_payload_plan().model_copy(update={"messages": [ChatMessage(role="user", content="hello")]})
+    handle = await adapter.start(plan)
+
+    with pytest.raises(TupleError) as caught:
+        await adapter.wait(handle, plan)
+
+    assert caught.value.code == "PROVIDER_TIMEOUT"
+    assert caught.value.status_code == 504
+
+
 def test_runpod_worker_vllm_health_rejects_throttled_endpoint() -> None:
     health = {"workers": {"idle": 0, "initializing": 0, "ready": 0, "running": 0, "throttled": 1, "unhealthy": 0}}
 

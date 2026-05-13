@@ -59,6 +59,41 @@ def _provider_http_error_code(status_code: int, body: str | None = None) -> str 
     return None
 
 
+def _request_get(url: str, *, error_message: str, **kwargs: Any) -> Any:
+    try:
+        return requests_session().get(url, **kwargs)
+    except Exception as exc:
+        mapped = _request_exception_to_tuple_error(exc, error_message)
+        if mapped is not None:
+            raise mapped from exc
+        raise
+
+
+def _request_post(url: str, *, error_message: str, **kwargs: Any) -> Any:
+    try:
+        return requests_session().post(url, **kwargs)
+    except Exception as exc:
+        mapped = _request_exception_to_tuple_error(exc, error_message)
+        if mapped is not None:
+            raise mapped from exc
+        raise
+
+
+def _request_exception_to_tuple_error(exc: Exception, message: str) -> TupleError | None:
+    exc_name = exc.__class__.__name__.lower()
+    exc_module = exc.__class__.__module__
+    if "timeout" in exc_name:
+        return TupleError(f"{message}: timeout", retryable=True, status_code=504, code="PROVIDER_TIMEOUT")
+    if exc_module.startswith("requests") or exc_module.startswith("urllib3"):
+        return TupleError(
+            f"{message}: provider request failed",
+            retryable=True,
+            status_code=503,
+            code="PROVIDER_UPSTREAM_UNAVAILABLE",
+        )
+    return None
+
+
 def runpod_endpoint_catalog_findings(tuples: list[Any], credentials: dict[str, dict[str, str]]) -> list[dict[str, Any]]:
     api_key = credentials.get("runpod", {}).get("api_key")
     findings: list[dict[str, Any]] = []
@@ -232,8 +267,9 @@ class RunpodVllmServerlessAdapter(TupleAdapter):
                 status_code=503,
                 code=runpod_vllm_health_rejection_code(rejection_reason),
             )
-        response = requests_session().post(
+        response = _request_post(
             f"{self.base_url}/{self.endpoint_id}/openai/v1/chat/completions",
+            error_message="RunPod worker-vLLM chat completion failed",
             headers=self._headers(),
             json=self._payload(plan),
             timeout=max(float(plan.timeout_seconds), 1.0),
@@ -318,8 +354,9 @@ class RunpodVllmServerlessAdapter(TupleAdapter):
         return {"authorization": f"Bearer {self.api_key}", "content-type": "application/json", "accept": "application/json"}
 
     def _health_sync(self) -> dict[str, Any]:
-        response = requests_session().get(
+        response = _request_get(
             f"{self.base_url}/{self.endpoint_id}/health",
+            error_message="RunPod worker-vLLM health check failed",
             headers=self._headers(),
             timeout=30,
         )
@@ -524,8 +561,9 @@ class RunpodServerlessAdapter(TupleAdapter):
             await asyncio.to_thread(self._cancel_sync, handle.remote_id)
 
     def _start_sync(self, plan: CompiledPlan) -> dict[str, str]:
-        response = requests_session().post(
+        response = _request_post(
             f"{self.base_url}/{self.endpoint_id}/run",
+            error_message="RunPod start failed",
             headers=self._headers(),
             json={
                 "input": self._payload(plan),
@@ -543,8 +581,9 @@ class RunpodServerlessAdapter(TupleAdapter):
         return {"job_id": str(job_id)}
 
     def _runsync_sync(self, plan: CompiledPlan) -> dict[str, Any]:
-        response = requests_session().post(
+        response = _request_post(
             f"{self.base_url}/{self.endpoint_id}/runsync",
+            error_message="RunPod runsync failed",
             headers=self._headers(),
             json={
                 "input": self._payload(plan),
@@ -574,8 +613,9 @@ class RunpodServerlessAdapter(TupleAdapter):
         queue_seen_at: float | None = None
         queue_limit = _queue_saturation_seconds(plan.timeout_seconds)
         while time.monotonic() < deadline:
-            response = requests_session().get(
+            response = _request_get(
                 f"{self.base_url}/{self.endpoint_id}/status/{handle.remote_id}",
+                error_message="RunPod status failed",
                 headers=self._headers(),
                 timeout=10,
             )
@@ -605,8 +645,9 @@ class RunpodServerlessAdapter(TupleAdapter):
         raise TupleError("RunPod polling timed out", retryable=True, status_code=504, code="PROVIDER_POLL_TIMEOUT")
 
     def _cancel_sync(self, job_id: str) -> None:
-        response = requests_session().post(
+        response = _request_post(
             f"{self.base_url}/{self.endpoint_id}/cancel/{job_id}",
+            error_message="RunPod cancel failed",
             headers=self._headers(),
             timeout=10,
         )

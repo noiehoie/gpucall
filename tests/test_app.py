@@ -1249,6 +1249,23 @@ def test_provider_temporary_failure_artifact_marks_fallback_and_cancel(tmp_path,
     assert artifact["provider_error_class"]["typical_state"] == "IN_QUEUE"
 
 
+def test_code_less_tuple_error_is_not_provider_temporary_artifact(tmp_path, monkeypatch) -> None:
+    async def fake_execute_sync(_plan):
+        from gpucall.domain import TupleError
+
+        raise TupleError("tuple runtime failed", retryable=True, status_code=502)
+
+    with TestClient(create_app(copy_config(tmp_path))) as client:
+        monkeypatch.setattr(client.app.state.runtime.dispatcher, "execute_sync", fake_execute_sync)
+        response = client.post("/v2/tasks/sync", json={"task": "infer", "mode": "sync"})
+
+    assert response.status_code == 502
+    artifact = response.json()["failure_artifact"]
+    assert artifact["failure_kind"] == "tuple_runtime"
+    assert artifact["fallback_eligible"] is True
+    assert "provider_error_class" not in artifact
+
+
 def test_provider_quota_failure_artifact_is_not_blind_fallback(tmp_path, monkeypatch) -> None:
     async def fake_execute_sync(_plan):
         from gpucall.domain import TupleError

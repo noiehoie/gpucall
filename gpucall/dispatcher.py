@@ -25,7 +25,7 @@ from gpucall.domain import (
     ResponseFormatType,
 )
 from gpucall.execution.base import TupleAdapter, RemoteHandle
-from gpucall.provider_errors import is_provider_temporary_unavailable, should_suppress_provider_family
+from gpucall.provider_errors import is_provider_temporary_unavailable, provider_error_class, should_suppress_provider_family
 from gpucall.registry import ObservedRegistry
 
 
@@ -201,7 +201,7 @@ class Dispatcher:
                         {"plan_id": plan.plan_id, "tuple": tuple, "error": _tuple_error_audit(exc)},
                     )
 
-                    if not exc.retryable and not is_provider_error:
+                    if not _provider_error_fallback_eligible(exc):
                         raise
                     break
                 except asyncio.TimeoutError as exc:
@@ -213,6 +213,11 @@ class Dispatcher:
                     )
                     self.registry.record(
                         self._observation(tuple, started, success=False)
+                    )
+                    await self.admission.suppress(
+                        tuple,
+                        code=last_error.code,
+                        suppress_family=should_suppress_provider_family(last_error.code),
                     )
                     self.audit.append("tuple.timeout", {"plan_id": plan.plan_id, "tuple": tuple})
                     break
@@ -336,7 +341,7 @@ class Dispatcher:
                     {"plan_id": plan.plan_id, "tuple": tuple, "error": _tuple_error_audit(exc)},
                 )
 
-                if not exc.retryable and not is_provider_error:
+                if not _provider_error_fallback_eligible(exc):
                     raise
             except Exception as exc:
                 last_error = TupleError(
@@ -489,6 +494,13 @@ def _lease_audit(handle: RemoteHandle) -> dict[str, object]:
 
 def _job_error_message(exc: TupleError) -> str:
     return f"tuple execution failed ({exc.code or 'PROVIDER_ERROR'})"
+
+
+def _provider_error_fallback_eligible(exc: TupleError) -> bool:
+    if not is_provider_temporary_unavailable(exc.code):
+        return bool(exc.retryable)
+    provider_class = provider_error_class(exc.code)
+    return bool(provider_class and provider_class.fallback_eligible)
 
 
 def _validate_stream_event(plan: CompiledPlan, event: str) -> str:

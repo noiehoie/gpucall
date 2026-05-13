@@ -76,9 +76,9 @@ class AdmissionController:
             tuple_until = self._tuple_suppressed_until.get(tuple_name, 0.0)
             family_until = self._family_suppressed_until.get(family, 0.0)
             if tuple_until > now:
-                return AdmissionDecision(False, reason="tuple_suppressed", suppressed_until_seconds=tuple_until)
+                return AdmissionDecision(False, reason="tuple_suppressed", suppressed_until_seconds=tuple_until - now)
             if family_until > now:
-                return AdmissionDecision(False, reason="provider_family_suppressed", suppressed_until_seconds=family_until)
+                return AdmissionDecision(False, reason="provider_family_suppressed", suppressed_until_seconds=family_until - now)
             if self.tuple_limit > 0 and self._tuple_inflight.get(tuple_name, 0) >= self.tuple_limit:
                 return AdmissionDecision(False, reason="tuple_inflight_limit")
             if self.family_limit > 0 and self._family_inflight.get(family, 0) >= self.family_limit:

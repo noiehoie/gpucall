@@ -25,6 +25,7 @@ from gpucall.domain import (
     ResponseFormatType,
 )
 from gpucall.execution import EchoTuple, RemoteHandle
+from gpucall.provider_errors import provider_error_class
 from gpucall.registry import ObservedRegistry
 
 
@@ -191,8 +192,14 @@ async def test_dispatcher_fails_over_all_provider_temporary_unavailable_codes(tm
             jobs=JobStore(),
         )
 
-        result = await dispatcher.execute_sync(plan(["bad", "good"]))
+        provider_class = provider_error_class(code)
+        if provider_class is not None and not provider_class.fallback_eligible:
+            with pytest.raises(TupleError) as caught:
+                await dispatcher.execute_sync(plan(["bad", "good"]))
+            assert caught.value.code == code
+            continue
 
+        result = await dispatcher.execute_sync(plan(["bad", "good"]))
         assert result.value == "ok:infer:good"
         assert bad.cancelled_handles
 
@@ -251,6 +258,7 @@ async def test_capacity_failure_does_not_suppress_provider_family(monkeypatch) -
     assert first.allowed is False
     assert first.reason == "tuple_suppressed"
     assert second.allowed is True
+    assert 0 < first.suppressed_until_seconds <= 60
     await admission.release(second.lease)
 
 
@@ -316,6 +324,46 @@ async def test_dispatcher_stops_fallback_after_attempt_limit(tmp_path, monkeypat
     raw = (tmp_path / "audit.jsonl").read_text(encoding="utf-8")
     assert '"event_type":"plan.fallback_exhausted"' in raw
     assert '"event_type":"plan.completed"' not in raw
+
+
+@pytest.mark.asyncio
+async def test_fallback_ineligible_provider_code_does_not_blindly_fallback(tmp_path) -> None:
+    bad = ProviderCodeFailingTuple("bad", ProviderErrorCode.PROVIDER_QUOTA_EXCEEDED)
+    dispatcher = Dispatcher(
+        adapters={"bad": bad, "good": EchoTuple("good")},
+        registry=ObservedRegistry(),
+        audit=AuditTrail(tmp_path / "audit.jsonl"),
+        jobs=JobStore(),
+    )
+
+    with pytest.raises(TupleError) as caught:
+        await dispatcher.execute_sync(plan(["bad", "good"]))
+
+    assert caught.value.code == ProviderErrorCode.PROVIDER_QUOTA_EXCEEDED
+    raw = (tmp_path / "audit.jsonl").read_text(encoding="utf-8")
+    assert '"event_type":"plan.completed"' not in raw
+
+
+@pytest.mark.asyncio
+async def test_timeout_suppresses_tuple_for_later_plans(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("GPUCALL_PROVIDER_TEMPORARY_COOLDOWN_SECONDS", "60")
+    audit_path = tmp_path / "audit.jsonl"
+    dispatcher = Dispatcher(
+        adapters={"slow": HangingTuple("slow"), "good": EchoTuple("good", latency_seconds=0.0)},
+        registry=ObservedRegistry(),
+        audit=AuditTrail(audit_path),
+        jobs=JobStore(),
+    )
+    fast_timeout = plan(["slow", "good"]).model_copy(update={"timeout_seconds": 0.01})
+
+    first = await dispatcher.execute_sync(fast_timeout)
+    second = await dispatcher.execute_sync(fast_timeout)
+
+    assert first.value == "ok:infer:good"
+    assert second.value == "ok:infer:good"
+    raw = audit_path.read_text(encoding="utf-8")
+    assert '"event_type":"tuple.timeout"' in raw
+    assert '"reason":"tuple_suppressed"' in raw
 
 
 @pytest.mark.asyncio

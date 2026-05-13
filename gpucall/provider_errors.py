@@ -83,7 +83,9 @@ def is_provider_temporary_unavailable(code: str | None) -> bool:
 
 
 def provider_error_class(code: str | None) -> ProviderErrorClass | None:
-    return PROVIDER_TEMPORARY_UNAVAILABLE_ERRORS.get(code or "PROVIDER_ERROR")
+    if not code:
+        return None
+    return PROVIDER_TEMPORARY_UNAVAILABLE_ERRORS.get(code)
 
 
 def should_suppress_provider_family(code: str | None) -> bool:
