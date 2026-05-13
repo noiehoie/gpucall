@@ -180,7 +180,7 @@ def tuple_route_rejection_reason(
         if "openai-chat-completions" not in contracts:
             return "tuple does not declare OpenAI chat completions tool/function contract"
     if required_input_contracts and input_contracts:
-        missing = required_input_contracts - input_contracts
+        missing = _missing_input_contracts(required_input_contracts, input_contracts)
         if missing:
             return "tuple input_contracts missing: " + ", ".join(sorted(missing))
     if recipe.task == "vision" and "image" not in input_contracts:
@@ -285,33 +285,48 @@ def catalog_route_rejection_reason(
         if tuple.vram_gb < model.min_vram_gb:
             return "tuple vram_gb is below model catalog min_vram_gb"
         if required_input_contracts:
-            missing_contracts = sorted(set(required_input_contracts) - set(model.input_contracts))
+            missing_contracts = sorted(_missing_input_contracts(required_input_contracts, set(model.input_contracts)))
             if missing_contracts:
                 return "model input_contracts missing: " + ", ".join(missing_contracts)
         if recipe.task == "vision" and not model.supports_vision:
             return "model does not declare vision support"
         if recipe.guided_decoding and output_contract in {"json_object", "json_schema"} and not model.supports_guided_decoding:
             return "model does not declare guided decoding support"
-        if output_contract and model.output_contracts and output_contract not in model.output_contracts:
+        if output_contract and model.output_contracts and not _output_contract_satisfied(output_contract, set(model.output_contracts)):
             return "model output_contracts missing: " + output_contract
     if engine is not None:
         if model is not None and model.supported_engines and engine.name not in model.supported_engines:
             return "engine is not listed in model supported_engines"
         if required_input_contracts:
-            missing_engine_contracts = sorted(set(required_input_contracts) - set(engine.input_contracts))
+            missing_engine_contracts = sorted(_missing_input_contracts(required_input_contracts, set(engine.input_contracts)))
             if missing_engine_contracts:
                 return "engine input_contracts missing: " + ", ".join(missing_engine_contracts)
         if recipe.task == "vision" and not engine.supports_multimedia:
             return "engine does not declare multi-media support"
         if recipe.guided_decoding and output_contract in {"json_object", "json_schema"} and not engine.supports_guided_decoding:
             return "engine does not declare guided decoding support"
-        if output_contract and engine.output_contracts and output_contract not in engine.output_contracts:
+        if output_contract and engine.output_contracts and not _output_contract_satisfied(output_contract, set(engine.output_contracts)):
             return "engine output_contracts missing: " + output_contract
         if mode is ExecutionMode.STREAM and not engine.supports_streaming:
             return "engine does not declare streaming support"
         if required_input_contracts and "data_refs" in required_input_contracts and not engine.supports_data_refs:
             return "engine does not declare DataRef support"
     return None
+
+
+def _missing_input_contracts(required: set[str], declared: set[str]) -> set[str]:
+    missing = set(required) - set(declared)
+    if "text" in missing and "chat_messages" in declared:
+        missing.remove("text")
+    return missing
+
+
+def _output_contract_satisfied(required: str, declared: set[str]) -> bool:
+    if required in declared:
+        return True
+    if required == "plain-text" and "openai-chat-completions" in declared:
+        return True
+    return False
 
 
 def tuple_security_rejection_reason(*, policy: Policy, recipe: Recipe, tuple: ExecutionTupleSpec) -> str | None:

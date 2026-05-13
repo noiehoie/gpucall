@@ -224,6 +224,68 @@ def test_compiler_counts_tool_calls_in_context_estimate() -> None:
     assert with_tool_call.attestations["context_estimate"]["required_model_len"] > base.attestations["context_estimate"]["required_model_len"]
 
 
+def test_compiler_routes_inline_text_to_chat_only_openai_tuple() -> None:
+    compiler = build_compiler()
+    compiler.policy = compiler.policy.model_copy(update={"tuples": TuplePolicy(allow=["chat"], deny=[])})
+    compiler.recipes["r1"] = compiler.recipes["r1"].model_copy(
+        update={
+            "required_model_capabilities": ["summarization"],
+            "output_contract": "plain-text",
+        }
+    )
+    compiler.tuples = {
+        "chat": ExecutionTupleSpec(
+            name="chat",
+            adapter="runpod-vllm-serverless",
+            execution_surface="managed_endpoint",
+            gpu="RUNPOD_RTX4000_ADA",
+            vram_gb=20,
+            max_model_len=32768,
+            cost_per_second=0.00016,
+            modes=[ExecutionMode.SYNC, ExecutionMode.ASYNC],
+            target="rp-endpoint",
+            model_ref="qwen-chat",
+            engine_ref="runpod-vllm-openai",
+            input_contracts=["chat_messages"],
+            output_contract="openai-chat-completions",
+            endpoint_contract="openai-chat-completions",
+            model="Qwen/Qwen2.5-1.5B-Instruct",
+        )
+    }
+    compiler.models = {
+        "qwen-chat": ModelSpec(
+            name="qwen-chat",
+            provider_model_id="Qwen/Qwen2.5-1.5B-Instruct",
+            capabilities=["summarization"],
+            max_model_len=32768,
+            min_vram_gb=16,
+            supported_engines=["runpod-vllm-openai"],
+            input_contracts=["chat_messages"],
+            output_contracts=["plain-text", "openai-chat-completions"],
+        )
+    }
+    compiler.engines = {
+        "runpod-vllm-openai": EngineSpec(
+            name="runpod-vllm-openai",
+            kind="openai-compatible-chat",
+            input_contracts=["chat_messages"],
+            output_contracts=["openai-chat-completions"],
+        )
+    }
+
+    plan = compiler.compile(
+        TaskRequest(
+            task="infer",
+            mode="sync",
+            recipe="r1",
+            inline_inputs={"prompt": {"value": "hi", "content_type": "text/plain"}},
+            max_tokens=8,
+        )
+    )
+
+    assert plan.tuple_chain == ["chat"]
+
+
 def test_compiler_auto_selects_smallest_capable_recipe_for_weight() -> None:
     compiler = build_compiler()
     small = compiler.recipes["r1"].model_copy(
