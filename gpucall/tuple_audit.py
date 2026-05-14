@@ -18,9 +18,20 @@ from gpucall.routing import tuple_route_rejection_reason
 from gpucall.targeting import is_configured_target
 
 
-def tuple_audit_report(config: Any, *, config_dir: Path, recipe_name: str | None = None, live: bool = False) -> dict[str, Any]:
+def tuple_audit_report(
+    config: Any,
+    *,
+    config_dir: Path,
+    recipe_name: str | None = None,
+    live: bool = False,
+    include_rows: bool = True,
+    include_candidates: bool = True,
+) -> dict[str, Any]:
     recipes = _selected_recipes(config.recipes, recipe_name)
-    candidates = _load_tuple_candidates(config_dir)
+    candidates = _load_tuple_candidates(config_dir) if include_candidates else []
+    validation_index = _validation_artifact_index(config_dir)
+    expected_config_hash = _config_hash(config_dir)
+    expected_commit = _git_commit()
     creds = load_credentials()
     report: dict[str, Any] = {
         "schema_version": 1,
@@ -50,7 +61,17 @@ def tuple_audit_report(config: Any, *, config_dir: Path, recipe_name: str | None
     if live:
         report["live_catalog"]["findings"] = live_tuple_catalog_findings(config.tuples, creds)
     for recipe in recipes:
-        report["recipes"][recipe.name] = _recipe_audit(config, config_dir=config_dir, recipe=recipe, candidates=candidates)
+        report["recipes"][recipe.name] = _recipe_audit(
+            config,
+            config_dir=config_dir,
+            recipe=recipe,
+            candidates=candidates,
+            validation_index=validation_index,
+            expected_config_hash=expected_config_hash,
+            expected_commit=expected_commit,
+            include_rows=include_rows,
+            include_candidates=include_candidates,
+        )
     return report
 
 
@@ -63,14 +84,54 @@ def _selected_recipes(recipes: Mapping[str, Recipe], recipe_name: str | None) ->
     return sorted([recipe for recipe in recipes.values() if recipe.auto_select], key=lambda item: item.name)
 
 
-def _recipe_audit(config: Any, *, config_dir: Path, recipe: Recipe, candidates: list[dict[str, Any]]) -> dict[str, Any]:
+def _recipe_audit(
+    config: Any,
+    *,
+    config_dir: Path,
+    recipe: Recipe,
+    candidates: list[dict[str, Any]],
+    validation_index: Mapping[tuple[str, str], list[dict[str, Any]]],
+    expected_config_hash: str,
+    expected_commit: str | None,
+    include_rows: bool,
+    include_candidates: bool,
+) -> dict[str, Any]:
+    if not include_rows:
+        return _recipe_audit_summary(
+            config,
+            config_dir=config_dir,
+            recipe=recipe,
+            candidates=candidates,
+            validation_index=validation_index,
+            expected_config_hash=expected_config_hash,
+            expected_commit=expected_commit,
+            include_candidates=include_candidates,
+        )
     required_inputs = _required_input_contracts(recipe)
     active_rows = [
-        _active_tuple_row(config, config_dir=config_dir, recipe=recipe, tuple=tuple, required_inputs=required_inputs)
+        _active_tuple_row(
+            config,
+            config_dir=config_dir,
+            recipe=recipe,
+            tuple=tuple,
+            required_inputs=required_inputs,
+            validation_index=validation_index,
+            expected_config_hash=expected_config_hash,
+            expected_commit=expected_commit,
+        )
         for tuple in sorted(config.tuples.values(), key=lambda item: item.name)
     ]
     candidate_rows = [
-        _candidate_row(config, config_dir=config_dir, recipe=recipe, candidate=candidate, required_inputs=required_inputs)
+        _candidate_row(
+            config,
+            config_dir=config_dir,
+            recipe=recipe,
+            candidate=candidate,
+            required_inputs=required_inputs,
+            validation_index=validation_index,
+            expected_config_hash=expected_config_hash,
+            expected_commit=expected_commit,
+        )
         for candidate in candidates
     ]
     active_fit = [row for row in active_rows if row["recipe_fit"]["eligible"]]
@@ -91,6 +152,89 @@ def _recipe_audit(config: Any, *, config_dir: Path, recipe: Recipe, candidates: 
     }
 
 
+def _recipe_audit_summary(
+    config: Any,
+    *,
+    config_dir: Path,
+    recipe: Recipe,
+    candidates: list[dict[str, Any]],
+    validation_index: Mapping[tuple[str, str], list[dict[str, Any]]],
+    expected_config_hash: str,
+    expected_commit: str | None,
+    include_candidates: bool,
+) -> dict[str, Any]:
+    required_inputs = _required_input_contracts(recipe)
+    active_fit_count = 0
+    production_ready_names: list[str] = []
+    validation_ready_names: list[str] = []
+    candidate_fit_names: list[str] = []
+    for tuple in sorted(config.tuples.values(), key=lambda item: item.name):
+        model = config.models.get(tuple.model_ref) if tuple.model_ref else None
+        engine = config.engines.get(tuple.engine_ref) if tuple.engine_ref else None
+        reason = tuple_route_rejection_reason(
+            policy=config.policy,
+            recipe=recipe,
+            tuple=tuple,
+            model=model,
+            engine=engine,
+            mode=_first_mode(recipe),
+            required_len=recipe_requirements(recipe).context_budget_tokens,
+            required_input_contracts=required_inputs,
+            auto_selected=True,
+        )
+        if reason is not None:
+            continue
+        active_fit_count += 1
+        if _adapter_config_findings(tuple):
+            continue
+        validation = _matching_validation(
+            tuple=tuple,
+            recipe=recipe,
+            validation_index=validation_index,
+            expected_config_hash=expected_config_hash,
+            expected_commit=expected_commit,
+        )
+        if validation["matched"]:
+            production_ready_names.append(tuple.name)
+        else:
+            validation_ready_names.append(tuple.name)
+    if include_candidates:
+        for candidate in candidates:
+            try:
+                tuple = _tuple_from_candidate(candidate, config)
+            except Exception:
+                continue
+            model = config.models.get(tuple.model_ref) if tuple.model_ref else None
+            engine = config.engines.get(tuple.engine_ref) if tuple.engine_ref else None
+            reason = tuple_route_rejection_reason(
+                policy=config.policy,
+                recipe=recipe,
+                tuple=tuple,
+                model=model,
+                engine=engine,
+                mode=_first_mode(recipe),
+                required_len=recipe_requirements(recipe).context_budget_tokens,
+                required_input_contracts=required_inputs,
+                auto_selected=False,
+            )
+            if reason is None:
+                candidate_fit_names.append(str(candidate.get("name") or tuple.name))
+    return {
+        "task": recipe.task,
+        "required_input_contracts": sorted(required_inputs),
+        "active_fit_count": active_fit_count,
+        "production_ready_count": len(production_ready_names),
+        "ready_for_validation_count": len(validation_ready_names),
+        "candidate_fit_count": len(candidate_fit_names),
+        "surfaces": {},
+        "routing_decision": _routing_decision(
+            [{"name": name} for name in production_ready_names],
+            [{"name": name} for name in validation_ready_names],
+            [{"name": name} for name in candidate_fit_names],
+        ),
+    }
+
+
 def _active_tuple_row(
     config: Any,
     *,
@@ -98,6 +242,9 @@ def _active_tuple_row(
     recipe: Recipe,
     tuple: ExecutionTupleSpec,
     required_inputs: set[str],
+    validation_index: Mapping[tuple[str, str], list[dict[str, Any]]],
+    expected_config_hash: str,
+    expected_commit: str | None,
 ) -> dict[str, Any]:
     model = config.models.get(tuple.model_ref) if tuple.model_ref else None
     engine = config.engines.get(tuple.engine_ref) if tuple.engine_ref else None
@@ -112,7 +259,13 @@ def _active_tuple_row(
         required_input_contracts=required_inputs,
         auto_selected=True,
     )
-    validation = _matching_validation(tuple=tuple, recipe=recipe, config_dir=config_dir)
+    validation = _matching_validation(
+        tuple=tuple,
+        recipe=recipe,
+        validation_index=validation_index,
+        expected_config_hash=expected_config_hash,
+        expected_commit=expected_commit,
+    )
     contract = _official_contract(tuple)
     config_findings = _adapter_config_findings(tuple)
     decision = "REJECTED_BY_RECIPE_OR_POLICY"
@@ -142,6 +295,9 @@ def _candidate_row(
     recipe: Recipe,
     candidate: Mapping[str, Any],
     required_inputs: set[str],
+    validation_index: Mapping[tuple[str, str], list[dict[str, Any]]],
+    expected_config_hash: str,
+    expected_commit: str | None,
 ) -> dict[str, Any]:
     tuple_error: str | None = None
     tuple: ExecutionTupleSpec | None = None
@@ -168,7 +324,13 @@ def _candidate_row(
             auto_selected=False,
         )
         config_findings = _adapter_config_findings(tuple)
-        validation = _matching_validation(tuple=tuple, recipe=recipe, config_dir=config_dir)
+        validation = _matching_validation(
+            tuple=tuple,
+            recipe=recipe,
+            validation_index=validation_index,
+            expected_config_hash=expected_config_hash,
+            expected_commit=expected_commit,
+        )
         contract = _official_contract(tuple)
     decision = _candidate_decision(reason=reason, config_findings=config_findings, validation=validation)
     return {
@@ -285,34 +447,37 @@ def _official_contract(tuple: ExecutionTupleSpec) -> dict[str, Any]:
     return official_contract(tuple)
 
 
-def _matching_validation(*, tuple: ExecutionTupleSpec, recipe: Recipe, config_dir: Path) -> dict[str, Any]:
+def _matching_validation(
+    *,
+    tuple: ExecutionTupleSpec,
+    recipe: Recipe,
+    validation_index: Mapping[tuple[str, str], list[dict[str, Any]]],
+    expected_config_hash: str,
+    expected_commit: str | None,
+) -> dict[str, Any]:
     root = default_state_dir() / "tuple-validation"
-    result: dict[str, Any] = {"dir": str(root), "matched": [], "checked": 0}
-    if not root.exists():
+    indexed = validation_index.get((recipe.name, tuple_evidence_key(tuple)), [])
+    result: dict[str, Any] = {"dir": str(root), "matched": [], "checked": len(indexed)}
+    if not root.exists() and not indexed:
         result["reason"] = "validation artifact directory does not exist"
         return result
-    expected_hash = _config_hash(config_dir)
-    expected_commit = _git_commit()
-    for path in sorted(root.glob("*.json"), key=lambda item: item.stat().st_mtime, reverse=True):
-        result["checked"] += 1
-        try:
-            data = json.loads(path.read_text(encoding="utf-8"))
-        except Exception:
-            continue
-        if data.get("validation_schema_version") != 1 or data.get("passed") is not True:
-            continue
-        if data.get("recipe") != recipe.name:
-            continue
-        if artifact_tuple_evidence_key(data, tuple) != tuple_evidence_key(tuple):
-            continue
-        if data.get("config_hash") != expected_hash:
+    for item in indexed:
+        data = item["data"]
+        if data.get("config_hash") != expected_config_hash:
             continue
         if expected_commit and data.get("commit") != expected_commit:
             continue
         contract = data.get("official_contract") if isinstance(data.get("official_contract"), dict) else {}
         if not _official_contract_hash_valid(data, contract):
             continue
-        result["matched"].append({"path": str(path), "tuple": data.get("tuple"), "recipe": recipe.name, "tuple_key": tuple_evidence_key(tuple)})
+        result["matched"].append(
+            {
+                "path": item["path"],
+                "tuple": data.get("tuple"),
+                "recipe": recipe.name,
+                "tuple_key": tuple_evidence_key(tuple),
+            }
+        )
     return result
 
 
@@ -320,6 +485,35 @@ def _official_contract_hash_valid(data: Mapping[str, Any], contract: Mapping[str
     if not contract:
         return False
     return data.get("official_contract_hash") == official_contract_hash(contract)
+
+
+def _validation_artifact_index(config_dir: Path) -> dict[tuple[str, str], list[dict[str, Any]]]:
+    root = default_state_dir() / "tuple-validation"
+    if not root.exists():
+        return {}
+    indexed: dict[tuple[str, str], list[dict[str, Any]]] = {}
+    for path in sorted(root.glob("*.json"), key=lambda item: item.stat().st_mtime, reverse=True):
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except Exception:
+            continue
+        if data.get("validation_schema_version") != 1 or data.get("passed") is not True:
+            continue
+        recipe_name = data.get("recipe")
+        if not isinstance(recipe_name, str) or not recipe_name:
+            continue
+        contract = data.get("official_contract") if isinstance(data.get("official_contract"), dict) else {}
+        if not _official_contract_hash_valid(data, contract):
+            continue
+        key = data.get("tuple_evidence_key")
+        if not isinstance(key, str) or not key:
+            key = data.get("tuple_key")
+        if not isinstance(key, str) or not key:
+            key = data.get("governance_hash") if isinstance(data.get("governance_hash"), str) else ""
+        if not key:
+            continue
+        indexed.setdefault((recipe_name, key), []).append({"path": str(path), "data": data})
+    return indexed
 
 
 def _load_tuple_candidates(config_dir: Path) -> list[dict[str, Any]]:

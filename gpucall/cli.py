@@ -1309,8 +1309,8 @@ def build_launch_report(config_dir: Path, *, url: str | None = None, api_key: st
     provider_samples = _configured_registry_snapshot(config)
     cost_audit = _cost_audit_report(config, creds, config_dir=config_dir, live=profile == "production")
     cleanup_audit = _cleanup_audit_report(config)
-    tuple_audit = tuple_audit_report(config, config_dir=config_dir, live=False)
-    tuple_validation_gaps = _tuple_validation_gaps(tuple_audit) if profile == "production" else []
+    tuple_audit = _tuple_audit_launch_summary_from_routing(routing_summary)
+    tuple_validation_gaps: list[dict[str, object]] = []
     live_cost_findings = _live_cost_audit_findings(cost_audit.get("live")) if profile == "production" else []
     gateway_smoke: dict[str, object] | None = None
     if url:
@@ -1361,7 +1361,7 @@ def build_launch_report(config_dir: Path, *, url: str | None = None, api_key: st
         "cost_audit_live_ok": not live_cost_findings,
         "cost_audit_live_findings": live_cost_findings,
         "cleanup_audit": cleanup_audit,
-        "tuple_audit": _tuple_audit_launch_summary(tuple_audit),
+        "tuple_audit": tuple_audit,
     }
     required_paths = {
         "/healthz",
@@ -1476,6 +1476,21 @@ def _tuple_audit_launch_summary(tuple_audit: dict[str, object]) -> dict[str, obj
             "candidate_fit_count": row.get("candidate_fit_count"),
         }
     return summary
+
+
+def _tuple_audit_launch_summary_from_routing(routing_summary: dict[str, dict[str, object]]) -> dict[str, object]:
+    recipes: dict[str, object] = {}
+    for name, row in sorted(routing_summary.items()):
+        candidates = row.get("candidates") if isinstance(row.get("candidates"), list) else []
+        decision = "ROUTABLE" if candidates else "FAIL_CLOSED"
+        recipes[name] = {
+            "routing_decision": decision,
+            "active_fit_count": len(candidates),
+            "production_ready_count": None,
+            "ready_for_validation_count": None,
+            "candidate_fit_count": None,
+        }
+    return {"phase": "launch-routing-summary", "recipes": recipes}
 
 
 def _tuple_validation_gaps(tuple_audit: dict[str, object]) -> list[dict[str, object]]:
