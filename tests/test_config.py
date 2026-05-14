@@ -531,7 +531,12 @@ def test_standard_config_transport_matrix_is_explicit(tmp_path) -> None:
 
 
 def test_standard_config_routes_structured_vision_to_json_capable_model(tmp_path) -> None:
-    config = load_config(copy_config(tmp_path))
+    root = copy_config(tmp_path)
+    runpod_worker = root / "workers" / "runpod-vllm-ampere48-qwen2-5-vl-7b-instruct.yml"
+    runpod_payload = yaml.safe_load(runpod_worker.read_text(encoding="utf-8"))
+    runpod_payload["target"] = "runpod-endpoint-test"
+    runpod_worker.write_text(yaml.safe_dump(runpod_payload, sort_keys=False), encoding="utf-8")
+    config = load_config(root)
     compiler = GovernanceCompiler(policy=config.policy, recipes=config.recipes, tuples=config.tuples, models=config.models, engines=config.engines, registry=ObservedRegistry())
 
     request = TaskRequest(
@@ -543,7 +548,9 @@ def test_standard_config_routes_structured_vision_to_json_capable_model(tmp_path
     )
     plan = compiler.compile(request)
 
-    assert plan.tuple_chain[0] == "modal-vision-catalog-a100-qwen2-5-vl-3b-instruct"
+    assert plan.tuple_chain[0] == "runpod-vllm-ampere48-qwen2-5-vl-7b-instruct"
+    assert "modal-vision-catalog-l40s-qwen2-5-vl-3b-instruct" in plan.tuple_chain
+    assert "modal-vision-catalog-a100-qwen2-5-vl-3b-instruct" in plan.tuple_chain
     assert "modal-vision-catalog-a100-qwen2-5-vl-7b-instruct" in plan.tuple_chain
     assert "modal-h100-qwen25-vl-7b" in plan.tuple_chain
     assert "modal-h100-florence-2-large-ft" not in plan.tuple_chain
@@ -558,8 +565,11 @@ def test_standard_config_routes_structured_vision_to_json_capable_model(tmp_path
 
     plan = compiler.compile(request)
 
-    assert plan.tuple_chain[0] == "modal-vision-catalog-a100-qwen2-5-vl-7b-instruct"
+    assert plan.tuple_chain[0] == "runpod-vllm-ampere48-qwen2-5-vl-7b-instruct"
+    assert "modal-vision-catalog-l40s-qwen2-5-vl-7b-instruct" in plan.tuple_chain
+    assert "modal-vision-catalog-a100-qwen2-5-vl-7b-instruct" in plan.tuple_chain
     assert "modal-vision-catalog-a100-qwen2-5-vl-32b-instruct" in plan.tuple_chain
+    assert "runpod-vllm-ampere48-qwen2-5-vl-7b-instruct" in plan.tuple_chain
     assert "modal-h100-qwen25-vl-7b" in plan.tuple_chain
     assert "modal-h100-qwen25-vl-32b" in plan.tuple_chain
     assert "modal-h100-qwen25-vl-3b" not in plan.tuple_chain
@@ -580,7 +590,8 @@ def test_template_config_routes_structured_vision_to_json_capable_model() -> Non
 
     plan = compiler.compile(request)
 
-    assert plan.tuple_chain[0] == "modal-vision-catalog-a100-qwen2-5-vl-7b-instruct"
+    assert plan.tuple_chain[0] == "modal-vision-catalog-l40s-qwen2-5-vl-7b-instruct"
+    assert "modal-vision-catalog-a100-qwen2-5-vl-7b-instruct" in plan.tuple_chain
     assert "modal-vision-catalog-a100-qwen2-5-vl-32b-instruct" in plan.tuple_chain
     assert "modal-h100-qwen25-vl-7b" in plan.tuple_chain
     assert "modal-h100-qwen25-vl-32b" in plan.tuple_chain

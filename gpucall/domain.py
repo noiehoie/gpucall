@@ -851,8 +851,10 @@ def _vram_for_recipe(payload: dict[str, Any], context_budget: int) -> int:
         return 1
     if resource_class == "light":
         return 16
-    if resource_class in {"standard", "document_vision"}:
-        return 80 if resource_class == "document_vision" else 24
+    if resource_class == "document_vision":
+        return 48
+    if resource_class == "standard":
+        return 24
     if resource_class in {"large", "exlarge", "ultralong"}:
         return 80
     if context_budget > 32768:
