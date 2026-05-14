@@ -189,7 +189,7 @@ from typing import Any
 
 from gpucall.domain import CompiledPlan, TupleError, TupleResult
 from gpucall.execution.base import TupleAdapter, RemoteHandle
-from gpucall.execution.payloads import openai_chat_payload_from_plan
+from gpucall.execution.payloads import gpucall_tuple_result, openai_chat_payload_from_plan
 from gpucall.execution.payloads import openai_chat_completion_result
 from gpucall.execution.registry import TupleAdapterDescriptor, register_adapter
 
@@ -269,13 +269,19 @@ class RunpodVllmServerlessAdapter(TupleAdapter):
                 code=runpod_vllm_health_rejection_code(rejection_reason),
             )
         response = _request_post(
-            f"{self.base_url}/{self.endpoint_id}/openai/v1/chat/completions",
-            error_message="RunPod worker-vLLM chat completion failed",
+            f"{self.base_url}/{self.endpoint_id}/runsync",
+            error_message="RunPod worker-vLLM runsync failed",
             headers=self._headers(),
-            json=self._payload(plan),
+            json={
+                "input": self._payload(plan),
+                "policy": {
+                    "executionTimeout": max(int(plan.timeout_seconds * 1000), 5000),
+                    "ttl": max(int(plan.lease_ttl_seconds * 1000), 10000),
+                },
+            },
             timeout=max(float(plan.timeout_seconds), 1.0),
         )
-        return openai_chat_completion_result(json_or_error(response, "RunPod worker-vLLM chat completion failed"))
+        return _runpod_vllm_runsync_result(json_or_error(response, "RunPod worker-vLLM runsync failed"))
 
     def _payload(self, plan: CompiledPlan) -> dict[str, Any]:
         return openai_chat_payload_from_plan(plan, model=self.model, stream=False, messages=self._messages(plan))
@@ -408,6 +414,51 @@ def runpod_vllm_health_rejection_code(reason: str | None) -> str:
     if "throttled" in lowered:
         return "PROVIDER_WORKER_THROTTLED"
     return "PROVIDER_CAPACITY_UNAVAILABLE"
+
+
+def _runpod_vllm_runsync_result(data: dict[str, Any]) -> TupleResult:
+    status = data.get("status")
+    if status in {"FAILED", "CANCELLED", "TIMED_OUT"}:
+        raise TupleError(
+            f"RunPod worker-vLLM status: {status}",
+            retryable=True,
+            status_code=502,
+            code=_runpod_terminal_status_code(status),
+        )
+    if status not in {None, "COMPLETED"}:
+        raise TupleError(
+            f"RunPod worker-vLLM unexpected status: {status}",
+            retryable=True,
+            status_code=503,
+            code="PROVIDER_QUEUE_SATURATED" if status == "IN_QUEUE" else "PROVIDER_JOB_FAILED",
+        )
+    output = data.get("output")
+    if isinstance(output, list) and output and isinstance(output[0], dict):
+        first = output[0]
+        if "choices" in first:
+            choices = first.get("choices")
+            if isinstance(choices, list):
+                normalized_choices: list[dict[str, Any]] = []
+                for choice in choices:
+                    if not isinstance(choice, dict):
+                        continue
+                    if "message" in choice:
+                        normalized_choices.append(choice)
+                        continue
+                    tokens = choice.get("tokens")
+                    if isinstance(tokens, list):
+                        content = "".join(str(token) for token in tokens)
+                    else:
+                        content = str(choice.get("text") or choice.get("content") or "")
+                    normalized_choices.append({"message": {"role": "assistant", "content": content}})
+                if normalized_choices:
+                    payload = {"choices": normalized_choices}
+                    if isinstance(first.get("usage"), dict):
+                        payload["usage"] = first["usage"]
+                    return openai_chat_completion_result(payload)
+    if isinstance(output, dict) and "choices" in output:
+        return openai_chat_completion_result(output)
+    return gpucall_tuple_result(output)
 
 
 def _positive_int_from_mapping(mapping: dict[str, Any], *keys: str) -> int:

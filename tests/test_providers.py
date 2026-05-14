@@ -858,8 +858,13 @@ async def test_runpod_vllm_official_route_uses_openai_chat_route(monkeypatch) ->
 
         def json(self) -> dict[str, object]:
             return {
-                "choices": [{"message": {"content": "flash llm ok"}}],
-                "usage": {"completion_tokens": 3, "prompt_tokens_details": None},
+                "status": "COMPLETED",
+                "output": [
+                    {
+                        "choices": [{"tokens": ["flash", " llm", " ok"]}],
+                        "usage": {"input": 5, "output": 3},
+                    }
+                ],
             }
 
     class FakeHealthResponse:
@@ -901,12 +906,13 @@ async def test_runpod_vllm_official_route_uses_openai_chat_route(monkeypatch) ->
     result = await adapter.wait(handle, plan)
 
     assert result.value == "flash llm ok"
-    assert result.usage == {"completion_tokens": 3}
+    assert result.usage == {"input": 5, "output": 3}
     assert calls[0][1] == "https://api.runpod.ai/v2/endpoint-1/health"
-    assert calls[1][1] == "https://api.runpod.ai/v2/endpoint-1/openai/v1/chat/completions"
-    assert calls[1][2]["model"] == "Qwen/Qwen2.5-1.5B-Instruct"
-    assert calls[1][2]["messages"] == [{"role": "user", "content": "hello"}]
-    assert calls[1][2]["stream"] is False
+    assert calls[1][1] == "https://api.runpod.ai/v2/endpoint-1/runsync"
+    assert calls[1][2]["input"]["model"] == "Qwen/Qwen2.5-1.5B-Instruct"
+    assert calls[1][2]["input"]["messages"] == [{"role": "user", "content": "hello"}]
+    assert calls[1][2]["input"]["stream"] is False
+    assert calls[1][2]["policy"]["executionTimeout"] >= 5000
 
 
 async def test_runpod_vllm_requests_timeout_is_provider_timeout(monkeypatch) -> None:
@@ -1119,8 +1125,13 @@ async def test_runpod_vllm_vision_data_ref_uses_openai_image_url(monkeypatch) ->
 
         def json(self) -> dict[str, object]:
             return {
-                "choices": [{"message": {"content": "{\"articles\": []}"}}],
-                "usage": {"completion_tokens": 4},
+                "status": "COMPLETED",
+                "output": [
+                    {
+                        "choices": [{"tokens": ["{\"articles\": []}"]}],
+                        "usage": {"completion_tokens": 4},
+                    }
+                ],
             }
 
     class FakeHealthResponse:
@@ -1175,7 +1186,8 @@ async def test_runpod_vllm_vision_data_ref_uses_openai_image_url(monkeypatch) ->
     result = await adapter.wait(handle, plan)
 
     assert result.value == "{\"articles\": []}"
-    body = calls[1][2]
+    assert calls[1][1] == "https://api.runpod.ai/v2/endpoint-1/runsync"
+    body = calls[1][2]["input"]
     assert body is not None
     assert body["messages"] == [
         {"role": "system", "content": "Return JSON."},
