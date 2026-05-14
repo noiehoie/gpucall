@@ -255,6 +255,16 @@ def test_live_cost_audit_worker_count_falls_through_invalid_alias() -> None:
     assert findings[0]["workers_min"] == 1
 
 
+def test_live_cost_audit_does_not_treat_workers_standby_as_standing_cost() -> None:
+    from gpucall.cli import _runpod_unmanaged_endpoint_findings
+
+    inventory = {"ok": True, "body": [{"id": "endpoint-1", "workersMin": 0, "workersStandby": 1}]}
+
+    findings = _runpod_unmanaged_endpoint_findings(inventory, configured_endpoint_ids=set())
+
+    assert findings == []
+
+
 def test_live_validation_artifact_accepts_policy_only_config_hash_drift(tmp_path, monkeypatch) -> None:
     from gpucall.cli import _git_commit, _live_validation_artifacts_by_tuple
     from gpucall.config import load_config

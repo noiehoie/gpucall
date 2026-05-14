@@ -110,9 +110,9 @@ validate the declared provider contract against the official worker-vLLM
 deployment contract before production routing.
 
 Use a container disk large enough for the image and model cache. Keep
-`workersMin=0` and `workersStandby=0` unless intentionally warming the endpoint
-with explicit cost approval. A warm endpoint is standing spend, not request
-spend. If a tuple declares warm workers in `provider_params.endpoint_runtime`,
+`workersMin=0` unless intentionally warming the endpoint with explicit cost
+approval. A warm endpoint is standing spend, not request spend. If a tuple
+declares warm workers in `provider_params.endpoint_runtime`,
 `gpucall validate-config` requires `standing_cost_per_second`,
 `standing_cost_window_seconds`, and
 `provider_params.cost_approval.standing_workers_approved=true` with approver,

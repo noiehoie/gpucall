@@ -410,8 +410,8 @@ def _positive_int_from_mapping(mapping: dict[str, Any], *keys: str) -> int:
     return 0
 
 
-def _standing_worker_approval_findings(tuple: Any, *, workers_min: int, workers_standby: int) -> list[str]:
-    if workers_min <= 0 and workers_standby <= 0:
+def _standing_worker_approval_findings(tuple: Any, *, workers_min: int) -> list[str]:
+    if workers_min <= 0:
         return []
     findings: list[str] = []
     if getattr(tuple, "standing_cost_per_second", None) is None:
@@ -436,14 +436,7 @@ def runpod_warm_worker_config_findings(tuple: Any) -> list[str]:
     if not isinstance(endpoint_runtime, dict):
         endpoint_runtime = tuple.provider_params or {}
     workers_min = _positive_int_from_mapping(endpoint_runtime, "workersMin", "workers_min", "minWorkers", "min_workers")
-    workers_standby = _positive_int_from_mapping(
-        endpoint_runtime,
-        "workersStandby",
-        "workers_standby",
-        "standbyWorkers",
-        "standby_workers",
-    )
-    return _standing_worker_approval_findings(tuple, workers_min=workers_min, workers_standby=workers_standby)
+    return _standing_worker_approval_findings(tuple, workers_min=workers_min)
 
 
 def _runpod_terminal_status_code(status: str | None) -> str:

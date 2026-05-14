@@ -2510,21 +2510,13 @@ def _runpod_unmanaged_endpoint_findings(inventory: dict[str, object], *, configu
         if endpoint_id in configured_endpoint_ids:
             continue
         workers_min = _positive_int_from_mapping(endpoint, "workersMin", "workers_min", "minWorkers", "min_workers")
-        workers_standby = _positive_int_from_mapping(
-            endpoint,
-            "workersStandby",
-            "workers_standby",
-            "standbyWorkers",
-            "standby_workers",
-        )
-        if workers_min <= 0 and workers_standby <= 0:
+        if workers_min <= 0:
             continue
         findings.append(
             {
                 "check": "runpod_unmanaged_standing_workers",
                 "endpoint_id": endpoint_id,
                 "workers_min": workers_min,
-                "workers_standby": workers_standby,
                 "reason": "live RunPod endpoint has standing workers but is not declared as a gpucall execution tuple",
             }
         )
@@ -2545,26 +2537,18 @@ def _runpod_endpoint_runtime_cost(tuple_spec: object, endpoint: dict[str, object
             ],
         }
     workers_min = _positive_int_from_mapping(endpoint, "workersMin", "workers_min", "minWorkers", "min_workers")
-    workers_standby = _positive_int_from_mapping(
-        endpoint,
-        "workersStandby",
-        "workers_standby",
-        "standbyWorkers",
-        "standby_workers",
-    )
     workers_max = _positive_int_from_mapping(endpoint, "workersMax", "workers_max", "maxWorkers", "max_workers")
     active_workers = _runpod_active_worker_count(endpoint)
     summary = {
         "inventory_matched": True,
         "workers_min": workers_min,
-        "workers_standby": workers_standby,
         "workers_max": workers_max,
         "active_workers": active_workers,
         "unmanaged_standing_cost": False,
     }
     findings: list[dict[str, object]] = []
-    if workers_min > 0 or workers_standby > 0:
-        approval_findings = _standing_endpoint_cost_approval_findings(tuple_spec, workers_min=workers_min, workers_standby=workers_standby)
+    if workers_min > 0:
+        approval_findings = _standing_endpoint_cost_approval_findings(tuple_spec, workers_min=workers_min)
         if approval_findings:
             summary["unmanaged_standing_cost"] = True
             findings.append(
@@ -2573,7 +2557,6 @@ def _runpod_endpoint_runtime_cost(tuple_spec: object, endpoint: dict[str, object
                     "tuple": getattr(tuple_spec, "name", ""),
                     "endpoint_id": getattr(tuple_spec, "target", None),
                     "workers_min": workers_min,
-                    "workers_standby": workers_standby,
                     "reason": "; ".join(approval_findings),
                 }
             )
@@ -2613,8 +2596,8 @@ def _positive_int_from_mapping(mapping: dict[str, object], *keys: str) -> int:
     return 0
 
 
-def _standing_endpoint_cost_approval_findings(tuple_spec: object, *, workers_min: int, workers_standby: int) -> list[str]:
-    if workers_min <= 0 and workers_standby <= 0:
+def _standing_endpoint_cost_approval_findings(tuple_spec: object, *, workers_min: int) -> list[str]:
+    if workers_min <= 0:
         return []
     findings: list[str] = []
     if getattr(tuple_spec, "standing_cost_per_second", None) is None:
