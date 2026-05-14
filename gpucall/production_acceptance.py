@@ -480,7 +480,7 @@ def _check_f12_orthogonal_route_state() -> AcceptanceCheck:
 
 
 def _check_f13_anonymous_replay_fixture() -> AcceptanceCheck:
-    fixture_path = Path(__file__).resolve().parent.parent / "tests" / "fixtures" / "anonymous_synthetic_replay.json"
+    fixture_path = Path(__file__).resolve().parent / "fixtures" / "anonymous_synthetic_replay.json"
     fixture = load_anonymous_replay_fixture(fixture_path)
     classes = replay_workload_classes(fixture)
     expected = {
@@ -499,7 +499,7 @@ def _check_f13_anonymous_replay_fixture() -> AcceptanceCheck:
         passed=passed,
         details={
             "classes": sorted(classes),
-            "fixture": "tests/fixtures/anonymous_synthetic_replay.json",
+            "fixture": "gpucall/fixtures/anonymous_synthetic_replay.json",
             "workload_count": len(fixture.get("workloads", [])),
         },
     )
