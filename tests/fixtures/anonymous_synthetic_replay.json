@@ -1,0 +1,114 @@
+{
+  "schema_version": 1,
+  "source": "anonymous_synthetic_replay",
+  "workloads": [
+    {
+      "class": "document_vision_burst",
+      "task": "vision",
+      "mode": "sync",
+      "count": 23,
+      "input": {
+        "content_type": "image/jpeg",
+        "bytes": 2100000,
+        "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "expiry_seconds": 900
+      },
+      "response_format": {
+        "type": "json_schema",
+        "required": [
+          "articles"
+        ]
+      },
+      "expected_state": {
+        "provider": "exhausted",
+        "tenant": "ok",
+        "workload": "sync_safe",
+        "tuple_quality": "passed"
+      }
+    },
+    {
+      "class": "long_async_rank",
+      "task": "infer",
+      "mode": "async",
+      "token_estimate": 42000,
+      "events": [
+        "accepted",
+        "started",
+        "late_completed"
+      ],
+      "expected_state": {
+        "provider": "in_flight",
+        "tenant": "reserved",
+        "workload": "late_completed",
+        "tuple_quality": "passed"
+      }
+    },
+    {
+      "class": "sync_text_batch",
+      "task": "infer",
+      "mode": "sync",
+      "count": 12,
+      "events": [
+        "provider_temporary_failure"
+      ],
+      "expected_state": {
+        "provider": "suppressed",
+        "tenant": "released",
+        "workload": "sync_safe",
+        "tuple_quality": "unknown"
+      }
+    },
+    {
+      "class": "strict_schema_business_object",
+      "task": "infer",
+      "mode": "sync",
+      "response_format": {
+        "type": "json_schema",
+        "strict": true,
+        "required": [
+          "items"
+        ]
+      },
+      "events": [
+        "malformed_output_strict"
+      ],
+      "expected_state": {
+        "provider": "live_ready",
+        "tenant": "released",
+        "workload": "sync_safe",
+        "tuple_quality": "strict_schema_failed"
+      }
+    },
+    {
+      "class": "capacity_unavailable_burst",
+      "task": "infer",
+      "mode": "sync",
+      "count": 50,
+      "events": [
+        "provider_temporary_failure",
+        "cooling_down"
+      ],
+      "expected_state": {
+        "provider": "cooling_down",
+        "tenant": "ok",
+        "workload": "sync_safe",
+        "tuple_quality": "unknown"
+      }
+    },
+    {
+      "class": "cold_start_late_completion",
+      "task": "infer",
+      "mode": "async",
+      "events": [
+        "timeout_before_start",
+        "late_completed"
+      ],
+      "expected_state": {
+        "provider": "capacity_unknown",
+        "tenant": "reserved",
+        "workload": "late_completed",
+        "tuple_quality": "unknown"
+      }
+    }
+  ]
+}

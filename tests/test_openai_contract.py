@@ -29,6 +29,7 @@ def test_gpucall_openai_policy_classifies_every_official_request_field() -> None
     classified = OPENAI_CHAT_COMPLETIONS_SUPPORTED_FIELDS | OPENAI_CHAT_COMPLETIONS_FAIL_CLOSED_FIELDS
 
     assert classified == OPENAI_CHAT_COMPLETIONS_FIELDS
+    assert not (OPENAI_CHAT_COMPLETIONS_SUPPORTED_FIELDS & OPENAI_CHAT_COMPLETIONS_FAIL_CLOSED_FIELDS)
     assert "web_search_options" in OPENAI_CHAT_COMPLETIONS_FAIL_CLOSED_FIELDS
     assert "modalities" in OPENAI_CHAT_COMPLETIONS_FAIL_CLOSED_FIELDS
     assert "tool_choice" in OPENAI_CHAT_COMPLETIONS_SUPPORTED_FIELDS

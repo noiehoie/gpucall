@@ -11,11 +11,26 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterator
 
+from gpucall.acceptance_invariants import (
+    OrthogonalRouteState,
+    ProviderRuntimeState,
+    TenantBudgetState,
+    TupleQualityState,
+    WorkloadAdmissionState,
+    dataref_lifecycle_summary,
+    production_route_gate,
+    semantic_to_wire_transform_evidence,
+    state_axes_are_orthogonal,
+    validate_failure_artifact_boundary,
+    validate_openai_interaction_contract,
+)
+from gpucall.acceptance_replay import load_anonymous_replay_fixture, replay_workload_classes
 from gpucall.admission import AdmissionController
+from gpucall.app_helpers import build_provider_failure_artifact
 from gpucall.audit import AuditTrail
 from gpucall.config import ConfigError, load_config
 from gpucall.dispatcher import Dispatcher, JobStore
-from gpucall.domain import CompiledPlan, ExecutionMode, JobState, ProviderErrorCode, RecipeQualityFloor, TupleError, TupleResult
+from gpucall.domain import ChatMessage, CompiledPlan, DataRef, ExecutionMode, JobState, ProviderErrorCode, RecipeQualityFloor, TaskRequest, TupleError, TupleResult
 from gpucall.execution import EchoTuple, RemoteHandle
 from gpucall.openai_facade.chat_completions import OpenAIProtocolError, admit_openai_chat_completion
 from gpucall.provider_errors import should_suppress_provider_family
@@ -59,12 +74,18 @@ async def run_production_acceptance_async(config_dir: Path | None = None) -> dic
     with tempfile.TemporaryDirectory(prefix="gpucall-acceptance-") as raw_root:
         root = Path(raw_root)
         checks = [
+            _check_f1_semantic_wire_contract(),
             await _check_f2_f6_live_executability(root),
+            _check_f3_production_route_gate(),
             await _check_f4_provider_failure_suppression(root),
             await _check_f5_fallback_storm_bound(root),
             _check_f7_openai_chat_contract(),
+            _check_f8_failure_artifact_boundary(),
             await _check_f9_budget_lifecycle(root),
             await _check_f10_async_lifecycle(root),
+            _check_f12_orthogonal_route_state(),
+            _check_f13_anonymous_replay_fixture(),
+            _check_f14_dataref_lifecycle_contract(),
         ]
         if config_dir is not None:
             checks.append(_check_f11_config_route_resilience(Path(config_dir)))
@@ -83,6 +104,34 @@ async def run_production_acceptance_async(config_dir: Path | None = None) -> dic
 
 def dumps_acceptance_report(report: dict[str, Any]) -> str:
     return json.dumps(report, ensure_ascii=False, indent=2, sort_keys=True) + "\n"
+
+
+def _check_f1_semantic_wire_contract() -> AcceptanceCheck:
+    evidence = semantic_to_wire_transform_evidence(
+        task="vision",
+        intent="understand_document_image",
+        mode="sync",
+        input_contract="data_refs:image",
+        output_contract="json_schema:articles",
+    )
+    repeated = semantic_to_wire_transform_evidence(
+        task="vision",
+        intent="understand_document_image",
+        mode="sync",
+        input_contract="data_refs:image",
+        output_contract="json_schema:articles",
+    )
+    passed = (
+        evidence["evidence_sha256"] == repeated["evidence_sha256"]
+        and evidence["payload"]["input_contract"] == "data_refs:image"
+        and evidence["payload"]["output_contract"] == "json_schema:articles"
+    )
+    return AcceptanceCheck(
+        id="F1",
+        name="semantic contract lowers to worker wire contract with evidence",
+        passed=passed,
+        details=evidence,
+    )
 
 
 async def _check_f2_f6_live_executability(root: Path) -> AcceptanceCheck:
@@ -123,6 +172,32 @@ async def _check_f2_f6_live_executability(root: Path) -> AcceptanceCheck:
                 "runtime_admission": admission,
             },
         )
+
+
+def _check_f3_production_route_gate() -> AcceptanceCheck:
+    blocked = [
+        production_route_gate({"candidate": True, "endpoint_configured": False, "validation_evidence": True, "production_activated": False}),
+        production_route_gate({"candidate": False, "endpoint_configured": True, "validation_evidence": False, "production_activated": True}),
+        production_route_gate({"candidate": False, "endpoint_configured": True, "validation_evidence": True, "placeholder": True, "production_activated": True}),
+        production_route_gate({"candidate": False, "endpoint_configured": True, "validation_evidence": True, "quality_floor": "smoke", "production_activated": True}),
+    ]
+    allowed = production_route_gate(
+        {
+            "candidate": False,
+            "endpoint_configured": True,
+            "validation_evidence": True,
+            "placeholder": False,
+            "quality_floor": "production",
+            "production_activated": True,
+        }
+    )
+    passed = all(not item["allowed"] and item["missing"] for item in blocked) and allowed == {"allowed": True, "missing": []}
+    return AcceptanceCheck(
+        id="F3",
+        name="candidate and unvalidated tuples cannot enter production routing",
+        passed=passed,
+        details={"blocked": blocked, "allowed": allowed},
+    )
 
 
 async def _check_f4_provider_failure_suppression(root: Path) -> AcceptanceCheck:
@@ -199,6 +274,30 @@ def _check_f7_openai_chat_contract() -> AcceptanceCheck:
         },
         inline_bytes_limit=10_000,
     )
+    strict_schema = admit_openai_chat_completion(
+        {
+            "model": "gpt-4o-mini",
+            "messages": [{"role": "user", "content": "return json"}],
+            "response_format": {
+                "type": "json_schema",
+                "json_schema": {
+                    "name": "answer",
+                    "strict": True,
+                    "schema": {"type": "object", "properties": {"answer": {"type": "string"}}, "required": ["answer"]},
+                },
+            },
+        },
+        inline_bytes_limit=10_000,
+    )
+    tools = admit_openai_chat_completion(
+        {
+            "model": "gpt-4o-mini",
+            "messages": [{"role": "user", "content": "call tool"}],
+            "tools": [{"type": "function", "function": {"name": "lookup", "parameters": {"type": "object"}}}],
+            "tool_choice": "auto",
+        },
+        inline_bytes_limit=10_000,
+    )
     rejected = False
     try:
         admit_openai_chat_completion(
@@ -212,7 +311,31 @@ def _check_f7_openai_chat_contract() -> AcceptanceCheck:
         )
     except OpenAIProtocolError:
         rejected = True
-    passed = accepted.stream is True and accepted.task_request.n == 2 and rejected
+    parallel_rejected = False
+    try:
+        admit_openai_chat_completion(
+            {
+                "model": "gpt-4o-mini",
+                "messages": [{"role": "user", "content": "call tool"}],
+                "tools": [{"type": "function", "function": {"name": "lookup", "parameters": {"type": "object"}}}],
+                "parallel_tool_calls": True,
+            },
+            inline_bytes_limit=10_000,
+        )
+    except OpenAIProtocolError:
+        parallel_rejected = True
+    interaction = validate_openai_interaction_contract(accepted.raw_supported_payload)
+    passed = (
+        accepted.stream is True
+        and accepted.task_request.n == 2
+        and interaction["include_usage"] is True
+        and strict_schema.task_request.response_format is not None
+        and strict_schema.task_request.response_format.json_schema is not None
+        and tools.task_request.tools is not None
+        and tools.task_request.tool_choice == "auto"
+        and rejected
+        and parallel_rejected
+    )
     return AcceptanceCheck(
         id="F7",
         name="OpenAI chat completion contract is accepted only inside declared support",
@@ -220,9 +343,46 @@ def _check_f7_openai_chat_contract() -> AcceptanceCheck:
         details={
             "accepted_n": accepted.task_request.n,
             "accepted_stream_options": accepted.task_request.stream_options,
+            "accepted_interaction": interaction,
+            "strict_json_schema": strict_schema.task_request.response_format.json_schema,
+            "tools_preserved": bool(tools.task_request.tools),
             "unsupported_obfuscation_rejected": rejected,
+            "parallel_tool_calls_fail_closed": parallel_rejected,
         },
         )
+
+
+def _check_f8_failure_artifact_boundary() -> AcceptanceCheck:
+    request = TaskRequest(
+        task="infer",
+        mode=ExecutionMode.SYNC,
+        intent="summarize_text",
+        messages=[ChatMessage(role="user", content="redacted by summary")],
+    )
+    artifact = build_provider_failure_artifact(
+        TupleError(
+            "tuple execution failed",
+            retryable=True,
+            status_code=503,
+            code=ProviderErrorCode.PROVIDER_CAPACITY_UNAVAILABLE,
+            raw_output="provider said capacity is unavailable",
+        ),
+        request,
+    )
+    boundary = validate_failure_artifact_boundary(artifact)
+    passed = (
+        boundary["valid"]
+        and artifact["retryable"] is True
+        and artifact["caller_action"] == "retry_later_or_wait_for_gpucall_fallback"
+        and artifact["redaction_guarantee"]["prompt_body_included"] is False
+        and "tuple_error_body_redacted" not in artifact
+    )
+    return AcceptanceCheck(
+        id="F8",
+        name="failure artifacts expose caller action and redaction guarantees",
+        passed=passed,
+        details={"artifact": artifact, "boundary": boundary},
+    )
 
 
 def _check_f11_config_route_resilience(config_dir: Path) -> AcceptanceCheck:
@@ -287,6 +447,85 @@ def _check_f11_config_route_resilience(config_dir: Path) -> AcceptanceCheck:
             "issue_count": len(issues),
             "issues": issues[:50],
         },
+    )
+
+
+def _check_f12_orthogonal_route_state() -> AcceptanceCheck:
+    provider_exhausted = OrthogonalRouteState(
+        provider=ProviderRuntimeState.EXHAUSTED,
+        tenant=TenantBudgetState.OK,
+        workload=WorkloadAdmissionState.SYNC_SAFE,
+        tuple_quality=TupleQualityState.PASSED,
+    )
+    tenant_exhausted = OrthogonalRouteState(
+        provider=ProviderRuntimeState.LIVE_READY,
+        tenant=TenantBudgetState.EXHAUSTED,
+        workload=WorkloadAdmissionState.SYNC_SAFE,
+        tuple_quality=TupleQualityState.PASSED,
+    )
+    strict_schema_failed = OrthogonalRouteState(
+        provider=ProviderRuntimeState.LIVE_READY,
+        tenant=TenantBudgetState.RELEASED,
+        workload=WorkloadAdmissionState.SYNC_SAFE,
+        tuple_quality=TupleQualityState.STRICT_SCHEMA_FAILED,
+    )
+    states = [provider_exhausted.as_dict(), tenant_exhausted.as_dict(), strict_schema_failed.as_dict()]
+    passed = all(state_axes_are_orthogonal(state) for state in states) and len({tuple(sorted(item.items())) for item in states}) == 3
+    return AcceptanceCheck(
+        id="F12",
+        name="provider, tenant, workload, and tuple quality states are orthogonal",
+        passed=passed,
+        details={"states": states},
+    )
+
+
+def _check_f13_anonymous_replay_fixture() -> AcceptanceCheck:
+    fixture_path = Path(__file__).resolve().parent.parent / "tests" / "fixtures" / "anonymous_synthetic_replay.json"
+    fixture = load_anonymous_replay_fixture(fixture_path)
+    classes = replay_workload_classes(fixture)
+    expected = {
+        "document_vision_burst",
+        "long_async_rank",
+        "sync_text_batch",
+        "strict_schema_business_object",
+        "capacity_unavailable_burst",
+        "cold_start_late_completion",
+    }
+    state_ok = all(state_axes_are_orthogonal(item.get("expected_state", {})) for item in fixture.get("workloads", []))
+    passed = expected <= classes and state_ok
+    return AcceptanceCheck(
+        id="F13",
+        name="anonymous synthetic replay fixture covers product workload classes",
+        passed=passed,
+        details={
+            "classes": sorted(classes),
+            "fixture": "tests/fixtures/anonymous_synthetic_replay.json",
+            "workload_count": len(fixture.get("workloads", [])),
+        },
+    )
+
+
+def _check_f14_dataref_lifecycle_contract() -> AcceptanceCheck:
+    ref = DataRef(
+        uri="s3://bucket/gpucall/tenants/tenant-a/object.bin",
+        sha256="a" * 64,
+        bytes=4096,
+        content_type="image/jpeg",
+    ).model_dump(mode="json")
+    summary = dataref_lifecycle_summary({**ref, "expiry_seconds": 900})
+    passed = (
+        summary["has_uri"]
+        and summary["has_sha256"]
+        and summary["bytes"] == 4096
+        and summary["content_type"] == "image/jpeg"
+        and summary["expiry_seconds"] == 900
+        and summary["body_included"] is False
+    )
+    return AcceptanceCheck(
+        id="F14",
+        name="DataRef lifecycle acceptance uses metadata without payload bytes",
+        passed=passed,
+        details=summary,
     )
 
 
