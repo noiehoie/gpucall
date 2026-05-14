@@ -32,6 +32,7 @@ from gpucall.execution_surfaces.function_runtime import RunpodVllmFlashBootAdapt
 from gpucall.execution_surfaces.managed_endpoint import RunpodServerlessAdapter
 from gpucall.execution_surfaces.managed_endpoint import (
     RunpodVllmServerlessAdapter,
+    runpod_vllm_health_preflight_rejection_reason,
     runpod_vllm_health_rejection_code,
     runpod_vllm_health_rejection_reason,
 )
@@ -979,6 +980,33 @@ def test_runpod_worker_vllm_health_classifies_initializing_and_unhealthy() -> No
             )
         )
         == "PROVIDER_UNHEALTHY"
+    )
+
+
+def test_runpod_worker_vllm_preflight_allows_serverless_scale_from_zero() -> None:
+    assert (
+        runpod_vllm_health_preflight_rejection_reason(
+            {"workers": {"ready": 0, "running": 0, "initializing": 0, "throttled": 0, "unhealthy": 0}}
+        )
+        is None
+    )
+    assert (
+        runpod_vllm_health_preflight_rejection_reason(
+            {"workers": {"ready": 0, "running": 0, "initializing": 1, "throttled": 0, "unhealthy": 0}}
+        )
+        is None
+    )
+    assert (
+        runpod_vllm_health_preflight_rejection_reason(
+            {"workers": {"ready": 0, "running": 0, "initializing": 0, "throttled": 1, "unhealthy": 0}}
+        )
+        is None
+    )
+    assert (
+        runpod_vllm_health_preflight_rejection_reason(
+            {"workers": {"ready": 0, "running": 0, "initializing": 0, "throttled": 0, "unhealthy": 1}}
+        )
+        == "workers.unhealthy is non-zero"
     )
 
 

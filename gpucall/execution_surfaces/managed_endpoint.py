@@ -260,7 +260,7 @@ class RunpodVllmServerlessAdapter(TupleAdapter):
             if not plan.input_refs:
                 raise TupleError("RunPod worker-vLLM openai-chat-completions contract requires compiled messages", retryable=True, status_code=502)
         health = self._health_sync()
-        rejection_reason = runpod_vllm_health_rejection_reason(health)
+        rejection_reason = runpod_vllm_health_preflight_rejection_reason(health)
         if rejection_reason:
             raise TupleError(
                 "RunPod worker-vLLM endpoint is not ready: " + rejection_reason,
@@ -383,6 +383,16 @@ def runpod_vllm_health_rejection_reason(health: dict[str, Any]) -> str | None:
     if throttled > 0:
         return "workers are throttled and no ready worker is available"
     return "no ready worker is available"
+
+
+def runpod_vllm_health_preflight_rejection_reason(health: dict[str, Any]) -> str | None:
+    workers = health.get("workers") if isinstance(health, dict) else None
+    if not isinstance(workers, dict):
+        return "health response did not include workers"
+    unhealthy = _positive_int_from_mapping(workers, "unhealthy")
+    if unhealthy > 0:
+        return "workers.unhealthy is non-zero"
+    return None
 
 
 def runpod_vllm_health_rejection_code(reason: str | None) -> str:
