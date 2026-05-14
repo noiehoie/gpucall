@@ -457,12 +457,16 @@ gpucall registry show
 gpucall smoke
 gpucall cost-audit --live
 gpucall cleanup-audit
-gpucall launch-check --profile production --url http://127.0.0.1:18088
+gpucall launch-check --profile production --config-dir config --url http://127.0.0.1:18088
 gpucall audit verify
 gpucall post-launch-report
 ```
 
 Production launch checks require gateway auth, object-store credentials, a live gateway smoke result, complete provider cost metadata, live provider cost/resource audit access, cleanup audit success, and provider-validation JSON artifacts. Static launch checks remain available for local config validation.
+
+`launch-check` writes the full report to `$XDG_STATE_HOME/gpucall/launch/launch-check.json` and prints a bounded summary by default. Use `--json` for the full JSON on stdout, or `--output-json <path>` to save a copy at an explicit path while keeping stdout short.
+
+For Netcup or other bare-metal production deployments using Tailscale and explicit configuration directories, see [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md).
 
 ## v3 Roadmap
 

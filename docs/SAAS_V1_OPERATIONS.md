@@ -104,7 +104,7 @@ gpucall release-check --output-dir "$XDG_STATE_HOME/gpucall/release"
 Production promotion additionally requires:
 
 ```bash
-gpucall launch-check --profile production --url http://127.0.0.1:18088
+gpucall launch-check --profile production --config-dir config --url http://127.0.0.1:18088
 gpucall audit verify
 ```
 

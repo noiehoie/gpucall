@@ -59,6 +59,13 @@ from gpucall.dispatcher import is_terminal_job_state
 from gpucall.production_acceptance import dumps_acceptance_report, run_production_acceptance
 
 
+def _positive_int(value: str) -> int:
+    parsed = int(value)
+    if parsed < 1:
+        raise argparse.ArgumentTypeError("value must be >= 1")
+    return parsed
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(prog="gpucall")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -115,7 +122,7 @@ def main() -> None:
     tuple_smoke.add_argument("--write-artifact", action="store_true")
     jobs = sub.add_parser("jobs")
     jobs.add_argument("job_id", nargs="?")
-    jobs.add_argument("--limit", type=int, default=20)
+    jobs.add_argument("--limit", type=_positive_int, default=20)
     jobs.add_argument("--scrub-inputs", action="store_true")
     jobs.add_argument("--expire-stale", action="store_true")
     registry = sub.add_parser("registry")
@@ -137,7 +144,7 @@ def main() -> None:
     validator_plan.add_argument("--live", action="store_true", help="include live catalog overlay before planning validation work")
     audit = sub.add_parser("audit")
     audit.add_argument("action", choices=["verify", "tail", "rotate"])
-    audit.add_argument("--limit", type=int, default=20)
+    audit.add_argument("--limit", type=_positive_int, default=20)
     audit.add_argument("--max-bytes", type=int, default=100 * 1024 * 1024)
     cost_audit = sub.add_parser("cost-audit")
     cost_audit.add_argument("--config-dir", type=Path, default=default_config_dir())
@@ -161,6 +168,8 @@ def main() -> None:
     launch_check.add_argument("--url", default=None)
     launch_check.add_argument("--api-key", default=None)
     launch_check.add_argument("--profile", choices=["static", "production"], default="production")
+    launch_check.add_argument("--json", action="store_true", help="print the full launch report JSON to stdout")
+    launch_check.add_argument("--output-json", type=Path, default=None, help="write the full launch report JSON to this path")
     post_launch = sub.add_parser("post-launch-report")
     post_launch.add_argument("--config-dir", type=Path, default=default_config_dir())
     release_check = sub.add_parser("release-check")
@@ -343,7 +352,14 @@ def main() -> None:
     elif args.command == "openapi":
         print(json.dumps(create_app(args.config_dir).openapi(), indent=2, sort_keys=True))
     elif args.command == "launch-check":
-        launch_check_command(args.config_dir, url=args.url, api_key=args.api_key, profile=args.profile)
+        launch_check_command(
+            args.config_dir,
+            url=args.url,
+            api_key=args.api_key,
+            profile=args.profile,
+            print_json=args.json,
+            output_json=args.output_json,
+        )
     elif args.command == "post-launch-report":
         asyncio.run(post_launch_report_command(args.config_dir))
     elif args.command == "release-check":
@@ -1265,12 +1281,67 @@ def _optional_float(value: object) -> float | None:
     return float(value)
 
 
-def launch_check_command(config_dir: Path, *, url: str | None = None, api_key: str | None = None, profile: str = "production") -> None:
+def launch_check_command(
+    config_dir: Path,
+    *,
+    url: str | None = None,
+    api_key: str | None = None,
+    profile: str = "production",
+    print_json: bool = False,
+    output_json: Path | None = None,
+) -> None:
     report = build_launch_report(config_dir, url=url, api_key=api_key, profile=profile)
     path = default_state_dir() / "launch" / "launch-check.json"
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(report, indent=2, sort_keys=True, default=str) + "\n", encoding="utf-8")
-    print(json.dumps({**report, "report_path": str(path)}, indent=2, sort_keys=True, default=str))
+    details_path = output_json or path
+    if output_json is not None:
+        output_json.parent.mkdir(parents=True, exist_ok=True)
+        output_json.write_text(json.dumps(report, indent=2, sort_keys=True, default=str) + "\n", encoding="utf-8")
+    if print_json:
+        print(json.dumps({**report, "report_path": str(path)}, indent=2, sort_keys=True, default=str))
+    else:
+        print(_launch_report_summary(report, details_path=details_path))
+
+
+def _launch_report_summary(report: dict[str, object], *, details_path: Path) -> str:
+    checks = report.get("checks") if isinstance(report.get("checks"), dict) else {}
+    launch_gates = checks.get("launch_gates") if isinstance(checks.get("launch_gates"), dict) else {}
+    tuple_live_validation = report.get("tuple_live_validation") if isinstance(report.get("tuple_live_validation"), dict) else {}
+    blockers = report.get("blockers") if isinstance(report.get("blockers"), list) else []
+    required_tuples = tuple_live_validation.get("required_tuples")
+    missing_tuples = tuple_live_validation.get("missing_tuples")
+    gateway_live_tuples = tuple_live_validation.get("gateway_live_tuples")
+
+    lines = [
+        f"gpucall launch-check: {'GO' if report.get('go') is True else 'NO-GO'}",
+        f"profile: {checks.get('launch_profile')}",
+        f"config_dir: {report.get('config_dir')}",
+        f"state_dir: {report.get('state_dir')}",
+        f"details_json: {details_path}",
+        f"blockers: {len(blockers)}",
+    ]
+    if launch_gates:
+        lines.append("launch_gates:")
+        for key in sorted(launch_gates):
+            lines.append(f"  {key}: {launch_gates[key]}")
+    if isinstance(required_tuples, list) or isinstance(missing_tuples, list) or isinstance(gateway_live_tuples, list):
+        lines.append(
+            "tuple_live_validation: "
+            f"required={len(required_tuples) if isinstance(required_tuples, list) else 0} "
+            f"missing={len(missing_tuples) if isinstance(missing_tuples, list) else 0} "
+            f"gateway_live={len(gateway_live_tuples) if isinstance(gateway_live_tuples, list) else 0}"
+        )
+    if blockers:
+        lines.append("blocker_checks:")
+        for blocker in blockers[:20]:
+            if isinstance(blocker, dict):
+                lines.append(f"  - {blocker.get('check')}")
+            else:
+                lines.append(f"  - {blocker}")
+        if len(blockers) > 20:
+            lines.append(f"  ... {len(blockers) - 20} more")
+    return "\n".join(lines)
 
 
 def release_check_command(config_dir: Path, output_dir: Path) -> None:
@@ -1559,6 +1630,8 @@ async def seed_liveness(
 ) -> None:
     if budget_usd < 0:
         raise SystemExit("--budget-usd must be non-negative")
+    if count <= 0 and interval <= 0:
+        raise SystemExit("seed-liveness with --count 0 requires --interval > 0")
     runtime = build_runtime(config_dir)
     recipe = runtime.compiler.recipes.get(recipe_name)
     if recipe is None:
@@ -1944,9 +2017,14 @@ def _gateway_smoke_summary(url: str, *, api_key: str | None, recipe: str | None 
             )
             presign.raise_for_status()
             presigned = presign.json()
-            upload = httpx.put(presigned["upload_url"], content=body, headers={"content-type": "text/plain"}, timeout=30.0)
+            upload_url = presigned.get("upload_url") if isinstance(presigned, dict) else None
+            data_ref = presigned.get("data_ref") if isinstance(presigned, dict) else None
+            if not upload_url or not isinstance(data_ref, dict):
+                summary["object_store_smoke"] = {"uploaded": False, "error": "presign response missing upload_url or data_ref"}
+                summary["vision"] = {"skipped": "object_store presign failed"}
+                return summary
+            upload = httpx.put(upload_url, content=body, headers={"content-type": "text/plain"}, timeout=timeout)
             upload.raise_for_status()
-            data_ref = presigned["data_ref"]
             summary["object_store_smoke"] = {
                 "uploaded": True,
                 "uri": data_ref.get("uri"),
@@ -1959,10 +2037,13 @@ def _gateway_smoke_summary(url: str, *, api_key: str | None, recipe: str | None 
                 json={"name": "smoke.png", "bytes": len(image_body), "sha256": image_digest, "content_type": "image/png"},
             )
             image_presign.raise_for_status()
-            image_ref = image_presign.json()["data_ref"]
-            image_upload = httpx.put(
-                image_presign.json()["upload_url"], content=image_body, headers={"content-type": "image/png"}, timeout=30.0
-            )
+            image_presigned = image_presign.json()
+            image_upload_url = image_presigned.get("upload_url") if isinstance(image_presigned, dict) else None
+            image_ref = image_presigned.get("data_ref") if isinstance(image_presigned, dict) else None
+            if not image_upload_url or not isinstance(image_ref, dict):
+                summary["vision"] = {"ok": False, "error": "vision presign response missing upload_url or data_ref"}
+                return summary
+            image_upload = httpx.put(image_upload_url, content=image_body, headers={"content-type": "image/png"}, timeout=timeout)
             image_upload.raise_for_status()
             vision = client.post(
                 "/v2/tasks/sync",
@@ -1987,6 +2068,11 @@ def _gateway_smoke_summary(url: str, *, api_key: str | None, recipe: str | None 
             and (
                 not isinstance(summary.get("object_store_smoke"), dict)
                 or summary["object_store_smoke"].get("uploaded") is True
+            )
+            and (
+                not isinstance(summary.get("vision"), dict)
+                or summary["vision"].get("ok") is True
+                or "skipped" in summary["vision"]
             )
         )
     return summary
@@ -2072,7 +2158,6 @@ def _live_validation_artifacts_by_tuple(config, config_dir: Path | None = None) 
         tuple = providers_by_name.get(str(data.get("tuple") or ""))
         if tuple is None:
             continue
-        contract = data.get("official_contract") if isinstance(data.get("official_contract"), dict) else {}
         tuple_key = artifact_tuple_evidence_key(data, tuple)
         if tuple_key is None:
             continue

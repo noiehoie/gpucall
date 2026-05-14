@@ -150,6 +150,71 @@ def test_gateway_smoke_uses_v2_inline_inputs(monkeypatch) -> None:
     assert requests[0]["json"]["task"] == "infer"
 
 
+def test_gateway_smoke_marks_vision_failure_as_not_ok(monkeypatch) -> None:
+    from gpucall.cli import _gateway_smoke_summary
+
+    put_timeouts: list[float] = []
+
+    class Response:
+        def __init__(self, status_code: int, body: dict[str, object]) -> None:
+            self.status_code = status_code
+            self._body = body
+
+        def raise_for_status(self) -> None:
+            if self.status_code >= 400:
+                raise AssertionError(f"unexpected status {self.status_code}")
+
+        def json(self) -> dict[str, object]:
+            return self._body
+
+    class Client:
+        def __init__(self, *args, **kwargs) -> None:
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args) -> None:
+            return None
+
+        def get(self, path: str) -> Response:
+            if path == "/healthz":
+                return Response(200, {"status": "ok"})
+            if path == "/readyz":
+                return Response(200, {"status": "ready", "object_store": True})
+            raise AssertionError(path)
+
+        def post(self, path: str, *, json: dict[str, object]) -> Response:
+            if path == "/v2/tasks/sync" and json["task"] == "infer":
+                return Response(200, {"plan": {"selected_tuple": "modal-a10g"}, "result": {"kind": "inline", "value": "ok"}})
+            if path == "/v2/tasks/sync" and json["task"] == "vision":
+                return Response(500, {"error": "vision failed"})
+            if path == "/v2/objects/presign-put":
+                return Response(
+                    200,
+                    {
+                        "upload_url": f"https://objects.example/{json['name']}",
+                        "data_ref": {"uri": f"s3://bucket/{json['name']}", "bytes": json["bytes"]},
+                    },
+                )
+            raise AssertionError(path)
+
+    def fake_put(*args, **kwargs) -> Response:
+        put_timeouts.append(kwargs["timeout"])
+        return Response(200, {})
+
+    monkeypatch.setenv("GPUCALL_GATEWAY_SMOKE_TIMEOUT_SECONDS", "123")
+    monkeypatch.setattr("gpucall.cli.httpx.Client", Client)
+    monkeypatch.setattr("gpucall.cli.httpx.post", lambda *args, **kwargs: Response(401, {}))
+    monkeypatch.setattr("gpucall.cli.httpx.put", fake_put)
+
+    summary = _gateway_smoke_summary("http://gateway.example.internal", api_key="gpk_test")
+
+    assert summary["ok"] is False
+    assert summary["vision"]["ok"] is False
+    assert put_timeouts == [123.0, 123.0]
+
+
 def test_required_live_validation_tuples_respects_policy_deny(tmp_path, monkeypatch) -> None:
     from gpucall.cli import _required_live_validation_tuples
     from gpucall.config import load_config

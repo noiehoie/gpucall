@@ -414,12 +414,16 @@ gpucall registry show
 gpucall smoke
 gpucall cost-audit --live
 gpucall cleanup-audit
-gpucall launch-check --profile production --url http://127.0.0.1:18088
+gpucall launch-check --profile production --config-dir config --url http://127.0.0.1:18088
 gpucall audit verify
 gpucall post-launch-report
 ```
 
 Production launch checks には gateway auth、object-store credentials、live gateway smoke result、complete provider cost metadata、live provider cost/resource audit access、cleanup audit success、provider-validation JSON artifacts が必要です。Static launch checks は local config validation 用に残っています。
+
+`launch-check` は full report を `$XDG_STATE_HOME/gpucall/launch/launch-check.json` に保存し、標準出力には bounded summary を出します。full JSON を stdout に出す場合は `--json`、summary stdout のまま明示パスにも保存する場合は `--output-json <path>` を使います。
+
+Netcup やベアメタル環境で Tailscale を利用し、明示的な設定ディレクトリを運用する手順については、[docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) を参照してください。
 
 ## v3 Roadmap
 
