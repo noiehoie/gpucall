@@ -3,6 +3,7 @@ provider_model_id: Qwen/Qwen2.5-VL-32B-Instruct
 capabilities:
 - vision_language
 - visual_question_answering
+- image_captioning
 - document_understanding
 - ocr
 - chart_understanding

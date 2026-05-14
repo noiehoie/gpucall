@@ -1,6 +1,6 @@
 name: qwen2.5-vl-72b-instruct
 provider_model_id: Qwen/Qwen2.5-VL-72B-Instruct
-capabilities: [vision_language, visual_question_answering, document_understanding, ocr, chart_understanding, instruction_following]
+capabilities: [vision_language, visual_question_answering, image_captioning, document_understanding, ocr, chart_understanding, instruction_following]
 max_model_len: 32768
 min_vram_gb: 160
 supported_engines: [runpod-vllm-openai]
