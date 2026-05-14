@@ -178,6 +178,15 @@ class Dispatcher:
                                 "retryable": not final_attempt,
                             },
                         )
+                        if _structured_failure_should_switch_tuple(plan, exc):
+                            last_error = TupleError(
+                                _job_error_message(exc),
+                                retryable=False,
+                                status_code=422,
+                                code=exc.code,
+                                raw_output=exc.raw_output,
+                            )
+                            break
                         if not final_attempt:
                             continue
                         last_error = TupleError(
@@ -538,6 +547,15 @@ def _requires_checked_inline_output(plan: CompiledPlan) -> bool:
 
 def _output_validation_attempts(plan: CompiledPlan) -> int:
     return max(int(getattr(plan, "output_validation_attempts", 1) or 1), 1)
+
+
+def _structured_failure_should_switch_tuple(plan: CompiledPlan, exc: TupleError) -> bool:
+    return (
+        exc.code == "MALFORMED_OUTPUT"
+        and plan.response_format is not None
+        and plan.response_format.type is ResponseFormatType.JSON_SCHEMA
+        and plan.response_format.strict
+    )
 
 
 def _admission_workload_scope(plan: CompiledPlan) -> str:

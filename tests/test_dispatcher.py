@@ -121,6 +121,19 @@ def json_plan(chain: list[str]) -> CompiledPlan:
     )
 
 
+def strict_json_schema_plan(chain: list[str]) -> CompiledPlan:
+    return plan(chain).model_copy(
+        update={
+            "response_format": ResponseFormat(
+                type=ResponseFormatType.JSON_SCHEMA,
+                json_schema={"type": "object", "properties": {"ok": {"type": "boolean"}}, "required": ["ok"]},
+                strict=True,
+            ),
+            "output_validation_attempts": 3,
+        }
+    )
+
+
 def checked_plan(chain: list[str]) -> CompiledPlan:
     return plan(chain).model_copy(update={"output_validation_attempts": 2})
 
@@ -794,6 +807,26 @@ async def test_structured_output_failure_does_not_open_circuit_or_fail_over(tmp_
     assert tuple.calls == 3
     assert dispatcher.registry.score("json").samples == 0
     assert dispatcher.registry.score("other").samples == 1
+
+
+@pytest.mark.asyncio
+async def test_strict_json_schema_failure_switches_tuple_without_same_tuple_retry(tmp_path) -> None:
+    tuple = SequenceTuple("weak", ['{"wrong": true}', '{"ok": true}'])
+    other = SequenceTuple("strong", ['{"ok": true}'])
+    dispatcher = Dispatcher(
+        adapters={"weak": tuple, "strong": other},
+        registry=ObservedRegistry(),
+        audit=AuditTrail(tmp_path / "audit.jsonl"),
+        jobs=JobStore(),
+    )
+
+    result = await dispatcher.execute_sync(strict_json_schema_plan(["weak", "strong"]))
+
+    assert result.value == '{"ok": true}'
+    assert tuple.calls == 1
+    assert other.calls == 1
+    assert dispatcher.registry.score("weak").samples == 0
+    assert dispatcher.registry.score("strong").samples == 1
 
 
 @pytest.mark.asyncio
