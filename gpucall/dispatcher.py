@@ -626,15 +626,35 @@ def _validate_tuple_output(plan: CompiledPlan, result: TupleResult) -> TupleResu
             raise TupleError("empty tuple output", retryable=True, code="EMPTY_OUTPUT", raw_output=result.value or "")
     if not _requires_json_output(plan):
         return result
+    if result.openai_choices:
+        for choice in result.openai_choices:
+            content = _openai_choice_content(choice)
+            _validate_structured_text(plan, content)
+        return result.model_copy(update={"output_validated": True})
     if result.kind != "inline" or result.value is None:
         raise TupleError("structured output must be inline text", retryable=True, code="MALFORMED_OUTPUT")
+    _validate_structured_text(plan, result.value)
+    return result.model_copy(update={"output_validated": True})
+
+
+def _openai_choice_content(choice: dict[str, object]) -> str:
+    message = choice.get("message")
+    if not isinstance(message, dict):
+        raise TupleError("OpenAI-compatible structured choice missing message", retryable=True, code="MALFORMED_OUTPUT")
+    content = message.get("content")
+    if not isinstance(content, str) or not content.strip():
+        raise TupleError("OpenAI-compatible structured choice missing text content", retryable=True, code="MALFORMED_OUTPUT")
+    return content
+
+
+def _validate_structured_text(plan: CompiledPlan, value: str) -> None:
     try:
-        parsed = json.loads(result.value)
+        parsed = json.loads(value)
     except json.JSONDecodeError as exc:
-        raise TupleError("malformed structured output", retryable=True, code="MALFORMED_OUTPUT", raw_output=result.value) from exc
+        raise TupleError("malformed structured output", retryable=True, code="MALFORMED_OUTPUT", raw_output=value) from exc
     if plan.response_format is not None and plan.response_format.type is ResponseFormatType.JSON_OBJECT:
         if not isinstance(parsed, dict):
-            raise TupleError("structured output must be a JSON object", retryable=True, code="MALFORMED_OUTPUT", raw_output=result.value)
+            raise TupleError("structured output must be a JSON object", retryable=True, code="MALFORMED_OUTPUT", raw_output=value)
     if (
         plan.response_format is not None
         and plan.response_format.type is ResponseFormatType.JSON_SCHEMA
@@ -646,8 +666,7 @@ def _validate_tuple_output(plan: CompiledPlan, result: TupleResult) -> TupleResu
 
             jsonschema.validate(parsed, plan.response_format.json_schema)
         except Exception as exc:
-            raise TupleError("structured output does not match JSON schema", retryable=True, code="MALFORMED_OUTPUT", raw_output=result.value) from exc
-    return result.model_copy(update={"output_validated": True})
+            raise TupleError("structured output does not match JSON schema", retryable=True, code="MALFORMED_OUTPUT", raw_output=value) from exc
 
 
 def _validate_and_register_tuple_output(dispatcher: Dispatcher, plan: CompiledPlan, result: TupleResult) -> TupleResult:

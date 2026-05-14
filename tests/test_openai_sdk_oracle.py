@@ -22,6 +22,25 @@ def test_openai_chat_response_matches_official_sdk_type_oracle() -> None:
     assert parsed.choices[0].message.content == "hello"
 
 
+def test_openai_chat_response_multiple_choices_match_official_sdk_type_oracle() -> None:
+    pytest.importorskip("openai")
+    from openai.types.chat import ChatCompletion
+
+    payload = openai_chat_response(
+        "gpucall:auto",
+        None,
+        {"prompt_tokens": 2, "completion_tokens": 2, "total_tokens": 4},
+        choices=[
+            {"index": 0, "message": {"role": "assistant", "content": "a"}, "finish_reason": "stop"},
+            {"index": 1, "message": {"role": "assistant", "content": "b"}, "finish_reason": "stop"},
+        ],
+    )
+
+    parsed = ChatCompletion.model_validate(payload)
+    assert len(parsed.choices) == 2
+    assert parsed.choices[1].message.content == "b"
+
+
 def test_openai_stream_chunk_matches_official_sdk_type_oracle() -> None:
     pytest.importorskip("openai")
     from openai.types.chat import ChatCompletionChunk

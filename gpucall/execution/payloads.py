@@ -29,6 +29,7 @@ def plan_payload(plan: CompiledPlan) -> dict[str, Any]:
         "functions": plan.functions,
         "function_call": plan.function_call,
         "stream_options": plan.stream_options,
+        "n": plan.n,
         "input_refs": [ref.model_dump(mode="json") for ref in plan.input_refs],
         "inline_inputs": {key: value.model_dump(mode="json") for key, value in plan.inline_inputs.items()},
         "messages": [message.model_dump(mode="json") for message in plan.messages],
@@ -76,6 +77,7 @@ def openai_chat_payload_from_plan(
         "functions": plan.functions,
         "function_call": plan.function_call,
         "stream_options": plan.stream_options,
+        "n": plan.n,
         "response_format": _openai_response_format(plan) if plan.response_format is not None else None,
     }
     for key, value in optional.items():
@@ -151,40 +153,59 @@ def openai_chat_completion_result(value: Any) -> TupleResult:
     choices = value.get("choices")
     if not isinstance(choices, list) or not choices:
         raise TupleError("OpenAI-compatible response missing choices", retryable=True, status_code=502)
-    if len(choices) != 1:
-        raise TupleError("OpenAI-compatible response returned multiple choices; n > 1 is not supported", retryable=False, status_code=502)
-    first = choices[0]
-    if not isinstance(first, dict):
-        raise TupleError("OpenAI-compatible response has invalid choice", retryable=True, status_code=502)
-    finish_reason = first.get("finish_reason")
-    if finish_reason is not None and not isinstance(finish_reason, str):
-        raise TupleError("OpenAI-compatible response has invalid finish_reason", retryable=True, status_code=502)
-    message = first.get("message")
-    content: Any = None
-    tool_calls: Any = None
-    function_call: Any = None
-    if isinstance(message, dict):
-        content = message.get("content")
-        tool_calls = message.get("tool_calls")
-        function_call = message.get("function_call")
-    if content is not None and not isinstance(content, str):
-        raise TupleError("OpenAI-compatible response has non-string assistant content", retryable=True, status_code=502)
-    if tool_calls is not None and not isinstance(tool_calls, list):
-        raise TupleError("OpenAI-compatible response has invalid tool_calls", retryable=True, status_code=502)
-    if isinstance(tool_calls, list):
-        for item in tool_calls:
-            if not _is_openai_tool_call(item):
-                raise TupleError("OpenAI-compatible response has invalid tool_calls", retryable=True, status_code=502)
-    if function_call is not None and not isinstance(function_call, dict):
-        raise TupleError("OpenAI-compatible response has invalid function_call", retryable=True, status_code=502)
-    if content is None and not tool_calls and not function_call:
-        raise TupleError("OpenAI-compatible response missing assistant content, tool_calls, or function_call", retryable=True, status_code=502)
+    normalized_choices: list[dict[str, Any]] = []
+    first_content: str | None = None
+    first_tool_calls: list[dict[str, Any]] | None = None
+    first_function_call: dict[str, Any] | None = None
+    first_finish_reason: str | None = None
+    for index, raw_choice in enumerate(choices):
+        if not isinstance(raw_choice, dict):
+            raise TupleError("OpenAI-compatible response has invalid choice", retryable=True, status_code=502)
+        choice = dict(raw_choice)
+        choice.setdefault("index", index)
+        finish_reason = choice.get("finish_reason")
+        if finish_reason is not None and not isinstance(finish_reason, str):
+            raise TupleError("OpenAI-compatible response has invalid finish_reason", retryable=True, status_code=502)
+        message = choice.get("message")
+        content: Any = None
+        tool_calls: Any = None
+        function_call: Any = None
+        if isinstance(message, dict):
+            content = message.get("content")
+            tool_calls = message.get("tool_calls")
+            function_call = message.get("function_call")
+        if content is not None and not isinstance(content, str):
+            raise TupleError("OpenAI-compatible response has non-string assistant content", retryable=True, status_code=502)
+        if tool_calls is not None and not isinstance(tool_calls, list):
+            raise TupleError("OpenAI-compatible response has invalid tool_calls", retryable=True, status_code=502)
+        if isinstance(tool_calls, list):
+            for item in tool_calls:
+                if not _is_openai_tool_call(item):
+                    raise TupleError("OpenAI-compatible response has invalid tool_calls", retryable=True, status_code=502)
+        if function_call is not None and not isinstance(function_call, dict):
+            raise TupleError("OpenAI-compatible response has invalid function_call", retryable=True, status_code=502)
+        if content is None and not tool_calls and not function_call:
+            raise TupleError("OpenAI-compatible response missing assistant content, tool_calls, or function_call", retryable=True, status_code=502)
+        normalized_choices.append(choice)
+        if index == 0:
+            first_content = content
+            first_tool_calls = tool_calls
+            first_function_call = function_call
+            first_finish_reason = finish_reason
 
     usage: dict[str, int] = {}
     raw_usage = value.get("usage")
     if isinstance(raw_usage, dict):
         usage = {str(k): v for k, v in raw_usage.items() if isinstance(v, int) and not isinstance(v, bool)}
-    return TupleResult(kind="inline", value=content, usage=usage, tool_calls=tool_calls, function_call=function_call, finish_reason=finish_reason)
+    return TupleResult(
+        kind="inline",
+        value=first_content,
+        usage=usage,
+        tool_calls=first_tool_calls,
+        function_call=first_function_call,
+        finish_reason=first_finish_reason,
+        openai_choices=normalized_choices,
+    )
 
 
 def _is_openai_tool_call(value: Any) -> bool:
@@ -192,7 +213,14 @@ def _is_openai_tool_call(value: Any) -> bool:
         return False
     if not isinstance(value.get("id"), str) or not isinstance(value.get("type"), str):
         return False
-    function = value.get("function")
-    if not isinstance(function, dict):
-        return False
-    return isinstance(function.get("name"), str) and isinstance(function.get("arguments"), str)
+    if value.get("type") == "function":
+        function = value.get("function")
+        if not isinstance(function, dict):
+            return False
+        return isinstance(function.get("name"), str) and isinstance(function.get("arguments"), str)
+    if value.get("type") == "custom":
+        custom = value.get("custom")
+        if not isinstance(custom, dict):
+            return False
+        return isinstance(custom.get("name"), str) and isinstance(custom.get("input"), str)
+    return False

@@ -41,10 +41,11 @@ X-GPUCall-Output-Validated: true
 ```
 
 The facade preserves standard chat roles, text-only content parts, sampling
-hints, stop sequences, `response_format`, `tools`, `tool_choice`, legacy
-`functions` / `function_call`, and backend `tool_calls` when the selected tuple
-uses an OpenAI-compatible worker contract. Non-text multimodal OpenAI message
-parts are rejected here; use the gpucall DataRef APIs for image/file inputs.
+hints, stop sequences, `n`, `response_format`, `stream_options.include_usage`,
+`tools`, `tool_choice`, legacy `functions` / `function_call`, backend
+`tool_calls`, and multiple backend choices when the selected tuple uses an
+OpenAI-compatible worker contract. Non-text multimodal OpenAI message parts are
+rejected here; use the gpucall DataRef APIs for image/file inputs.
 
 The top-level Chat Completions request field contract is generated from the
 vendored official OpenAI OpenAPI specification at
@@ -60,11 +61,13 @@ feature-gated, or fail-closed. Unknown fields are rejected as unknown; official
 but unsupported fields are rejected by their official field name.
 
 The v2.0 facade still fails closed for unsupported OpenAI fields instead of
-silently dropping them. In particular, `n > 1`, `logprobs`, `top_logprobs`,
-`logit_bias`, `stream_options.include_usage`, `stream_options.include_obfuscation`,
-and `stream + response_format` are rejected until the gateway can return a
-truthful compatible contract. Anthropic-compatible `/v1/messages` is not part of
-the v2.0 MVP.
+silently dropping them. In particular, `logprobs`, `top_logprobs`, `logit_bias`,
+`stream_options.include_obfuscation`, audio modalities, hosted web-search
+options, and other non-chat-completions execution features are rejected until the
+gateway can return a truthful compatible contract. `n > 1`, stream usage, and
+`stream + response_format` require an OpenAI-compatible worker contract and will
+not route to plain-text workers. Anthropic-compatible `/v1/messages` is not part
+of the v2.0 MVP.
 
 ## Level 2: gpucall Python SDK
 

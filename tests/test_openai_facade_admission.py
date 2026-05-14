@@ -43,12 +43,14 @@ def test_openai_admission_rejects_official_unsupported_field_by_name() -> None:
         admit_openai_chat_completion(_payload(modalities=["text"]), inline_bytes_limit=10_000)
 
 
-def test_openai_admission_rejects_stream_structured_output_until_supported() -> None:
-    with pytest.raises(OpenAIProtocolError, match=r"stream.response_format"):
-        admit_openai_chat_completion(
-            _payload(stream=True, response_format={"type": "json_object"}),
-            inline_bytes_limit=10_000,
-        )
+def test_openai_admission_accepts_stream_structured_output_for_openai_worker_contract() -> None:
+    admission = admit_openai_chat_completion(
+        _payload(stream=True, response_format={"type": "json_object"}),
+        inline_bytes_limit=10_000,
+    )
+
+    assert admission.stream is True
+    assert admission.task_request.response_format is not None
 
 
 def test_openai_admission_rejects_image_content_parts() -> None:
@@ -73,3 +75,13 @@ def test_openai_admission_preserves_text_part_boundaries_without_added_newlines(
     )
 
     assert admission.task_request.messages[0].content == "hello"
+
+
+def test_openai_admission_preserves_n_and_stream_usage() -> None:
+    admission = admit_openai_chat_completion(
+        _payload(n=2, stream=True, stream_options={"include_usage": True}),
+        inline_bytes_limit=10_000,
+    )
+
+    assert admission.task_request.n == 2
+    assert admission.task_request.stream_options == {"include_usage": True}

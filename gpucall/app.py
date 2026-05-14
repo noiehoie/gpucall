@@ -717,6 +717,7 @@ def create_app(config_dir: Path | None = None) -> FastAPI:
                     _openai_response_model(admission.requested_model, plan, runtime.compiler.tuples),
                     result.value,
                     result.usage,
+                    choices=result.openai_choices,
                     tool_calls=result.tool_calls,
                     function_call=result.function_call,
                     finish_reason=result.finish_reason,

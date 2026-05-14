@@ -1190,6 +1190,46 @@ def test_openai_facade_surfaces_backend_tool_calls(tmp_path, monkeypatch) -> Non
     assert payload["choices"][0]["message"]["tool_calls"][0]["function"]["name"] == "noop"
 
 
+def test_openai_facade_preserves_multiple_backend_choices_for_n(tmp_path, monkeypatch) -> None:
+    captured = {}
+
+    async def fake_execute_sync(plan):
+        captured["n"] = plan.n
+        return TupleResult(
+            kind="inline",
+            value="first",
+            usage={"prompt_tokens": 3, "completion_tokens": 2, "total_tokens": 5},
+            openai_choices=[
+                {"index": 0, "message": {"role": "assistant", "content": "first"}, "finish_reason": "stop"},
+                {"index": 1, "message": {"role": "assistant", "content": "second"}, "finish_reason": "stop"},
+            ],
+        )
+
+    config_dir = copy_config(tmp_path)
+    worker_path = config_dir / "workers" / "local-echo.yml"
+    worker = yaml.safe_load(worker_path.read_text(encoding="utf-8"))
+    worker["endpoint_contract"] = "openai-chat-completions"
+    worker["output_contract"] = "openai-chat-completions"
+    worker_path.write_text(yaml.safe_dump(worker, sort_keys=False), encoding="utf-8")
+
+    with TestClient(create_app(config_dir)) as client:
+        monkeypatch.setattr(client.app.state.runtime.dispatcher, "execute_sync", fake_execute_sync)
+        response = client.post(
+            "/v1/chat/completions",
+            json={
+                "model": "gpt-4o-mini",
+                "messages": [{"role": "user", "content": "two variants"}],
+                "n": 2,
+            },
+        )
+
+    payload = response.json()
+    assert response.status_code == 200
+    assert captured["n"] == 2
+    assert len(payload["choices"]) == 2
+    assert payload["choices"][1]["message"]["content"] == "second"
+
+
 def test_openai_facade_rejects_tools_when_no_tuple_declares_openai_chat_contract(tmp_path) -> None:
     with TestClient(create_app(copy_config(tmp_path))) as client:
         response = client.post(
@@ -1199,6 +1239,21 @@ def test_openai_facade_rejects_tools_when_no_tuple_declares_openai_chat_contract
                 "messages": [{"role": "user", "content": "call tool"}],
                 "tools": [{"type": "function", "function": {"name": "noop"}}],
                 "tool_choice": "required",
+            },
+        )
+
+    assert response.status_code == 503
+    assert "OpenAI chat completions tool/function contract" in response.text
+
+
+def test_openai_facade_requires_openai_contract_for_n_greater_than_one(tmp_path) -> None:
+    with TestClient(create_app(copy_config(tmp_path))) as client:
+        response = client.post(
+            "/v1/chat/completions",
+            json={
+                "model": "gpt-4o-mini",
+                "messages": [{"role": "user", "content": "two variants"}],
+                "n": 2,
             },
         )
 
@@ -1659,6 +1714,22 @@ def test_openai_chat_completions_streams_sse(tmp_path) -> None:
     assert '"object":"chat.completion.chunk"' in response.text
     assert "ok:infer:local-echo" in response.text
     assert "data: [DONE]" in response.text
+
+
+def test_openai_chat_completions_stream_response_format_requires_openai_contract(tmp_path) -> None:
+    with TestClient(create_app(copy_config(tmp_path))) as client:
+        response = client.post(
+            "/v1/chat/completions",
+            json={
+                "model": "gpucall:auto",
+                "messages": [{"role": "user", "content": "return json"}],
+                "stream": True,
+                "response_format": {"type": "json_object"},
+            },
+        )
+
+    assert response.status_code == 503
+    assert "OpenAI chat completions tool/function contract" in response.text
 
 
 def test_openai_chat_completions_rejects_large_prompt_without_500(tmp_path) -> None:

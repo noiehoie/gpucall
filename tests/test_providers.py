@@ -102,16 +102,20 @@ def test_openai_chat_completion_result_rejects_malformed_tool_call() -> None:
         )
 
 
-def test_openai_chat_completion_result_rejects_multiple_choices() -> None:
-    with pytest.raises(TupleError, match="multiple choices"):
-        openai_chat_completion_result(
-            {
-                "choices": [
-                    {"message": {"role": "assistant", "content": "one"}},
-                    {"message": {"role": "assistant", "content": "two"}},
-                ]
-            }
-        )
+def test_openai_chat_completion_result_preserves_multiple_choices() -> None:
+    result = openai_chat_completion_result(
+        {
+            "choices": [
+                {"message": {"role": "assistant", "content": "one"}},
+                {"message": {"role": "assistant", "content": "two"}},
+            ]
+        }
+    )
+
+    assert result.value == "one"
+    assert result.openai_choices is not None
+    assert len(result.openai_choices) == 2
+    assert result.openai_choices[1]["message"]["content"] == "two"
 
 
 def test_provider_contract_modules_are_separated_and_sourced() -> None:

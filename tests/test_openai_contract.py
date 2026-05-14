@@ -32,6 +32,8 @@ def test_gpucall_openai_policy_classifies_every_official_request_field() -> None
     assert "web_search_options" in OPENAI_CHAT_COMPLETIONS_FAIL_CLOSED_FIELDS
     assert "modalities" in OPENAI_CHAT_COMPLETIONS_FAIL_CLOSED_FIELDS
     assert "tool_choice" in OPENAI_CHAT_COMPLETIONS_SUPPORTED_FIELDS
+    assert "n" in OPENAI_CHAT_COMPLETIONS_SUPPORTED_FIELDS
+    assert "stream.response_format" not in OPENAI_CHAT_COMPLETIONS_CONTRACT["gpucall_policy"]["feature_gated_fields"]
 
 
 def _collect_schema(spec: dict, schema: dict) -> tuple[list[str], list[str]]:

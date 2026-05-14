@@ -127,6 +127,7 @@ class GovernanceCompiler:
             functions=request.functions,
             function_call=request.function_call,
             stream_options=request.stream_options,
+            n=request.n,
             input_refs=request.input_refs,
             inline_inputs=request.inline_inputs,
             messages=compiled_messages,
@@ -258,8 +259,6 @@ class GovernanceCompiler:
     def _validate_request_against_recipe(self, request: TaskRequest, recipe: Recipe) -> None:
         if request.mode not in recipe.allowed_modes:
             raise GovernanceError(f"mode {request.mode} is not allowed for recipe {recipe.name}")
-        if request.mode is ExecutionMode.STREAM and request.response_format is not None:
-            raise GovernanceError("response_format is not supported for stream mode until streaming output validation is available")
         if request.messages and (request.inline_inputs or request.input_refs):
             raise GovernanceError("messages cannot be combined with inline_inputs or input_refs in v2.0")
         if recipe.task == "vision" and not _has_image_ref(request):

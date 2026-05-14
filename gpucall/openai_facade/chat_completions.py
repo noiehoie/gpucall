@@ -67,6 +67,7 @@ def admit_openai_chat_completion(payload: Mapping[str, Any], *, inline_bytes_lim
         functions=raw.get("functions"),
         function_call=raw.get("function_call"),
         stream_options=raw.get("stream_options"),
+        n=raw.get("n"),
         response_format=response_format,
         metadata=_openai_request_metadata(raw, extensions),
     )
@@ -105,8 +106,6 @@ def _reject_unsupported_fields(payload: Mapping[str, Any]) -> None:
             unsupported.append(key)
         elif key not in OPENAI_CHAT_COMPLETIONS_FIELDS:
             unsupported.append(f"unknown.{key}")
-    if payload.get("n") not in (None, 1):
-        unsupported.append("n > 1")
     if (
         payload.get("max_tokens") is not None
         and payload.get("max_completion_tokens") is not None
@@ -120,20 +119,17 @@ def _reject_unsupported_fields(payload: Mapping[str, Any]) -> None:
             for field in OPENAI_CHAT_COMPLETIONS_FEATURE_GATED_FIELDS
             if str(field).startswith("stream_options.")
         }
+        allowed.add("include_usage")
         for key in sorted(str(key) for key in stream_options if str(key) not in allowed):
             unsupported.append(f"stream_options.{key}")
         if not payload.get("stream"):
             unsupported.append("stream_options_without_stream")
         if "include_usage" in stream_options and not isinstance(stream_options.get("include_usage"), bool):
             unsupported.append("stream_options.include_usage")
-        if stream_options.get("include_usage") is True:
-            unsupported.append("stream_options.include_usage")
         if "include_obfuscation" in stream_options and not isinstance(stream_options.get("include_obfuscation"), bool):
             unsupported.append("stream_options.include_obfuscation")
         if stream_options.get("include_obfuscation") is True:
             unsupported.append("stream_options.include_obfuscation")
-    if payload.get("stream") is True and payload.get("response_format") is not None:
-        unsupported.append("stream.response_format")
     if not unsupported:
         return
     fields = ", ".join(sorted(set(unsupported)))
@@ -215,9 +211,9 @@ def _openai_request_metadata(payload: Mapping[str, Any], extensions: Mapping[str
         "openai.tool_choice": payload.get("tool_choice"),
         "openai.functions": payload.get("functions"),
         "openai.function_call": payload.get("function_call"),
+        "openai.n": payload.get("n"),
         "openai.presence_penalty": payload.get("presence_penalty"),
         "openai.frequency_penalty": payload.get("frequency_penalty"),
-        "openai.n": payload.get("n"),
         "openai.max_completion_tokens": payload.get("max_completion_tokens"),
         "openai.stream_options": payload.get("stream_options"),
         "gpucall.intent": extensions.get("intent"),

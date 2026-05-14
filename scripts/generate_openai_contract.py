@@ -107,10 +107,7 @@ def main() -> None:
             ),
             "feature_gated_fields": sorted(
                 {
-                    "n",
                     "stream_options.include_obfuscation",
-                    "stream_options.include_usage",
-                    "stream.response_format",
                 }
             ),
         },

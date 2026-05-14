@@ -389,6 +389,7 @@ class TaskRequest(BaseModel):
     functions: list[dict[str, Any]] | None = None
     function_call: str | dict[str, Any] | None = None
     stream_options: dict[str, Any] | None = None
+    n: PositiveInt | None = None
     timeout_seconds: PositiveInt | None = None
     lease_ttl_seconds: PositiveInt | None = None
     response_format: ResponseFormat | None = None
@@ -777,6 +778,7 @@ class CompiledPlan(BaseModel):
     functions: list[dict[str, Any]] | None = None
     function_call: str | dict[str, Any] | None = None
     stream_options: dict[str, Any] | None = None
+    n: PositiveInt | None = None
     input_refs: list[DataRef]
     inline_inputs: dict[str, InlineValue]
     messages: list[ChatMessage] = Field(default_factory=list)
@@ -825,6 +827,7 @@ class TupleResult(BaseModel):
     tool_calls: list[dict[str, Any]] | None = None
     function_call: dict[str, Any] | None = None
     finish_reason: str | None = None
+    openai_choices: list[dict[str, Any]] | None = None
 
 
 def _context_budget_for(payload: dict[str, Any]) -> int:

@@ -96,6 +96,12 @@ def requested_output_contract(request: TaskRequest, recipe: Recipe) -> str | Non
 
 
 def requires_openai_chat_contract(request: TaskRequest) -> bool:
+    if request.n is not None and request.n > 1:
+        return True
+    if request.stream_options:
+        return True
+    if request.mode is ExecutionMode.STREAM and request.response_format is not None:
+        return True
     if request.tools or request.tool_choice is not None or request.functions or request.function_call is not None:
         return True
     for message in request.messages:
@@ -325,6 +331,8 @@ def _output_contract_satisfied(required: str, declared: set[str]) -> bool:
     if required in declared:
         return True
     if required == "plain-text" and "openai-chat-completions" in declared:
+        return True
+    if required in {"json_object", "json_schema"} and "openai-chat-completions" in declared:
         return True
     return False
 

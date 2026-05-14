@@ -18,10 +18,7 @@
       "web_search_options"
     ],
     "feature_gated_fields": [
-      "n",
-      "stream.response_format",
-      "stream_options.include_obfuscation",
-      "stream_options.include_usage"
+      "stream_options.include_obfuscation"
     ],
     "supported_fields": [
       "frequency_penalty",

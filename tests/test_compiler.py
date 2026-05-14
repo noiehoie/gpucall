@@ -286,6 +286,60 @@ def test_compiler_routes_inline_text_to_chat_only_openai_tuple() -> None:
     assert plan.tuple_chain == ["chat"]
 
 
+def test_compiler_treats_openai_chat_contract_as_structured_output_capable() -> None:
+    compiler = build_compiler()
+    compiler.policy = compiler.policy.model_copy(update={"tuples": TuplePolicy(allow=["chat"], deny=[])})
+    compiler.tuples = {
+        "chat": ExecutionTupleSpec(
+            name="chat",
+            adapter="runpod-vllm-serverless",
+            execution_surface="managed_endpoint",
+            gpu="RUNPOD_RTX4000_ADA",
+            vram_gb=20,
+            max_model_len=32768,
+            cost_per_second=0.00016,
+            modes=[ExecutionMode.SYNC],
+            target="rp-endpoint",
+            model_ref="qwen-chat",
+            engine_ref="runpod-vllm-openai",
+            input_contracts=["chat_messages"],
+            output_contract="openai-chat-completions",
+            endpoint_contract="openai-chat-completions",
+            model="Qwen/Qwen2.5-1.5B-Instruct",
+        )
+    }
+    compiler.models = {
+        "qwen-chat": ModelSpec(
+            name="qwen-chat",
+            provider_model_id="Qwen/Qwen2.5-1.5B-Instruct",
+            max_model_len=32768,
+            min_vram_gb=16,
+            supported_engines=["runpod-vllm-openai"],
+            input_contracts=["chat_messages"],
+            output_contracts=["openai-chat-completions"],
+        )
+    }
+    compiler.engines = {
+        "runpod-vllm-openai": EngineSpec(
+            name="runpod-vllm-openai",
+            kind="openai-compatible-chat",
+            input_contracts=["chat_messages"],
+            output_contracts=["openai-chat-completions"],
+        )
+    }
+
+    plan = compiler.compile(
+        TaskRequest(
+            task="infer",
+            mode="sync",
+            recipe="r1",
+            response_format={"type": "json_schema", "json_schema": {"type": "object", "properties": {"ok": {"type": "boolean"}}}},
+        )
+    )
+
+    assert plan.tuple_chain == ["chat"]
+
+
 def test_compiler_auto_selects_smallest_capable_recipe_for_weight() -> None:
     compiler = build_compiler()
     small = compiler.recipes["r1"].model_copy(
@@ -668,18 +722,28 @@ def test_compiler_carries_generation_params_into_plan() -> None:
     assert plan.temperature == 0.0
 
 
-def test_compiler_rejects_response_format_for_stream_mode_until_validated_streaming_exists() -> None:
+def test_compiler_allows_stream_response_format_when_openai_contract_route_exists() -> None:
     compiler = build_compiler()
     recipe = compiler.recipes["r1"].model_copy(update={"allowed_modes": [ExecutionMode.STREAM]})
     compiler.recipes = {"r1": recipe}
     compiler.tuples = {
-        name: spec.model_copy(update={"modes": [ExecutionMode.STREAM], "stream_target": "app:stream", "stream_contract": "token-incremental"})
+        name: spec.model_copy(
+            update={
+                "modes": [ExecutionMode.STREAM],
+                "stream_target": "app:stream",
+                "stream_contract": "openai-chat-completions",
+                "endpoint_contract": "openai-chat-completions",
+                "output_contract": "openai-chat-completions",
+            }
+        )
         for name, spec in compiler.tuples.items()
     }
     request = TaskRequest(task="infer", mode="stream", recipe="r1", response_format={"type": "json_object"})
 
-    with pytest.raises(GovernanceError, match="response_format is not supported for stream mode"):
-        compiler.compile(request)
+    plan = compiler.compile(request)
+
+    assert plan.mode is ExecutionMode.STREAM
+    assert plan.response_format is not None
 
 
 def test_compiler_rejects_expired_data_ref() -> None:

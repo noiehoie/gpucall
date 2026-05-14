@@ -11,6 +11,7 @@ def openai_chat_response(
     content: str | None,
     usage: dict[str, int],
     *,
+    choices: list[dict[str, Any]] | None = None,
     tool_calls: list[dict[str, Any]] | None = None,
     function_call: dict[str, Any] | None = None,
     finish_reason: str | None = None,
@@ -18,25 +19,29 @@ def openai_chat_response(
     output_validated: bool | None = None,
 ) -> dict[str, Any]:
     now = int(time.time())
-    message: dict[str, Any] = {"role": "assistant", "content": content if content is not None else (None if tool_calls or function_call else "")}
-    if tool_calls:
-        message["tool_calls"] = tool_calls
-    if function_call:
-        message["function_call"] = function_call
-    resolved_finish_reason = finish_reason or ("tool_calls" if tool_calls else ("function_call" if function_call else "stop"))
+    if choices is not None:
+        normalized_choices = [_normalize_openai_choice(choice, index) for index, choice in enumerate(choices)]
+    else:
+        message: dict[str, Any] = {"role": "assistant", "content": content if content is not None else (None if tool_calls or function_call else "")}
+        if tool_calls:
+            message["tool_calls"] = tool_calls
+        if function_call:
+            message["function_call"] = function_call
+        resolved_finish_reason = finish_reason or ("tool_calls" if tool_calls else ("function_call" if function_call else "stop"))
+        normalized_choices = [
+            {
+                "index": 0,
+                "message": message,
+                "finish_reason": resolved_finish_reason,
+            }
+        ]
 
     payload: dict[str, Any] = {
         "id": f"chatcmpl-{uuid4().hex}",
         "object": "chat.completion",
         "created": now,
         "model": model,
-        "choices": [
-            {
-                "index": 0,
-                "message": message,
-                "finish_reason": resolved_finish_reason,
-            }
-        ],
+        "choices": normalized_choices,
         "usage": usage,
     }
     if gpucall is not None:
@@ -44,6 +49,16 @@ def openai_chat_response(
     if output_validated is not None:
         payload["output_validated"] = output_validated
     return payload
+
+
+def _normalize_openai_choice(choice: dict[str, Any], fallback_index: int) -> dict[str, Any]:
+    normalized = dict(choice)
+    normalized.setdefault("index", fallback_index)
+    normalized.setdefault("finish_reason", "stop")
+    message = normalized.get("message")
+    if isinstance(message, dict):
+        normalized["message"] = {key: value for key, value in message.items() if value is not None}
+    return normalized
 
 
 def openai_stream_chunks(model: str, event: str, already_started: bool, *, stream_id: str):
