@@ -13,11 +13,13 @@ from typing import Any, Iterator
 
 from gpucall.admission import AdmissionController
 from gpucall.audit import AuditTrail
+from gpucall.config import ConfigError, load_config
 from gpucall.dispatcher import Dispatcher, JobStore
-from gpucall.domain import CompiledPlan, ExecutionMode, JobState, ProviderErrorCode, TupleError, TupleResult
+from gpucall.domain import CompiledPlan, ExecutionMode, JobState, ProviderErrorCode, RecipeQualityFloor, TupleError, TupleResult
 from gpucall.execution import EchoTuple, RemoteHandle
 from gpucall.openai_facade.chat_completions import OpenAIProtocolError, admit_openai_chat_completion
 from gpucall.provider_errors import should_suppress_provider_family
+from gpucall.readiness import build_readiness_report
 from gpucall.registry import ObservedRegistry
 from gpucall.tenant import TenantUsageLedger
 
@@ -49,11 +51,11 @@ class SlowTuple(EchoTuple):
         return TupleResult(kind="inline", value=f"ok:{plan.task}:{self.name}")
 
 
-def run_production_acceptance() -> dict[str, Any]:
-    return asyncio.run(run_production_acceptance_async())
+def run_production_acceptance(config_dir: Path | None = None) -> dict[str, Any]:
+    return asyncio.run(run_production_acceptance_async(config_dir=config_dir))
 
 
-async def run_production_acceptance_async() -> dict[str, Any]:
+async def run_production_acceptance_async(config_dir: Path | None = None) -> dict[str, Any]:
     with tempfile.TemporaryDirectory(prefix="gpucall-acceptance-") as raw_root:
         root = Path(raw_root)
         checks = [
@@ -64,6 +66,8 @@ async def run_production_acceptance_async() -> dict[str, Any]:
             await _check_f9_budget_lifecycle(root),
             await _check_f10_async_lifecycle(root),
         ]
+        if config_dir is not None:
+            checks.append(_check_f11_config_route_resilience(Path(config_dir)))
     passed = all(item.passed for item in checks)
     return {
         "schema_version": 1,
@@ -140,6 +144,7 @@ async def _check_f4_provider_failure_suppression(root: Path) -> AcceptanceCheck:
             and len(bad.cancelled_handles) == 1
             and "bad" in snapshot["suppressed_tuples"]
             and '"reason":"tuple_suppressed"' in audit
+            and not snapshot["suppressed_provider_families"]
         )
         return AcceptanceCheck(
             id="F4",
@@ -216,6 +221,71 @@ def _check_f7_openai_chat_contract() -> AcceptanceCheck:
             "accepted_n": accepted.task_request.n,
             "accepted_stream_options": accepted.task_request.stream_options,
             "unsupported_obfuscation_rejected": rejected,
+        },
+        )
+
+
+def _check_f11_config_route_resilience(config_dir: Path) -> AcceptanceCheck:
+    try:
+        config = load_config(config_dir)
+        report = build_readiness_report(config_dir=config_dir, config=config)
+    except ConfigError as exc:
+        return AcceptanceCheck(
+            id="F11",
+            name="production config routes have cross-family executable breadth",
+            passed=False,
+            details={"config_error": str(exc)},
+        )
+
+    admission = AdmissionController(config.tuples)
+    issues: list[dict[str, Any]] = []
+    by_recipe = {item.name: item for item in config.recipes.values()}
+    for recipe_report in report.get("recipes", []):
+        if not recipe_report.get("auto_select"):
+            continue
+        if recipe_report.get("task") not in {"infer", "vision"}:
+            continue
+        recipe = by_recipe.get(str(recipe_report.get("recipe")))
+        if recipe is None or recipe.quality_floor is RecipeQualityFloor.SMOKE:
+            continue
+        eligible_names = [str(item.get("tuple")) for item in recipe_report.get("eligible_tuples", []) if item.get("tuple")]
+        families = sorted({admission.family_for(name) for name in eligible_names})
+        surfaces = sorted(
+            {
+                config.tuples[name].execution_surface.value
+                for name in eligible_names
+                if name in config.tuples and config.tuples[name].execution_surface is not None
+            }
+        )
+        if not eligible_names:
+            issues.append(
+                {
+                    "recipe": recipe.name,
+                    "intent": recipe.intent,
+                    "reason": "no_eligible_production_tuple",
+                }
+            )
+            continue
+        if len(families) < 2:
+            issues.append(
+                {
+                    "recipe": recipe.name,
+                    "intent": recipe.intent,
+                    "reason": "single_provider_family",
+                    "eligible_tuple_count": len(eligible_names),
+                    "provider_families": families,
+                    "execution_surfaces": surfaces,
+                }
+            )
+
+    return AcceptanceCheck(
+        id="F11",
+        name="production config routes have cross-family executable breadth",
+        passed=not issues,
+        details={
+            "config_dir": str(config_dir),
+            "issue_count": len(issues),
+            "issues": issues[:50],
         },
     )
 

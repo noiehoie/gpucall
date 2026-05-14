@@ -245,7 +245,7 @@ async def test_provider_temporary_failure_suppresses_tuple_for_later_plans(tmp_p
 
 
 @pytest.mark.asyncio
-async def test_resource_exhaustion_suppresses_provider_family(monkeypatch) -> None:
+async def test_resource_exhaustion_suppresses_only_observed_tuple(monkeypatch) -> None:
     monkeypatch.setenv("GPUCALL_PROVIDER_TEMPORARY_COOLDOWN_SECONDS", "60")
     admission = AdmissionController(cooldown_seconds=60)
     admission.tuple_families = {"modal-a": "modal:function_runtime:modal", "modal-b": "modal:function_runtime:modal"}
@@ -261,8 +261,8 @@ async def test_resource_exhaustion_suppresses_provider_family(monkeypatch) -> No
 
     assert first.allowed is False
     assert first.reason == "tuple_suppressed"
-    assert second.allowed is False
-    assert second.reason == "provider_family_suppressed"
+    assert second.allowed is True
+    await admission.release(second.lease)
     assert 0 < first.suppressed_until_seconds <= 60
 
 

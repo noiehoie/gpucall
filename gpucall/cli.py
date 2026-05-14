@@ -167,6 +167,7 @@ def main() -> None:
     release_check.add_argument("--config-dir", type=Path, default=default_config_dir())
     release_check.add_argument("--output-dir", type=Path, default=default_state_dir() / "release")
     production_acceptance = sub.add_parser("production-acceptance")
+    production_acceptance.add_argument("--config-dir", type=Path, default=None)
     production_acceptance.add_argument("--output", type=Path, default=None)
     add_readiness_parser(sub)
     add_setup_parser(sub)
@@ -348,7 +349,7 @@ def main() -> None:
     elif args.command == "release-check":
         release_check_command(args.config_dir, args.output_dir)
     elif args.command == "production-acceptance":
-        production_acceptance_command(args.output)
+        production_acceptance_command(args.output, config_dir=args.config_dir)
     elif args.command == "readiness":
         run_readiness_command(args)
     elif args.command == "setup":
@@ -403,8 +404,8 @@ def main() -> None:
         )
 
 
-def production_acceptance_command(output: Path | None) -> None:
-    report = run_production_acceptance()
+def production_acceptance_command(output: Path | None, *, config_dir: Path | None = None) -> None:
+    report = run_production_acceptance(config_dir=config_dir)
     rendered = dumps_acceptance_report(report)
     if output is not None:
         output.parent.mkdir(parents=True, exist_ok=True)
