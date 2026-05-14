@@ -356,16 +356,35 @@ class GovernanceCompiler:
     def _fit_ordered_tuples(self, tuples: list[str], request: TaskRequest, recipe: Recipe) -> list[str]:
         return sorted(tuples, key=lambda name: (*self._tuple_fit_key(name, request, recipe), name))
 
-    def _tuple_fit_key(self, name: str, request: TaskRequest, recipe: Recipe) -> tuple[int, int, int, int, float]:
+    def _tuple_fit_key(self, name: str, request: TaskRequest, recipe: Recipe) -> tuple[int, int, int, int, int, float]:
         compiled_required_model_len = self._required_model_len(request, recipe)
         spec = self.tuples[name]
         local_preference = 0 if spec.execution_surface and spec.execution_surface.value == "local_runtime" else 1
         return (
             local_preference,
+            self._route_quality_penalty(name, request, recipe),
             self._observed_reliability_tier(name),
             spec.vram_gb,
             spec.max_model_len - compiled_required_model_len,
             float(spec.cost_per_second),
+        )
+
+    def _route_quality_penalty(self, name: str, request: TaskRequest, recipe: Recipe) -> int:
+        if not (
+            request.response_format is not None
+            and request.response_format.type is ResponseFormatType.JSON_SCHEMA
+            and request.response_format.strict
+        ):
+            return 0
+        return min(
+            self.registry.quality_failure_count(
+                name,
+                recipe=recipe.name,
+                task=request.task,
+                mode=request.mode.value,
+                code="MALFORMED_OUTPUT",
+            ),
+            99,
         )
 
     def _observed_reliability_tier(self, name: str) -> int:

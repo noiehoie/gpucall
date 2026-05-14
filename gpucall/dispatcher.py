@@ -179,6 +179,13 @@ class Dispatcher:
                             },
                         )
                         if _structured_failure_should_switch_tuple(plan, exc):
+                            self.registry.record_quality_failure(
+                                tuple,
+                                recipe=plan.recipe_name,
+                                task=plan.task,
+                                mode=plan.mode.value,
+                                code=exc.code,
+                            )
                             last_error = TupleError(
                                 _job_error_message(exc),
                                 retryable=False,

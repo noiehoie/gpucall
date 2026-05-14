@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections import defaultdict
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from pathlib import Path
 import sqlite3
 from statistics import median
@@ -46,8 +47,10 @@ class CircuitBreaker:
 class ObservedRegistry:
     observations: dict[str, list[TupleObservation]] = field(default_factory=lambda: defaultdict(list))
     breakers: dict[str, CircuitBreaker] = field(default_factory=lambda: defaultdict(CircuitBreaker))
+    quality_failures: dict[str, list[dict[str, object]]] = field(default_factory=lambda: defaultdict(list))
     path: Path | None = None
     max_observations_per_tuple: int = 1000
+    max_quality_failures_per_tuple: int = 1000
 
     def __post_init__(self) -> None:
         if self.path is None:
@@ -103,6 +106,50 @@ class ObservedRegistry:
             samples=len(rows),
         )
 
+    def record_quality_failure(
+        self,
+        tuple: str,
+        *,
+        recipe: str,
+        task: str,
+        mode: str,
+        code: str,
+    ) -> None:
+        row = {
+            "tuple": tuple,
+            "recipe": recipe,
+            "task": task,
+            "mode": mode,
+            "code": code,
+            "observed_at": datetime.now(timezone.utc).isoformat(),
+        }
+        self.quality_failures[tuple].append(row)
+        self._trim_quality_failures(tuple)
+        if self.path is not None and self.path.suffix == ".db":
+            self._record_quality_failure_sqlite(row)
+
+    def quality_failure_count(
+        self,
+        tuple: str,
+        *,
+        recipe: str | None = None,
+        task: str | None = None,
+        mode: str | None = None,
+        code: str | None = None,
+    ) -> int:
+        count = 0
+        for row in self.quality_failures.get(tuple, []):
+            if recipe is not None and row.get("recipe") != recipe:
+                continue
+            if task is not None and row.get("task") != task:
+                continue
+            if mode is not None and row.get("mode") != mode:
+                continue
+            if code is not None and row.get("code") != code:
+                continue
+            count += 1
+        return count
+
     def rank(self, tuples: list[str]) -> list[str]:
         available = [item for item in tuples if self.is_available(item)]
         input_order = {item: index for index, item in enumerate(tuples)}
@@ -150,6 +197,18 @@ class ObservedRegistry:
                 )
                 """
             )
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS route_quality_failures (
+                  tuple TEXT NOT NULL,
+                  recipe TEXT NOT NULL,
+                  task TEXT NOT NULL,
+                  mode TEXT NOT NULL,
+                  code TEXT NOT NULL,
+                  observed_at TEXT NOT NULL
+                )
+                """
+            )
 
     def _load_sqlite(self) -> None:
         with self._connect() as conn:
@@ -178,6 +237,31 @@ class ObservedRegistry:
                 breaker.consecutive_successes = int(successes)
                 breaker.open = bool(opened)
                 breaker.opened_at = float(opened_at) if opened_at is not None else None
+            for row in conn.execute(
+                """
+                SELECT tuple, recipe, task, mode, code, observed_at
+                FROM (
+                  SELECT tuple, recipe, task, mode, code, observed_at,
+                         ROW_NUMBER() OVER (PARTITION BY tuple ORDER BY observed_at DESC) AS rn
+                  FROM route_quality_failures
+                )
+                WHERE rn <= ?
+                ORDER BY observed_at
+                """,
+                (self.max_quality_failures_per_tuple,),
+            ):
+                tuple_name, recipe, task, mode, code, observed_at = row
+                self.quality_failures[tuple_name].append(
+                    {
+                        "tuple": tuple_name,
+                        "recipe": recipe,
+                        "task": task,
+                        "mode": mode,
+                        "code": code,
+                        "observed_at": observed_at,
+                    }
+                )
+                self._trim_quality_failures(tuple_name)
 
     def _record_sqlite(self, observation: TupleObservation) -> None:
         breaker = self.breakers[observation.tuple]
@@ -219,6 +303,37 @@ class ObservedRegistry:
                 ),
             )
 
+    def _record_quality_failure_sqlite(self, row: dict[str, object]) -> None:
+        with self._connect() as conn:
+            conn.execute(
+                """
+                INSERT INTO route_quality_failures(tuple, recipe, task, mode, code, observed_at)
+                VALUES (?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    row["tuple"],
+                    row["recipe"],
+                    row["task"],
+                    row["mode"],
+                    row["code"],
+                    row["observed_at"],
+                ),
+            )
+            conn.execute(
+                """
+                DELETE FROM route_quality_failures
+                WHERE tuple = ?
+                  AND rowid NOT IN (
+                    SELECT rowid
+                    FROM route_quality_failures
+                    WHERE tuple = ?
+                    ORDER BY observed_at DESC
+                    LIMIT ?
+                  )
+                """,
+                (row["tuple"], row["tuple"], self.max_quality_failures_per_tuple),
+            )
+
     def _migrate_jsonl_if_present(self) -> None:
         assert self.path is not None
         legacy = self.path.with_suffix(".jsonl")
@@ -240,5 +355,11 @@ class ObservedRegistry:
     def _trim_observations(self, tuple: str) -> None:
         rows = self.observations[tuple]
         overflow = len(rows) - self.max_observations_per_tuple
+        if overflow > 0:
+            del rows[:overflow]
+
+    def _trim_quality_failures(self, tuple: str) -> None:
+        rows = self.quality_failures[tuple]
+        overflow = len(rows) - self.max_quality_failures_per_tuple
         if overflow > 0:
             del rows[:overflow]

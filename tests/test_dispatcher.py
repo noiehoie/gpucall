@@ -825,6 +825,13 @@ async def test_strict_json_schema_failure_switches_tuple_without_same_tuple_retr
     assert result.value == '{"ok": true}'
     assert tuple.calls == 1
     assert other.calls == 1
+    assert dispatcher.registry.quality_failure_count(
+        "weak",
+        recipe="r1",
+        task="infer",
+        mode="sync",
+        code="MALFORMED_OUTPUT",
+    ) == 1
     assert dispatcher.registry.score("weak").samples == 0
     assert dispatcher.registry.score("strong").samples == 1
 

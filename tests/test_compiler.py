@@ -5,7 +5,7 @@ from datetime import datetime, timedelta, timezone
 import pytest
 
 from gpucall.compiler import GovernanceCompiler, GovernanceError
-from gpucall.domain import CostPolicy, DataRef, EngineSpec, ExecutionMode, ModelSpec, Policy, TuplePolicy, ExecutionTupleSpec, Recipe, RecipeQualityFloor, TaskRequest
+from gpucall.domain import CostPolicy, DataRef, EngineSpec, ExecutionMode, ModelSpec, Policy, TuplePolicy, ExecutionTupleSpec, Recipe, RecipeQualityFloor, ResponseFormat, ResponseFormatType, TaskRequest
 from gpucall.domain import TupleObservation
 from gpucall.registry import ObservedRegistry
 
@@ -817,6 +817,56 @@ def test_poor_observed_reliability_loses_to_larger_reliable_tuple() -> None:
     assert plan.tuple_chain == ["p1", "p2"]
 
 
+def test_strict_schema_quality_failure_lowers_tuple_for_same_route() -> None:
+    compiler = build_compiler()
+    compiler.registry.record_quality_failure(
+        "p1",
+        recipe="r1",
+        task="infer",
+        mode="sync",
+        code="MALFORMED_OUTPUT",
+    )
+    request = TaskRequest(
+        task="infer",
+        mode="sync",
+        recipe="r1",
+        response_format=ResponseFormat(
+            type=ResponseFormatType.JSON_SCHEMA,
+            json_schema={"type": "object"},
+            strict=True,
+        ),
+    )
+
+    plan = compiler.compile(request)
+
+    assert plan.tuple_chain == ["p2", "p1"]
+
+
+def test_quality_failure_penalty_is_scoped_to_recipe_task_and_mode() -> None:
+    compiler = build_compiler()
+    compiler.registry.record_quality_failure(
+        "p1",
+        recipe="other",
+        task="infer",
+        mode="sync",
+        code="MALFORMED_OUTPUT",
+    )
+    request = TaskRequest(
+        task="infer",
+        mode="sync",
+        recipe="r1",
+        response_format=ResponseFormat(
+            type=ResponseFormatType.JSON_SCHEMA,
+            json_schema={"type": "object"},
+            strict=True,
+        ),
+    )
+
+    plan = compiler.compile(request)
+
+    assert plan.tuple_chain == ["p1", "p2"]
+
+
 def test_tuple_chain_filters_by_request_weight() -> None:
     compiler = build_compiler()
     compiler.recipes["r1"] = compiler.recipes["r1"].model_copy(update={"context_budget_tokens": 1000})
@@ -1111,6 +1161,28 @@ def test_observed_registry_persists_observations(tmp_path) -> None:
     score = loaded.score("p1")
     assert score.samples == 1
     assert score.p50_latency_ms == 12
+
+
+def test_observed_registry_persists_route_quality_failures(tmp_path) -> None:
+    path = tmp_path / "registry.db"
+    registry = ObservedRegistry(path=path)
+
+    registry.record_quality_failure(
+        "p1",
+        recipe="r1",
+        task="infer",
+        mode="sync",
+        code="MALFORMED_OUTPUT",
+    )
+    loaded = ObservedRegistry(path=path)
+
+    assert loaded.quality_failure_count(
+        "p1",
+        recipe="r1",
+        task="infer",
+        mode="sync",
+        code="MALFORMED_OUTPUT",
+    ) == 1
 
 
 def test_observed_registry_persists_circuit_breaker_state(tmp_path) -> None:
