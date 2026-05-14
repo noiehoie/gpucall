@@ -113,10 +113,12 @@ def test_runpod_vllm_tuple_examples_include_official_worker_env() -> None:
 
 
 def test_live_cost_audit_ignores_placeholder_runpod_endpoint(monkeypatch: pytest.MonkeyPatch) -> None:
-    def fail_http_json(*args: object, **kwargs: object) -> dict[str, object]:
-        raise AssertionError("placeholder RunPod endpoint must not be queried")
+    def fake_http_json(url: str, *args: object, **kwargs: object) -> dict[str, object]:
+        if url == "https://rest.runpod.io/v1/endpoints":
+            return {"ok": True, "body": []}
+        raise AssertionError("placeholder RunPod endpoint health must not be queried")
 
-    monkeypatch.setattr("gpucall.cli._http_json", fail_http_json)
+    monkeypatch.setattr("gpucall.cli._http_json", fake_http_json)
     report = _managed_endpoint_live_cost_audit(
         {
             "runpod": SimpleNamespace(
@@ -130,7 +132,9 @@ def test_live_cost_audit_ignores_placeholder_runpod_endpoint(monkeypatch: pytest
         {"runpod": {"api_key": "secret"}},
     )
 
-    assert report == {"configured": False}
+    assert report["configured"] is True
+    assert report["endpoints"] == []
+    assert report["unmanaged_endpoint_findings"] == []
 
 
 def test_recipe_v3_rejects_provider_resource_fields() -> None:

@@ -109,7 +109,16 @@ These values must be represented in `provider_params.worker_env` so gpucall can
 validate the declared provider contract against the official worker-vLLM
 deployment contract before production routing.
 
-Use a container disk large enough for the image and model cache. Keep `workersMin=0` unless intentionally warming the endpoint with explicit cost approval.
+Use a container disk large enough for the image and model cache. Keep
+`workersMin=0` and `workersStandby=0` unless intentionally warming the endpoint
+with explicit cost approval. A warm endpoint is standing spend, not request
+spend. If a tuple declares warm workers in `provider_params.endpoint_runtime`,
+`gpucall validate-config` requires `standing_cost_per_second`,
+`standing_cost_window_seconds`, and
+`provider_params.cost_approval.standing_workers_approved=true` with approver,
+timestamp, and reason. `gpucall cost-audit --live` queries the live RunPod
+endpoint inventory and production `launch-check` fails closed when live
+`workersMin` or standby workers are present without that approval.
 
 For `runpod-vllm-flashboot`, gpucall uses `gpucall/worker_contracts/runpod_flash.py` as the official Flash SDK function body. Keep that file self-contained because RunPod Flash serializes and executes the function remotely.
 

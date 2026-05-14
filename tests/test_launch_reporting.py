@@ -7,6 +7,7 @@ import yaml
 
 from gpucall.cli import build_launch_report
 from gpucall.config import ConfigError
+from gpucall.domain import ExecutionTupleSpec
 
 
 def copy_config(tmp_path: Path) -> Path:
@@ -164,6 +165,94 @@ def test_required_live_validation_tuples_respects_policy_deny(tmp_path, monkeypa
     required = _required_live_validation_tuples(config)
 
     assert "modal-vision-a10g" not in {row["tuple"] for row in required}
+
+
+def test_live_cost_audit_flags_unapproved_runpod_warm_workers() -> None:
+    from gpucall.cli import _live_cost_audit_findings, _runpod_endpoint_runtime_cost
+
+    tuple = ExecutionTupleSpec(
+        name="runpod-vllm-serverless",
+        adapter="runpod-vllm-serverless",
+        gpu="AMPERE_16",
+        vram_gb=16,
+        max_model_len=8192,
+        cost_per_second=0.00016,
+        target="endpoint-1",
+        image="runpod/worker-v1-vllm:v2.18.1",
+        endpoint_contract="openai-chat-completions",
+        input_contracts=["chat_messages"],
+        output_contract="openai-chat-completions",
+        stream_contract="none",
+        model="Qwen/Qwen2.5-1.5B-Instruct",
+    )
+
+    runtime_cost = _runpod_endpoint_runtime_cost(tuple, {"id": "endpoint-1", "workersMin": 1, "workersMax": 3, "workers": []})
+    live = {"managed_endpoint": {"configured": True, "endpoints": [{"runtime_cost_findings": runtime_cost["findings"]}]}}
+
+    findings = _live_cost_audit_findings(live)
+
+    assert runtime_cost["summary"]["unmanaged_standing_cost"] is True
+    assert findings[0]["check"] == "runpod_unmanaged_standing_workers"
+    assert "standing_cost_per_second" in findings[0]["reason"]
+
+
+def test_live_cost_audit_accepts_approved_runpod_warm_workers() -> None:
+    from gpucall.cli import _runpod_endpoint_runtime_cost
+
+    tuple = ExecutionTupleSpec(
+        name="runpod-vllm-serverless",
+        adapter="runpod-vllm-serverless",
+        gpu="AMPERE_16",
+        vram_gb=16,
+        max_model_len=8192,
+        cost_per_second=0.00016,
+        standing_cost_per_second=0.00016,
+        standing_cost_window_seconds=3600,
+        target="endpoint-1",
+        image="runpod/worker-v1-vllm:v2.18.1",
+        endpoint_contract="openai-chat-completions",
+        input_contracts=["chat_messages"],
+        output_contract="openai-chat-completions",
+        stream_contract="none",
+        model="Qwen/Qwen2.5-1.5B-Instruct",
+        provider_params={
+            "cost_approval": {
+                "standing_workers_approved": True,
+                "approved_by": "operator",
+                "approved_at": "2026-05-14T00:00:00Z",
+                "reason": "bounded warm pool for scheduled production window",
+            }
+        },
+    )
+
+    runtime_cost = _runpod_endpoint_runtime_cost(tuple, {"id": "endpoint-1", "workersMin": 1, "workersMax": 3})
+
+    assert runtime_cost["summary"]["unmanaged_standing_cost"] is False
+    assert runtime_cost["findings"] == []
+
+
+def test_live_cost_audit_flags_unmanaged_runpod_warm_endpoint() -> None:
+    from gpucall.cli import _live_cost_audit_findings, _runpod_unmanaged_endpoint_findings
+
+    inventory = {"ok": True, "body": [{"id": "endpoint-1", "workersMin": 1, "workersMax": 2}]}
+
+    unmanaged = _runpod_unmanaged_endpoint_findings(inventory, configured_endpoint_ids=set())
+    live = {"managed_endpoint": {"configured": True, "unmanaged_endpoint_findings": unmanaged}}
+    findings = _live_cost_audit_findings(live)
+
+    assert findings[0]["check"] == "runpod_unmanaged_standing_workers"
+    assert findings[0]["endpoint_id"] == "endpoint-1"
+    assert "not declared" in findings[0]["reason"]
+
+
+def test_live_cost_audit_worker_count_falls_through_invalid_alias() -> None:
+    from gpucall.cli import _runpod_unmanaged_endpoint_findings
+
+    inventory = {"ok": True, "body": [{"id": "endpoint-1", "workersMin": "invalid", "workers_min": 1}]}
+
+    findings = _runpod_unmanaged_endpoint_findings(inventory, configured_endpoint_ids=set())
+
+    assert findings[0]["workers_min"] == 1
 
 
 def test_live_validation_artifact_accepts_policy_only_config_hash_drift(tmp_path, monkeypatch) -> None:

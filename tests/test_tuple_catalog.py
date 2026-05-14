@@ -111,6 +111,14 @@ def test_runpod_live_catalog_records_price_and_blocks_unavailable_stock(monkeypa
     assert any(item.get("live_price_per_second") == 0.00042 for item in findings)
 
 
+def test_runpod_health_rejection_treats_nonnumeric_worker_counts_as_zero() -> None:
+    from gpucall.execution_surfaces.managed_endpoint import runpod_vllm_health_rejection_reason
+
+    reason = runpod_vllm_health_rejection_reason({"workers": {"ready": "bad", "running": 0, "initializing": "1"}})
+
+    assert reason == "workers are still initializing"
+
+
 def test_runpod_vllm_provider_requires_official_worker_contract() -> None:
     tuple = ExecutionTupleSpec(
         name="runpod-vllm-serverless",
@@ -262,3 +270,62 @@ def test_runpod_vllm_requires_model_storage_contract() -> None:
         assert "provider_params.model_storage" in str(exc)
     else:
         raise AssertionError("RunPod worker-vLLM tuple accepted missing model_storage contract")
+
+
+def test_runpod_warm_workers_require_explicit_standing_cost_approval() -> None:
+    tuple = ExecutionTupleSpec(
+        name="runpod-vllm-serverless",
+        adapter="runpod-vllm-serverless",
+        gpu="AMPERE_16",
+        vram_gb=16,
+        max_model_len=8192,
+        cost_per_second=0.00016,
+        modes=["sync"],
+        target="endpoint-1",
+        image="runpod/worker-v1-vllm:v2.18.1",
+        endpoint_contract="openai-chat-completions",
+        input_contracts=["chat_messages"],
+        output_contract="openai-chat-completions",
+        stream_contract="none",
+        model="Qwen/Qwen2.5-1.5B-Instruct",
+        provider_params={
+            "endpoint_runtime": {"workersMin": 1},
+            "worker_env": {
+                "MODEL_NAME": "Qwen/Qwen2.5-1.5B-Instruct",
+                "MAX_MODEL_LEN": "8192",
+                "GPU_MEMORY_UTILIZATION": "0.9",
+                "MAX_CONCURRENCY": "1",
+            },
+            "model_storage": {"storage_kind": "container_ephemeral"},
+        },
+    )
+    recipe = Recipe(
+        name="text-infer-light",
+        task="infer",
+        allowed_modes=["sync"],
+        min_vram_gb=8,
+        max_model_len=8192,
+        timeout_seconds=30,
+        lease_ttl_seconds=60,
+        token_estimation_profile="qwen",
+    )
+    config = GpucallConfig(
+        policy=Policy(
+            version="test",
+            inline_bytes_limit=8192,
+            default_lease_ttl_seconds=60,
+            max_lease_ttl_seconds=120,
+            max_timeout_seconds=60,
+            tuples={"allow": ["runpod-vllm-serverless"], "deny": []},
+        ),
+        recipes={recipe.name: recipe},
+        tuples={tuple.name: tuple},
+    )
+
+    try:
+        validate_config(config)
+    except ConfigError as exc:
+        assert "warm RunPod workers require standing_cost_per_second" in str(exc)
+        assert "provider_params.cost_approval.standing_workers_approved=true" in str(exc)
+    else:
+        raise AssertionError("RunPod warm workers accepted without explicit standing cost approval")

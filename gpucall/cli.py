@@ -2379,6 +2379,22 @@ def _live_cost_audit_findings(live: object) -> list[dict[str, object]]:
                             "reason": health.get("error") or "endpoint health audit failed",
                         }
                     )
+                for cost_finding in endpoint.get("runtime_cost_findings") or []:
+                    if isinstance(cost_finding, dict):
+                        findings.append({"surface_contract": surface_contract, **cost_finding})
+        inventory = section.get("endpoint_inventory")
+        if isinstance(inventory, dict) and inventory.get("ok") is False:
+            findings.append(
+                {
+                    "surface_contract": surface_contract,
+                    "check": "endpoint_inventory",
+                    "status_code": inventory.get("status_code"),
+                    "reason": inventory.get("error") or "endpoint inventory audit failed",
+                }
+            )
+        for cost_finding in section.get("unmanaged_endpoint_findings") or []:
+            if isinstance(cost_finding, dict):
+                findings.append({"surface_contract": surface_contract, **cost_finding})
     return findings
 
 
@@ -2417,7 +2433,17 @@ def _managed_endpoint_live_cost_audit(tuples: dict[str, object], creds: dict[str
         and is_configured_target(getattr(tuple_spec, "target", None))
     ]
     if not endpoint_tuples:
-        return {"configured": False}
+        api_key = creds.get("runpod", {}).get("api_key")
+        if not api_key:
+            return {"configured": False}
+        inventory = _runpod_endpoint_inventory(api_key)
+        return {
+            "configured": True,
+            "credential_families": ["runpod"],
+            "endpoint_inventory": inventory,
+            "endpoints": [],
+            "unmanaged_endpoint_findings": _runpod_unmanaged_endpoint_findings(inventory, configured_endpoint_ids=set()),
+        }
     families = sorted({vendor_family_for_adapter(str(getattr(tuple_spec, "adapter", "") or "")) for tuple_spec in endpoint_tuples})
     if families != ["runpod"]:
         return {"configured": True, "ok": False, "credential_families": families, "error": "managed endpoint live cost probe supports RunPod credentials only"}
@@ -2425,9 +2451,12 @@ def _managed_endpoint_live_cost_audit(tuples: dict[str, object], creds: dict[str
     if not api_key:
         return {"configured": True, "ok": False, "credential_families": families, "error": "managed endpoint api_key is not configured"}
     rows: list[dict[str, object]] = []
+    inventory = _runpod_endpoint_inventory(api_key)
+    inventory_by_id = _runpod_endpoint_inventory_by_id(inventory)
     for tuple_spec in endpoint_tuples:
         base_url = str(getattr(tuple_spec, "endpoint", None) or "https://api.runpod.ai/v2").rstrip("/")
         endpoint_id = str(getattr(tuple_spec, "target"))
+        runtime_cost = _runpod_endpoint_runtime_cost(tuple_spec, inventory_by_id.get(endpoint_id))
         rows.append(
             {
                 "tuple": getattr(tuple_spec, "name", ""),
@@ -2436,9 +2465,170 @@ def _managed_endpoint_live_cost_audit(tuples: dict[str, object], creds: dict[str
                     f"{base_url}/{endpoint_id}/health",
                     headers={"authorization": f"Bearer {api_key}", "accept": "application/json"},
                 ),
+                "runtime_cost": runtime_cost["summary"],
+                "runtime_cost_findings": runtime_cost["findings"],
             }
         )
-    return {"configured": True, "credential_families": families, "endpoints": rows}
+    return {
+        "configured": True,
+        "credential_families": families,
+        "endpoint_inventory": inventory,
+        "endpoints": rows,
+        "unmanaged_endpoint_findings": _runpod_unmanaged_endpoint_findings(inventory, configured_endpoint_ids={str(getattr(t, "target")) for t in endpoint_tuples}),
+    }
+
+
+def _runpod_endpoint_inventory(api_key: str) -> dict[str, object]:
+    return _http_json(
+        "https://rest.runpod.io/v1/endpoints",
+        headers={"authorization": f"Bearer {api_key}", "accept": "application/json"},
+    )
+
+
+def _runpod_endpoint_inventory_by_id(inventory: dict[str, object]) -> dict[str, dict[str, object]]:
+    if inventory.get("ok") is not True:
+        return {}
+    body = inventory.get("body")
+    rows: object = body
+    if isinstance(body, dict):
+        rows = body.get("endpoints") or body.get("data") or body.get("items") or body.get("results")
+    if not isinstance(rows, list):
+        return {}
+    by_id: dict[str, dict[str, object]] = {}
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        endpoint_id = str(row.get("id") or row.get("endpointId") or row.get("endpoint_id") or "")
+        if endpoint_id:
+            by_id[endpoint_id] = row
+    return by_id
+
+
+def _runpod_unmanaged_endpoint_findings(inventory: dict[str, object], *, configured_endpoint_ids: set[str]) -> list[dict[str, object]]:
+    findings: list[dict[str, object]] = []
+    for endpoint_id, endpoint in _runpod_endpoint_inventory_by_id(inventory).items():
+        if endpoint_id in configured_endpoint_ids:
+            continue
+        workers_min = _positive_int_from_mapping(endpoint, "workersMin", "workers_min", "minWorkers", "min_workers")
+        workers_standby = _positive_int_from_mapping(
+            endpoint,
+            "workersStandby",
+            "workers_standby",
+            "standbyWorkers",
+            "standby_workers",
+        )
+        if workers_min <= 0 and workers_standby <= 0:
+            continue
+        findings.append(
+            {
+                "check": "runpod_unmanaged_standing_workers",
+                "endpoint_id": endpoint_id,
+                "workers_min": workers_min,
+                "workers_standby": workers_standby,
+                "reason": "live RunPod endpoint has standing workers but is not declared as a gpucall execution tuple",
+            }
+        )
+    return findings
+
+
+def _runpod_endpoint_runtime_cost(tuple_spec: object, endpoint: dict[str, object] | None) -> dict[str, object]:
+    if endpoint is None:
+        return {
+            "summary": {"inventory_matched": False},
+            "findings": [
+                {
+                    "check": "runpod_endpoint_inventory",
+                    "tuple": getattr(tuple_spec, "name", ""),
+                    "endpoint_id": getattr(tuple_spec, "target", None),
+                    "reason": "configured RunPod endpoint was not present in live endpoint inventory",
+                }
+            ],
+        }
+    workers_min = _positive_int_from_mapping(endpoint, "workersMin", "workers_min", "minWorkers", "min_workers")
+    workers_standby = _positive_int_from_mapping(
+        endpoint,
+        "workersStandby",
+        "workers_standby",
+        "standbyWorkers",
+        "standby_workers",
+    )
+    workers_max = _positive_int_from_mapping(endpoint, "workersMax", "workers_max", "maxWorkers", "max_workers")
+    active_workers = _runpod_active_worker_count(endpoint)
+    summary = {
+        "inventory_matched": True,
+        "workers_min": workers_min,
+        "workers_standby": workers_standby,
+        "workers_max": workers_max,
+        "active_workers": active_workers,
+        "unmanaged_standing_cost": False,
+    }
+    findings: list[dict[str, object]] = []
+    if workers_min > 0 or workers_standby > 0:
+        approval_findings = _standing_endpoint_cost_approval_findings(tuple_spec, workers_min=workers_min, workers_standby=workers_standby)
+        if approval_findings:
+            summary["unmanaged_standing_cost"] = True
+            findings.append(
+                {
+                    "check": "runpod_unmanaged_standing_workers",
+                    "tuple": getattr(tuple_spec, "name", ""),
+                    "endpoint_id": getattr(tuple_spec, "target", None),
+                    "workers_min": workers_min,
+                    "workers_standby": workers_standby,
+                    "reason": "; ".join(approval_findings),
+                }
+            )
+    return {"summary": summary, "findings": findings}
+
+
+def _runpod_active_worker_count(endpoint: dict[str, object]) -> int:
+    for key in ("activeWorkers", "active_workers", "workers"):
+        value = endpoint.get(key)
+        if isinstance(value, list):
+            return len(value)
+        if isinstance(value, dict):
+            total = 0
+            for nested_key in ("running", "ready", "initializing", "throttled", "unhealthy"):
+                try:
+                    total += int(value.get(nested_key) or 0)
+                except (TypeError, ValueError):
+                    pass
+            return total
+        if value is not None:
+            try:
+                return max(int(value), 0)
+            except (TypeError, ValueError):
+                pass
+    return 0
+
+
+def _positive_int_from_mapping(mapping: dict[str, object], *keys: str) -> int:
+    for key in keys:
+        value = mapping.get(key)
+        if value is None:
+            continue
+        try:
+            return max(int(value), 0)
+        except (TypeError, ValueError):
+            continue
+    return 0
+
+
+def _standing_endpoint_cost_approval_findings(tuple_spec: object, *, workers_min: int, workers_standby: int) -> list[str]:
+    if workers_min <= 0 and workers_standby <= 0:
+        return []
+    findings: list[str] = []
+    if getattr(tuple_spec, "standing_cost_per_second", None) is None:
+        findings.append("standing_cost_per_second is not declared")
+    if getattr(tuple_spec, "standing_cost_window_seconds", None) is None:
+        findings.append("standing_cost_window_seconds is not declared")
+    approval = (getattr(tuple_spec, "provider_params", None) or {}).get("cost_approval")
+    if not isinstance(approval, dict) or approval.get("standing_workers_approved") is not True:
+        findings.append("provider_params.cost_approval.standing_workers_approved is not true")
+        return findings
+    for key in ("approved_by", "approved_at", "reason"):
+        if not str(approval.get(key) or "").strip():
+            findings.append(f"provider_params.cost_approval.{key} is not declared")
+    return findings
 
 
 def _iaas_vm_live_cost_audit(tuples: dict[str, object], creds: dict[str, dict[str, str]]) -> dict[str, object]:

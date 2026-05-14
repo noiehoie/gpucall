@@ -101,6 +101,18 @@ The static report lists configured billing metadata and missing fields. The live
 report queries Modal billing/app state, RunPod endpoint health, and Hyperstack
 VM inventory when credentials and provider tools are available.
 
+RunPod warm workers are treated as standing endpoint cost. Static tuple config
+may describe the intended endpoint runtime under `provider_params.endpoint_runtime`.
+If that declaration sets `workersMin`, `workers_min`, `workersStandby`, or
+`workers_standby` above zero, config validation requires standing-cost metadata
+and an explicit `provider_params.cost_approval` record. The live cost audit also
+queries the RunPod endpoint inventory and blocks production launch when the live
+endpoint has unapproved warm workers, even if the tuple YAML forgot to declare
+them. If RunPod credentials are configured, the live audit also checks account
+endpoints that are not declared in gpucall config and blocks any unmanaged
+endpoint with standing workers. `workersMax` alone is not standing cost; it is
+a capacity ceiling.
+
 For startup-time live catalog gating, set `GPUCALL_LIVE_CATALOG_ON_STARTUP=1`.
 Tuples blocked by live catalog evidence are opened in the observed registry
 before routing, so a workload that normally used an unavailable VM tuple can

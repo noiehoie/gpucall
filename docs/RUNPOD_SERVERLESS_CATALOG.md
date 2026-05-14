@@ -51,8 +51,31 @@ Candidate tuples must not enter production routing until all of these are true:
 - official execution contract validates
 - model and worker environment agree
 - cost metadata is present
+- live endpoint inventory has no unapproved warm workers
 - billable tuple smoke passes for the exact recipe/resource/model/engine/contract tuple
 - cleanup audit remains green
+
+RunPod Serverless endpoints should default to scale-to-zero. A tuple that needs
+warm workers must declare the runtime intent and standing spend explicitly:
+
+```yaml
+provider_params:
+  endpoint_runtime:
+    workersMin: 1
+  cost_approval:
+    standing_workers_approved: true
+    approved_by: operator
+    approved_at: "2026-01-01T00:00:00Z"
+    reason: bounded scheduled production warm pool
+standing_cost_per_second: 0.001
+standing_cost_window_seconds: 3600
+```
+
+Without that approval, `validate-config` rejects declared warm workers, and
+`cost-audit --live` / production `launch-check` reject live warm workers found
+directly in the provider endpoint inventory. When RunPod credentials are
+configured, live audit also rejects unmanaged RunPod endpoints with warm workers
+even when no active gpucall tuple points at that endpoint.
 
 For OpenAI-compatible LLM traffic, prefer `runpod-vllm-*`. Use
 `runpod-native-*` when a gpucall worker must fetch DataRefs, return

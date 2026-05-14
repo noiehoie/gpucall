@@ -369,11 +369,11 @@ def runpod_vllm_health_rejection_reason(health: dict[str, Any]) -> str | None:
     workers = health.get("workers") if isinstance(health, dict) else None
     if not isinstance(workers, dict):
         return "health response did not include workers"
-    ready = int(workers.get("ready") or 0)
-    running = int(workers.get("running") or 0)
-    initializing = int(workers.get("initializing") or 0)
-    throttled = int(workers.get("throttled") or 0)
-    unhealthy = int(workers.get("unhealthy") or 0)
+    ready = _positive_int_from_mapping(workers, "ready")
+    running = _positive_int_from_mapping(workers, "running")
+    initializing = _positive_int_from_mapping(workers, "initializing")
+    throttled = _positive_int_from_mapping(workers, "throttled")
+    unhealthy = _positive_int_from_mapping(workers, "unhealthy")
     if unhealthy > 0:
         return "workers.unhealthy is non-zero"
     if ready + running > 0:
@@ -398,6 +398,54 @@ def runpod_vllm_health_rejection_code(reason: str | None) -> str:
     return "PROVIDER_CAPACITY_UNAVAILABLE"
 
 
+def _positive_int_from_mapping(mapping: dict[str, Any], *keys: str) -> int:
+    for key in keys:
+        value = mapping.get(key)
+        if value is None:
+            continue
+        try:
+            return max(int(value), 0)
+        except (TypeError, ValueError):
+            continue
+    return 0
+
+
+def _standing_worker_approval_findings(tuple: Any, *, workers_min: int, workers_standby: int) -> list[str]:
+    if workers_min <= 0 and workers_standby <= 0:
+        return []
+    findings: list[str] = []
+    if getattr(tuple, "standing_cost_per_second", None) is None:
+        findings.append(f"tuple {tuple.name!r} warm RunPod workers require standing_cost_per_second")
+    if getattr(tuple, "standing_cost_window_seconds", None) is None:
+        findings.append(f"tuple {tuple.name!r} warm RunPod workers require standing_cost_window_seconds")
+    approval = (getattr(tuple, "provider_params", None) or {}).get("cost_approval")
+    if not isinstance(approval, dict) or approval.get("standing_workers_approved") is not True:
+        findings.append(f"tuple {tuple.name!r} warm RunPod workers require provider_params.cost_approval.standing_workers_approved=true")
+        return findings
+    if not str(approval.get("approved_by") or "").strip():
+        findings.append(f"tuple {tuple.name!r} warm RunPod worker approval requires provider_params.cost_approval.approved_by")
+    if not str(approval.get("approved_at") or "").strip():
+        findings.append(f"tuple {tuple.name!r} warm RunPod worker approval requires provider_params.cost_approval.approved_at")
+    if not str(approval.get("reason") or "").strip():
+        findings.append(f"tuple {tuple.name!r} warm RunPod worker approval requires provider_params.cost_approval.reason")
+    return findings
+
+
+def runpod_warm_worker_config_findings(tuple: Any) -> list[str]:
+    endpoint_runtime = (tuple.provider_params or {}).get("endpoint_runtime")
+    if not isinstance(endpoint_runtime, dict):
+        endpoint_runtime = tuple.provider_params or {}
+    workers_min = _positive_int_from_mapping(endpoint_runtime, "workersMin", "workers_min", "minWorkers", "min_workers")
+    workers_standby = _positive_int_from_mapping(
+        endpoint_runtime,
+        "workersStandby",
+        "workers_standby",
+        "standbyWorkers",
+        "standby_workers",
+    )
+    return _standing_worker_approval_findings(tuple, workers_min=workers_min, workers_standby=workers_standby)
+
+
 def _runpod_terminal_status_code(status: str | None) -> str:
     if status == "TIMED_OUT":
         return "PROVIDER_TIMEOUT"
@@ -418,6 +466,7 @@ def _queue_saturation_seconds(timeout_seconds: int | float) -> float:
 
 def runpod_vllm_config_findings(tuple: Any) -> list[str]:
     findings: list[str] = []
+    findings.extend(runpod_warm_worker_config_findings(tuple))
     if not tuple.target:
         findings.append(f"tuple {tuple.name!r} must declare RunPod endpoint id in target")
     if not tuple.model:
@@ -681,6 +730,7 @@ class RunpodServerlessAdapter(TupleAdapter):
             "contract is custom and must not be treated as the official worker-vLLM production route"
         ),
         required_auto_fields={"target": "RunPod endpoint target is not configured"},
+        config_validator=runpod_warm_worker_config_findings,
         catalog_validator=runpod_endpoint_catalog_findings,
         official_sources=(
             "https://docs.runpod.io/serverless/endpoints/send-requests",
