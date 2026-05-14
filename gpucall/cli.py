@@ -56,6 +56,7 @@ from gpucall.sqlite_store import SQLiteJobStore
 from gpucall.tenant import TenantUsageLedger
 from gpucall.validator_plan import build_validator_plan, dumps_validator_plan
 from gpucall.dispatcher import is_terminal_job_state
+from gpucall.production_acceptance import dumps_acceptance_report, run_production_acceptance
 
 
 def main() -> None:
@@ -165,6 +166,8 @@ def main() -> None:
     release_check = sub.add_parser("release-check")
     release_check.add_argument("--config-dir", type=Path, default=default_config_dir())
     release_check.add_argument("--output-dir", type=Path, default=default_state_dir() / "release")
+    production_acceptance = sub.add_parser("production-acceptance")
+    production_acceptance.add_argument("--output", type=Path, default=None)
     add_readiness_parser(sub)
     add_setup_parser(sub)
     configure = sub.add_parser("configure")
@@ -344,6 +347,8 @@ def main() -> None:
         asyncio.run(post_launch_report_command(args.config_dir))
     elif args.command == "release-check":
         release_check_command(args.config_dir, args.output_dir)
+    elif args.command == "production-acceptance":
+        production_acceptance_command(args.output)
     elif args.command == "readiness":
         run_readiness_command(args)
     elif args.command == "setup":
@@ -396,6 +401,17 @@ def main() -> None:
             onboarding_manual_url=args.onboarding_manual_url,
             caller_sdk_wheel_url=args.caller_sdk_wheel_url,
         )
+
+
+def production_acceptance_command(output: Path | None) -> None:
+    report = run_production_acceptance()
+    rendered = dumps_acceptance_report(report)
+    if output is not None:
+        output.parent.mkdir(parents=True, exist_ok=True)
+        output.write_text(rendered, encoding="utf-8")
+    print(rendered, end="")
+    if not report.get("passed"):
+        raise SystemExit(1)
 
 
 def init_config(config_dir: Path, *, force: bool = False) -> None:
@@ -1852,7 +1868,7 @@ def _live_catalog_scope(config, config_dir: Path) -> dict[str, object]:
     return scope
 
 
-def smoke_gateway(url: str, *, api_key: str | None, recipe: str) -> None:
+def smoke_gateway(url: str, *, api_key: str | None, recipe: str | None) -> None:
     print(json.dumps(_gateway_smoke_summary(url, api_key=api_key, recipe=recipe), indent=2, sort_keys=True))
 
 
@@ -2309,8 +2325,9 @@ def _tuple_validation_cleanup_summary(config) -> dict[str, object]:
 
 
 def _provider_cost_audit_row(tuple) -> dict[str, object]:
+    cost_per_second = float(tuple.cost_per_second or 0)
     cost_fields = {
-        "cost_per_second": float(tuple.cost_per_second),
+        "cost_per_second": cost_per_second,
         "expected_cold_start_seconds": tuple.expected_cold_start_seconds,
         "scaledown_window_seconds": tuple.scaledown_window_seconds,
         "min_billable_seconds": tuple.min_billable_seconds,
@@ -2321,7 +2338,7 @@ def _provider_cost_audit_row(tuple) -> dict[str, object]:
         "endpoint_cost_window_seconds": tuple.endpoint_cost_window_seconds,
     }
     required = ["scaledown_window_seconds", "min_billable_seconds", "billing_granularity_seconds"]
-    missing = [key for key in required if cost_fields[key] is None and float(tuple.cost_per_second) > 0]
+    missing = [key for key in required if cost_fields[key] is None and cost_per_second > 0]
     return {
         "name": tuple.name,
         "adapter": tuple.adapter,
