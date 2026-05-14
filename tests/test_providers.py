@@ -956,6 +956,53 @@ async def test_runpod_vllm_requests_timeout_is_provider_timeout(monkeypatch) -> 
     assert caught.value.status_code == 504
 
 
+async def test_runpod_vllm_sync_rejects_no_ready_worker_before_post(monkeypatch) -> None:
+    calls: list[str] = []
+
+    class FakeHealthResponse:
+        status_code = 200
+        text = "{}"
+
+        def json(self) -> dict[str, object]:
+            return {"workers": {"ready": 0, "running": 0, "initializing": 0, "throttled": 0, "unhealthy": 0}}
+
+    class FakeSession:
+        def mount(self, *_args, **_kwargs) -> None:
+            return None
+
+        def get(self, url: str, **_kwargs):
+            calls.append(f"GET {url}")
+            return FakeHealthResponse()
+
+        def post(self, url: str, **_kwargs):
+            calls.append(f"POST {url}")
+            raise AssertionError("sync route must not POST to scale-from-zero RunPod endpoint")
+
+    fake_requests = types.SimpleNamespace(Session=lambda: FakeSession())
+    fake_adapters = types.SimpleNamespace(HTTPAdapter=lambda **_kwargs: object())
+    fake_retry = types.SimpleNamespace(Retry=lambda **_kwargs: object())
+    monkeypatch.setitem(sys.modules, "requests", fake_requests)
+    monkeypatch.setitem(sys.modules, "requests.adapters", fake_adapters)
+    monkeypatch.setitem(sys.modules, "urllib3.util.retry", fake_retry)
+
+    adapter = RunpodVllmServerlessAdapter(
+        api_key="rk_test",
+        endpoint_id="endpoint-1",
+        image="runpod/worker-v1-vllm:v2.18.1",
+        endpoint_contract="openai-chat-completions",
+        model="Qwen/Qwen2.5-1.5B-Instruct",
+    )
+    plan = plan_payload_plan().model_copy(update={"messages": [ChatMessage(role="user", content="hello")]})
+    handle = await adapter.start(plan)
+
+    with pytest.raises(TupleError) as caught:
+        await adapter.wait(handle, plan)
+
+    assert caught.value.code == "PROVIDER_CAPACITY_UNAVAILABLE"
+    assert caught.value.status_code == 503
+    assert calls == ["GET https://api.runpod.ai/v2/endpoint-1/health"]
+
+
 def test_runpod_worker_vllm_health_rejects_throttled_endpoint() -> None:
     health = {"workers": {"idle": 0, "initializing": 0, "ready": 0, "running": 0, "throttled": 1, "unhealthy": 0}}
 
@@ -983,28 +1030,59 @@ def test_runpod_worker_vllm_health_classifies_initializing_and_unhealthy() -> No
     )
 
 
-def test_runpod_worker_vllm_preflight_allows_serverless_scale_from_zero() -> None:
+def test_runpod_worker_vllm_preflight_rejects_scale_from_zero_for_sync() -> None:
     assert (
         runpod_vllm_health_preflight_rejection_reason(
             {"workers": {"ready": 0, "running": 0, "initializing": 0, "throttled": 0, "unhealthy": 0}}
         )
-        is None
+        == "no ready worker is available"
     )
     assert (
         runpod_vllm_health_preflight_rejection_reason(
             {"workers": {"ready": 0, "running": 0, "initializing": 1, "throttled": 0, "unhealthy": 0}}
         )
-        is None
+        == "workers are still initializing"
     )
     assert (
         runpod_vllm_health_preflight_rejection_reason(
             {"workers": {"ready": 0, "running": 0, "initializing": 0, "throttled": 1, "unhealthy": 0}}
         )
+        == "workers are throttled and no ready worker is available"
+    )
+    assert (
+        runpod_vllm_health_preflight_rejection_reason(
+            {"workers": {"ready": 1, "running": 0, "initializing": 0, "throttled": 0, "unhealthy": 0}}
+        )
+        is None
+    )
+
+
+def test_runpod_worker_vllm_preflight_allows_serverless_scale_from_zero_for_async() -> None:
+    assert (
+        runpod_vllm_health_preflight_rejection_reason(
+            {"workers": {"ready": 0, "running": 0, "initializing": 0, "throttled": 0, "unhealthy": 0}},
+            mode="async",
+        )
         is None
     )
     assert (
         runpod_vllm_health_preflight_rejection_reason(
-            {"workers": {"ready": 0, "running": 0, "initializing": 0, "throttled": 0, "unhealthy": 1}}
+            {"workers": {"ready": 0, "running": 0, "initializing": 1, "throttled": 0, "unhealthy": 0}},
+            mode="async",
+        )
+        is None
+    )
+    assert (
+        runpod_vllm_health_preflight_rejection_reason(
+            {"workers": {"ready": 0, "running": 0, "initializing": 0, "throttled": 1, "unhealthy": 0}},
+            mode="async",
+        )
+        is None
+    )
+    assert (
+        runpod_vllm_health_preflight_rejection_reason(
+            {"workers": {"ready": 0, "running": 0, "initializing": 0, "throttled": 0, "unhealthy": 1}},
+            mode="async",
         )
         == "workers.unhealthy is non-zero"
     )
