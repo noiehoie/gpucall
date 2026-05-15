@@ -796,6 +796,53 @@ async def test_runpod_vllm_stream_is_explicitly_unsupported() -> None:
         raise AssertionError("RunPod Flash stream unexpectedly started")
 
 
+def test_runpod_vllm_uses_openai_chat_completions_route(monkeypatch) -> None:
+    calls: list[tuple[str, dict[str, object] | None]] = []
+
+    class FakeResponse:
+        status_code = 200
+        text = "{}"
+
+        def json(self) -> dict[str, object]:
+            return {
+                "choices": [
+                    {
+                        "message": {
+                            "content": "worker-vllm ok",
+                        }
+                    }
+                ]
+            }
+
+    def fake_post(url: str, **kwargs):
+        calls.append((url, kwargs.get("json")))
+        return FakeResponse()
+
+    monkeypatch.setattr("gpucall.execution_surfaces.managed_endpoint._request_post", fake_post)
+    monkeypatch.setattr(
+        "gpucall.execution_surfaces.managed_endpoint.runpod_vllm_health_preflight_rejection_reason",
+        lambda _health, *, mode: None,
+    )
+    adapter = RunpodVllmServerlessAdapter(
+        api_key="rk_test",
+        endpoint_id="endpoint-1",
+        endpoint_contract="openai-chat-completions",
+        model="Qwen/Qwen2.5-1.5B-Instruct",
+    )
+    monkeypatch.setattr(adapter, "_health_sync", lambda: {"workers": {"ready": 1}})
+
+    plan = plan_payload_plan().model_copy(update={"messages": [ChatMessage(role="user", content="hello")]})
+    result = adapter._call_sync(plan)
+
+    assert calls[0][0] == "https://api.runpod.ai/v2/endpoint-1/openai/v1/chat/completions"
+    assert calls[0][1] is not None
+    assert "input" not in calls[0][1]
+    assert "policy" not in calls[0][1]
+    assert calls[0][1]["model"] == "Qwen/Qwen2.5-1.5B-Instruct"
+    assert result.kind == "inline"
+    assert result.value == "worker-vllm ok"
+
+
 async def test_runpod_flash_uses_deployed_runsync_rest_endpoint(monkeypatch) -> None:
     calls: list[tuple[str, str, dict[str, object] | None]] = []
 
@@ -858,13 +905,14 @@ async def test_runpod_vllm_official_route_uses_openai_chat_route(monkeypatch) ->
 
         def json(self) -> dict[str, object]:
             return {
-                "status": "COMPLETED",
-                "output": [
+                "choices": [
                     {
-                        "choices": [{"tokens": ["flash", " llm", " ok"]}],
-                        "usage": {"input": 5, "output": 3},
+                        "message": {
+                            "content": "flash llm ok",
+                        },
                     }
                 ],
+                "usage": {"prompt_tokens": 5, "completion_tokens": 3},
             }
 
     class FakeHealthResponse:
@@ -906,13 +954,13 @@ async def test_runpod_vllm_official_route_uses_openai_chat_route(monkeypatch) ->
     result = await adapter.wait(handle, plan)
 
     assert result.value == "flash llm ok"
-    assert result.usage == {"input": 5, "output": 3}
+    assert result.usage == {"prompt_tokens": 5, "completion_tokens": 3}
     assert calls[0][1] == "https://api.runpod.ai/v2/endpoint-1/health"
-    assert calls[1][1] == "https://api.runpod.ai/v2/endpoint-1/runsync"
-    assert calls[1][2]["input"]["model"] == "Qwen/Qwen2.5-1.5B-Instruct"
-    assert calls[1][2]["input"]["messages"] == [{"role": "user", "content": "hello"}]
-    assert calls[1][2]["input"]["stream"] is False
-    assert calls[1][2]["policy"]["executionTimeout"] >= 5000
+    assert calls[1][1] == "https://api.runpod.ai/v2/endpoint-1/openai/v1/chat/completions"
+    assert calls[1][2]["model"] == "Qwen/Qwen2.5-1.5B-Instruct"
+    assert "input" not in calls[1][2]
+    assert calls[1][2]["messages"] == [{"role": "user", "content": "hello"}]
+    assert calls[1][2]["stream"] is False
 
 
 async def test_runpod_vllm_requests_timeout_is_provider_timeout(monkeypatch) -> None:
@@ -1125,13 +1173,14 @@ async def test_runpod_vllm_vision_data_ref_uses_openai_image_url(monkeypatch) ->
 
         def json(self) -> dict[str, object]:
             return {
-                "status": "COMPLETED",
-                "output": [
+                "choices": [
                     {
-                        "choices": [{"tokens": ["{\"articles\": []}"]}],
-                        "usage": {"completion_tokens": 4},
+                        "message": {
+                            "content": "{\"articles\": []}",
+                        },
                     }
                 ],
+                "usage": {"completion_tokens": 4},
             }
 
     class FakeHealthResponse:
@@ -1186,8 +1235,8 @@ async def test_runpod_vllm_vision_data_ref_uses_openai_image_url(monkeypatch) ->
     result = await adapter.wait(handle, plan)
 
     assert result.value == "{\"articles\": []}"
-    assert calls[1][1] == "https://api.runpod.ai/v2/endpoint-1/runsync"
-    body = calls[1][2]["input"]
+    assert calls[1][1] == "https://api.runpod.ai/v2/endpoint-1/openai/v1/chat/completions"
+    body = calls[1][2]
     assert body is not None
     assert body["messages"] == [
         {"role": "system", "content": "Return JSON."},
@@ -1308,7 +1357,6 @@ def test_runpod_serverless_uses_rest_policy_and_cancel(monkeypatch) -> None:
     assert calls[0][2]["input"]["max_model_len"] == 32768
     assert calls[0][2]["policy"] == {"executionTimeout": 5000, "ttl": 10000}
     assert calls[1][1] == "https://api.runpod.ai/v2/endpoint-1/runsync"
-    assert calls[1][2]["policy"] == {"executionTimeout": 5000, "ttl": 10000}
     assert calls[2][1] == "https://api.runpod.ai/v2/endpoint-1/cancel/job-1"
 
 

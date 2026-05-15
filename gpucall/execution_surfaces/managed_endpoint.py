@@ -356,19 +356,13 @@ class RunpodVllmServerlessAdapter(TupleAdapter):
                 code=runpod_vllm_health_rejection_code(rejection_reason),
             )
         response = _request_post(
-            f"{self.base_url}/{self.endpoint_id}/runsync",
-            error_message="RunPod worker-vLLM runsync failed",
+            f"{self.base_url}/{self.endpoint_id}/openai/v1/chat/completions",
+            error_message="RunPod worker-vLLM OpenAI chat completions failed",
             headers=self._headers(),
-            json={
-                "input": self._payload(plan),
-                "policy": {
-                    "executionTimeout": max(int(plan.timeout_seconds * 1000), 5000),
-                    "ttl": max(int(plan.lease_ttl_seconds * 1000), 10000),
-                },
-            },
+            json=self._payload(plan),
             timeout=max(float(plan.timeout_seconds), 1.0),
         )
-        return _runpod_vllm_runsync_result(json_or_error(response, "RunPod worker-vLLM runsync failed"))
+        return openai_chat_completion_result(json_or_error(response, "RunPod worker-vLLM OpenAI chat completions failed"))
 
     def _payload(self, plan: CompiledPlan) -> dict[str, Any]:
         return openai_chat_payload_from_plan(plan, model=self.model, stream=False, messages=self._messages(plan))
