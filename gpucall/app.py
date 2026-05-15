@@ -495,7 +495,7 @@ def create_app(config_dir: Path | None = None) -> FastAPI:
 
     @app.get("/v2/readiness/intents/{intent}")
     async def intent_readiness(intent: str, runtime: Runtime = Depends(runtime_dep)) -> dict[str, object]:
-        report = build_readiness_report(config_dir=root, intent=intent, config=runtime.compiler)
+        report = await asyncio.to_thread(build_readiness_report, config_dir=root, intent=intent, config=runtime.compiler)
         admission = runtime.dispatcher.admission.snapshot()
         suppressed_tuples = admission.get("suppressed_tuples") if isinstance(admission.get("suppressed_tuples"), dict) else {}
         suppressed_families = admission.get("suppressed_provider_families") if isinstance(admission.get("suppressed_provider_families"), dict) else {}
@@ -514,7 +514,9 @@ def create_app(config_dir: Path | None = None) -> FastAPI:
                     continue
                 tuple_name = item.get("tuple")
                 family = runtime.dispatcher.admission.family_for(str(tuple_name))
-                if tuple_name in suppressed_tuples:
+                if item.get("live_blocked") is True:
+                    blocked.append(item)
+                elif tuple_name in suppressed_tuples:
                     blocked.append({**item, "live_reason": "tuple_suppressed"})
                 elif family in suppressed_families:
                     blocked.append({**item, "live_reason": "provider_family_suppressed", "provider_family": family})

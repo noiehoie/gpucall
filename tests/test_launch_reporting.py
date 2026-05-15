@@ -294,6 +294,8 @@ def test_live_cost_audit_accepts_approved_runpod_warm_workers() -> None:
 
     assert runtime_cost["summary"]["unmanaged_standing_cost"] is False
     assert runtime_cost["findings"] == []
+    assert runtime_cost["live_blocked"] is True
+    assert runtime_cost["live_blockers"][0]["check"] == "runpod_serverless_billing_guard"
 
 
 def test_live_cost_audit_flags_unmanaged_runpod_warm_endpoint() -> None:
@@ -305,7 +307,7 @@ def test_live_cost_audit_flags_unmanaged_runpod_warm_endpoint() -> None:
     live = {"managed_endpoint": {"configured": True, "unmanaged_endpoint_findings": unmanaged}}
     findings = _live_cost_audit_findings(live)
 
-    assert findings[0]["check"] == "runpod_unmanaged_standing_workers"
+    assert findings[0]["check"] == "runpod_unmanaged_endpoint_live_blocked"
     assert findings[0]["endpoint_id"] == "endpoint-1"
     assert "not declared" in findings[0]["reason"]
 

@@ -48,6 +48,10 @@ from gpucall.price_cache import load_cached_price_evidence, merge_price_evidence
 from gpucall.tuple_audit import _tuple_from_candidate, tuple_audit_report
 from gpucall.tuple_catalog import live_tuple_catalog_evidence, live_tuple_catalog_findings
 from gpucall.execution.registry import adapter_descriptor, vendor_family_for_adapter
+from gpucall.execution_surfaces.managed_endpoint import (
+    runpod_serverless_billing_guard_findings,
+    runpod_serverless_billing_guard_summary,
+)
 from gpucall.registry import ObservedRegistry
 from gpucall.audit import AuditTrail
 from gpucall.routing import tuple_route_rejection_reason
@@ -2500,6 +2504,9 @@ def _live_cost_audit_findings(live: object) -> list[dict[str, object]]:
                 for cost_finding in endpoint.get("runtime_cost_findings") or []:
                     if isinstance(cost_finding, dict):
                         findings.append({"surface_contract": surface_contract, **cost_finding})
+                for live_blocker in endpoint.get("live_blockers") or []:
+                    if isinstance(live_blocker, dict):
+                        findings.append({"surface_contract": surface_contract, **live_blocker})
         inventory = section.get("endpoint_inventory")
         if isinstance(inventory, dict) and inventory.get("ok") is False:
             findings.append(
@@ -2585,6 +2592,8 @@ def _managed_endpoint_live_cost_audit(tuples: dict[str, object], creds: dict[str
                 ),
                 "runtime_cost": runtime_cost["summary"],
                 "runtime_cost_findings": runtime_cost["findings"],
+                "live_blocked": runtime_cost["live_blocked"],
+                "live_blockers": runtime_cost["live_blockers"],
             }
         )
     return {
@@ -2598,7 +2607,7 @@ def _managed_endpoint_live_cost_audit(tuples: dict[str, object], creds: dict[str
 
 def _runpod_endpoint_inventory(api_key: str) -> dict[str, object]:
     return _http_json(
-        "https://rest.runpod.io/v1/endpoints",
+        "https://rest.runpod.io/v1/endpoints?includeWorkers=true",
         headers={"authorization": f"Bearer {api_key}", "accept": "application/json"},
     )
 
@@ -2627,17 +2636,20 @@ def _runpod_unmanaged_endpoint_findings(inventory: dict[str, object], *, configu
     for endpoint_id, endpoint in _runpod_endpoint_inventory_by_id(inventory).items():
         if endpoint_id in configured_endpoint_ids:
             continue
-        workers_min = _positive_int_from_mapping(endpoint, "workersMin", "workers_min", "minWorkers", "min_workers")
-        if workers_min <= 0:
-            continue
-        findings.append(
-            {
-                "check": "runpod_unmanaged_standing_workers",
-                "endpoint_id": endpoint_id,
-                "workers_min": workers_min,
-                "reason": "live RunPod endpoint has standing workers but is not declared as a gpucall execution tuple",
-            }
+        blockers = runpod_serverless_billing_guard_findings(
+            _RunpodUnmanagedEndpointTuple(endpoint_id),
+            endpoint=endpoint,
         )
+        if not blockers:
+            continue
+        for blocker in blockers:
+            findings.append(
+                {
+                    **blocker,
+                    "check": "runpod_unmanaged_endpoint_live_blocked",
+                    "reason": "live RunPod endpoint is not declared as a gpucall execution tuple: " + str(blocker.get("reason")),
+                }
+            )
     return findings
 
 
@@ -2653,16 +2665,30 @@ def _runpod_endpoint_runtime_cost(tuple_spec: object, endpoint: dict[str, object
                     "reason": "configured RunPod endpoint was not present in live endpoint inventory",
                 }
             ],
+            "live_blocked": True,
+            "live_blockers": [
+                {
+                    "check": "runpod_serverless_endpoint_inventory",
+                    "tuple": getattr(tuple_spec, "name", ""),
+                    "endpoint_id": getattr(tuple_spec, "target", None),
+                    "live_reason": "endpoint_missing_from_inventory",
+                    "reason": "configured RunPod endpoint was not present in live endpoint inventory",
+                }
+            ],
         }
     workers_min = _positive_int_from_mapping(endpoint, "workersMin", "workers_min", "minWorkers", "min_workers")
     workers_max = _positive_int_from_mapping(endpoint, "workersMax", "workers_max", "maxWorkers", "max_workers")
     active_workers = _runpod_active_worker_count(endpoint)
+    live_guard_summary = runpod_serverless_billing_guard_summary(tuple_spec, endpoint=endpoint)
+    live_blockers = runpod_serverless_billing_guard_findings(tuple_spec, endpoint=endpoint)
     summary = {
         "inventory_matched": True,
         "workers_min": workers_min,
         "workers_max": workers_max,
         "active_workers": active_workers,
         "unmanaged_standing_cost": False,
+        "live_blocked": live_guard_summary["live_blocked"],
+        "active_pods": live_guard_summary["active_pods"],
     }
     findings: list[dict[str, object]] = []
     if workers_min > 0:
@@ -2678,7 +2704,15 @@ def _runpod_endpoint_runtime_cost(tuple_spec: object, endpoint: dict[str, object
                     "reason": "; ".join(approval_findings),
                 }
             )
-    return {"summary": summary, "findings": findings}
+    return {"summary": summary, "findings": findings, "live_blocked": bool(live_blockers), "live_blockers": live_blockers}
+
+
+class _RunpodUnmanagedEndpointTuple:
+    adapter = "runpod-vllm-serverless"
+
+    def __init__(self, endpoint_id: str) -> None:
+        self.name = endpoint_id
+        self.target = endpoint_id
 
 
 def _runpod_active_worker_count(endpoint: dict[str, object]) -> int:

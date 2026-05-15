@@ -753,6 +753,39 @@ def test_readiness_cli(tmp_path) -> None:
     assert "infer-summarize-text-draft" in result.stdout
 
 
+def test_readiness_reports_live_catalog_blocked_tuple(tmp_path, monkeypatch) -> None:
+    from gpucall.readiness import build_readiness_report
+
+    root = copy_config(tmp_path)
+    monkeypatch.setattr("gpucall.readiness.load_credentials", lambda: {"runpod": {"api_key": "rk_test"}})
+    monkeypatch.setattr(
+        "gpucall.readiness.live_tuple_catalog_evidence",
+        lambda tuples, credentials: {
+            name: {
+                "tuple": name,
+                "status": "blocked",
+                "checked": True,
+                "findings": [
+                    {
+                        "severity": "error",
+                        "field": "runpod_serverless_billing_guard",
+                        "raw": {"live_reason": "active_workers_present"},
+                    }
+                ],
+            }
+            for name in tuples
+        },
+    )
+
+    report = build_readiness_report(config_dir=root, intent="standard_text_inference")
+
+    recipe = report["recipes"][0]
+    blocked = recipe["live_blocked_tuples"]
+    assert recipe["eligible_tuple_count"] > 0
+    assert blocked
+    assert any(item["live_reason"] == "active_workers_present" for item in blocked)
+
+
 def test_provider_smoke_writes_live_validation_artifact(tmp_path, monkeypatch) -> None:
     root = copy_config(tmp_path)
     monkeypatch.setenv("GPUCALL_ALLOW_FAKE_AUTO_TUPLES", "1")

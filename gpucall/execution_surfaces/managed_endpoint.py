@@ -12,6 +12,7 @@ from gpucall.live_catalog import live_error, live_info, price_per_second_from_ma
 from gpucall.targeting import is_configured_target
 
 RUNPOD_API_BASE = "https://api.runpod.ai/v2"
+RUNPOD_SERVERLESS_BILLING_GUARD_CHECK = "runpod_serverless_billing_guard"
 
 
 def requests_session():
@@ -97,6 +98,7 @@ def _request_exception_to_tuple_error(exc: Exception, message: str) -> TupleErro
 def runpod_endpoint_catalog_findings(tuples: list[Any], credentials: dict[str, dict[str, str]]) -> list[dict[str, Any]]:
     api_key = credentials.get("runpod", {}).get("api_key")
     findings: list[dict[str, Any]] = []
+    inventory_by_base_url: dict[str, list[dict[str, Any]]] = {}
     for tuple in tuples:
         if not api_key:
             findings.append(live_error(tuple, dimension="credential", reason="missing RunPod API key; cannot verify endpoint health"))
@@ -105,6 +107,56 @@ def runpod_endpoint_catalog_findings(tuples: list[Any], credentials: dict[str, d
             findings.append(live_error(tuple, dimension="endpoint", field="target", reason="RunPod endpoint target is not configured"))
             continue
         base_url = str(tuple.endpoint or RUNPOD_API_BASE).rstrip("/")
+        health: dict[str, Any] | None = None
+        inventory_rows = inventory_by_base_url.get(base_url)
+        if inventory_rows is None:
+            inventory_rows = _runpod_endpoint_live_inventory_rows(api_key, base_url)
+            inventory_by_base_url[base_url] = inventory_rows
+        endpoint = _runpod_endpoint_live_inventory_row(tuple, api_key, base_url, rows=inventory_rows)
+        if endpoint is None:
+            findings.append(
+                live_error(
+                    tuple,
+                    dimension="endpoint",
+                    field="runpod_endpoint_inventory",
+                    reason="configured RunPod endpoint was not present in live endpoint inventory",
+                    source=f"{base_url}/endpoints",
+                )
+            )
+            continue
+        blocked_by_billing_guard = False
+        for blocker in runpod_serverless_billing_guard_findings(tuple, endpoint=endpoint):
+            blocked_by_billing_guard = True
+            findings.append(
+                live_error(
+                    tuple,
+                    dimension="cost",
+                    field=str(blocker.get("check") or RUNPOD_SERVERLESS_BILLING_GUARD_CHECK),
+                    reason=str(blocker.get("reason") or "RunPod Serverless billing guard blocked this endpoint"),
+                    source=f"{base_url}/endpoints",
+                    raw={
+                        "endpoint_id": blocker.get("endpoint_id"),
+                        "workers_min": blocker.get("workers_min"),
+                        "workers_max": blocker.get("workers_max"),
+                        "active_workers": blocker.get("active_workers"),
+                        "active_pods": blocker.get("active_pods"),
+                        "live_reason": blocker.get("live_reason"),
+                    },
+                )
+            )
+        if blocked_by_billing_guard:
+            price = _runpod_endpoint_live_price(tuple, api_key, base_url, endpoint=endpoint)
+            if price is not None:
+                findings.append(
+                    live_info(
+                        tuple,
+                        dimension="price",
+                        source=price["source"],
+                        live_price_per_second=price["price_per_second"],
+                        raw=price["raw"],
+                    )
+                )
+            continue
         try:
             response = requests_session().get(
                 f"{base_url}/{tuple.target}/health",
@@ -137,7 +189,26 @@ def runpod_endpoint_catalog_findings(tuples: list[Any], credentials: dict[str, d
                 live_error(tuple, dimension="endpoint", field="target", reason=f"RunPod endpoint health lookup failed: {exc}")
             )
             continue
-        price = _runpod_endpoint_live_price(tuple, api_key, base_url)
+        if endpoint is not None:
+            for blocker in runpod_serverless_billing_guard_findings(tuple, endpoint=endpoint, health=health):
+                findings.append(
+                    live_error(
+                        tuple,
+                        dimension="endpoint",
+                        field=str(blocker.get("check") or RUNPOD_SERVERLESS_BILLING_GUARD_CHECK),
+                        reason=str(blocker.get("reason") or "RunPod Serverless billing guard blocked this endpoint"),
+                        source=f"{base_url}/endpoints",
+                        raw={
+                            "endpoint_id": blocker.get("endpoint_id"),
+                            "workers_min": blocker.get("workers_min"),
+                            "workers_max": blocker.get("workers_max"),
+                            "active_workers": blocker.get("active_workers"),
+                            "active_pods": blocker.get("active_pods"),
+                            "live_reason": blocker.get("live_reason"),
+                        },
+                    )
+                )
+        price = _runpod_endpoint_live_price(tuple, api_key, base_url, endpoint=endpoint)
         if price is not None:
             findings.append(
                 live_info(
@@ -151,7 +222,7 @@ def runpod_endpoint_catalog_findings(tuples: list[Any], credentials: dict[str, d
     return findings
 
 
-def _runpod_endpoint_live_price(tuple: Any, api_key: str, base_url: str) -> dict[str, Any] | None:
+def _runpod_endpoint_live_inventory_rows(api_key: str, base_url: str) -> list[dict[str, Any]]:
     try:
         response = requests_session().get(
             f"{base_url}/endpoints",
@@ -160,27 +231,40 @@ def _runpod_endpoint_live_price(tuple: Any, api_key: str, base_url: str) -> dict
             timeout=10,
         )
         if response.status_code not in {200, 201, 202}:
-            return None
+            return []
         payload = response.json()
         rows = payload.get("endpoints") or payload.get("data") or payload
         if not isinstance(rows, list):
-            return None
-        for row in rows:
-            if not isinstance(row, dict):
-                continue
+            return []
+        return [row for row in rows if isinstance(row, dict)]
+    except Exception:
+        return []
+
+
+def _runpod_endpoint_live_inventory_row(tuple: Any, api_key: str, base_url: str, *, rows: list[dict[str, Any]] | None = None) -> dict[str, Any] | None:
+    try:
+        candidate_rows = rows if rows is not None else _runpod_endpoint_live_inventory_rows(api_key, base_url)
+        for row in candidate_rows:
             if str(row.get("id") or row.get("endpointId") or row.get("name") or "") != str(tuple.target):
                 continue
-            price, field = price_per_second_from_mapping(row)
-            if price is None:
-                return None
-            return {
-                "price_per_second": price,
-                "source": f"{base_url}/endpoints:{field}",
-                "raw": {"field": field, "gpuTypeIds": row.get("gpuTypeIds"), "computeType": row.get("computeType")},
-            }
+            return row
     except Exception:
         return None
     return None
+
+
+def _runpod_endpoint_live_price(tuple: Any, api_key: str, base_url: str, *, endpoint: dict[str, Any] | None = None) -> dict[str, Any] | None:
+    row = endpoint if endpoint is not None else _runpod_endpoint_live_inventory_row(tuple, api_key, base_url)
+    if row is None:
+        return None
+    price, field = price_per_second_from_mapping(row)
+    if price is None:
+        return None
+    return {
+        "price_per_second": price,
+        "source": f"{base_url}/endpoints:{field}",
+        "raw": {"field": field, "gpuTypeIds": row.get("gpuTypeIds"), "computeType": row.get("computeType")},
+    }
 
 
 import asyncio
@@ -470,6 +554,116 @@ def _positive_int_from_mapping(mapping: dict[str, Any], *keys: str) -> int:
             return max(int(value), 0)
         except (TypeError, ValueError):
             continue
+    return 0
+
+
+def runpod_serverless_billing_guard_summary(
+    tuple: Any | None = None,
+    *,
+    endpoint: dict[str, Any],
+    health: dict[str, Any] | None = None,
+) -> dict[str, int | bool]:
+    workers_min = _positive_int_from_mapping(endpoint, "workersMin", "workers_min", "minWorkers", "min_workers")
+    workers_max = _positive_int_from_mapping(endpoint, "workersMax", "workers_max", "maxWorkers", "max_workers")
+    active_workers = max(_runpod_active_worker_count(endpoint), _runpod_active_worker_count(health or {}))
+    active_pods = _runpod_active_pod_count(endpoint)
+
+    return {
+        "workers_min": workers_min,
+        "workers_max": workers_max,
+        "active_workers": active_workers,
+        "active_pods": active_pods,
+        "live_blocked": bool(workers_min > 0 or active_workers > 0 or active_pods > 0),
+    }
+
+
+def runpod_serverless_billing_guard_findings(
+    tuple: Any,
+    *,
+    endpoint: dict[str, Any],
+    health: dict[str, Any] | None = None,
+) -> list[dict[str, object]]:
+    summary = runpod_serverless_billing_guard_summary(tuple, endpoint=endpoint, health=health)
+    endpoint_id = str(endpoint.get("id") or endpoint.get("endpointId") or endpoint.get("endpoint_id") or getattr(tuple, "target", "") or "")
+    base = {
+        "check": RUNPOD_SERVERLESS_BILLING_GUARD_CHECK,
+        "tuple": getattr(tuple, "name", ""),
+        "endpoint_id": endpoint_id,
+        "workers_min": summary["workers_min"],
+        "workers_max": summary["workers_max"],
+        "active_workers": summary["active_workers"],
+        "active_pods": summary["active_pods"],
+    }
+    findings: list[dict[str, object]] = []
+    if int(summary["workers_min"]) > 0:
+        findings.append(
+            {
+                **base,
+                "live_reason": "workers_min_positive",
+                "reason": "live RunPod Serverless endpoint has workersMin > 0; standing workers can create continuous billing",
+                "severity": "error",
+            }
+        )
+    if int(summary["active_workers"]) > 0:
+        findings.append(
+            {
+                **base,
+                "live_reason": "active_workers_present",
+                "reason": "live RunPod Serverless endpoint has active workers remaining",
+                "severity": "error",
+            }
+        )
+    if int(summary["active_pods"]) > 0:
+        findings.append(
+            {
+                **base,
+                "live_reason": "active_pods_present",
+                "reason": "live RunPod Serverless endpoint has active pods remaining",
+                "severity": "error",
+            }
+        )
+    return findings
+
+
+def _runpod_active_worker_count(payload: dict[str, Any]) -> int:
+    for key in ("activeWorkers", "active_workers", "workers"):
+        value = payload.get(key)
+        if isinstance(value, list):
+            return len(value)
+        if isinstance(value, dict):
+            total = 0
+            for nested_key in ("running", "ready", "initializing", "throttled", "unhealthy"):
+                try:
+                    total += int(value.get(nested_key) or 0)
+                except (TypeError, ValueError):
+                    pass
+            return total
+        if value is not None:
+            try:
+                return max(int(value), 0)
+            except (TypeError, ValueError):
+                pass
+    return 0
+
+
+def _runpod_active_pod_count(endpoint: dict[str, Any]) -> int:
+    for key in ("activePods", "active_pods", "pods"):
+        value = endpoint.get(key)
+        if isinstance(value, list):
+            return len(value)
+        if isinstance(value, dict):
+            total = 0
+            for nested_key in ("running", "ready", "initializing", "active"):
+                try:
+                    total += int(value.get(nested_key) or 0)
+                except (TypeError, ValueError):
+                    pass
+            return total
+        if value is not None:
+            try:
+                return max(int(value), 0)
+            except (TypeError, ValueError):
+                pass
     return 0
 
 

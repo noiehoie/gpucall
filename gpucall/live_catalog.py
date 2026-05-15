@@ -6,7 +6,7 @@ from typing import Any, Literal, Mapping
 
 
 LiveSeverity = Literal["error", "info"]
-LiveDimension = Literal["contract", "price", "stock", "endpoint", "credential"]
+LiveDimension = Literal["contract", "price", "stock", "endpoint", "credential", "cost"]
 
 
 @dataclass(frozen=True)
@@ -46,7 +46,15 @@ class LiveCatalogObservation:
         return payload
 
 
-def live_error(tuple: Any, *, dimension: LiveDimension, reason: str, field: str | None = None, source: str | None = None) -> dict[str, Any]:
+def live_error(
+    tuple: Any,
+    *,
+    dimension: LiveDimension,
+    reason: str,
+    field: str | None = None,
+    source: str | None = None,
+    raw: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
     return LiveCatalogObservation(
         tuple=str(tuple.name),
         adapter=str(tuple.adapter),
@@ -55,6 +63,7 @@ def live_error(tuple: Any, *, dimension: LiveDimension, reason: str, field: str 
         reason=reason,
         field=field,
         source=source,
+        raw=raw or {},
     ).as_finding()
 
 
