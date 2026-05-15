@@ -3,11 +3,11 @@
 External provider validation can create billable resources. Run these only after credentials, quotas, and cost guardrails are confirmed.
 
 ```bash
-gpucall tuple-smoke modal-a10g --recipe text-infer-standard --mode sync
-gpucall tuple-smoke runpod-vllm-serverless --recipe text-infer-light --mode sync
-gpucall tuple-smoke runpod-vllm-flashboot --recipe text-infer-light --mode sync
-gpucall tuple-smoke local-ollama --recipe text-infer-standard --mode sync
-gpucall tuple-smoke hyperstack-a100 --recipe text-infer-standard --mode sync
+gpucall tuple-smoke modal-a10g --recipe text-infer-standard --mode sync --budget-usd 0.10
+gpucall tuple-smoke runpod-vllm-serverless --recipe text-infer-light --mode sync --budget-usd 0.10
+gpucall tuple-smoke runpod-vllm-flashboot --recipe text-infer-light --mode sync --budget-usd 0.10
+gpucall tuple-smoke local-ollama --recipe text-infer-standard --mode sync --budget-usd 0.01 --allow-zero-estimate
+gpucall tuple-smoke hyperstack-a100 --recipe text-infer-standard --mode sync --budget-usd 0.10
 ```
 
 RunPod production validation uses the official worker-vLLM OpenAI-compatible route:

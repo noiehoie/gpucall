@@ -815,6 +815,9 @@ def test_provider_smoke_writes_live_validation_artifact(tmp_path, monkeypatch) -
             "smoke-text-small",
             "--mode",
             "sync",
+            "--budget-usd",
+            "0.01",
+            "--allow-zero-estimate",
             "--write-artifact",
         ],
         check=True,
@@ -832,6 +835,32 @@ def test_provider_smoke_writes_live_validation_artifact(tmp_path, monkeypatch) -
     assert '"passed":true' in payload
     assert '"official_contract"' in payload
     assert '"official_contract_hash"' in payload
+
+
+def test_tuple_smoke_requires_explicit_budget(tmp_path, monkeypatch) -> None:
+    root = copy_config(tmp_path)
+    monkeypatch.setenv("GPUCALL_ALLOW_FAKE_AUTO_TUPLES", "1")
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            str(Path(__file__).resolve().parents[1] / "gpucall" / "cli.py"),
+            "tuple-smoke",
+            "local-echo",
+            "--config-dir",
+            str(root),
+            "--recipe",
+            "smoke-text-small",
+            "--mode",
+            "sync",
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 2
+    assert "--budget-usd" in result.stderr
 
 
 def test_live_validation_artifact_must_match_current_commit_and_config(tmp_path, monkeypatch) -> None:

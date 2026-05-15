@@ -125,6 +125,8 @@ def main() -> None:
     tuple_smoke.add_argument("--config-dir", type=Path, default=default_config_dir())
     tuple_smoke.add_argument("--recipe", default="text-infer-standard")
     tuple_smoke.add_argument("--mode", choices=["sync", "async", "stream"], default="sync")
+    tuple_smoke.add_argument("--budget-usd", type=float, required=True, help="hard cost ceiling for this forced tuple smoke")
+    tuple_smoke.add_argument("--allow-zero-estimate", action="store_true", help="allow forced smoke when the compiled tuple cost estimate is zero")
     tuple_smoke.add_argument("--write-artifact", action="store_true")
     jobs = sub.add_parser("jobs")
     jobs.add_argument("job_id", nargs="?")
@@ -324,6 +326,8 @@ def main() -> None:
                 args.tuple,
                 args.recipe,
                 ExecutionMode(args.mode),
+                budget_usd=args.budget_usd,
+                allow_zero_estimate=args.allow_zero_estimate,
                 write_artifact=args.write_artifact,
             )
         )
@@ -1743,8 +1747,12 @@ async def provider_smoke_command(
     recipe_name: str,
     mode: ExecutionMode,
     *,
+    budget_usd: float,
+    allow_zero_estimate: bool = False,
     write_artifact: bool = False,
 ) -> None:
+    if budget_usd < 0:
+        raise SystemExit("--budget-usd must be non-negative")
     runtime = build_runtime(config_dir)
     recipe = runtime.compiler.recipes.get(recipe_name)
     if recipe is None:
@@ -1755,6 +1763,11 @@ async def provider_smoke_command(
     if request.input_refs or request.split_learning is not None:
         worker_request = worker_readable_request(request, runtime)
         plan = plan_with_worker_refs(plan, worker_request.input_refs, split_learning=worker_request.split_learning)
+    estimated = float((plan.attestations.get("cost_estimate") or {}).get("estimated_cost_usd") or 0.0)
+    if estimated <= 0.0 and not allow_zero_estimate:
+        raise SystemExit("tuple-smoke refuses zero-cost estimates unless --allow-zero-estimate is set")
+    if estimated > budget_usd:
+        raise SystemExit(f"tuple-smoke budget exceeded before execution: estimated={estimated:.6f}, budget={budget_usd:.6f}")
     try:
         summary: dict[str, object]
         if mode is ExecutionMode.STREAM:

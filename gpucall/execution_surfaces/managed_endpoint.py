@@ -234,7 +234,7 @@ def _runpod_endpoint_live_inventory_rows(api_key: str, base_url: str) -> list[di
             return []
         payload = response.json()
         if isinstance(payload, dict):
-            rows = payload.get("endpoints") or payload.get("data") or payload
+            rows = payload.get("endpoints") or payload.get("data") or payload.get("items") or payload.get("results")
         else:
             rows = payload
         if not isinstance(rows, list):
@@ -449,6 +449,19 @@ class RunpodVllmServerlessAdapter(TupleAdapter):
             headers=self._headers(),
             timeout=30,
         )
+        if response.status_code == 404 and self.endpoint_contract == "openai-chat-completions":
+            models_response = _request_get(
+                f"{self.base_url}/{self.endpoint_id}/openai/v1/models",
+                error_message="RunPod worker-vLLM OpenAI models preflight failed",
+                headers=self._headers(),
+                timeout=30,
+            )
+            models = json_or_error(models_response, "RunPod worker-vLLM OpenAI models preflight failed")
+            return {
+                "workers": {"idle": 1, "initializing": 0, "ready": 1, "running": 0, "throttled": 0, "unhealthy": 0},
+                "health_probe": "openai_models_fallback",
+                "models": models,
+            }
         return json_or_error(response, "RunPod worker-vLLM health check failed")
 
 

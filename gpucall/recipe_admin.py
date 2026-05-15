@@ -70,6 +70,7 @@ def main(argv: list[str] | None = None) -> int:
     promote.add_argument("--work-dir", required=True, help="promotion workspace for generated config and reports")
     promote.add_argument("--validation-dir", help="tuple live validation artifact directory")
     promote.add_argument("--run-validation", action="store_true", help="run billable gpucall tuple-smoke in the promotion workspace")
+    promote.add_argument("--validation-budget-usd", type=float, help="hard cost ceiling for --run-validation tuple-smoke")
     promote.add_argument("--activate", action="store_true", help="copy validated recipe/tuple into the active config directory")
     promote.add_argument("--force", action="store_true", help="overwrite generated or active recipe/tuple files")
     promote.add_argument("--output", "-o", help="write promotion report JSON")
@@ -183,6 +184,7 @@ def main(argv: list[str] | None = None) -> int:
             work_dir=args.work_dir,
             validation_dir=args.validation_dir,
             run_validation=args.run_validation,
+            validation_budget_usd=args.validation_budget_usd,
             activate=args.activate,
             force=args.force,
         )
@@ -901,6 +903,8 @@ def _run_existing_tuple_validation(*, tuple_name: str, recipe_name: str, config_
             recipe_name,
             "--mode",
             mode,
+            "--budget-usd",
+            "0.10",
             "--write-artifact",
         ],
         validation_dir=validation_dir,
@@ -1338,7 +1342,7 @@ def _promotion_actions(candidate: Mapping[str, Any]) -> list[str]:
     return [
         f"review official execution contract conformance for tuple {name}",
         f"materialize active surface/worker YAML from tuple candidate {name!r} only after credentials/endpoint ids are filled",
-        f"run gpucall tuple-smoke {name} --write-artifact against the exact billable tuple",
+        f"run gpucall tuple-smoke {name} --budget-usd <limit> --write-artifact against the exact billable tuple",
         "rerun gpucall-recipe-admin review with --validation-dir pointing to tuple-validation artifacts",
         "promote to production auto-routing only after review returns READY_FOR_PRODUCTION or AUTO_SELECT_SAFE",
     ]

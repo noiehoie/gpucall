@@ -115,6 +115,57 @@ def test_runpod_live_catalog_records_price_and_blocks_unavailable_stock(monkeypa
     assert calls == ["https://rest.runpod.io/v1/endpoints", "https://api.runpod.ai/v2/endpoint-1/health"]
 
 
+def test_runpod_live_catalog_accepts_items_inventory_shape(monkeypatch) -> None:
+    class FakeResponse:
+        status_code = 200
+
+        def __init__(self, payload: dict) -> None:
+            self._payload = payload
+
+        def json(self) -> dict:
+            return self._payload
+
+    class FakeSession:
+        def mount(self, *_args, **_kwargs) -> None:
+            return None
+
+        def get(self, url: str, **_kwargs):
+            if url.endswith("/endpoints"):
+                return FakeResponse({"items": [{"id": "endpoint-1", "currentPricePerSecond": 0.00042}]})
+            if url.endswith("/endpoint-1/health"):
+                return FakeResponse({"workers": {"ready": 1, "running": 0, "initializing": 0, "throttled": 0, "unhealthy": 0}})
+            raise AssertionError(url)
+
+    fake_requests = __import__("types").SimpleNamespace(Session=lambda: FakeSession())
+    fake_adapters = __import__("types").SimpleNamespace(HTTPAdapter=lambda **_kwargs: object())
+    fake_retry = __import__("types").SimpleNamespace(Retry=lambda **_kwargs: object())
+    modules = __import__("sys").modules
+    monkeypatch.setitem(modules, "requests", fake_requests)
+    monkeypatch.setitem(modules, "requests.adapters", fake_adapters)
+    monkeypatch.setitem(modules, "urllib3.util.retry", fake_retry)
+    tuple = ExecutionTupleSpec(
+        name="runpod-vllm-serverless",
+        adapter="runpod-vllm-serverless",
+        gpu="AMPERE_16",
+        vram_gb=16,
+        max_model_len=8192,
+        cost_per_second=0.00045,
+        modes=["sync"],
+        target="endpoint-1",
+        image="runpod/worker-v1-vllm:v2.18.1",
+        endpoint_contract="openai-chat-completions",
+        input_contracts=["chat_messages"],
+        output_contract="openai-chat-completions",
+        stream_contract="none",
+        model="Qwen/Qwen2.5-1.5B-Instruct",
+    )
+
+    evidence = live_tuple_catalog_evidence({tuple.name: tuple}, {"runpod": {"api_key": "rk_test"}})
+
+    findings = evidence[tuple.name]["findings"]
+    assert any(item.get("live_price_per_second") == 0.00042 for item in findings)
+
+
 def test_runpod_live_catalog_blocks_positive_workers_min(monkeypatch) -> None:
     calls: list[str] = []
 

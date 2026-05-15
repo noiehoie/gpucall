@@ -1081,6 +1081,71 @@ def test_runpod_worker_vllm_health_rejects_throttled_endpoint() -> None:
     assert runpod_vllm_health_rejection_code(reason) == "PROVIDER_WORKER_THROTTLED"
 
 
+@pytest.mark.asyncio
+async def test_runpod_vllm_health_404_falls_back_to_openai_models_preflight(monkeypatch) -> None:
+    calls: list[str] = []
+
+    class FakeResponse:
+        def __init__(self, status_code: int, payload: dict[str, object]) -> None:
+            self.status_code = status_code
+            self._payload = payload
+            self.text = json.dumps(payload)
+
+        def json(self) -> dict[str, object]:
+            return self._payload
+
+    class FakeSession:
+        def mount(self, *_args, **_kwargs) -> None:
+            return None
+
+        def get(self, url: str, **_kwargs):
+            calls.append(f"GET {url}")
+            if url.endswith("/health"):
+                return FakeResponse(404, {"error": "not found"})
+            if url.endswith("/openai/v1/models"):
+                return FakeResponse(200, {"data": [{"id": "Qwen/Qwen2.5-1.5B-Instruct"}]})
+            raise AssertionError(url)
+
+        def post(self, url: str, **_kwargs):
+            calls.append(f"POST {url}")
+            return FakeResponse(
+                200,
+                {
+                    "choices": [
+                        {
+                            "message": {"content": "runpod ok"},
+                            "finish_reason": "stop",
+                        }
+                    ]
+                },
+            )
+
+    fake_requests = types.SimpleNamespace(Session=lambda: FakeSession())
+    fake_adapters = types.SimpleNamespace(HTTPAdapter=lambda **_kwargs: object())
+    fake_retry = types.SimpleNamespace(Retry=lambda **_kwargs: object())
+    monkeypatch.setitem(sys.modules, "requests", fake_requests)
+    monkeypatch.setitem(sys.modules, "requests.adapters", fake_adapters)
+    monkeypatch.setitem(sys.modules, "urllib3.util.retry", fake_retry)
+
+    adapter = RunpodVllmServerlessAdapter(
+        api_key="rk_test",
+        endpoint_id="endpoint-1",
+        image="runpod/worker-v1-vllm:v2.18.1",
+        endpoint_contract="openai-chat-completions",
+        model="Qwen/Qwen2.5-1.5B-Instruct",
+    )
+    plan = plan_payload_plan().model_copy(update={"messages": [ChatMessage(role="user", content="hello")]})
+
+    result = await adapter.wait(await adapter.start(plan), plan)
+
+    assert result.value == "runpod ok"
+    assert calls == [
+        "GET https://api.runpod.ai/v2/endpoint-1/health",
+        "GET https://api.runpod.ai/v2/endpoint-1/openai/v1/models",
+        "POST https://api.runpod.ai/v2/endpoint-1/openai/v1/chat/completions",
+    ]
+
+
 def test_runpod_worker_vllm_health_classifies_initializing_and_unhealthy() -> None:
     assert (
         runpod_vllm_health_rejection_code(

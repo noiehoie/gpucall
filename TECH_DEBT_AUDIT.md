@@ -630,3 +630,272 @@ Classification:
 | RunPod billable canary | Production blocker | Credentials present, but `seed-liveness` requires `--budget-usd`; no budget was specified in this task. | Must run explicit low-budget canary before production Go. |
 
 No code changes were made in this live-readiness pass. The only file updated was this audit log.
+
+## 2026-05-16 Production Go Live Canary Update
+
+Status: Conditional Go remains. Production Go was not reached because no
+successful production tuple result was observed for SDK sync/async, DataRef
+object-store live path is not configured, and RunPod forced tuple smoke failed
+its endpoint health check.
+
+Checkpoint under test:
+
+```text
+git branch --show-current
+# codex/rc-audit-product-static-conditional-go
+
+git rev-parse --short HEAD
+# 9083e45
+```
+
+Secret/environment presence check redacted values and reported only
+present/missing:
+
+```text
+credentials.runpod: present=True keys=['api_key', 'endpoint_id']
+credentials.modal: present=False keys=[]
+credentials.hyperstack: present=True keys=['api_key']
+credentials.aws: present=False keys=[]
+credentials.object_store: present=False keys=[]
+
+GPUCALL_API_KEY=missing
+GPUCALL_TENANT_API_KEYS=missing
+GPUCALL_POSTGRES_PASSWORD=missing
+GPUCALL_DATABASE_URL=missing
+GPUCALL_RUNPOD_API_KEY=missing
+GPUCALL_RUNPOD_ENDPOINT_ID=missing
+RUNPOD_API_KEY=missing
+AWS_ACCESS_KEY_ID=missing
+AWS_SECRET_ACCESS_KEY=missing
+AWS_REGION=missing
+AWS_ENDPOINT_URL_S3=missing
+GPUCALL_OBJECT_STORE_BUCKET=missing
+GPUCALL_OBJECT_STORE_ENDPOINT=missing
+GPUCALL_OBJECT_STORE_REGION=missing
+GPUCALL_OBJECT_STORE_ACCESS_KEY_ID=missing
+GPUCALL_OBJECT_STORE_SECRET_ACCESS_KEY=missing
+config/object_store.yml=missing
+config/.modal.toml=present
+```
+
+Active route facts:
+
+```text
+XDG_CACHE_HOME=$PWD/.cache GPUCALL_STATE_DIR=$PWD/.state/prod-canary-readiness uv run gpucall validate-config --config-dir config
+# "valid": true
+
+XDG_CACHE_HOME=$PWD/.cache GPUCALL_STATE_DIR=$PWD/.state/prod-canary-readiness uv run gpucall readiness --config-dir config --intent short_text_inference
+# recipe: text-infer-light
+# auto_select: true
+# production_activated: true
+# eligible_tuple_count: 49
+# first eligible tuple: local-author-ollama
+
+XDG_CACHE_HOME=$PWD/.cache uv run python -c '... compile route summary ...'
+# text-infer-light selected local-author-ollama chain_len 59 runpod_count 0
+# text-infer-standard selected local-author-ollama chain_len 55 runpod_count 0
+# infer-summarize-text-light selected local-author-ollama chain_len 35 runpod_count 0
+# infer-summarize-text-standard selected local-author-ollama chain_len 33 runpod_count 0
+
+XDG_CACHE_HOME=$PWD/.cache GPUCALL_STATE_DIR=$PWD/.state/prod-canary-readiness uv run gpucall doctor --config-dir config --live-tuple-catalog
+# live_tuple_catalog.ok: false
+# reason: live tuple catalog check timed out after 15s; skipped bounded live lookup
+```
+
+RunPod / billable canary:
+
+```text
+XDG_CACHE_HOME=$PWD/.cache uv run gpucall seed-liveness --help
+# usage: gpucall seed-liveness ... --budget-usd BUDGET_USD recipe_name
+
+XDG_CACHE_HOME=$PWD/.cache GPUCALL_STATE_DIR=$PWD/.state/prod-canary-runpod uv run gpucall seed-liveness text-infer-light --config-dir config --count 1 --budget-usd 0.25
+# seed-liveness refuses zero-cost estimates unless --allow-zero-estimate is set
+
+XDG_CACHE_HOME=$PWD/.cache uv run gpucall tuple-smoke runpod-vllm-serverless --config-dir config --recipe text-infer-light --mode sync
+# passed: false
+# tuple: runpod-vllm-serverless
+# engine_ref: runpod-vllm-openai
+# model_ref: qwen2.5-1.5b-instruct
+# error.code: PROVIDER_ERROR
+# error.status_code: 404
+# error.message: RunPod worker-vLLM health check failed: 404
+# observed_wall_seconds: 0.469377
+# cost.observed: null
+```
+
+Note: `tuple-smoke` does not expose a `--budget-usd` flag. The forced RunPod
+smoke above returned before model execution with a health-check 404 and no
+observed cost. No further budgetless forced tuple smoke was run.
+
+Gateway / SDK / OpenAI facade canary:
+
+```text
+XDG_CACHE_HOME=$PWD/.cache GPUCALL_STATE_DIR=$PWD/.state/prod-canary-gateway GPUCALL_TENANT_API_KEYS=default:prod-canary-secret uv run gpucall serve --config-dir config --host 127.0.0.1 --port 18088
+# /healthz -> {"status":"ok"}
+# /readyz -> {"status":"ready"}
+# /openapi.json -> {'version': '2.0.9', 'title': 'gpucall v2.0', 'paths': 17, 'has_openai': True, 'has_presign': True}
+
+SDK sync infer, request_timeout=60
+# ok: false
+# elapsed: 2.14
+# exception: GPUCallProviderRuntimeError
+# message: tuple execution failed (PROVIDER_CAPACITY_UNAVAILABLE)
+
+SDK async infer, poll_timeout=40
+# submit_ok: true
+# job_id: 75930482594c4a7abbe2e96bb216133a
+# selected_tuple: local-author-ollama
+# final.state: FAILED
+# final.provider_error_code: PROVIDER_CAPACITY_UNAVAILABLE
+
+POST /v1/chat/completions
+# status: 200
+# model: qwen2.5-32b:latest
+# choices_count: 1
+# finish_reason: stop
+```
+
+DataRef / object store:
+
+```text
+POST /v2/objects/presign-put
+# {"detail":"object store is not configured"}
+```
+
+Docker Postgres production-mode smoke:
+
+```text
+GPUCALL_POSTGRES_PASSWORD=product-test docker compose config --quiet
+# compose_config_exit:0
+
+GPUCALL_POSTGRES_PASSWORD=product-test GPUCALL_API_KEYS=prod-canary-secret GPUCALL_GIT_COMMIT=9083e45 docker compose -p gpucall-product-canary up -d postgres gpucall
+# gpucall-product-canary-postgres-1 healthy
+# gpucall-product-canary-gpucall-1 healthy
+
+curl http://127.0.0.1:18088/healthz
+# {"status":"ok"}
+
+curl http://127.0.0.1:18088/readyz
+# {"status":"ready"}
+
+curl http://127.0.0.1:18088/openapi.json
+# version 2.0.9; paths 17; has_openai true
+
+POST /v2/tasks/async
+# job_id: aa33e595db41457aa88f161f5b3555d3
+# state: QUEUED
+# selected_tuple: local-author-ollama
+
+GET /v2/jobs/aa33e595db41457aa88f161f5b3555d3
+# state: FAILED
+# provider_error_code: PROVIDER_CAPACITY_UNAVAILABLE
+
+docker compose -p gpucall-product-canary down
+# containers and network removed; volume was not removed
+```
+
+Updated live blocker table:
+
+| Area | Status | Evidence | Classification |
+|---|---|---|---|
+| Gateway startup | Go | Local gateway and Docker gateway return health/ready/openapi. | Product code startup path is green. |
+| Docker Postgres startup/API | Go for startup / DB-backed job path | Compose project starts Postgres and gateway healthy; async job persists and can be polled. | Provider-blocked after DB-backed submit. |
+| OpenAI facade | Partial Go | Facade returned 200 using `qwen2.5-32b:latest` through the active local tuple. | Facade contract works for local chat path; not sufficient for Production Go because SDK sync/async and DataRef are not green. |
+| SDK sync | Production blocker | `GPUCallProviderRuntimeError`, provider code `PROVIDER_CAPACITY_UNAVAILABLE`. | Active SDK infer route still fails on `local-author-ollama`. |
+| SDK async | Production blocker | Submit succeeds, final job fails with `PROVIDER_CAPACITY_UNAVAILABLE`. | Gateway fail-closed; no successful production tuple. |
+| Active infer route | Production blocker | Text recipes compile to `local-author-ollama` first and contain no RunPod tuples in the compiled chain. | Current active config cannot prove RunPod production execution for text workloads. |
+| RunPod forced tuple | Production blocker | `tuple-smoke runpod-vllm-serverless` failed health check with 404. | Endpoint/contract readiness issue before billable model execution. |
+| Object store/DataRef live | Environment-gated blocker | `config/object_store.yml` and object-store env are missing; presign returns `object store is not configured`. | Must configure object store before DataRef production traffic. |
+
+Budget usage: `seed-liveness` was invoked with `--budget-usd 0.25` and did not
+execute because the compiled active route estimated zero cost. The only forced
+RunPod smoke returned 404 at health check before execution and reported
+`cost.observed: null`; no repeated billable smoke was run.
+
+## Production Go Live Blocker Follow-up 2026-05-16
+
+Verdict: Conditional Go, not Production Go.
+
+Code changes:
+
+- `tuple-smoke` now requires `--budget-usd` and refuses forced tuple execution
+  without an explicit budget ceiling. Zero-cost estimates require
+  `--allow-zero-estimate`.
+- `runpod-vllm-serverless` no longer treats `/health` 404 as the only possible
+  vLLM liveness contract. For OpenAI-compatible vLLM endpoints it falls back to
+  the official `/openai/v1/models` preflight before posting
+  `/openai/v1/chat/completions`.
+- RunPod endpoint inventory now accepts REST list payloads under `items` and
+  `results` in addition to `endpoints` and `data`.
+- `gpucall-recipe-admin promote --run-validation` now has an explicit
+  `--validation-budget-usd` handoff to the forced tuple smoke path.
+
+Evidence:
+
+```text
+XDG_CACHE_HOME=$PWD/.cache uv run python -m compileall -q gpucall gpucall_sdk sdk/python/gpucall_sdk sdk/python/gpucall_recipe_draft
+# exit 0
+
+XDG_CACHE_HOME=$PWD/.cache uv run pytest tests/test_providers.py tests/test_tuple_catalog.py tests/test_config.py::test_provider_smoke_writes_live_validation_artifact tests/test_config.py::test_tuple_smoke_requires_explicit_budget -q --maxfail=10
+# 71 passed
+
+XDG_CACHE_HOME=$PWD/.cache uv run gpucall security scan-secrets --config-dir config
+# {"findings": [], "ok": true}
+
+XDG_CACHE_HOME=$PWD/.cache GPUCALL_STATE_DIR=$PWD/.state/prodgo-validate2 uv run gpucall validate-config --config-dir config
+# "valid": true
+
+XDG_CACHE_HOME=$PWD/.cache GPUCALL_STATE_DIR=$PWD/.state/prodgo-static2 uv run gpucall launch-check --profile static --config-dir config
+# gpucall launch-check: GO
+# blockers: 0
+
+XDG_CACHE_HOME=$PWD/.cache GPUCALL_STATE_DIR=$PWD/.state/prodgo-runpod3 uv run gpucall tuple-smoke runpod-vllm-serverless --config-dir config --recipe text-infer-light --mode sync --budget-usd 0.25
+# exit 1
+# error.message: RunPod worker-vLLM OpenAI models preflight failed: 404
+# endpoint_id: RUNPOD_ENDPOINT_ID_PLACEHOLDER
+# passed: false
+```
+
+Gateway/API canary with ephemeral local API key:
+
+```text
+GET /readyz
+# {"status":"ready"}; HTTP 200
+
+GET /openapi.json
+# openapi 2.0.9; paths 17
+
+SDK sync infer
+# success, selected_tuple: local-author-ollama
+# not Production Go evidence because it is local-only
+
+SDK async infer
+# submit accepted; final state FAILED
+# provider_error_code: PROVIDER_CAPACITY_UNAVAILABLE
+# selected_tuple: local-author-ollama
+
+POST /v1/chat/completions
+# HTTP 503
+# code: PROVIDER_CAPACITY_UNAVAILABLE
+# failure_artifact present
+
+POST /v2/objects/presign-put
+# HTTP 503
+# {"detail":"object store is not configured"}
+```
+
+Updated live blocker table:
+
+| Area | Status | Evidence | Remaining risk |
+|---|---|---|---|
+| Forced tuple smoke budget | Fixed | `tuple-smoke --help` shows required `--budget-usd`; missing budget test returns argparse exit 2. | None for budgetless forced smoke. |
+| RunPod vLLM health 404 | Fixed for contract handling | `/health` 404 now falls back to `/openai/v1/models`; unit test covers fallback to chat completion. | Active config still points at `RUNPOD_ENDPOINT_ID_PLACEHOLDER`; real endpoint not configured. |
+| RunPod production tuple canary | Production blocker | Budgeted smoke exits 1 at `/openai/v1/models` 404 with placeholder endpoint id. | Need real endpoint id and API credentials before billable production tuple canary. |
+| SDK sync production tuple | Production blocker | SDK sync succeeded only on `local-author-ollama`. | No successful RunPod/production tuple result. |
+| SDK async production tuple | Production blocker | Async job failed with `PROVIDER_CAPACITY_UNAVAILABLE` on `local-author-ollama`. | No successful production async result. |
+| OpenAI facade production tuple | Production blocker | Facade returned structured 503 with failure artifact. | Facade contract is fail-closed; no production tuple success. |
+| Object store/DataRef live | Environment-gated blocker | No `config/object_store.yml`; AWS/GPUCALL object-store env missing; presign returns not configured. | Configure object store before DataRef production traffic. |
+
+Production traffic remains blocked until a real production tuple endpoint and
+object store are configured and SDK sync, SDK async, OpenAI facade, and DataRef
+live canaries all succeed on that production tuple.
