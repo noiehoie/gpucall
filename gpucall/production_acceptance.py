@@ -94,6 +94,12 @@ async def run_production_acceptance_async(config_dir: Path | None = None) -> dic
         "schema_version": 1,
         "phase": "production_acceptance",
         "passed": passed,
+        "classification": {
+            "code_static_acceptance_go": passed,
+            "production_traffic_go": False,
+            "production_traffic_status": "NO-GO",
+            "reason": "acceptance invariants do not include same-tuple live gateway success with object-store/DataRef evidence",
+        },
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "checks": [
             {"id": item.id, "name": item.name, "passed": item.passed, "details": item.details}

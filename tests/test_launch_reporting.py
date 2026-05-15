@@ -26,6 +26,9 @@ def test_launch_report_is_go_for_sample_config(tmp_path, monkeypatch) -> None:
     report = build_launch_report(copy_config(tmp_path), profile="static")
 
     assert report["go"] is True
+    assert report["code_static_go"] is True
+    assert report["production_traffic_go"] is False
+    assert report["release_gates"]["production_traffic_status"] == "NOT_EVALUATED"
     assert report["blockers"] == []
     checks = report["checks"]
     assert checks["config_valid"] is True
@@ -73,6 +76,12 @@ def test_production_launch_report_blocks_without_live_requirements(tmp_path, mon
     report = build_launch_report(copy_config(tmp_path), profile="production")
 
     assert report["go"] is False
+    assert report["code_static_go"] is True
+    assert report["production_traffic_go"] is False
+    assert report["release_gates"]["code_static_status"] == "GO"
+    assert report["release_gates"]["production_traffic_status"] == "NO-GO"
+    assert report["static_blockers"] == []
+    assert report["production_blockers"]
     checks = {blocker["check"] for blocker in report["blockers"]}
     assert "gateway_auth" in checks
     assert "gateway_live_smoke" in checks
@@ -82,6 +91,7 @@ def test_production_launch_report_blocks_without_live_requirements(tmp_path, mon
     assert report["checks"]["cost_audit_live_findings"]
     tuple_live_validation = report["tuple_live_validation"]
     assert tuple_live_validation["missing_tuples"] == tuple_live_validation["required_tuples"]
+    assert tuple_live_validation["production_dataref_artifacts_by_tuple"] == {}
     labels = {row["label"] for row in tuple_live_validation["required_tuples"]}
     assert "function_runtime:modal-function:qwen2.5-1.5b-instruct:modal-vllm" in labels
     assert "managed_endpoint:openai-chat-completions:qwen2.5-1.5b-instruct:runpod-vllm-openai" not in labels
@@ -161,6 +171,40 @@ def test_gateway_smoke_uses_v2_inline_inputs(monkeypatch) -> None:
     assert summary["ok"] is True
     assert summary["auth_required"] is True
     assert requests[0]["json"]["task"] == "infer"
+
+
+def test_gateway_smoke_inline_success_is_not_production_tuple_evidence(tmp_path, monkeypatch) -> None:
+    from gpucall.cli import _gateway_smoke_live_tuples
+    from gpucall.config import load_config
+
+    root = copy_config(tmp_path)
+    config = load_config(root)
+    summary = {
+        "ok": True,
+        "sync": {"selected_tuple": "modal-a10g", "output_non_empty": True},
+    }
+
+    assert _gateway_smoke_live_tuples(summary, config) == []
+
+
+def test_gateway_smoke_dataref_vision_success_counts_same_tuple(tmp_path, monkeypatch) -> None:
+    from gpucall.cli import _gateway_smoke_live_tuples
+    from gpucall.config import load_config
+    from gpucall.execution.contracts import tuple_evidence_key
+
+    root = copy_config(tmp_path)
+    config = load_config(root)
+    summary = {
+        "ok": True,
+        "object_store_smoke": {"uploaded": True},
+        "sync": {"selected_tuple": "modal-a10g", "output_non_empty": True},
+        "vision": {
+            "ok": True,
+            "body": {"plan": {"selected_tuple": "modal-vision-a10g"}},
+        },
+    }
+
+    assert _gateway_smoke_live_tuples(summary, config) == [tuple_evidence_key(config.tuples["modal-vision-a10g"])]
 
 
 def test_gateway_smoke_marks_vision_failure_as_not_ok(monkeypatch) -> None:
@@ -432,6 +476,53 @@ def test_live_validation_artifact_accepts_policy_only_config_hash_drift(tmp_path
 
     artifacts = _live_validation_artifacts_by_tuple(config, config_dir=root)
 
+    assert tuple_evidence_key(tuple_spec) in artifacts
+
+
+def test_production_dataref_validation_artifacts_require_dataref_evidence(tmp_path, monkeypatch) -> None:
+    from gpucall.cli import _git_commit, _production_dataref_live_validation_artifacts_by_tuple
+    from gpucall.config import load_config
+    from gpucall.execution.contracts import official_contract, official_contract_hash, tuple_evidence_key
+
+    monkeypatch.setenv("GPUCALL_STATE_DIR", str(tmp_path / "state"))
+    root = copy_config(tmp_path)
+    config = load_config(root)
+    tuple_spec = config.tuples["modal-vision-a10g"]
+    contract = official_contract(tuple_spec)
+    artifact_dir = tmp_path / "state" / "tuple-validation"
+    artifact_dir.mkdir(parents=True)
+    base_payload = {
+        "tuple": tuple_spec.name,
+        "recipe": "vision-image-standard",
+        "mode": "sync",
+        "started_at": "2026-01-01T00:00:00+00:00",
+        "ended_at": "2026-01-01T00:00:01+00:00",
+        "commit": _git_commit(),
+        "config_hash": "policy-only-drift",
+        "governance_hash": "c" * 64,
+        "validation_schema_version": 1,
+        "passed": True,
+        "cleanup": {"required": False, "completed": None},
+        "cost": {"observed": None, "estimated": None},
+        "audit": {"event_ids": []},
+        "official_contract": contract,
+        "official_contract_hash": official_contract_hash(contract),
+    }
+    (artifact_dir / "inline-only.json").write_text(json.dumps(base_payload), encoding="utf-8")
+    assert _production_dataref_live_validation_artifacts_by_tuple(config, config_dir=root) == {}
+
+    dataref_payload = {
+        **base_payload,
+        "dataref_evidence": {
+            "input_ref_count": 1,
+            "input_ref_content_types": ["image/png"],
+            "object_store_dataref_used": True,
+            "gateway_presigned_input_refs": True,
+        },
+    }
+    (artifact_dir / "dataref.json").write_text(json.dumps(dataref_payload), encoding="utf-8")
+
+    artifacts = _production_dataref_live_validation_artifacts_by_tuple(config, config_dir=root)
     assert tuple_evidence_key(tuple_spec) in artifacts
 
 

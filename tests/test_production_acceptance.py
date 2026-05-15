@@ -10,6 +10,8 @@ def test_production_acceptance_suite_passes() -> None:
 
     assert report["phase"] == "production_acceptance"
     assert report["passed"] is True
+    assert report["classification"]["code_static_acceptance_go"] is True
+    assert report["classification"]["production_traffic_go"] is False
     checks = {item["id"]: item for item in report["checks"]}
     assert {"F1", "F2/F6", "F3", "F4", "F5", "F7", "F8", "F9", "F10", "F12", "F13", "F14"} <= set(checks)
     assert checks["F1"]["details"]["transform"] == "semantic_to_worker_wire_contract"

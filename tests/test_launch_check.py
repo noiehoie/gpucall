@@ -14,6 +14,10 @@ def test_launch_check_summary_default(tmp_path, monkeypatch, capsys):
         "config_dir": str(config_dir),
         "state_dir": str(tmp_path / "state"),
         "checks": {"launch_profile": "production", "launch_gates": {"config_valid": True}},
+        "release_gates": {
+            "code_static_status": "GO",
+            "production_traffic_status": "GO",
+        },
         "tuple_live_validation": {"required_tuples": [], "missing_tuples": [], "gateway_live_tuples": []},
         "blockers": [],
     }
@@ -25,6 +29,8 @@ def test_launch_check_summary_default(tmp_path, monkeypatch, capsys):
     output = capsys.readouterr().out
     assert "gpucall launch-check: GO" in output
     assert "profile: production" in output
+    assert "Code/Static: GO" in output
+    assert "Production traffic: GO" in output
     assert "details_json:" in output
     assert '"checks":' not in output
     assert json.loads((tmp_path / "state" / "launch" / "launch-check.json").read_text(encoding="utf-8"))["go"] is True
@@ -60,6 +66,10 @@ def test_launch_check_output_json_keeps_summary_stdout(tmp_path, monkeypatch, ca
         "config_dir": str(config_dir),
         "state_dir": str(tmp_path / "state"),
         "checks": {"launch_profile": "production"},
+        "release_gates": {
+            "code_static_status": "GO",
+            "production_traffic_status": "NO-GO",
+        },
         "blockers": [{"check": "gateway_live_smoke", "url": None}],
     }
     monkeypatch.setattr("gpucall.cli.build_launch_report", lambda *args, **kwargs: report)
@@ -70,6 +80,8 @@ def test_launch_check_output_json_keeps_summary_stdout(tmp_path, monkeypatch, ca
 
     output = capsys.readouterr().out
     assert "gpucall launch-check: NO-GO" in output
+    assert "Code/Static: GO" in output
+    assert "Production traffic: NO-GO" in output
     assert f"details_json: {output_json}" in output
     assert "- gateway_live_smoke" in output
     assert json.loads(output_json.read_text(encoding="utf-8"))["blockers"][0]["check"] == "gateway_live_smoke"

@@ -1386,6 +1386,7 @@ def launch_check_command(
 
 def _launch_report_summary(report: dict[str, object], *, details_path: Path) -> str:
     checks = report.get("checks") if isinstance(report.get("checks"), dict) else {}
+    release_gates = report.get("release_gates") if isinstance(report.get("release_gates"), dict) else {}
     launch_gates = checks.get("launch_gates") if isinstance(checks.get("launch_gates"), dict) else {}
     tuple_live_validation = report.get("tuple_live_validation") if isinstance(report.get("tuple_live_validation"), dict) else {}
     blockers = report.get("blockers") if isinstance(report.get("blockers"), list) else []
@@ -1396,6 +1397,8 @@ def _launch_report_summary(report: dict[str, object], *, details_path: Path) -> 
     lines = [
         f"gpucall launch-check: {'GO' if report.get('go') is True else 'NO-GO'}",
         f"profile: {checks.get('launch_profile')}",
+        f"Code/Static: {release_gates.get('code_static_status')}",
+        f"Production traffic: {release_gates.get('production_traffic_status')}",
         f"config_dir: {report.get('config_dir')}",
         f"state_dir: {report.get('state_dir')}",
         f"details_json: {details_path}",
@@ -1441,6 +1444,9 @@ def release_check_command(config_dir: Path, output_dir: Path) -> None:
         "recipes": sorted(config.recipes),
         "tenants": sorted(config.tenants),
         "static_launch_go": launch_report["go"],
+        "code_static_go": launch_report.get("code_static_go"),
+        "production_traffic_go": launch_report.get("production_traffic_go"),
+        "release_gates": launch_report.get("release_gates"),
         "static_launch_blockers": launch_report["blockers"],
         "artifacts": {"openapi": str(openapi_path)},
     }
@@ -1542,16 +1548,17 @@ def build_launch_report(config_dir: Path, *, url: str | None = None, api_key: st
         blockers.append({"check": "cost_metadata", "tuples": incomplete_cost_metadata})
     if cleanup_audit.get("ok") is not True:
         blockers.append({"check": "cleanup_audit", "summary": cleanup_audit})
+    static_blockers = list(blockers)
     secrets = checks["secrets_present"]
     required_live_tuples = _required_live_validation_tuples(config)
     live_artifacts = _live_validation_artifacts_by_tuple(config, config_dir=config_dir)
+    production_dataref_artifacts = _production_dataref_live_validation_artifacts_by_tuple(config, config_dir=config_dir)
     capacity_unavailable_tuples = _capacity_unavailable_validation_tuples(config, config_dir=config_dir)
+    production_live_tuple_keys = set(production_dataref_artifacts) | set(gateway_live_tuples)
     missing_live_tuples = [
         item
         for item in required_live_tuples
-        if item["tuple_key"] not in live_artifacts
-        and item["tuple_key"] not in gateway_live_tuples
-        and item["tuple_key"] not in capacity_unavailable_tuples
+        if item["tuple_key"] not in production_live_tuple_keys
     ]
     production = profile == "production"
     checks["launch_gates"] = {
@@ -1561,33 +1568,49 @@ def build_launch_report(config_dir: Path, *, url: str | None = None, api_key: st
         "object_store_configured": config.object_store is not None and bool(secrets["object_store"]),
         "gateway_live_smoke_passed": bool(gateway_smoke and gateway_smoke.get("ok") is True),
         "tuple_live_validation_passed": not missing_live_tuples,
+        "tuple_live_validation_requires_dataref_evidence": production,
         "audit_chain_valid": checks["audit_chain_valid"],
     }
+    production_blockers: list[dict[str, object]] = []
     if production:
         if live_cost_findings:
-            blockers.append({"check": "tuple_live_cost_audit", "findings": live_cost_findings})
+            production_blockers.append({"check": "tuple_live_cost_audit", "findings": live_cost_findings})
         if not config.tenants:
-            blockers.append({"check": "tenant_governance", "configured": False})
+            production_blockers.append({"check": "tenant_governance", "configured": False})
         if not secrets["gateway_auth"]:
-            blockers.append({"check": "gateway_auth", "configured": False})
+            production_blockers.append({"check": "gateway_auth", "configured": False})
         if config.object_store is None or not secrets["object_store"]:
-            blockers.append({"check": "object_store", "configured": config.object_store is not None, "secrets": secrets["object_store"]})
+            production_blockers.append({"check": "object_store", "configured": config.object_store is not None, "secrets": secrets["object_store"]})
         if not url:
-            blockers.append({"check": "gateway_live_smoke", "url": None})
+            production_blockers.append({"check": "gateway_live_smoke", "url": None})
         elif not gateway_smoke or gateway_smoke.get("ok") is not True:
-            blockers.append({"check": "gateway_live_smoke", "passed": False, "summary": gateway_smoke})
+            production_blockers.append({"check": "gateway_live_smoke", "passed": False, "summary": gateway_smoke})
         elif gateway_smoke.get("auth_required") is not True:
-            blockers.append({"check": "gateway_auth_enforced", "auth_required": gateway_smoke.get("auth_required")})
+            production_blockers.append({"check": "gateway_auth_enforced", "auth_required": gateway_smoke.get("auth_required")})
         if missing_live_tuples:
-            blockers.append(
+            production_blockers.append(
                 {
                     "check": "tuple_live_validation",
                     "missing_tuples": missing_live_tuples,
                     "required_tuples": required_live_tuples,
+                    "accepted_artifact_keys": sorted(production_dataref_artifacts),
+                    "accepted_gateway_live_tuple_keys": gateway_live_tuples,
+                    "capacity_unavailable_tuples": capacity_unavailable_tuples,
+                    "requirement": "same production tuple live success with object-store/DataRef evidence",
                 }
             )
+        placeholder_tuples = [
+            name
+            for name, t in config.tuples.items()
+            if str(getattr(t, "adapter", "")).startswith("runpod")
+            and not has_configured_endpoint_or_target(getattr(t, "endpoint", None), getattr(t, "target", None))
+        ]
+        if placeholder_tuples:
+            production_blockers.append({"check": "real_endpoint_id_required", "tuples": placeholder_tuples})
         if tuple_validation_gaps:
-            blockers.append({"check": "tuple_validation", "recipes": tuple_validation_gaps})
+            production_blockers.append({"check": "tuple_validation", "recipes": tuple_validation_gaps})
+    blockers.extend(production_blockers)
+    release_gates = _launch_release_gates(profile=profile, static_blockers=static_blockers, production_blockers=production_blockers)
     report: dict[str, object] = {
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "config_dir": str(config_dir),
@@ -1604,11 +1627,38 @@ def build_launch_report(config_dir: Path, *, url: str | None = None, api_key: st
             "gateway_live_tuples": gateway_live_tuples,
             "capacity_unavailable_tuples": capacity_unavailable_tuples,
             "artifacts_by_tuple": live_artifacts,
+            "production_dataref_artifacts_by_tuple": production_dataref_artifacts,
         },
+        "release_gates": release_gates,
+        "code_static_go": release_gates["code_static_go"],
+        "production_traffic_go": release_gates["production_traffic_go"],
+        "static_blockers": static_blockers,
+        "production_blockers": production_blockers,
         "blockers": blockers,
-        "go": not blockers,
+        "go": release_gates["profile_go"],
     }
     return report
+
+
+def _launch_release_gates(
+    *,
+    profile: str,
+    static_blockers: list[dict[str, object]],
+    production_blockers: list[dict[str, object]],
+) -> dict[str, object]:
+    code_static_go = not static_blockers
+    production_evaluated = profile == "production"
+    production_traffic_go = production_evaluated and code_static_go and not production_blockers
+    return {
+        "code_static_go": code_static_go,
+        "code_static_status": "GO" if code_static_go else "NO-GO",
+        "production_traffic_evaluated": production_evaluated,
+        "production_traffic_go": production_traffic_go,
+        "production_traffic_status": "GO" if production_traffic_go else "NO-GO" if production_evaluated else "NOT_EVALUATED",
+        "static_blocker_count": len(static_blockers),
+        "production_blocker_count": len(production_blockers),
+        "profile_go": code_static_go if not production_evaluated else production_traffic_go,
+    }
 
 
 def _tuple_audit_launch_summary(tuple_audit: dict[str, object]) -> dict[str, object]:
@@ -1915,6 +1965,13 @@ def _finish_provider_smoke_summary(
     summary["commit"] = _git_commit()
     summary["config_hash"] = _config_hash(config_dir)
     summary["governance_hash"] = getattr(plan, "attestations", {}).get("governance_hash")
+    input_refs = list(getattr(plan, "input_refs", []) or [])
+    summary["dataref_evidence"] = {
+        "input_ref_count": len(input_refs),
+        "input_ref_content_types": sorted({str(getattr(ref, "content_type", "") or "application/octet-stream") for ref in input_refs}),
+        "object_store_dataref_used": bool(input_refs),
+        "gateway_presigned_input_refs": bool(input_refs) and all(bool(getattr(ref, "gateway_presigned", False)) for ref in input_refs),
+    }
     if write_artifact:
         artifact_path = _write_live_validation_artifact(summary)
         summary["artifact_path"] = str(artifact_path)
@@ -2262,17 +2319,25 @@ def _live_validation_artifacts_by_tuple(config, config_dir: Path | None = None) 
     return artifacts
 
 
+def _production_dataref_live_validation_artifacts_by_tuple(config, config_dir: Path | None = None) -> dict[str, object]:
+    artifacts = _live_validation_artifacts_by_tuple(config, config_dir=config_dir)
+    return {
+        key: artifact
+        for key, artifact in artifacts.items()
+        if isinstance(artifact, dict)
+        and isinstance(artifact.get("data"), dict)
+        and _live_validation_artifact_has_dataref_evidence(artifact["data"])
+    }
+
+
 def _gateway_smoke_live_tuples(gateway_smoke: dict[str, object] | None, config) -> list[str]:
     if not isinstance(gateway_smoke, dict) or gateway_smoke.get("ok") is not True:
         return []
+    object_store_smoke = gateway_smoke.get("object_store_smoke")
+    if not isinstance(object_store_smoke, dict) or object_store_smoke.get("uploaded") is not True:
+        return []
     providers_by_name = config.tuples
     tuple_keys: set[str] = set()
-    sync = gateway_smoke.get("sync")
-    if isinstance(sync, dict):
-        tuple_name = sync.get("selected_tuple")
-        tuple = providers_by_name.get(str(tuple_name or ""))
-        if tuple is not None and sync.get("output_non_empty") is True:
-            tuple_keys.add(tuple_evidence_key(tuple))
     vision = gateway_smoke.get("vision")
     if isinstance(vision, dict) and vision.get("ok") is True:
         body = vision.get("body")
@@ -2282,6 +2347,17 @@ def _gateway_smoke_live_tuples(gateway_smoke: dict[str, object] | None, config) 
         if tuple is not None:
             tuple_keys.add(tuple_evidence_key(tuple))
     return sorted(tuple_keys)
+
+
+def _live_validation_artifact_has_dataref_evidence(data: dict[str, object]) -> bool:
+    evidence = data.get("dataref_evidence")
+    if not isinstance(evidence, dict):
+        return False
+    try:
+        input_ref_count = int(evidence.get("input_ref_count") or 0)
+    except (TypeError, ValueError):
+        return False
+    return input_ref_count > 0 and evidence.get("object_store_dataref_used") is True
 
 
 def _capacity_unavailable_validation_tuples(config, config_dir: Path | None = None) -> list[str]:
