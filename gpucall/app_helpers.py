@@ -428,28 +428,44 @@ async def idempotency_execution_lock(
 
 def idempotency_lookup(
     request: TaskRequest,
-    cache: SQLiteIdempotencyStore,
+    cache: SQLiteIdempotencyStore | PostgresIdempotencyStore,
     *,
     request_hash: str,
     identity: str,
     ttl_seconds: float,
     max_entries: int,
-):
+) -> tuple[int, dict[str, Any], dict[str, str]] | str | None:
     if not request.idempotency_key:
         return None
     key = idempotency_cache_key(request, identity)
     cached = cache.get(key, ttl_seconds=ttl_seconds, max_entries=max_entries)
     if cached is None:
         return None
-    cached_hash, status, content, headers = cached
+    cached_hash, status, content, headers, idempotency_status = cached
     if cached_hash != request_hash:
         raise HTTPException(status_code=409, detail="idempotency key reused with different request body")
+    if idempotency_status == "pending":
+        return "pending"
     return status, content, headers
+
+
+def idempotency_reserve(
+    request: TaskRequest,
+    cache: SQLiteIdempotencyStore | PostgresIdempotencyStore,
+    *,
+    request_hash: str,
+    identity: str,
+    max_entries: int,
+) -> bool:
+    if not request.idempotency_key:
+        return True
+    key = idempotency_cache_key(request, identity)
+    return cache.reserve(key, request_hash=request_hash, max_entries=max_entries)
 
 
 def idempotency_store(
     request: TaskRequest,
-    cache: SQLiteIdempotencyStore,
+    cache: SQLiteIdempotencyStore | PostgresIdempotencyStore,
     status: int,
     content: dict[str, Any],
     headers: dict[str, str],
@@ -467,6 +483,17 @@ def idempotency_store(
             headers=headers,
             max_entries=max_entries,
         )
+
+
+def idempotency_release(
+    request: TaskRequest,
+    cache: SQLiteIdempotencyStore | PostgresIdempotencyStore,
+    *,
+    request_hash: str,
+    identity: str,
+) -> None:
+    if request.idempotency_key and hasattr(cache, "release"):
+        cache.release(idempotency_cache_key(request, identity), request_hash=request_hash)
 
 
 def idempotency_cache_key(request: TaskRequest, identity: str) -> str:

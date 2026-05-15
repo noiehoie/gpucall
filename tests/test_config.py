@@ -7,6 +7,7 @@ import os
 import json
 import ast
 import re
+import time
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -14,7 +15,7 @@ import pytest
 import yaml
 
 from gpucall.config import ConfigError, load_config
-from gpucall.cli import _managed_endpoint_live_cost_audit, _provider_smoke_request
+from gpucall.cli import _bounded_live_tuple_catalog_findings, _managed_endpoint_live_cost_audit, _provider_smoke_request
 from gpucall.compiler import GovernanceCompiler, GovernanceError
 from gpucall.domain import DataRef, ExecutionMode, ExecutionTupleSpec, InlineValue, ObjectStoreConfig, Recipe, SecurityTier, TaskRequest, recipe_requirements
 from gpucall.registry import ObservedRegistry
@@ -26,6 +27,14 @@ def copy_config(tmp_path: Path) -> Path:
     root = tmp_path / "config"
     shutil.copytree(source, root)
     return root
+
+
+def enable_recipe_auto_select(root: Path, *recipe_names: str) -> None:
+    for recipe_name in recipe_names:
+        path = root / "recipes" / f"{recipe_name}.yml"
+        payload = yaml.safe_load(path.read_text(encoding="utf-8"))
+        payload["auto_select"] = True
+        path.write_text(yaml.safe_dump(payload, sort_keys=False), encoding="utf-8")
 
 
 def test_modal_config_targets_match_worker_app_and_functions() -> None:
@@ -114,7 +123,7 @@ def test_runpod_vllm_tuple_examples_include_official_worker_env() -> None:
 
 def test_live_cost_audit_ignores_placeholder_runpod_endpoint(monkeypatch: pytest.MonkeyPatch) -> None:
     def fake_http_json(url: str, *args: object, **kwargs: object) -> dict[str, object]:
-        if url == "https://rest.runpod.io/v1/endpoints":
+        if url == "https://rest.runpod.io/v1/endpoints?includeWorkers=true":
             return {"ok": True, "body": []}
         raise AssertionError("placeholder RunPod endpoint health must not be queried")
 
@@ -360,7 +369,9 @@ def test_standard_config_includes_verified_text_recipes(tmp_path) -> None:
 
 
 def test_standard_config_routes_news_sized_prompts_to_long_recipes(tmp_path) -> None:
-    config = load_config(copy_config(tmp_path))
+    root = copy_config(tmp_path)
+    enable_recipe_auto_select(root, "text-infer-large", "text-infer-exlarge", "text-infer-ultralong")
+    config = load_config(root)
     compiler = GovernanceCompiler(policy=config.policy, recipes=config.recipes, tuples=config.tuples, registry=ObservedRegistry())
 
     large_plan = compiler.compile(
@@ -384,9 +395,8 @@ def test_standard_config_routes_news_sized_prompts_to_long_recipes(tmp_path) -> 
     if is_configured_cidr(config.tuples["hyperstack-qwen-1m"].ssh_remote_cidr):
         assert large_plan.tuple_chain[0] == "hyperstack-qwen-1m"
     else:
-        assert large_plan.tuple_chain[0] == "modal-a100-qwen25-7b"
-        assert "modal-a100-qwen25-14b" in large_plan.tuple_chain
-        assert "modal-h200x4-qwen25-14b-1m" in large_plan.tuple_chain
+        assert config.tuples[large_plan.tuple_chain[0]].max_model_len >= recipe_requirements(config.recipes["text-infer-large"]).context_budget_tokens
+        assert "modal-b200x2-qwen25-14b-1m" in large_plan.tuple_chain
         assert "hyperstack-qwen-1m" not in large_plan.tuple_chain
     artifact = large_plan.attestations["compile_artifact"]
     assert artifact["selected_tuple"]["tuple"] == large_plan.tuple_chain[0]
@@ -394,7 +404,7 @@ def test_standard_config_routes_news_sized_prompts_to_long_recipes(tmp_path) -> 
     assert ultralong_plan.recipe_name == "text-infer-ultralong"
     assert ultralong_plan.tuple_chain[0] == "modal-b200x2-qwen25-14b-1m"
     assert "modal-b200x2-qwen25-14b-1m" in ultralong_plan.tuple_chain
-    assert "modal-h200x4-qwen25-14b-1m" in ultralong_plan.tuple_chain
+    assert config.tuples[ultralong_plan.tuple_chain[0]].max_model_len >= recipe_requirements(config.recipes["text-infer-ultralong"]).context_budget_tokens
 
 
 def test_standard_config_rejects_sync_for_long_context_text(tmp_path) -> None:
@@ -482,7 +492,9 @@ model: deepseek-v4-flash
 
 
 def test_standard_config_transport_matrix_is_explicit(tmp_path) -> None:
-    config = load_config(copy_config(tmp_path))
+    root = copy_config(tmp_path)
+    enable_recipe_auto_select(root, "text-infer-standard", "text-infer-large", "text-infer-exlarge", "text-infer-ultralong")
+    config = load_config(root)
     compiler = GovernanceCompiler(policy=config.policy, recipes=config.recipes, tuples=config.tuples, registry=ObservedRegistry())
 
     cases = [
@@ -490,7 +502,7 @@ def test_standard_config_transport_matrix_is_explicit(tmp_path) -> None:
             "small inline text",
             TaskRequest(task="infer", mode=ExecutionMode.SYNC, inline_inputs={"prompt": {"kind": "text", "value": "hello"}}),
             "text-infer-light",
-            {"modal-a10g"},
+            {"local-author-ollama", "modal-t4-qwen25-0.5b"},
         ),
         (
             "standard text dataref",
@@ -500,7 +512,7 @@ def test_standard_config_transport_matrix_is_explicit(tmp_path) -> None:
                 input_refs=[DataRef(uri="s3://bucket/standard.txt", sha256="a" * 64, bytes=16000, content_type="text/plain")],
             ),
             "text-infer-standard",
-            {"modal-a10g"},
+            {"modal-l4-qwen25-1.5b", "modal-a10g-qwen25-7b"},
         ),
         (
             "large text dataref",
@@ -510,7 +522,7 @@ def test_standard_config_transport_matrix_is_explicit(tmp_path) -> None:
                 input_refs=[DataRef(uri="s3://bucket/large.txt", sha256="b" * 64, bytes=32000, content_type="text/plain")],
             ),
             "text-infer-large",
-            {"modal-h200x4-qwen25-14b-1m"},
+            {"modal-rtx-pro-6000-qwen25-7b", "modal-b200x2-qwen25-14b-1m"},
         ),
         (
             "image dataref",
@@ -520,7 +532,7 @@ def test_standard_config_transport_matrix_is_explicit(tmp_path) -> None:
                 input_refs=[DataRef(uri="s3://bucket/image.png", sha256="c" * 64, bytes=2_000_000, content_type="image/png")],
             ),
             "vision-image-standard",
-            {"modal-vision-a10g", "modal-h100-florence-2-large-ft"},
+            {"modal-vision-catalog-l4-microsoft-florence-2-large-ft", "modal-vision-catalog-a100-qwen2-5-vl-7b-instruct"},
         ),
     ]
 
@@ -548,11 +560,11 @@ def test_standard_config_routes_structured_vision_to_json_capable_model(tmp_path
     )
     plan = compiler.compile(request)
 
-    assert plan.tuple_chain[0] == "runpod-vllm-ampere48-qwen2-5-vl-7b-instruct"
+    assert plan.tuple_chain[0] == "modal-vision-catalog-l40s-qwen2-5-vl-3b-instruct"
+    assert "runpod-vllm-ampere48-qwen2-5-vl-7b-instruct" not in plan.tuple_chain
     assert "modal-vision-catalog-l40s-qwen2-5-vl-3b-instruct" in plan.tuple_chain
     assert "modal-vision-catalog-a100-qwen2-5-vl-3b-instruct" in plan.tuple_chain
     assert "modal-vision-catalog-a100-qwen2-5-vl-7b-instruct" in plan.tuple_chain
-    assert "modal-h100-qwen25-vl-7b" in plan.tuple_chain
     assert "modal-h100-florence-2-large-ft" not in plan.tuple_chain
 
     request = TaskRequest(
@@ -565,14 +577,14 @@ def test_standard_config_routes_structured_vision_to_json_capable_model(tmp_path
 
     plan = compiler.compile(request)
 
-    assert plan.tuple_chain[0] == "runpod-vllm-ampere48-qwen2-5-vl-7b-instruct"
+    assert plan.tuple_chain[0] == "modal-vision-catalog-l40s-qwen2-5-vl-7b-instruct"
     assert "modal-vision-catalog-l40s-qwen2-5-vl-7b-instruct" in plan.tuple_chain
     assert "modal-vision-catalog-a100-qwen2-5-vl-7b-instruct" in plan.tuple_chain
     assert "modal-vision-catalog-a100-qwen2-5-vl-32b-instruct" in plan.tuple_chain
-    assert "runpod-vllm-ampere48-qwen2-5-vl-7b-instruct" in plan.tuple_chain
-    assert "modal-h100-qwen25-vl-7b" in plan.tuple_chain
-    assert "modal-h100-qwen25-vl-32b" in plan.tuple_chain
-    assert "modal-h100-qwen25-vl-3b" not in plan.tuple_chain
+    assert "runpod-vllm-ampere48-qwen2-5-vl-7b-instruct" not in plan.tuple_chain
+    assert "modal-vision-catalog-h200-qwen2-5-vl-7b-instruct" in plan.tuple_chain
+    assert "modal-vision-catalog-h200-qwen2-5-vl-32b-instruct" in plan.tuple_chain
+    assert "modal-vision-catalog-h200-qwen2-5-vl-3b-instruct" not in plan.tuple_chain
     assert "modal-h100-florence-2-large-ft" not in plan.tuple_chain
 
 
@@ -593,9 +605,9 @@ def test_template_config_routes_structured_vision_to_json_capable_model() -> Non
     assert plan.tuple_chain[0] == "modal-vision-catalog-l40s-qwen2-5-vl-7b-instruct"
     assert "modal-vision-catalog-a100-qwen2-5-vl-7b-instruct" in plan.tuple_chain
     assert "modal-vision-catalog-a100-qwen2-5-vl-32b-instruct" in plan.tuple_chain
-    assert "modal-h100-qwen25-vl-7b" in plan.tuple_chain
-    assert "modal-h100-qwen25-vl-32b" in plan.tuple_chain
-    assert "modal-h100-qwen25-vl-3b" not in plan.tuple_chain
+    assert "modal-vision-catalog-h200-qwen2-5-vl-7b-instruct" in plan.tuple_chain
+    assert "modal-vision-catalog-h200-qwen2-5-vl-32b-instruct" in plan.tuple_chain
+    assert "modal-vision-catalog-h200-qwen2-5-vl-3b-instruct" not in plan.tuple_chain
     assert "modal-h100-florence-2-large-ft" not in plan.tuple_chain
 
 
@@ -979,7 +991,24 @@ def test_doctor_supports_live_tuple_catalog_flag_without_credentials(tmp_path) -
         capture_output=True,
         text=True,
         env=env,
+        timeout=10,
     )
 
     assert '"live_tuple_catalog"' in result.stdout
     assert '"ok": false' in result.stdout
+    assert "skipped bounded live lookup" in result.stdout
+
+
+def test_doctor_live_tuple_catalog_lookup_is_bounded(monkeypatch) -> None:
+    def slow_lookup(_tuples, _credentials):
+        time.sleep(1)
+        return []
+
+    monkeypatch.setenv("GPUCALL_LIVE_TUPLE_CATALOG_TIMEOUT_SECONDS", "0.01")
+    monkeypatch.setattr("gpucall.cli.live_tuple_catalog_findings", slow_lookup)
+
+    findings = _bounded_live_tuple_catalog_findings({}, {"runpod": {"api_key": "test"}})
+
+    assert findings
+    assert findings[0]["dimension"] == "live_tuple_catalog"
+    assert "timed out" in findings[0]["reason"]

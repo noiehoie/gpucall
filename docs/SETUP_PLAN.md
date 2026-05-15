@@ -73,7 +73,7 @@ recipe_automation:
 handoff_assets:
   onboarding_prompt_url: https://assets.example/gpucall/EXTERNAL_SYSTEM_ONBOARDING_PROMPT.md
   onboarding_manual_url: https://assets.example/gpucall/EXTERNAL_SYSTEM_ONBOARDING_MANUAL.md
-  caller_sdk_wheel_url: https://assets.example/gpucall/gpucall_sdk-2.0.8-py3-none-any.whl
+  caller_sdk_wheel_url: https://assets.example/gpucall/gpucall_sdk-2.0.16-py3-none-any.whl
 
 external_systems:
   - name: example-system
@@ -292,7 +292,7 @@ deployments can point handoff prompts at operator-hosted copies instead:
 handoff_assets:
   onboarding_prompt_url: https://assets.example/gpucall/EXTERNAL_SYSTEM_ONBOARDING_PROMPT.md
   onboarding_manual_url: https://assets.example/gpucall/EXTERNAL_SYSTEM_ONBOARDING_MANUAL.md
-  caller_sdk_wheel_url: https://assets.example/gpucall/gpucall_sdk-2.0.8-py3-none-any.whl
+  caller_sdk_wheel_url: https://assets.example/gpucall/gpucall_sdk-2.0.16-py3-none-any.whl
 ```
 
 `gpucall setup export-handoff-prompt` uses these values when present. This

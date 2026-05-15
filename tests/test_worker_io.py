@@ -28,7 +28,13 @@ def test_worker_fetches_gateway_presigned_https_data_ref_text(monkeypatch) -> No
         assert timeout >= 1
         return FakeResponse()
 
-    monkeypatch.setattr("gpucall.worker_contracts.io.urlopen", fake_urlopen)
+    class FakeOpener:
+        def open(self, request, timeout):
+            return fake_urlopen(request, timeout)
+
+    monkeypatch.setenv("GPUCALL_WORKER_DATAREF_ALLOWED_HOSTS", "objects.example")
+    monkeypatch.setattr("gpucall.worker_contracts.io.socket.getaddrinfo", lambda *args, **kwargs: [(None, None, None, None, ("93.184.216.34", 443))])
+    monkeypatch.setattr("gpucall.worker_contracts.io._get_pinned_opener", lambda pinned_ip, scheme: FakeOpener())
     payload = {
         "inline_inputs": {},
         "input_refs": [

@@ -4,7 +4,9 @@ import argparse
 import asyncio
 import hashlib
 import json
+import multiprocessing as mp
 import os
+import queue
 import re
 import secrets
 import shutil
@@ -477,12 +479,82 @@ def doctor_config(config_dir: Path, *, live_tuple_catalog: bool = False) -> None
         "secrets": _secret_presence_summary(creds),
     }
     if live_tuple_catalog:
-        catalog_findings = live_tuple_catalog_findings(config.tuples, creds)
+        if _credentials_empty(creds):
+            catalog_findings = [
+                {
+                    "severity": "error",
+                    "dimension": "credential",
+                    "reason": "live tuple catalog check requires provider credentials; skipped bounded live lookup",
+                }
+            ]
+        else:
+            catalog_findings = _bounded_live_tuple_catalog_findings(config.tuples, creds)
         checks["live_tuple_catalog"] = {
             "ok": not catalog_findings,
             "findings": catalog_findings,
         }
     print(json.dumps(checks, indent=2, sort_keys=True))
+
+
+def _credentials_empty(credentials: dict[str, dict[str, str]]) -> bool:
+    for provider in credentials.values():
+        for value in provider.values():
+            if str(value or "").strip():
+                return False
+    return True
+
+
+def _bounded_live_tuple_catalog_findings(tuples, credentials: dict[str, dict[str, str]]) -> list[dict[str, object]]:
+    timeout_seconds = _live_tuple_catalog_timeout_seconds()
+    if timeout_seconds <= 0:
+        return live_tuple_catalog_findings(tuples, credentials)
+
+    methods = mp.get_all_start_methods()
+    context = mp.get_context("fork" if "fork" in methods else methods[0])
+    result_queue = context.Queue(maxsize=1)
+    process = context.Process(target=_live_tuple_catalog_findings_worker, args=(tuples, credentials, result_queue))
+    process.start()
+    process.join(timeout_seconds)
+    if process.is_alive():
+        process.terminate()
+        process.join(2)
+        return [
+            {
+                "severity": "error",
+                "dimension": "live_tuple_catalog",
+                "reason": f"live tuple catalog check timed out after {timeout_seconds:g}s; skipped bounded live lookup",
+            }
+        ]
+    try:
+        payload = result_queue.get_nowait()
+    except queue.Empty:
+        payload = {"ok": False, "error": f"live tuple catalog worker exited with code {process.exitcode}"}
+    if payload.get("ok") is True:
+        findings = payload.get("findings")
+        return findings if isinstance(findings, list) else []
+    return [
+        {
+            "severity": "error",
+            "dimension": "live_tuple_catalog",
+            "reason": str(payload.get("error") or "live tuple catalog worker failed"),
+        }
+    ]
+
+
+def _live_tuple_catalog_findings_worker(tuples, credentials: dict[str, dict[str, str]], result_queue) -> None:
+    try:
+        result_queue.put({"ok": True, "findings": live_tuple_catalog_findings(tuples, credentials)})
+    except Exception as exc:
+        result_queue.put({"ok": False, "error": f"{type(exc).__name__}: {exc}"})
+
+
+def _live_tuple_catalog_timeout_seconds() -> float:
+    raw = os.getenv("GPUCALL_LIVE_TUPLE_CATALOG_TIMEOUT_SECONDS", "15")
+    try:
+        value = float(raw)
+    except ValueError:
+        return 15.0
+    return max(value, 0.0)
 
 
 def validate_config_command(config_dir: Path) -> None:

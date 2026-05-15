@@ -20,7 +20,25 @@ from gpucall_sdk import (
     GPUCallNoEligibleTupleError,
     GPUCallProviderRuntimeError,
 )
-from gpucall_sdk.client import DEFAULT_ASYNC_POLL_TIMEOUT_SECONDS, DEFAULT_AUTO_UPLOAD_THRESHOLD_BYTES
+from gpucall_sdk.client import DEFAULT_ASYNC_POLL_TIMEOUT_SECONDS, DEFAULT_AUTO_UPLOAD_THRESHOLD_BYTES, DEFAULT_REQUEST_TIMEOUT_SECONDS
+
+
+def test_default_and_per_request_timeouts_are_cold_start_safe() -> None:
+    seen_timeout = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal seen_timeout
+        seen_timeout = request.extensions["timeout"]
+        return httpx.Response(200, json={"result": {"kind": "inline", "value": "ok"}})
+
+    client = GPUCallClient("http://gpucall.test", transport=httpx.MockTransport(handler))
+
+    assert client.client.timeout.read >= 600
+    assert DEFAULT_REQUEST_TIMEOUT_SECONDS >= 600
+
+    client.infer(prompt="hello", request_timeout=900)
+
+    assert seen_timeout["read"] == 900
 
 
 def test_chat_completions_sends_no_recipe_or_provider() -> None:

@@ -220,7 +220,7 @@ route, and SDK/helper wheel URL before the migration agent starts.
 If the caller-side helper is not installed, install only the SDK helper wheel:
 
 ```bash
-uv tool install https://github.com/noiehoie/gpucall/releases/download/v2.0.8/gpucall_sdk-2.0.8-py3-none-any.whl
+uv tool install https://github.com/noiehoie/gpucall/releases/download/v2.0.16/gpucall_sdk-2.0.16-py3-none-any.whl
 gpucall-recipe-draft --help
 ```
 

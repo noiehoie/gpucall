@@ -4,6 +4,8 @@ import httpx
 import pytest
 import json
 import inspect
+import subprocess
+import sys
 
 from gpucall_sdk import (
     AsyncGPUCallClient,
@@ -19,7 +21,32 @@ from gpucall_sdk import (
     GPUCallNoRecipeError,
     GPUCallProviderRuntimeError,
 )
-from gpucall_sdk.client import DEFAULT_ASYNC_POLL_TIMEOUT_SECONDS, DEFAULT_AUTO_UPLOAD_THRESHOLD_BYTES
+from gpucall_sdk.client import DEFAULT_ASYNC_POLL_TIMEOUT_SECONDS, DEFAULT_AUTO_UPLOAD_THRESHOLD_BYTES, DEFAULT_REQUEST_TIMEOUT_SECONDS
+
+
+def test_python_sdk_import_smoke_from_source_tree() -> None:
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            (
+                "from gpucall_sdk import GPUCallClient, AsyncGPUCallClient; "
+                "from gpucall_sdk.client import DEFAULT_REQUEST_TIMEOUT_SECONDS; "
+                "print(GPUCallClient.__name__); "
+                "print(AsyncGPUCallClient.__name__); "
+                "print(DEFAULT_REQUEST_TIMEOUT_SECONDS)"
+            ),
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=10,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert "GPUCallClient" in result.stdout
+    assert "AsyncGPUCallClient" in result.stdout
+    assert "600.0" in result.stdout
 
 
 def test_python_sdk_uploads_file_and_sends_data_ref(tmp_path, monkeypatch) -> None:
@@ -119,6 +146,40 @@ def test_python_sdk_sends_intent_without_recipe_or_tuple() -> None:
     assert sent_payload["intent"] == "translate_text"
     assert "recipe" not in sent_payload
     assert "requested_tuple" not in sent_payload
+
+
+def test_python_sdk_sends_idempotency_key() -> None:
+    sent_payload = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal sent_payload
+        sent_payload = json.loads(request.read())
+        return httpx.Response(200, json={"result": {"kind": "inline", "value": "ok"}})
+
+    client = GPUCallClient("http://gpucall.test", transport=httpx.MockTransport(handler))
+
+    client.infer(prompt="hello", idempotency_key="canary-key")
+
+    assert sent_payload["idempotency_key"] == "canary-key"
+    assert sent_payload["task"] == "infer"
+
+
+def test_python_sdk_default_and_per_request_timeouts_are_cold_start_safe() -> None:
+    seen_timeout = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal seen_timeout
+        seen_timeout = request.extensions["timeout"]
+        return httpx.Response(200, json={"result": {"kind": "inline", "value": "ok"}})
+
+    client = GPUCallClient("http://gpucall.test", transport=httpx.MockTransport(handler))
+
+    assert client.client.timeout.read >= 600
+    assert DEFAULT_REQUEST_TIMEOUT_SECONDS >= 600
+
+    client.infer(prompt="hello", request_timeout=900)
+
+    assert seen_timeout["read"] == 900
 
 
 def test_python_sdk_chat_completions_create_returns_openai_like_shape() -> None:

@@ -1,0 +1,4 @@
+recipe_inbox_auto_materialize: false
+api_key_handoff_mode: manual
+api_key_bootstrap_allowed_cidrs: []
+api_key_bootstrap_allowed_hosts: []

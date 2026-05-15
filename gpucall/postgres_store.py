@@ -95,6 +95,7 @@ class PostgresIdempotencyStore:
     def __init__(self, dsn: str) -> None:
         import psycopg
 
+        self._dsn = dsn
         self._conn = psycopg.connect(dsn)
         self._lock = threading.RLock()
         self._init_schema()
@@ -107,15 +108,25 @@ class PostgresIdempotencyStore:
                   key TEXT PRIMARY KEY,
                   created_at DOUBLE PRECISION NOT NULL,
                   request_hash TEXT NOT NULL,
-                  status INTEGER NOT NULL,
-                  content JSONB NOT NULL,
-                  headers JSONB NOT NULL
+                  status INTEGER,
+                  content JSONB,
+                  headers JSONB,
+                  idempotency_status TEXT NOT NULL DEFAULT 'completed'
                 )
                 """
             )
-            cur.execute("ALTER TABLE gpucall_idempotency ADD COLUMN IF NOT EXISTS status INTEGER")
-            cur.execute("ALTER TABLE gpucall_idempotency ADD COLUMN IF NOT EXISTS content JSONB")
-            cur.execute("ALTER TABLE gpucall_idempotency ADD COLUMN IF NOT EXISTS headers JSONB")
+            cur.execute(
+                "ALTER TABLE gpucall_idempotency ADD COLUMN IF NOT EXISTS status INTEGER"
+            )
+            cur.execute(
+                "ALTER TABLE gpucall_idempotency ADD COLUMN IF NOT EXISTS content JSONB"
+            )
+            cur.execute(
+                "ALTER TABLE gpucall_idempotency ADD COLUMN IF NOT EXISTS headers JSONB"
+            )
+            cur.execute(
+                "ALTER TABLE gpucall_idempotency ADD COLUMN IF NOT EXISTS idempotency_status TEXT NOT NULL DEFAULT 'completed'"
+            )
             cur.execute(
                 """
                 SELECT column_name
@@ -124,54 +135,61 @@ class PostgresIdempotencyStore:
                 """
             )
             columns = {str(row[0]) for row in cur.fetchall()}
-            if {"status_code", "response_json", "headers_json"} & columns:
-                if "owner_identity" in columns:
-                    cur.execute("ALTER TABLE gpucall_idempotency ALTER COLUMN owner_identity DROP NOT NULL")
-                if "status_code" in columns:
-                    cur.execute("ALTER TABLE gpucall_idempotency ALTER COLUMN status_code DROP NOT NULL")
-                if "response_json" in columns:
-                    cur.execute("ALTER TABLE gpucall_idempotency ALTER COLUMN response_json DROP NOT NULL")
-                if "headers_json" in columns:
-                    cur.execute("ALTER TABLE gpucall_idempotency ALTER COLUMN headers_json DROP NOT NULL")
-                status_source = "status_code" if "status_code" in columns else "status"
-                content_source = "response_json" if "response_json" in columns else "content"
-                headers_source = "headers_json" if "headers_json" in columns else "headers"
-                cur.execute(
-                    f"""
-                    UPDATE gpucall_idempotency
-                    SET
-                      status = COALESCE(status, {status_source}),
-                      content = COALESCE(content, {content_source}),
-                      headers = COALESCE(headers, {headers_source}, '{{}}'::jsonb)
-                    WHERE status IS NULL OR content IS NULL OR headers IS NULL
-                    """
-                )
-            cur.execute("ALTER TABLE gpucall_idempotency ALTER COLUMN headers SET DEFAULT '{}'::jsonb")
-            cur.execute("ALTER TABLE gpucall_idempotency ALTER COLUMN status SET NOT NULL")
-            cur.execute("ALTER TABLE gpucall_idempotency ALTER COLUMN content SET NOT NULL")
-            cur.execute("ALTER TABLE gpucall_idempotency ALTER COLUMN headers SET NOT NULL")
+            if "status_code" in columns:
+                cur.execute("UPDATE gpucall_idempotency SET status = status_code WHERE status IS NULL")
+            if "response_json" in columns:
+                cur.execute("UPDATE gpucall_idempotency SET content = response_json WHERE content IS NULL")
+            if "headers_json" in columns:
+                cur.execute("UPDATE gpucall_idempotency SET headers = headers_json WHERE headers IS NULL")
+            # Ensure status, content, headers are nullable for pending state
+            cur.execute("ALTER TABLE gpucall_idempotency ALTER COLUMN status DROP NOT NULL")
+            cur.execute("ALTER TABLE gpucall_idempotency ALTER COLUMN content DROP NOT NULL")
+            cur.execute("ALTER TABLE gpucall_idempotency ALTER COLUMN headers DROP NOT NULL")
+
             cur.execute("CREATE INDEX IF NOT EXISTS gpucall_idempotency_created_at_idx ON gpucall_idempotency(created_at)")
         self._conn.commit()
 
-    def get(self, key: str, *, ttl_seconds: float, max_entries: int) -> tuple[str, int, dict[str, Any], dict[str, str]] | None:
+    def get(self, key: str, *, ttl_seconds: float, max_entries: int) -> tuple[str, int, dict[str, Any], dict[str, str], str] | None:
         with self._lock:
             now = time.time()
             self.prune(now, ttl_seconds=ttl_seconds, max_entries=max_entries)
             with self._conn.cursor() as cur:
                 cur.execute(
-                    "SELECT created_at, request_hash, status, content::text, headers::text FROM gpucall_idempotency WHERE key = %s",
+                    "SELECT created_at, request_hash, status, content::text, headers::text, idempotency_status FROM gpucall_idempotency WHERE key = %s",
                     (key,),
                 )
                 row = cur.fetchone()
             if row is None:
                 return None
-            created_at, request_hash, status, content, headers = row
+            created_at, request_hash, status, content, headers, idempotency_status = row
             if now - float(created_at) > ttl_seconds:
                 with self._conn.cursor() as cur:
                     cur.execute("DELETE FROM gpucall_idempotency WHERE key = %s", (key,))
                 self._conn.commit()
                 return None
-            return str(request_hash), int(status), json.loads(content), json.loads(headers)
+            return (
+                str(request_hash),
+                int(status) if status is not None else 0,
+                json.loads(content) if content else {},
+                json.loads(headers) if headers else {},
+                str(idempotency_status),
+            )
+
+    def reserve(self, key: str, *, request_hash: str, max_entries: int) -> bool:
+        with self._lock:
+            with self._conn.cursor() as cur:
+                cur.execute(
+                    """
+                    INSERT INTO gpucall_idempotency(key, created_at, request_hash, idempotency_status)
+                    VALUES (%s, %s, %s, 'pending')
+                    ON CONFLICT(key) DO NOTHING
+                    """,
+                    (key, time.time(), request_hash),
+                )
+                reserved = cur.rowcount == 1
+            self._conn.commit()
+            self.prune(time.time(), ttl_seconds=float("inf"), max_entries=max_entries)
+            return reserved
 
     def set(
         self,
@@ -185,16 +203,19 @@ class PostgresIdempotencyStore:
     ) -> None:
         with self._lock:
             with self._conn.cursor() as cur:
+                # Only update if it's currently 'pending' or doesn't exist
                 cur.execute(
                     """
-                    INSERT INTO gpucall_idempotency(key, created_at, request_hash, status, content, headers)
-                    VALUES (%s, %s, %s, %s, %s::jsonb, %s::jsonb)
+                    INSERT INTO gpucall_idempotency(key, created_at, request_hash, status, content, headers, idempotency_status)
+                    VALUES (%s, %s, %s, %s, %s::jsonb, %s::jsonb, 'completed')
                     ON CONFLICT(key) DO UPDATE SET
-                      created_at=excluded.created_at,
-                      request_hash=excluded.request_hash,
                       status=excluded.status,
                       content=excluded.content,
-                      headers=excluded.headers
+                      headers=excluded.headers,
+                      idempotency_status='completed',
+                      created_at=excluded.created_at
+                    WHERE gpucall_idempotency.idempotency_status = 'pending'
+                      AND gpucall_idempotency.request_hash = excluded.request_hash
                     """,
                     (
                         key,
@@ -207,6 +228,15 @@ class PostgresIdempotencyStore:
                 )
             self._conn.commit()
             self.prune(time.time(), ttl_seconds=float("inf"), max_entries=max_entries)
+
+    def release(self, key: str, *, request_hash: str) -> None:
+        with self._lock:
+            with self._conn.cursor() as cur:
+                cur.execute(
+                    "DELETE FROM gpucall_idempotency WHERE key = %s AND request_hash = %s AND idempotency_status = 'pending'",
+                    (key, request_hash),
+                )
+            self._conn.commit()
 
     def prune(self, now: float, *, ttl_seconds: float, max_entries: int) -> None:
         with self._lock:

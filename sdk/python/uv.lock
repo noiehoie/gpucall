@@ -35,7 +35,7 @@ wheels = [
 
 [[package]]
 name = "gpucall-sdk"
-version = "2.0.15"
+version = "2.0.16"
 source = { editable = "." }
 dependencies = [
     { name = "httpx" },

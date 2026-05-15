@@ -21,7 +21,7 @@ from gpucall_sdk import GPUCallClient
 Compatibility:
 
 ```text
-gpucall-sdk 2.0.8 -> gpucall Gateway 2.0.x
+gpucall-sdk 2.0.16 -> gpucall Gateway 2.0.x
 ```
 
 Runtime dependency:
@@ -38,7 +38,7 @@ uvicorn are intentionally not SDK dependencies.
 Example:
 
 ```bash
-uv tool install https://github.com/noiehoie/gpucall/releases/download/v2.0.8/gpucall_sdk-2.0.8-py3-none-any.whl
+uv tool install https://github.com/noiehoie/gpucall/releases/download/v2.0.16/gpucall_sdk-2.0.16-py3-none-any.whl
 ```
 
 Download and verify the release `SHA256SUMS` before wiring the wheel URL into
@@ -49,14 +49,14 @@ production automation.
 Example:
 
 ```bash
-uv add "gpucall-sdk @ file:///opt/gpucall/artifacts/sdk/python/gpucall_sdk-2.0.8-py3-none-any.whl"
+uv add "gpucall-sdk @ file:///opt/gpucall/artifacts/sdk/python/gpucall_sdk-2.0.16-py3-none-any.whl"
 ```
 
 For another host, copy the wheel first:
 
 ```bash
-scp gateway.example.internal:/opt/gpucall/artifacts/sdk/python/gpucall_sdk-2.0.8-py3-none-any.whl ./vendor/
-uv add "gpucall-sdk @ file://${PWD}/vendor/gpucall_sdk-2.0.8-py3-none-any.whl"
+scp gateway.example.internal:/opt/gpucall/artifacts/sdk/python/gpucall_sdk-2.0.16-py3-none-any.whl ./vendor/
+uv add "gpucall-sdk @ file://${PWD}/vendor/gpucall_sdk-2.0.16-py3-none-any.whl"
 ```
 
 ## Configure

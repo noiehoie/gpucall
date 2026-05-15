@@ -1,0 +1,24 @@
+version: '2026-04-30'
+inline_bytes_limit: 8192
+default_lease_ttl_seconds: 300
+max_lease_ttl_seconds: 3600
+max_timeout_seconds: 1800
+tokenizer_safety_multiplier: 1.25
+immutable_audit: true
+cost_policy:
+  max_estimated_cost_usd: null
+  max_cold_start_cost_usd: null
+  max_idle_cost_usd: null
+  require_budget_for_high_cost_tuple: true
+  high_cost_threshold_usd: 5.0
+  require_fresh_price_for_budget: true
+security:
+  restricted_requires:
+  - confidential_tee
+  - split_learning
+  confidential_allows_inline: true
+  require_data_ref_sha256: true
+tuples:
+  max_data_classification: confidential
+  allow: []
+  deny: []

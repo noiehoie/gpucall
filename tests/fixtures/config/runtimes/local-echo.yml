@@ -1,0 +1,31 @@
+name: local-echo
+kind: controlled_runtime
+runtime_boundary: gateway_host
+network_scope: localhost
+operator_controlled: true
+endpoint: null
+adapter: echo
+model: null
+max_model_len: 32768
+input_contracts:
+- text
+- chat_messages
+- data_refs
+max_data_classification: confidential
+trust_profile:
+  security_tier: local
+  sovereign_jurisdiction: local
+  dedicated_gpu: true
+  requires_attestation: false
+  supports_key_release: false
+  allows_worker_s3_credentials: false
+routing:
+  enabled: true
+  preference: prefer_when_eligible
+  allowed_tasks:
+  - infer
+  allowed_modes:
+  - sync
+  - async
+  - stream
+  require_validation_evidence: false

@@ -1,0 +1,20 @@
+name: local-echo
+account_ref: local
+adapter: echo
+execution_surface: local_runtime
+gpu: L4
+vram_gb: 24
+max_model_len: 32768
+cost_per_second: 0
+stock_state: configured
+max_data_classification: confidential
+trust_profile:
+  security_tier: local
+  sovereign_jurisdiction: local
+  dedicated_gpu: true
+  requires_attestation: false
+  supports_key_release: false
+  allows_worker_s3_credentials: false
+model_ref: local-echo-model
+engine_ref: local-echo-engine
+controlled_runtime_ref: local-echo

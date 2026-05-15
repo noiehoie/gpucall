@@ -1,0 +1,3 @@
+worker_ref: local-echo
+model_ref: local-echo-model
+engine_ref: local-echo-engine

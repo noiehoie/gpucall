@@ -20,6 +20,7 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse, PlainTextResponse, StreamingResponse
 from pydantic import BaseModel, Field
 
+from gpucall import __version__
 from gpucall.app_helpers import (
     _allow_unauthenticated_gateway,
     _public_metrics_enabled,
@@ -37,6 +38,8 @@ from gpucall.app_helpers import (
     idempotency_execution_lock,
     idempotency_identity,
     idempotency_lookup,
+    idempotency_release,
+    idempotency_reserve,
     idempotency_request_hash,
     idempotency_store,
     metric_route_path,
@@ -54,7 +57,7 @@ from gpucall.app_helpers import (
     warning_headers,
     worker_readable_request,
 )
-from gpucall.artifacts import SQLiteArtifactRegistry
+from gpucall.artifacts import build_artifact_registry
 from gpucall.audit import AuditTrail
 from gpucall.compiler import GovernanceCompiler, GovernanceError
 from gpucall.config import ConfigError, default_config_dir, default_state_dir, load_config
@@ -81,7 +84,7 @@ from gpucall.tuple_catalog import live_tuple_catalog_evidence
 from gpucall.sqlite_store import SQLiteIdempotencyStore, SQLiteJobStore
 from gpucall.tenant import (
     TenantBudgetError,
-    TenantUsageLedger,
+    build_tenant_usage_ledger,
     enforce_tenant_budget,
     legacy_api_keys,
     tenant_for_api_key,
@@ -98,10 +101,10 @@ class Runtime(BaseModel):
     jobs: JobStore
     reaper: LeaseReaper
     reconciler: TupleReconciler
-    artifact_registry: SQLiteArtifactRegistry
+    artifact_registry: Any
     object_store: ObjectStore | None = None
     tenants: dict[str, TenantSpec] = {}
-    tenant_usage: TenantUsageLedger
+    tenant_usage: Any
     metrics: dict[str, Any] = {}
 
 
@@ -252,7 +255,8 @@ def build_runtime(config_dir: Path) -> Runtime:
             if evidence.get("status") == "blocked":
                 registry.mark_unavailable(tuple_name)
     audit = AuditTrail(state_dir / "audit" / "trail.jsonl")
-    artifact_registry = SQLiteArtifactRegistry(state_dir / "artifacts.db")
+    artifact_registry = build_artifact_registry(state_dir)
+    tenant_usage = build_tenant_usage_ledger(state_dir)
     object_store = ObjectStore(config.object_store) if config.object_store is not None else None
     jobs = _job_store(state_dir)
     adapters = build_adapters(tuples)
@@ -273,8 +277,8 @@ def build_runtime(config_dir: Path) -> Runtime:
         tuple_costs={name: float(tuple.cost_per_second) for name, tuple in tuples.items()},
         artifact_registry=artifact_registry,
         admission=admission,
-        on_async_success=lambda plan: TenantUsageLedger(state_dir / "tenant_usage.db").commit_plan(plan.plan_id),
-        on_async_terminal_failure=lambda plan: TenantUsageLedger(state_dir / "tenant_usage.db").release_plan(plan.plan_id),
+        on_async_success=lambda plan: tenant_usage.commit_plan(plan.plan_id),
+        on_async_terminal_failure=lambda plan: tenant_usage.release_plan(plan.plan_id),
     )
     reaper = LeaseReaper(jobs=jobs, audit=audit, cancel_job=dispatcher.cancel_job)
     reconciler = TupleReconciler(adapters=adapters, audit=audit)
@@ -287,17 +291,20 @@ def build_runtime(config_dir: Path) -> Runtime:
         artifact_registry=artifact_registry,
         object_store=object_store,
         tenants=config.tenants,
-        tenant_usage=TenantUsageLedger(state_dir / "tenant_usage.db"),
+        tenant_usage=tenant_usage,
         metrics={"requests": {}, "latency_ms": []},
     )
 
 
 def create_app(config_dir: Path | None = None) -> FastAPI:
     root = config_dir or default_config_dir()
+    idempotency_cache = None
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
+        nonlocal idempotency_cache
         try:
+            idempotency_cache = _idempotency_store(default_state_dir())
             runtime = build_runtime(root)
         except ConfigError as exc:
             raise RuntimeError(str(exc)) from exc
@@ -316,11 +323,12 @@ def create_app(config_dir: Path | None = None) -> FastAPI:
             close_admission = getattr(runtime.dispatcher.admission, "close", None)
             if callable(close_admission):
                 close_admission()
-            idempotency_cache.close()
+            if idempotency_cache is not None:
+                idempotency_cache.close()
+                idempotency_cache = None
 
-    app = FastAPI(title="gpucall v2.0", version="2.0.1", lifespan=lifespan)
+    app = FastAPI(title="gpucall v2.0", version=__version__, lifespan=lifespan)
     max_request_bytes = int(os.getenv("GPUCALL_MAX_REQUEST_BYTES", "1048576"))
-    idempotency_cache = _idempotency_store(default_state_dir())
     idempotency_locks: dict[str, asyncio.Lock] = {}
     idempotency_locks_guard = asyncio.Lock()
     rate_limit: dict[str, list[float]] = {}
@@ -329,6 +337,11 @@ def create_app(config_dir: Path | None = None) -> FastAPI:
     idempotency_ttl_seconds = float(os.getenv("GPUCALL_IDEMPOTENCY_TTL_SECONDS", "3600"))
     idempotency_cache_max = int(os.getenv("GPUCALL_IDEMPOTENCY_CACHE_MAX", "10000"))
     rate_limit_identity_max = int(os.getenv("GPUCALL_RATE_LIMIT_IDENTITY_MAX", "10000"))
+
+    def current_idempotency_cache():
+        if idempotency_cache is None:
+            raise RuntimeError("idempotency store is not initialized")
+        return idempotency_cache
 
     @app.exception_handler(RequestValidationError)
     async def sanitized_validation_error(request: Request, exc: RequestValidationError) -> JSONResponse:
@@ -598,11 +611,16 @@ def create_app(config_dir: Path | None = None) -> FastAPI:
         if request.mode is not ExecutionMode.SYNC:
             raise HTTPException(status_code=400, detail="use /v2/tasks/sync with mode=sync")
         plan = None
+        idempotency_reserved = False
+        idempotency_identity_value = None
+        idempotency_hash_value = None
         try:
             enforce_gateway_owned_routing(request)
             plan = runtime.compiler.compile(request)
             caller_identity = idempotency_identity(http_request)
             caller_request_hash = idempotency_request_hash(request)
+            idempotency_identity_value = caller_identity
+            idempotency_hash_value = caller_request_hash
             async with idempotency_execution_lock(
                 idempotency_locks,
                 idempotency_locks_guard,
@@ -610,14 +628,27 @@ def create_app(config_dir: Path | None = None) -> FastAPI:
             ):
                 cached = idempotency_lookup(
                     request,
-                    idempotency_cache,
+                    current_idempotency_cache(),
                     request_hash=caller_request_hash,
                     identity=caller_identity,
                     ttl_seconds=idempotency_ttl_seconds,
                     max_entries=idempotency_cache_max,
                 )
-                if cached is not None:
+                if isinstance(cached, tuple):
                     return JSONResponse(status_code=cached[0], content=cached[1], headers=cached[2])
+                if cached == "pending":
+                    return JSONResponse(status_code=409, content={"detail": "idempotency key is already being processed"})
+
+                if not idempotency_reserve(
+                    request,
+                    current_idempotency_cache(),
+                    request_hash=caller_request_hash,
+                    identity=caller_identity,
+                    max_entries=idempotency_cache_max,
+                ):
+                    return JSONResponse(status_code=409, content={"detail": "idempotency key is already being processed"})
+                idempotency_reserved = bool(request.idempotency_key)
+
                 await enforce_request_budget(runtime, http_request, plan)
                 tenant_prefix = object_tenant_prefix(runtime, http_request) if request_needs_worker_object_access(request) else None
                 request = worker_readable_request(request, runtime, tenant_prefix=tenant_prefix)
@@ -632,7 +663,7 @@ def create_app(config_dir: Path | None = None) -> FastAPI:
                 }
                 idempotency_store(
                     request,
-                    idempotency_cache,
+                    current_idempotency_cache(),
                     200,
                     content,
                     headers,
@@ -642,17 +673,29 @@ def create_app(config_dir: Path | None = None) -> FastAPI:
                 )
             return JSONResponse(status_code=200, content=content, headers=tenant_headers(headers, http_request))
         except GovernanceError as exc:
+            if idempotency_reserved and idempotency_identity_value and idempotency_hash_value:
+                idempotency_release(request, current_idempotency_cache(), request_hash=idempotency_hash_value, identity=idempotency_identity_value)
             record_error_code(runtime, exc.code)
             return governance_error_response(exc, request=request)
         except ValueError as exc:
+            if idempotency_reserved and idempotency_identity_value and idempotency_hash_value:
+                idempotency_release(request, current_idempotency_cache(), request_hash=idempotency_hash_value, identity=idempotency_identity_value)
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         except TupleError as exc:
             refund_request_budget(runtime, plan)
+            if idempotency_reserved and idempotency_identity_value and idempotency_hash_value:
+                idempotency_release(request, current_idempotency_cache(), request_hash=idempotency_hash_value, identity=idempotency_identity_value)
             record_error_code(runtime, exc.code or "TUPLE_ERROR")
             return tuple_error_response(exc, request=request)
         except TenantBudgetError as exc:
+            if idempotency_reserved and idempotency_identity_value and idempotency_hash_value:
+                idempotency_release(request, current_idempotency_cache(), request_hash=idempotency_hash_value, identity=idempotency_identity_value)
             record_error_code(runtime, exc.code)
             return tenant_budget_error_response(exc, request=request)
+        except Exception:
+            if idempotency_reserved and idempotency_identity_value and idempotency_hash_value:
+                idempotency_release(request, current_idempotency_cache(), request_hash=idempotency_hash_value, identity=idempotency_identity_value)
+            raise
 
     @app.post("/v1/chat/completions", response_model=None)
     async def openai_chat_completions(
@@ -766,6 +809,8 @@ def create_app(config_dir: Path | None = None) -> FastAPI:
             plan = runtime.compiler.compile(request)
             owner_identity = idempotency_identity(http_request)
             caller_request_hash = idempotency_request_hash(request)
+            idempotency_identity_value = owner_identity
+            idempotency_hash_value = caller_request_hash
             async with idempotency_execution_lock(
                 idempotency_locks,
                 idempotency_locks_guard,
@@ -773,14 +818,27 @@ def create_app(config_dir: Path | None = None) -> FastAPI:
             ):
                 cached = idempotency_lookup(
                     request,
-                    idempotency_cache,
+                    current_idempotency_cache(),
                     request_hash=caller_request_hash,
                     identity=owner_identity,
                     ttl_seconds=idempotency_ttl_seconds,
                     max_entries=idempotency_cache_max,
                 )
-                if cached is not None:
+                if isinstance(cached, tuple):
                     return JSONResponse(status_code=cached[0], content=cached[1], headers=cached[2])
+                if cached == "pending":
+                    return JSONResponse(status_code=409, content={"detail": "idempotency key is already being processed"})
+
+                if not idempotency_reserve(
+                    request,
+                    current_idempotency_cache(),
+                    request_hash=caller_request_hash,
+                    identity=owner_identity,
+                    max_entries=idempotency_cache_max,
+                ):
+                    return JSONResponse(status_code=409, content={"detail": "idempotency key is already being processed"})
+                idempotency_reserved = bool(request.idempotency_key)
+
                 await enforce_request_budget(runtime, http_request, plan)
                 tenant_prefix = object_tenant_prefix(runtime, http_request) if request_needs_worker_object_access(request) else None
                 request = worker_readable_request(request, runtime, tenant_prefix=tenant_prefix)
@@ -795,7 +853,7 @@ def create_app(config_dir: Path | None = None) -> FastAPI:
                 }
                 idempotency_store(
                     request,
-                    idempotency_cache,
+                    current_idempotency_cache(),
                     202,
                     content,
                     headers,
@@ -809,17 +867,29 @@ def create_app(config_dir: Path | None = None) -> FastAPI:
                 headers=tenant_headers(headers, http_request),
             )
         except GovernanceError as exc:
+            if idempotency_reserved and idempotency_identity_value and idempotency_hash_value:
+                idempotency_release(request, current_idempotency_cache(), request_hash=idempotency_hash_value, identity=idempotency_identity_value)
             record_error_code(runtime, exc.code)
             return governance_error_response(exc, request=request)
         except ValueError as exc:
+            if idempotency_reserved and idempotency_identity_value and idempotency_hash_value:
+                idempotency_release(request, current_idempotency_cache(), request_hash=idempotency_hash_value, identity=idempotency_identity_value)
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         except TupleError as exc:
             refund_request_budget(runtime, plan)
+            if idempotency_reserved and idempotency_identity_value and idempotency_hash_value:
+                idempotency_release(request, current_idempotency_cache(), request_hash=idempotency_hash_value, identity=idempotency_identity_value)
             record_error_code(runtime, exc.code or "TUPLE_ERROR")
             return tuple_error_response(exc, request=request)
         except TenantBudgetError as exc:
+            if idempotency_reserved and idempotency_identity_value and idempotency_hash_value:
+                idempotency_release(request, current_idempotency_cache(), request_hash=idempotency_hash_value, identity=idempotency_identity_value)
             record_error_code(runtime, exc.code)
             return tenant_budget_error_response(exc, request=request)
+        except Exception:
+            if idempotency_reserved and idempotency_identity_value and idempotency_hash_value:
+                idempotency_release(request, current_idempotency_cache(), request_hash=idempotency_hash_value, identity=idempotency_identity_value)
+            raise
 
     @app.post("/v2/tasks/stream")
     async def task_stream(request: TaskRequest, http_request: Request, runtime: Runtime = Depends(runtime_dep)) -> StreamingResponse:
@@ -1047,4 +1117,14 @@ def _prom_label(value: str) -> str:
     return value.replace("\\", "\\\\").replace("\n", "\\n").replace('"', '\\"')
 
 
-app = create_app()
+class LazyASGIApp:
+    def __init__(self) -> None:
+        self._app: FastAPI | None = None
+
+    async def __call__(self, scope, receive, send) -> None:
+        if self._app is None:
+            self._app = create_app()
+        await self._app(scope, receive, send)
+
+
+app = LazyASGIApp()

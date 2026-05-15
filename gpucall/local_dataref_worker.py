@@ -1,8 +1,11 @@
 from __future__ import annotations
 
 import hashlib
+import ipaddress
 import os
+import socket
 from typing import Any
+from urllib.parse import urlparse
 
 import httpx
 from fastapi import FastAPI, Header, HTTPException
@@ -36,6 +39,7 @@ def create_app(
     configured_api_key = api_key if api_key is not None else os.environ.get("GPUCALL_LOCAL_OPENAI_API_KEY", "local")
     configured_worker_api_key = worker_api_key if worker_api_key is not None else os.environ.get("GPUCALL_LOCAL_DATAREF_WORKER_API_KEY", "")
     configured_max_dataref_bytes = max_dataref_bytes or int(os.environ.get("GPUCALL_LOCAL_DATAREF_MAX_BYTES", DEFAULT_MAX_DATAREF_BYTES))
+    dev_insecure = os.environ.get("GPUCALL_LOCAL_DATAREF_DEV_INSECURE", "").strip().lower() in {"1", "true", "yes", "on"}
 
     @app.get("/healthz")
     async def healthz() -> dict[str, str]:
@@ -43,6 +47,8 @@ def create_app(
 
     @app.post(DEFAULT_WORKER_PATH)
     async def chat(payload: dict[str, Any], authorization: str | None = Header(default=None)) -> dict[str, Any]:
+        if not configured_worker_api_key and not dev_insecure:
+            raise HTTPException(status_code=503, detail="local DataRef worker API key is not configured")
         if configured_worker_api_key and authorization != f"Bearer {configured_worker_api_key}":
             raise HTTPException(status_code=401, detail="unauthorized")
         try:
@@ -90,8 +96,10 @@ async def run_dataref_openai_request(
     except httpx.ConnectError as exc:
         raise TupleError("local OpenAI-compatible server is unavailable", retryable=True, status_code=503) from exc
     except httpx.HTTPStatusError as exc:
-        retryable = exc.response.status_code >= 500
-        raise TupleError(f"local OpenAI-compatible server failed: {exc.response.status_code}", retryable=retryable, status_code=502) from exc
+        status_code = exc.response.status_code
+        if status_code == 429:
+            raise TupleError("local OpenAI-compatible server rate limited", retryable=True, status_code=429) from exc
+        raise TupleError(f"local OpenAI-compatible server failed: {status_code}", retryable=status_code >= 500, status_code=502) from exc
     except httpx.TimeoutException as exc:
         raise TupleError("local OpenAI-compatible server timed out", retryable=True, status_code=504) from exc
 
@@ -108,21 +116,36 @@ async def _fetch_dataref_texts(
             if not isinstance(ref, dict):
                 raise TupleError("DataRef must be an object", retryable=False, status_code=400)
             uri = str(ref.get("uri") or "")
-            if not uri.startswith(("http://", "https://")):
-                raise TupleError("local DataRef worker requires HTTP(S) DataRef URI", retryable=False, status_code=400)
+            _validate_dataref_fetch_uri(uri, ref)
             declared_bytes = ref.get("bytes")
             if isinstance(declared_bytes, int) and declared_bytes > max_dataref_bytes:
                 raise TupleError("DataRef exceeds local worker byte limit", retryable=False, status_code=413)
             try:
-                response = await client.get(uri)
-                response.raise_for_status()
+                async with client.stream("GET", uri) as response:
+                    response.raise_for_status()
+                    if response.status_code != 200:
+                        raise httpx.HTTPStatusError(
+                            f"unexpected DataRef fetch status: {response.status_code}",
+                            request=response.request,
+                            response=response,
+                        )
+                    chunks: list[bytes] = []
+                    total = 0
+                    async for chunk in response.aiter_bytes():
+                        total += len(chunk)
+                        if total > max_dataref_bytes:
+                            raise TupleError("DataRef exceeds local worker byte limit", retryable=False, status_code=413)
+                        chunks.append(chunk)
             except httpx.HTTPStatusError as exc:
-                raise TupleError("DataRef fetch failed", retryable=exc.response.status_code >= 500, status_code=502) from exc
+                status_code = exc.response.status_code
+                if status_code == 429:
+                    raise TupleError("DataRef fetch rate limited", retryable=True, status_code=429) from exc
+                raise TupleError("DataRef fetch failed", retryable=status_code >= 500, status_code=502) from exc
             except httpx.TimeoutException as exc:
                 raise TupleError("DataRef fetch timed out", retryable=True, status_code=504) from exc
-            content = response.content
-            if len(content) > max_dataref_bytes:
-                raise TupleError("DataRef exceeds local worker byte limit", retryable=False, status_code=413)
+            except httpx.RequestError as exc:
+                raise TupleError("DataRef fetch request failed", retryable=True, status_code=502) from exc
+            content = b"".join(chunks)
             if isinstance(declared_bytes, int) and len(content) != declared_bytes:
                 raise TupleError("DataRef byte length mismatch", retryable=False, status_code=422)
             expected_sha = ref.get("sha256")
@@ -136,6 +159,49 @@ async def _fetch_dataref_texts(
             except UnicodeDecodeError as exc:
                 raise TupleError("DataRef is not valid UTF-8 text", retryable=False, status_code=415) from exc
     return texts
+
+
+def _validate_dataref_fetch_uri(uri: str, ref: dict[str, Any]) -> None:
+    parsed = urlparse(uri)
+    if parsed.scheme not in {"http", "https"}:
+        raise TupleError("local DataRef worker requires HTTP(S) DataRef URI", retryable=False, status_code=400)
+    if ref.get("gateway_presigned") is not True:
+        raise TupleError("local DataRef worker requires gateway-presigned DataRefs", retryable=False, status_code=400)
+    if parsed.username or parsed.password:
+        raise TupleError("DataRef URI must not contain userinfo", retryable=False, status_code=400)
+    if not parsed.hostname:
+        raise TupleError("DataRef URI must include a host", retryable=False, status_code=400)
+    allowed_hosts = {
+        item.strip().lower()
+        for item in os.environ.get("GPUCALL_LOCAL_DATAREF_ALLOWED_HOSTS", "").split(",")
+        if item.strip()
+    }
+    host = parsed.hostname.lower()
+    if not allowed_hosts:
+        raise TupleError("local DataRef worker requires GPUCALL_LOCAL_DATAREF_ALLOWED_HOSTS", retryable=False, status_code=400)
+    if host not in allowed_hosts:
+        raise TupleError("DataRef host is not in GPUCALL_LOCAL_DATAREF_ALLOWED_HOSTS", retryable=False, status_code=400)
+    try:
+        literal_ip = ipaddress.ip_address(host)
+    except ValueError:
+        literal_ip = None
+    if literal_ip is not None and (
+        literal_ip.is_private
+        or literal_ip.is_loopback
+        or literal_ip.is_link_local
+        or literal_ip.is_multicast
+        or literal_ip.is_reserved
+        or literal_ip.is_unspecified
+    ):
+        raise TupleError("DataRef host resolves to a non-public address", retryable=False, status_code=400)
+    try:
+        addresses = {item[4][0] for item in socket.getaddrinfo(host, parsed.port or (443 if parsed.scheme == "https" else 80), type=socket.SOCK_STREAM)}
+    except OSError as exc:
+        raise TupleError("DataRef host could not be resolved", retryable=True, status_code=502) from exc
+    for address in addresses:
+        ip = ipaddress.ip_address(address)
+        if ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_multicast or ip.is_reserved or ip.is_unspecified:
+            raise TupleError("DataRef host resolves to a non-public address", retryable=False, status_code=400)
 
 
 def _chat_payload(payload: dict[str, Any], *, model: str, dataref_texts: list[str]) -> dict[str, Any]:

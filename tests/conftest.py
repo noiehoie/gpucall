@@ -23,6 +23,8 @@ def isolate_process_environment(tmp_path, monkeypatch):
     monkeypatch.setenv("XDG_STATE_HOME", str(xdg_state))
     monkeypatch.setenv("GPUCALL_CREDENTIALS", str(credentials))
     monkeypatch.setenv("GPUCALL_ALLOW_UNAUTHENTICATED", "1")
+    monkeypatch.setenv("GPUCALL_TUPLE_CONCURRENCY_LIMIT", "100")
+    monkeypatch.setenv("GPUCALL_PROVIDER_FAMILY_CONCURRENCY_LIMIT", "100")
 
     for name in (
         "GPUCALL_API_KEY",
@@ -52,3 +54,5 @@ def isolate_process_environment(tmp_path, monkeypatch):
     ):
         monkeypatch.delenv(name, raising=False)
     monkeypatch.setenv("GPUCALL_ALLOW_UNAUTHENTICATED", "1")
+    monkeypatch.setenv("GPUCALL_TUPLE_CONCURRENCY_LIMIT", "100")
+    monkeypatch.setenv("GPUCALL_PROVIDER_FAMILY_CONCURRENCY_LIMIT", "100")

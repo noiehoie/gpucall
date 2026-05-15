@@ -73,6 +73,47 @@ class TenantUsageLedger:
                 (tenant_id, estimated_cost_usd, tuple, recipe, plan_id, datetime.now(timezone.utc).isoformat()),
             )
 
+    def reserve_with_budget(
+        self,
+        tenant_id: str,
+        estimated_cost_usd: float,
+        *,
+        tenant: TenantSpec | None,
+        tuple: str | None,
+        recipe: str | None,
+        plan_id: str | None,
+    ) -> None:
+        now = datetime.now(timezone.utc)
+        day_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
+        month_start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+        with self._connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            if tenant is not None:
+                if tenant.max_request_estimated_cost_usd is not None and estimated_cost_usd > float(tenant.max_request_estimated_cost_usd):
+                    raise TenantBudgetError(
+                        f"estimated request cost {estimated_cost_usd:.4f} exceeds tenant max_request_estimated_cost_usd "
+                        f"{float(tenant.max_request_estimated_cost_usd):.4f}"
+                    )
+                if tenant.daily_budget_usd is not None:
+                    projected = self._spend_since_conn(conn, tenant_id, day_start) + estimated_cost_usd
+                    if projected > float(tenant.daily_budget_usd):
+                        raise TenantBudgetError(
+                            f"tenant daily budget exceeded: projected {projected:.4f} > {float(tenant.daily_budget_usd):.4f}"
+                        )
+                if tenant.monthly_budget_usd is not None:
+                    projected = self._spend_since_conn(conn, tenant_id, month_start) + estimated_cost_usd
+                    if projected > float(tenant.monthly_budget_usd):
+                        raise TenantBudgetError(
+                            f"tenant monthly budget exceeded: projected {projected:.4f} > {float(tenant.monthly_budget_usd):.4f}"
+                        )
+            conn.execute(
+                """
+                INSERT INTO tenant_usage (tenant_id, estimated_cost_usd, tuple, recipe, plan_id, status, recorded_at)
+                VALUES (?, ?, ?, ?, ?, 'reserved', ?)
+                """,
+                (tenant_id, estimated_cost_usd, tuple, recipe, plan_id, now.isoformat()),
+            )
+
     def release_plan(self, plan_id: str | None) -> None:
         if not plan_id:
             return
@@ -87,10 +128,19 @@ class TenantUsageLedger:
 
     def spend_since(self, tenant_id: str, since: datetime) -> float:
         with self._connect() as conn:
-            row = conn.execute(
-                "SELECT COALESCE(SUM(estimated_cost_usd), 0) FROM tenant_usage WHERE tenant_id = ? AND recorded_at >= ? AND status IN ('reserved', 'committed')",
-                (tenant_id, since.isoformat()),
-            ).fetchone()
+            row = self._spend_since_row(conn, tenant_id, since)
+        return float(row[0] or 0)
+
+    @staticmethod
+    def _spend_since_row(conn: sqlite3.Connection, tenant_id: str, since: datetime):
+        return conn.execute(
+            "SELECT COALESCE(SUM(estimated_cost_usd), 0) FROM tenant_usage WHERE tenant_id = ? AND recorded_at >= ? AND status IN ('reserved', 'committed')",
+            (tenant_id, since.isoformat()),
+        ).fetchone()
+
+    @classmethod
+    def _spend_since_conn(cls, conn: sqlite3.Connection, tenant_id: str, since: datetime) -> float:
+        row = cls._spend_since_row(conn, tenant_id, since)
         return float(row[0] or 0)
 
     def summary(self, tenants: dict[str, TenantSpec]) -> dict[str, Any]:
@@ -106,6 +156,144 @@ class TenantUsageLedger:
                 "monthly_estimated_spend_usd": self.spend_since(name, month_start),
             }
         return rows
+
+
+class PostgresTenantUsageLedger:
+    def __init__(self, dsn: str) -> None:
+        import psycopg
+
+        self._conn = psycopg.connect(dsn)
+        self._init_schema()
+
+    def _init_schema(self) -> None:
+        with self._conn.cursor() as cur:
+            cur.execute(
+                """
+                CREATE TABLE IF NOT EXISTS gpucall_tenant_usage (
+                    id BIGSERIAL PRIMARY KEY,
+                    tenant_id TEXT NOT NULL,
+                    estimated_cost_usd DOUBLE PRECISION NOT NULL,
+                    tuple TEXT,
+                    recipe TEXT,
+                    plan_id TEXT,
+                    status TEXT NOT NULL DEFAULT 'reserved',
+                    recorded_at TIMESTAMPTZ NOT NULL
+                )
+                """
+            )
+            cur.execute("CREATE INDEX IF NOT EXISTS gpucall_tenant_usage_time_idx ON gpucall_tenant_usage(tenant_id, recorded_at)")
+            cur.execute("CREATE INDEX IF NOT EXISTS gpucall_tenant_usage_plan_idx ON gpucall_tenant_usage(plan_id)")
+        self._conn.commit()
+
+    def reserve(self, tenant_id: str, estimated_cost_usd: float, *, tuple: str | None, recipe: str | None, plan_id: str | None) -> None:
+        with self._conn.cursor() as cur:
+            cur.execute(
+                """
+                INSERT INTO gpucall_tenant_usage (tenant_id, estimated_cost_usd, tuple, recipe, plan_id, status, recorded_at)
+                VALUES (%s, %s, %s, %s, %s, 'reserved', %s)
+                """,
+                (tenant_id, estimated_cost_usd, tuple, recipe, plan_id, datetime.now(timezone.utc)),
+            )
+        self._conn.commit()
+
+    def reserve_with_budget(
+        self,
+        tenant_id: str,
+        estimated_cost_usd: float,
+        *,
+        tenant: TenantSpec | None,
+        tuple: str | None,
+        recipe: str | None,
+        plan_id: str | None,
+    ) -> None:
+        now = datetime.now(timezone.utc)
+        day_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
+        month_start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+        with self._conn.cursor() as cur:
+            lock_key = int(hashlib.sha256(tenant_id.encode("utf-8")).hexdigest()[:15], 16)
+            cur.execute("SELECT pg_advisory_xact_lock(%s)", (lock_key,))
+            if tenant is not None:
+                if tenant.max_request_estimated_cost_usd is not None and estimated_cost_usd > float(tenant.max_request_estimated_cost_usd):
+                    self._conn.rollback()
+                    raise TenantBudgetError(
+                        f"estimated request cost {estimated_cost_usd:.4f} exceeds tenant max_request_estimated_cost_usd "
+                        f"{float(tenant.max_request_estimated_cost_usd):.4f}"
+                    )
+                if tenant.daily_budget_usd is not None:
+                    projected = self._spend_since_cur(cur, tenant_id, day_start) + estimated_cost_usd
+                    if projected > float(tenant.daily_budget_usd):
+                        self._conn.rollback()
+                        raise TenantBudgetError(f"tenant daily budget exceeded: projected {projected:.4f} > {float(tenant.daily_budget_usd):.4f}")
+                if tenant.monthly_budget_usd is not None:
+                    projected = self._spend_since_cur(cur, tenant_id, month_start) + estimated_cost_usd
+                    if projected > float(tenant.monthly_budget_usd):
+                        self._conn.rollback()
+                        raise TenantBudgetError(
+                            f"tenant monthly budget exceeded: projected {projected:.4f} > {float(tenant.monthly_budget_usd):.4f}"
+                        )
+            cur.execute(
+                """
+                INSERT INTO gpucall_tenant_usage (tenant_id, estimated_cost_usd, tuple, recipe, plan_id, status, recorded_at)
+                VALUES (%s, %s, %s, %s, %s, 'reserved', %s)
+                """,
+                (tenant_id, estimated_cost_usd, tuple, recipe, plan_id, now),
+            )
+        self._conn.commit()
+
+    def release_plan(self, plan_id: str | None) -> None:
+        if not plan_id:
+            return
+        with self._conn.cursor() as cur:
+            cur.execute("UPDATE gpucall_tenant_usage SET status = 'released' WHERE plan_id = %s AND status = 'reserved'", (plan_id,))
+        self._conn.commit()
+
+    def commit_plan(self, plan_id: str | None) -> None:
+        if not plan_id:
+            return
+        with self._conn.cursor() as cur:
+            cur.execute("UPDATE gpucall_tenant_usage SET status = 'committed' WHERE plan_id = %s AND status = 'reserved'", (plan_id,))
+        self._conn.commit()
+
+    def spend_since(self, tenant_id: str, since: datetime) -> float:
+        with self._conn.cursor() as cur:
+            return self._spend_since_cur(cur, tenant_id, since)
+
+    @staticmethod
+    def _spend_since_cur(cur: Any, tenant_id: str, since: datetime) -> float:
+        cur.execute(
+            """
+            SELECT COALESCE(SUM(estimated_cost_usd), 0)
+            FROM gpucall_tenant_usage
+            WHERE tenant_id = %s AND recorded_at >= %s AND status IN ('reserved', 'committed')
+            """,
+            (tenant_id, since),
+        )
+        row = cur.fetchone()
+        return float(row[0] or 0)
+
+    def summary(self, tenants: dict[str, TenantSpec]) -> dict[str, Any]:
+        now = datetime.now(timezone.utc)
+        month_start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+        day_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
+        return {
+            name: {
+                "daily_budget_usd": tenant.daily_budget_usd,
+                "monthly_budget_usd": tenant.monthly_budget_usd,
+                "daily_estimated_spend_usd": self.spend_since(name, day_start),
+                "monthly_estimated_spend_usd": self.spend_since(name, month_start),
+            }
+            for name, tenant in sorted(tenants.items())
+        }
+
+    def close(self) -> None:
+        self._conn.close()
+
+
+def build_tenant_usage_ledger(state_dir: Path) -> TenantUsageLedger | PostgresTenantUsageLedger:
+    database_url = os.getenv("GPUCALL_DATABASE_URL") or os.getenv("DATABASE_URL")
+    if database_url and database_url.startswith(("postgres://", "postgresql://")):
+        return PostgresTenantUsageLedger(database_url)
+    return TenantUsageLedger(state_dir / "tenant_usage.db")
 
 
 def tenant_key_map() -> dict[str, str]:
@@ -158,26 +346,7 @@ def enforce_tenant_budget(
     plan_id: str | None,
 ) -> None:
     resolved = tenant_identity(tenant_id, None)
-    if tenant is not None:
-        if tenant.max_request_estimated_cost_usd is not None and estimated_cost_usd > float(tenant.max_request_estimated_cost_usd):
-            raise TenantBudgetError(
-                f"estimated request cost {estimated_cost_usd:.4f} exceeds tenant max_request_estimated_cost_usd "
-                f"{float(tenant.max_request_estimated_cost_usd):.4f}"
-            )
-        now = datetime.now(timezone.utc)
-        day_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
-        month_start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
-        if tenant.daily_budget_usd is not None:
-            projected = ledger.spend_since(resolved, day_start) + estimated_cost_usd
-            if projected > float(tenant.daily_budget_usd):
-                raise TenantBudgetError(f"tenant daily budget exceeded: projected {projected:.4f} > {float(tenant.daily_budget_usd):.4f}")
-        if tenant.monthly_budget_usd is not None:
-            projected = ledger.spend_since(resolved, month_start) + estimated_cost_usd
-            if projected > float(tenant.monthly_budget_usd):
-                raise TenantBudgetError(
-                    f"tenant monthly budget exceeded: projected {projected:.4f} > {float(tenant.monthly_budget_usd):.4f}"
-                )
-    ledger.reserve(resolved, estimated_cost_usd, tuple=tuple, recipe=recipe, plan_id=plan_id)
+    ledger.reserve_with_budget(resolved, estimated_cost_usd, tenant=tenant, tuple=tuple, recipe=recipe, plan_id=plan_id)
 
 
 def _tenant_key_sources() -> list[str]:

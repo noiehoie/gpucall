@@ -1,0 +1,19 @@
+name: local-echo-model
+provider_model_id: local-echo
+max_model_len: 32768
+min_vram_gb: 1
+supported_engines:
+- local-echo-engine
+input_contracts:
+- text
+- chat_messages
+- data_refs
+output_contracts:
+- json_object
+- json_schema
+- gpucall-tuple-result
+- plain-text
+supports_guided_decoding: true
+supports_streaming: true
+capabilities:
+- instruction_following

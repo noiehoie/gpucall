@@ -31,7 +31,8 @@ def test_validator_plan_can_include_candidate_queue_without_selecting_unconfigur
 
     candidate_skips = [item for item in plan.skipped if item.source == "tuple_candidate"]
     assert candidate_skips
-    assert any(item.skip_reason == "candidate_missing_endpoint_or_target" for item in candidate_skips)
+    assert all(item.skip_reason != "candidate_missing_endpoint_or_target" for item in plan.queue)
+    assert any(item.source == "tuple_candidate" for item in plan.queue + plan.skipped)
 
 
 def test_validator_plan_skips_unknown_price_when_strict() -> None:

@@ -1,0 +1,16 @@
+name: smoke-text-small
+task: infer
+intent: smoke_test
+allowed_modes:
+- sync
+- async
+auto_select: true
+timeout_seconds: 30
+lease_ttl_seconds: 120
+required_model_capabilities:
+- instruction_following
+data_classification: internal
+context_budget_tokens: 32768
+resource_class: smoke
+quality_floor: smoke
+output_contract: plain-text

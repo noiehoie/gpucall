@@ -20,6 +20,7 @@ from gpucall_sdk.openai_contract import (
 )
 
 DEFAULT_AUTO_UPLOAD_THRESHOLD_BYTES = 8 * 1024
+DEFAULT_REQUEST_TIMEOUT_SECONDS = 600.0
 DEFAULT_ASYNC_POLL_TIMEOUT_SECONDS = 600.0
 SUPPORTED_TASKS = {"infer", "vision", "transcribe", "convert", "train", "fine-tune", "split-infer"}
 TERMINAL_JOB_STATES = {
@@ -185,7 +186,7 @@ class GPUCallClient:
         base_url: str,
         *,
         api_key: str | None = None,
-        timeout: float = 300.0,
+        timeout: float | None = None,
         transport: httpx.BaseTransport | None = None,
         auto_upload_threshold_bytes: int = DEFAULT_AUTO_UPLOAD_THRESHOLD_BYTES,
         redact_http_logs: bool = True,
@@ -194,7 +195,12 @@ class GPUCallClient:
             _install_http_log_redaction()
         key = api_key if api_key is not None else os.getenv("GPUCALL_API_KEY")
         headers = {"authorization": f"Bearer {key}"} if key else {}
-        self.client = httpx.Client(base_url=base_url.rstrip("/"), timeout=timeout, headers=headers, transport=transport)
+        self.client = httpx.Client(
+            base_url=base_url.rstrip("/"),
+            timeout=DEFAULT_REQUEST_TIMEOUT_SECONDS if timeout is None else timeout,
+            headers=headers,
+            transport=transport,
+        )
         self.auto_upload_threshold_bytes = auto_upload_threshold_bytes
         self.chat = _ChatResource(self)
 
@@ -250,10 +256,12 @@ class GPUCallClient:
         intent: str | None = None,
         task_family: str | None = None,
         metadata: dict[str, Any] | None = None,
+        idempotency_key: str | None = None,
         auto_upload: bool = True,
         poll: bool = True,
         poll_interval: float = 1.0,
         poll_timeout: float = DEFAULT_ASYNC_POLL_TIMEOUT_SECONDS,
+        request_timeout: float | None = None,
     ) -> dict[str, Any]:
         payload = self._task_payload(
             task=task,
@@ -277,10 +285,14 @@ class GPUCallClient:
             intent=intent,
             task_family=task_family,
             metadata=metadata,
+            idempotency_key=idempotency_key,
             auto_upload=auto_upload,
         )
         try:
-            response = self.client.post(f"/v2/tasks/{mode}", json=payload)
+            request_kwargs: dict[str, Any] = {}
+            if request_timeout is not None:
+                request_kwargs["timeout"] = request_timeout
+            response = self.client.post(f"/v2/tasks/{mode}", json=payload, **request_kwargs)
         except httpx.TimeoutException as exc:
             raise GPUCallColdStartTimeout("gpucall request timed out; this may be normal cold-start latency and is not a provider circuit-breaker signal", original=exc) from exc
         self._emit_warnings(response)
@@ -299,9 +311,11 @@ class GPUCallClient:
         intent: str | None = None,
         task_family: str | None = None,
         metadata: dict[str, Any] | None = None,
+        idempotency_key: str | None = None,
         response_format: dict[str, Any] | None = None,
         poll: bool = True,
         poll_timeout: float = DEFAULT_ASYNC_POLL_TIMEOUT_SECONDS,
+        request_timeout: float | None = None,
     ) -> dict[str, Any]:
         return self.infer(
             prompt=prompt,
@@ -311,9 +325,11 @@ class GPUCallClient:
             intent=intent,
             task_family=task_family,
             metadata=metadata,
+            idempotency_key=idempotency_key,
             response_format=response_format,
             poll=poll,
             poll_timeout=poll_timeout,
+            request_timeout=request_timeout,
         )
 
     def stream(
@@ -376,6 +392,7 @@ class GPUCallClient:
         intent: str | None = None,
         task_family: str | None = None,
         metadata: dict[str, Any] | None = None,
+        idempotency_key: str | None = None,
         auto_upload: bool = True,
     ) -> dict[str, Any]:
         _validate_task(task)
@@ -393,6 +410,8 @@ class GPUCallClient:
             payload["intent"] = selected_intent
         if metadata:
             payload["metadata"] = {str(key): _metadata_value(value) for key, value in metadata.items() if value is not None}
+        if idempotency_key is not None:
+            payload["idempotency_key"] = str(idempotency_key)
         if messages is not None:
             payload["messages"] = _normalize_messages(messages)
         if response_format is not None:
@@ -439,7 +458,7 @@ class AsyncGPUCallClient:
         base_url: str,
         *,
         api_key: str | None = None,
-        timeout: float = 300.0,
+        timeout: float | None = None,
         transport: httpx.AsyncBaseTransport | None = None,
         auto_upload_threshold_bytes: int = DEFAULT_AUTO_UPLOAD_THRESHOLD_BYTES,
         redact_http_logs: bool = True,
@@ -448,7 +467,12 @@ class AsyncGPUCallClient:
             _install_http_log_redaction()
         key = api_key if api_key is not None else os.getenv("GPUCALL_API_KEY")
         headers = {"authorization": f"Bearer {key}"} if key else {}
-        self.client = httpx.AsyncClient(base_url=base_url.rstrip("/"), timeout=timeout, headers=headers, transport=transport)
+        self.client = httpx.AsyncClient(
+            base_url=base_url.rstrip("/"),
+            timeout=DEFAULT_REQUEST_TIMEOUT_SECONDS if timeout is None else timeout,
+            headers=headers,
+            transport=transport,
+        )
         self.auto_upload_threshold_bytes = auto_upload_threshold_bytes
         self.chat = _AsyncChatResource(self)
 
@@ -485,10 +509,12 @@ class AsyncGPUCallClient:
         intent: str | None = None,
         task_family: str | None = None,
         metadata: dict[str, Any] | None = None,
+        idempotency_key: str | None = None,
         auto_upload: bool = True,
         poll: bool = True,
         poll_interval: float = 1.0,
         poll_timeout: float = DEFAULT_ASYNC_POLL_TIMEOUT_SECONDS,
+        request_timeout: float | None = None,
     ) -> dict[str, Any]:
         payload = await self._task_payload(
             task=task,
@@ -512,10 +538,14 @@ class AsyncGPUCallClient:
             intent=intent,
             task_family=task_family,
             metadata=metadata,
+            idempotency_key=idempotency_key,
             auto_upload=auto_upload,
         )
         try:
-            response = await self.client.post(f"/v2/tasks/{mode}", json=payload)
+            request_kwargs: dict[str, Any] = {}
+            if request_timeout is not None:
+                request_kwargs["timeout"] = request_timeout
+            response = await self.client.post(f"/v2/tasks/{mode}", json=payload, **request_kwargs)
         except httpx.TimeoutException as exc:
             raise GPUCallColdStartTimeout("gpucall request timed out; this may be normal cold-start latency and is not a provider circuit-breaker signal", original=exc) from exc
         _emit_warnings(response)
@@ -534,9 +564,11 @@ class AsyncGPUCallClient:
         intent: str | None = None,
         task_family: str | None = None,
         metadata: dict[str, Any] | None = None,
+        idempotency_key: str | None = None,
         response_format: dict[str, Any] | None = None,
         poll: bool = True,
         poll_timeout: float = DEFAULT_ASYNC_POLL_TIMEOUT_SECONDS,
+        request_timeout: float | None = None,
     ) -> dict[str, Any]:
         return await self.infer(
             prompt=prompt,
@@ -546,9 +578,11 @@ class AsyncGPUCallClient:
             intent=intent,
             task_family=task_family,
             metadata=metadata,
+            idempotency_key=idempotency_key,
             response_format=response_format,
             poll=poll,
             poll_timeout=poll_timeout,
+            request_timeout=request_timeout,
         )
 
     async def stream(
@@ -631,6 +665,7 @@ class AsyncGPUCallClient:
         intent: str | None = None,
         task_family: str | None = None,
         metadata: dict[str, Any] | None = None,
+        idempotency_key: str | None = None,
         auto_upload: bool = True,
     ) -> dict[str, Any]:
         _validate_task(task)
@@ -648,6 +683,8 @@ class AsyncGPUCallClient:
             payload["intent"] = selected_intent
         if metadata:
             payload["metadata"] = {str(key): _metadata_value(value) for key, value in metadata.items() if value is not None}
+        if idempotency_key is not None:
+            payload["idempotency_key"] = str(idempotency_key)
         if messages is not None:
             payload["messages"] = _normalize_messages(messages)
         if response_format is not None:
@@ -696,6 +733,7 @@ class _ChatCompletionsResource:
         intent: str | None = None,
         task_family: str | None = None,
         metadata: dict[str, Any] | None = None,
+        idempotency_key: str | None = None,
         top_p: float | None = None,
         stop: str | list[str] | None = None,
         seed: int | None = None,
@@ -713,6 +751,7 @@ class _ChatCompletionsResource:
         parse_json: bool = False,
         poll_interval: float = 1.0,
         poll_timeout: float = DEFAULT_ASYNC_POLL_TIMEOUT_SECONDS,
+        request_timeout: float | None = None,
         **extra: Any,
     ) -> dict[str, Any]:
         _reject_extra_openai_fields(extra)
@@ -756,9 +795,11 @@ class _ChatCompletionsResource:
             intent=intent,
             task_family=task_family,
             metadata=request_metadata,
+            idempotency_key=idempotency_key,
             poll=True,
             poll_interval=poll_interval,
             poll_timeout=poll_timeout,
+            request_timeout=request_timeout,
         )
         value = _extract_result_text(result)
         tool_calls = _extract_tool_calls(result)
@@ -804,6 +845,7 @@ class _AsyncChatCompletionsResource:
         intent: str | None = None,
         task_family: str | None = None,
         metadata: dict[str, Any] | None = None,
+        idempotency_key: str | None = None,
         top_p: float | None = None,
         stop: str | list[str] | None = None,
         seed: int | None = None,
@@ -821,6 +863,7 @@ class _AsyncChatCompletionsResource:
         parse_json: bool = False,
         poll_interval: float = 1.0,
         poll_timeout: float = DEFAULT_ASYNC_POLL_TIMEOUT_SECONDS,
+        request_timeout: float | None = None,
         **extra: Any,
     ) -> dict[str, Any]:
         _reject_extra_openai_fields(extra)
@@ -864,9 +907,11 @@ class _AsyncChatCompletionsResource:
             intent=intent,
             task_family=task_family,
             metadata=request_metadata,
+            idempotency_key=idempotency_key,
             poll=True,
             poll_interval=poll_interval,
             poll_timeout=poll_timeout,
+            request_timeout=request_timeout,
         )
         value = _extract_result_text(result)
         tool_calls = _extract_tool_calls(result)

@@ -1,0 +1,17 @@
+name: text-infer-standard
+task: infer
+intent: standard_text_inference
+allowed_modes:
+- sync
+- async
+- stream
+auto_select: true
+timeout_seconds: 30
+lease_ttl_seconds: 120
+required_model_capabilities:
+- instruction_following
+data_classification: confidential
+context_budget_tokens: 32768
+resource_class: standard
+quality_floor: standard
+output_contract: plain-text

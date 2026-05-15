@@ -566,7 +566,9 @@ async def test_local_dataref_openai_worker_adapter_forwards_refs_without_derefer
 
 
 @pytest.mark.asyncio
-async def test_local_dataref_worker_fetches_validates_and_calls_openai() -> None:
+async def test_local_dataref_worker_fetches_validates_and_calls_openai(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("GPUCALL_LOCAL_DATAREF_ALLOWED_HOSTS", "objects.local")
+    monkeypatch.setattr("gpucall.local_dataref_worker.socket.getaddrinfo", lambda *args, **kwargs: [(None, None, None, None, ("93.184.216.34", 443))])
     content = b"long local document"
     content_sha = hashlib.sha256(content).hexdigest()
     captured: dict[str, object] = {}
@@ -590,7 +592,13 @@ async def test_local_dataref_worker_fetches_validates_and_calls_openai() -> None
     result = await run_dataref_openai_request(
         {
             "input_refs": [
-                {"uri": "https://objects.local/doc.txt", "sha256": content_sha, "bytes": len(content), "content_type": "text/plain"}
+                {
+                    "uri": "https://objects.local/doc.txt",
+                    "sha256": content_sha,
+                    "bytes": len(content),
+                    "content_type": "text/plain",
+                    "gateway_presigned": True,
+                }
             ],
             "inline_inputs": {"prompt": {"value": "summarize this", "content_type": "text/plain"}},
             "system_prompt": "Answer directly.",
@@ -618,7 +626,9 @@ async def test_local_dataref_worker_fetches_validates_and_calls_openai() -> None
 
 
 @pytest.mark.asyncio
-async def test_local_dataref_worker_rejects_sha_mismatch() -> None:
+async def test_local_dataref_worker_rejects_sha_mismatch(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("GPUCALL_LOCAL_DATAREF_ALLOWED_HOSTS", "objects.local")
+    monkeypatch.setattr("gpucall.local_dataref_worker.socket.getaddrinfo", lambda *args, **kwargs: [(None, None, None, None, ("93.184.216.34", 443))])
     def dataref_handler(request: httpx.Request) -> httpx.Response:
         return httpx.Response(200, content=b"tampered", headers={"content-type": "text/plain"})
 
@@ -626,7 +636,13 @@ async def test_local_dataref_worker_rejects_sha_mismatch() -> None:
         await run_dataref_openai_request(
             {
                 "input_refs": [
-                    {"uri": "https://objects.local/doc.txt", "sha256": "0" * 64, "bytes": 8, "content_type": "text/plain"}
+                    {
+                        "uri": "https://objects.local/doc.txt",
+                        "sha256": "0" * 64,
+                        "bytes": 8,
+                        "content_type": "text/plain",
+                        "gateway_presigned": True,
+                    }
                 ],
                 "inline_inputs": {},
             },

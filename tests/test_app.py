@@ -51,36 +51,16 @@ class TenantPrefixObjectStore:
             data_ref=DataRef(uri=f"s3://bucket/gpucall/tenants/{tenant_prefix}/object.txt", sha256=request.sha256, bytes=request.bytes),
         )
 
-
 def copy_config(tmp_path: Path) -> Path:
-    source = Path(__file__).resolve().parents[1] / "config"
+    source = Path(__file__).resolve().parent / "fixtures" / "config"
     root = tmp_path / "config"
+    root.mkdir(parents=True, exist_ok=True)
+    for subdir in ["tuples", "surfaces", "workers", "recipes", "models", "engines", "tenants", "accounts"]:
+        (root / subdir).mkdir(parents=True, exist_ok=True)
     for path in source.rglob("*.yml"):
         target = root / path.relative_to(source)
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_text(path.read_text(encoding="utf-8"), encoding="utf-8")
-    for provider_path in (root / "tuples").glob("*.yml"):
-        if provider_path.name != "local-echo.yml":
-            provider_path.unlink()
-    for split_dir in ("surfaces", "workers"):
-        for split_path in (root / split_dir).glob("*.yml"):
-            if split_path.name != "local-echo.yml":
-                split_path.unlink()
-    for recipe_path in (root / "recipes").glob("*.yml"):
-        if recipe_path.name not in {"smoke-text-small.yml", "text-infer-standard.yml"}:
-            recipe_path.unlink()
-    for recipe_name in ("text-infer-standard.yml",):
-        path = root / "recipes" / recipe_name
-        recipe = yaml.safe_load(path.read_text(encoding="utf-8"))
-        recipe["timeout_seconds"] = 30
-        recipe["lease_ttl_seconds"] = 120
-        path.write_text(yaml.safe_dump(recipe, sort_keys=False), encoding="utf-8")
-    for rel_path in ("models/local-echo-model.yml", "engines/local-echo-engine.yml"):
-        path = root / rel_path
-        payload = yaml.safe_load(path.read_text(encoding="utf-8"))
-        payload["output_contracts"] = sorted(set(payload.get("output_contracts") or []) | {"json_object", "json_schema"})
-        payload["supports_guided_decoding"] = True
-        path.write_text(yaml.safe_dump(payload, sort_keys=False), encoding="utf-8")
     return root
 
 
@@ -123,14 +103,26 @@ def test_database_url_selects_postgres_stores(monkeypatch, tmp_path) -> None:
             self.dsn = dsn
             self.tuples = tuples
 
+    class FakePostgresTenantUsageLedger:
+        def __init__(self, dsn):
+            self.dsn = dsn
+
+    class FakePostgresArtifactRegistry:
+        def __init__(self, dsn):
+            self.dsn = dsn
+
     monkeypatch.setattr(app_module, "PostgresJobStore", FakePostgresJobStore)
     monkeypatch.setattr(app_module, "PostgresIdempotencyStore", FakePostgresIdempotencyStore)
     monkeypatch.setattr(app_module, "PostgresAdmissionController", FakePostgresAdmissionController)
+    monkeypatch.setattr("gpucall.tenant.PostgresTenantUsageLedger", FakePostgresTenantUsageLedger)
+    monkeypatch.setattr("gpucall.artifacts.PostgresArtifactRegistry", FakePostgresArtifactRegistry)
     monkeypatch.setenv("GPUCALL_DATABASE_URL", "postgresql://user:pass@db/gpucall")
 
     assert app_module._job_store(tmp_path).dsn == "postgresql://user:pass@db/gpucall"
     assert app_module._idempotency_store(tmp_path).dsn == "postgresql://user:pass@db/gpucall"
     assert app_module._admission_controller({}).dsn == "postgresql://user:pass@db/gpucall"
+    assert app_module.build_tenant_usage_ledger(tmp_path).dsn == "postgresql://user:pass@db/gpucall"
+    assert app_module.build_artifact_registry(tmp_path).dsn == "postgresql://user:pass@db/gpucall"
 
 
 def test_sync_endpoint_auto_selects_recipe(tmp_path) -> None:

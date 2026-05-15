@@ -90,13 +90,46 @@ class SQLiteIdempotencyStore:
               key TEXT PRIMARY KEY,
               created_at REAL NOT NULL,
               request_hash TEXT NOT NULL,
-              status INTEGER NOT NULL,
-              content TEXT NOT NULL,
-              headers TEXT NOT NULL
+              status INTEGER,
+              content TEXT,
+              headers TEXT,
+              idempotency_status TEXT NOT NULL DEFAULT 'completed'
             )
             """
         )
+        self._migrate_schema()
         self._conn.commit()
+
+    def _migrate_schema(self) -> None:
+        info = self._conn.execute("PRAGMA table_info(idempotency_entries)").fetchall()
+        columns = {str(row[1]) for row in info}
+        if "idempotency_status" not in columns:
+            self._conn.execute("ALTER TABLE idempotency_entries ADD COLUMN idempotency_status TEXT NOT NULL DEFAULT 'completed'")
+        nullable_required = {"status", "content", "headers"}
+        not_null_columns = {str(row[1]) for row in info if str(row[1]) in nullable_required and int(row[3]) == 1}
+        if not_null_columns:
+            self._conn.execute("ALTER TABLE idempotency_entries RENAME TO idempotency_entries_old")
+            self._conn.execute(
+                """
+                CREATE TABLE idempotency_entries (
+                  key TEXT PRIMARY KEY,
+                  created_at REAL NOT NULL,
+                  request_hash TEXT NOT NULL,
+                  status INTEGER,
+                  content TEXT,
+                  headers TEXT,
+                  idempotency_status TEXT NOT NULL DEFAULT 'completed'
+                )
+                """
+            )
+            self._conn.execute(
+                """
+                INSERT INTO idempotency_entries(key, created_at, request_hash, status, content, headers, idempotency_status)
+                SELECT key, created_at, request_hash, status, content, headers, COALESCE(idempotency_status, 'completed')
+                FROM idempotency_entries_old
+                """
+            )
+            self._conn.execute("DROP TABLE idempotency_entries_old")
 
     def get(
         self,
@@ -104,22 +137,42 @@ class SQLiteIdempotencyStore:
         *,
         ttl_seconds: float,
         max_entries: int,
-    ) -> tuple[str, int, dict[str, Any], dict[str, str]] | None:
+    ) -> tuple[str, int, dict[str, Any], dict[str, str], str] | None:
         with self._lock:
             now = time.time()
             self.prune(now, ttl_seconds=ttl_seconds, max_entries=max_entries)
             row = self._conn.execute(
-                "SELECT created_at, request_hash, status, content, headers FROM idempotency_entries WHERE key = ?",
+                "SELECT created_at, request_hash, status, content, headers, idempotency_status FROM idempotency_entries WHERE key = ?",
                 (key,),
             ).fetchone()
             if row is None:
                 return None
-            created_at, request_hash, status, content, headers = row
+            created_at, request_hash, status, content, headers, idempotency_status = row
             if now - float(created_at) > ttl_seconds:
                 self._conn.execute("DELETE FROM idempotency_entries WHERE key = ?", (key,))
                 self._conn.commit()
                 return None
-            return str(request_hash), int(status), json.loads(content), json.loads(headers)
+            return (
+                str(request_hash),
+                int(status) if status is not None else 0,
+                json.loads(content) if content else {},
+                json.loads(headers) if headers else {},
+                str(idempotency_status),
+            )
+
+    def reserve(self, key: str, *, request_hash: str, max_entries: int) -> bool:
+        with self._lock:
+            self._conn.execute("BEGIN IMMEDIATE")
+            cursor = self._conn.execute(
+                """
+                INSERT OR IGNORE INTO idempotency_entries(key, created_at, request_hash, idempotency_status)
+                VALUES (?, ?, ?, 'pending')
+                """,
+                (key, time.time(), request_hash),
+            )
+            self._conn.commit()
+            self.prune(time.time(), ttl_seconds=float("inf"), max_entries=max_entries)
+            return cursor.rowcount == 1
 
     def set(
         self,
@@ -132,16 +185,18 @@ class SQLiteIdempotencyStore:
         max_entries: int,
     ) -> None:
         with self._lock:
+            # Only update if it's currently 'pending' or doesn't exist
             self._conn.execute(
                 """
-                INSERT INTO idempotency_entries(key, created_at, request_hash, status, content, headers)
-                VALUES (?, ?, ?, ?, ?, ?)
+                INSERT INTO idempotency_entries(key, created_at, request_hash, status, content, headers, idempotency_status)
+                VALUES (?, ?, ?, ?, ?, ?, 'completed')
                 ON CONFLICT(key) DO UPDATE SET
-                  created_at=excluded.created_at,
-                  request_hash=excluded.request_hash,
-                  status=excluded.status,
-                  content=excluded.content,
-                  headers=excluded.headers
+                    status=excluded.status,
+                    content=excluded.content,
+                    headers=excluded.headers,
+                    idempotency_status='completed',
+                    created_at=excluded.created_at
+                WHERE idempotency_status = 'pending' AND request_hash = excluded.request_hash
                 """,
                 (
                     key,
@@ -154,6 +209,14 @@ class SQLiteIdempotencyStore:
             )
             self._conn.commit()
             self.prune(time.time(), ttl_seconds=float("inf"), max_entries=max_entries)
+
+    def release(self, key: str, *, request_hash: str) -> None:
+        with self._lock:
+            self._conn.execute(
+                "DELETE FROM idempotency_entries WHERE key = ? AND request_hash = ? AND idempotency_status = 'pending'",
+                (key, request_hash),
+            )
+            self._conn.commit()
 
     def prune(self, now: float, *, ttl_seconds: float, max_entries: int) -> None:
         with self._lock:
