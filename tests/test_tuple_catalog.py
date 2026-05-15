@@ -78,7 +78,7 @@ def test_runpod_live_catalog_records_price_and_blocks_unavailable_stock(monkeypa
             if url.endswith("/endpoint-1/health"):
                 return FakeResponse({"workers": {"ready": 0, "running": 0, "initializing": 0, "throttled": 1, "unhealthy": 0}})
             if url.endswith("/endpoints"):
-                return FakeResponse({"endpoints": [{"id": "endpoint-1", "currentPricePerSecond": 0.00042}]})
+                return FakeResponse([{"id": "endpoint-1", "currentPricePerSecond": 0.00042}])
             raise AssertionError(url)
 
     fake_requests = __import__("types").SimpleNamespace(Session=lambda: FakeSession())

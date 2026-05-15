@@ -233,7 +233,10 @@ def _runpod_endpoint_live_inventory_rows(api_key: str, base_url: str) -> list[di
         if response.status_code not in {200, 201, 202}:
             return []
         payload = response.json()
-        rows = payload.get("endpoints") or payload.get("data") or payload
+        if isinstance(payload, dict):
+            rows = payload.get("endpoints") or payload.get("data") or payload
+        else:
+            rows = payload
         if not isinstance(rows, list):
             return []
         return [row for row in rows if isinstance(row, dict)]
