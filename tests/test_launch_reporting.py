@@ -362,6 +362,23 @@ def test_runpod_billing_guard_ignores_exited_workers() -> None:
     assert summary["live_blocked"] is False
 
 
+def test_runpod_billing_guard_does_not_block_ready_serverless_workers() -> None:
+    from gpucall.execution_surfaces.managed_endpoint import runpod_serverless_billing_guard_findings
+
+    findings = runpod_serverless_billing_guard_findings(
+        object(),
+        endpoint={
+            "id": "endpoint-1",
+            "workersMin": 0,
+            "workersMax": 2,
+            "workers": [{"id": "worker-1", "desiredStatus": "RUNNING"}],
+        },
+        health={"workers": {"ready": 1, "running": 0, "initializing": 0, "throttled": 0, "unhealthy": 0}},
+    )
+
+    assert findings == []
+
+
 def test_live_validation_artifact_accepts_policy_only_config_hash_drift(tmp_path, monkeypatch) -> None:
     from gpucall.cli import _git_commit, _live_validation_artifacts_by_tuple
     from gpucall.config import load_config

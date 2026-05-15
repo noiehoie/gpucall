@@ -576,7 +576,7 @@ def runpod_serverless_billing_guard_summary(
         "workers_max": workers_max,
         "active_workers": active_workers,
         "active_pods": active_pods,
-        "live_blocked": bool(workers_min > 0 or active_workers > 0 or active_pods > 0),
+        "live_blocked": bool(workers_min > 0 or active_pods > 0),
     }
 
 
@@ -604,15 +604,6 @@ def runpod_serverless_billing_guard_findings(
                 **base,
                 "live_reason": "workers_min_positive",
                 "reason": "live RunPod Serverless endpoint has workersMin > 0; standing workers can create continuous billing",
-                "severity": "error",
-            }
-        )
-    if int(summary["active_workers"]) > 0:
-        findings.append(
-            {
-                **base,
-                "live_reason": "active_workers_present",
-                "reason": "live RunPod Serverless endpoint has active workers remaining",
                 "severity": "error",
             }
         )

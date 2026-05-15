@@ -115,7 +115,7 @@ def test_runpod_live_catalog_records_price_and_blocks_unavailable_stock(monkeypa
     assert calls == ["https://rest.runpod.io/v1/endpoints", "https://api.runpod.ai/v2/endpoint-1/health"]
 
 
-def test_runpod_live_catalog_blocks_serverless_billing_guard(monkeypatch) -> None:
+def test_runpod_live_catalog_blocks_positive_workers_min(monkeypatch) -> None:
     calls: list[str] = []
 
     class FakeResponse:
@@ -142,7 +142,7 @@ def test_runpod_live_catalog_blocks_serverless_billing_guard(monkeypatch) -> Non
                             {
                                 "id": "endpoint-1",
                                 "currentPricePerSecond": 0.00042,
-                                "workersMin": 0,
+                                "workersMin": 1,
                                 "workersMax": 1,
                                 "workers": [{"id": "worker-1"}],
                             }
@@ -182,7 +182,7 @@ def test_runpod_live_catalog_blocks_serverless_billing_guard(monkeypatch) -> Non
     findings = evidence[tuple.name]["findings"]
     billing_findings = [item for item in findings if item.get("field") == "runpod_serverless_billing_guard"]
     assert billing_findings
-    assert {item["raw"]["live_reason"] for item in billing_findings} >= {"active_workers_present"}
+    assert {item["raw"]["live_reason"] for item in billing_findings} >= {"workers_min_positive"}
     assert calls == ["https://rest.runpod.io/v1/endpoints"]
 
 
