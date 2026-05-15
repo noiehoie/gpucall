@@ -90,6 +90,42 @@ class BadStreamTuple(EchoTuple):
         yield "not-sse"
 
 
+class PlanRecordingTuple(EchoTuple):
+    def __init__(self, name: str) -> None:
+        super().__init__(name=name)
+        self.plan_types: list[tuple[str, type[CompiledPlan]]] = []
+
+    async def start(self, plan: CompiledPlan) -> RemoteHandle:
+        self.plan_types.append(("start", type(plan)))
+        return await super().start(plan)
+
+    async def wait(self, handle: RemoteHandle, plan: CompiledPlan) -> TupleResult:
+        self.plan_types.append(("wait", type(plan)))
+        return await super().wait(handle, plan)
+
+    async def stream(self, handle: RemoteHandle, plan: CompiledPlan):
+        self.plan_types.append(("stream", type(plan)))
+        yield "data: ok\n\n"
+
+
+class ProviderCodeFailingStreamTuple(ProviderCodeFailingTuple):
+    async def stream(self, handle: RemoteHandle, plan: CompiledPlan):
+        raise TupleError("provider stream failed", retryable=False, status_code=503, code=self.code)
+        yield "data: unreachable\n\n"
+
+
+class PartialFailingStreamTuple(ProviderCodeFailingTuple):
+    async def stream(self, handle: RemoteHandle, plan: CompiledPlan):
+        yield "data: first\n\n"
+        raise TupleError("provider stream failed", retryable=False, status_code=503, code=self.code)
+
+
+class HangingStreamTuple(EchoTuple):
+    async def stream(self, handle: RemoteHandle, plan: CompiledPlan):
+        await asyncio.sleep(60)
+        yield "data: late\n\n"
+
+
 class ArtifactTuple(EchoTuple):
     def __init__(self, name: str, manifest: ArtifactManifest) -> None:
         super().__init__(name=name)
@@ -235,6 +271,53 @@ async def test_dispatcher_admission_prevents_tuple_stampede(tmp_path, monkeypatc
     values = {first.value, second.value}
     assert values == {"ok:infer:busy", "ok:infer:fallback"}
     assert '"event_type":"tuple.admission_rejected"' in (tmp_path / "audit.jsonl").read_text(encoding="utf-8")
+
+
+@pytest.mark.asyncio
+async def test_provider_egress_adapters_receive_compiled_plan_not_wire_payload(tmp_path) -> None:
+    sync_tuple = PlanRecordingTuple("sync")
+    stream_tuple = PlanRecordingTuple("stream")
+    dispatcher = Dispatcher(
+        adapters={"sync": sync_tuple, "stream": stream_tuple},
+        registry=ObservedRegistry(),
+        audit=AuditTrail(tmp_path / "audit.jsonl"),
+        jobs=JobStore(),
+    )
+
+    await dispatcher.execute_sync(plan(["sync"]).model_copy(update={"metadata": {"openai.model": "gpt-4o-mini"}}))
+    stream_plan = plan(["stream"]).model_copy(
+        update={"mode": ExecutionMode.STREAM, "metadata": {"openai.model": "gpt-4o-mini"}}
+    )
+    async for _event in dispatcher.execute_stream(stream_plan):
+        pass
+
+    assert sync_tuple.plan_types == [("start", CompiledPlan), ("wait", CompiledPlan)]
+    assert stream_tuple.plan_types == [("start", CompiledPlan), ("stream", CompiledPlan)]
+
+
+@pytest.mark.asyncio
+async def test_egress_admission_acceptance_is_audited_deterministically(tmp_path) -> None:
+    audit_path = tmp_path / "audit.jsonl"
+    dispatcher = Dispatcher(
+        adapters={"good": EchoTuple("good")},
+        registry=ObservedRegistry(),
+        audit=AuditTrail(audit_path),
+        jobs=JobStore(),
+    )
+
+    await dispatcher.execute_sync(plan(["good"]))
+
+    events = [json.loads(line) for line in audit_path.read_text(encoding="utf-8").splitlines()]
+    accepted = [event for event in events if event["event_type"] == "tuple.egress_admission_accepted"]
+    assert len(accepted) == 1
+    assert accepted[0]["payload"] == {
+        "plan_id": events[0]["payload"]["plan_id"],
+        "tuple": "good",
+        "provider_family": "good",
+        "workload_scope": "infer:r1:sync",
+        "mode": "sync",
+        "attempt": 1,
+    }
 
 
 @pytest.mark.asyncio
@@ -717,6 +800,105 @@ async def test_stream_execution_enforces_security_gate_before_start(tmp_path) ->
     with pytest.raises(TupleError, match="key release grant is required"):
         async for _event in dispatcher.execute_stream(stream_plan):
             pass
+
+
+@pytest.mark.asyncio
+async def test_stream_provider_temporary_failure_preserves_code_and_cleanup(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("GPUCALL_PROVIDER_TEMPORARY_COOLDOWN_SECONDS", "60")
+    bad = ProviderCodeFailingStreamTuple("bad", ProviderErrorCode.PROVIDER_RESOURCE_EXHAUSTED)
+    audit_path = tmp_path / "audit.jsonl"
+    dispatcher = Dispatcher(
+        adapters={"bad": bad, "good": PlanRecordingTuple("good")},
+        registry=ObservedRegistry(),
+        audit=AuditTrail(audit_path),
+        jobs=JobStore(),
+    )
+    stream_plan = plan(["bad", "good"]).model_copy(update={"mode": ExecutionMode.STREAM})
+
+    events = []
+    async for event in dispatcher.execute_stream(stream_plan):
+        events.append(event)
+
+    assert events == ["data: ok\n\n"]
+    assert bad.cancelled_handles
+    raw = audit_path.read_text(encoding="utf-8")
+    assert '"event_type":"tuple.provider_temporary_failure"' in raw
+    assert '"code":"PROVIDER_RESOURCE_EXHAUSTED"' in raw
+    assert '"event_type":"lease.cleaned_up"' in raw
+    assert '"execution_surface":"local_runtime"' in raw
+
+
+@pytest.mark.asyncio
+async def test_stream_non_fallback_eligible_provider_error_does_not_fall_through(tmp_path) -> None:
+    bad = ProviderCodeFailingStreamTuple("bad", ProviderErrorCode.PROVIDER_QUOTA_EXCEEDED)
+    good = PlanRecordingTuple("good")
+    dispatcher = Dispatcher(
+        adapters={"bad": bad, "good": good},
+        registry=ObservedRegistry(),
+        audit=AuditTrail(tmp_path / "audit.jsonl"),
+        jobs=JobStore(),
+    )
+    stream_plan = plan(["bad", "good"]).model_copy(update={"mode": ExecutionMode.STREAM})
+
+    with pytest.raises(TupleError) as caught:
+        async for _event in dispatcher.execute_stream(stream_plan):
+            pass
+
+    assert caught.value.code == ProviderErrorCode.PROVIDER_QUOTA_EXCEEDED
+    assert good.plan_types == []
+    raw = (tmp_path / "audit.jsonl").read_text(encoding="utf-8")
+    assert '"event_type":"plan.completed"' not in raw
+    assert '"event_type":"lease.cleaned_up"' in raw
+
+
+@pytest.mark.asyncio
+async def test_stream_does_not_fallback_after_partial_provider_output(tmp_path) -> None:
+    bad = PartialFailingStreamTuple("bad", ProviderErrorCode.PROVIDER_RESOURCE_EXHAUSTED)
+    good = PlanRecordingTuple("good")
+    dispatcher = Dispatcher(
+        adapters={"bad": bad, "good": good},
+        registry=ObservedRegistry(),
+        audit=AuditTrail(tmp_path / "audit.jsonl"),
+        jobs=JobStore(),
+    )
+    stream_plan = plan(["bad", "good"]).model_copy(update={"mode": ExecutionMode.STREAM})
+    events = []
+
+    with pytest.raises(TupleError) as caught:
+        async for event in dispatcher.execute_stream(stream_plan):
+            events.append(event)
+
+    assert events == ["data: first\n\n"]
+    assert caught.value.code == ProviderErrorCode.PROVIDER_RESOURCE_EXHAUSTED
+    assert good.plan_types == []
+    raw = (tmp_path / "audit.jsonl").read_text(encoding="utf-8")
+    assert '"event_type":"plan.completed"' not in raw
+    assert '"event_type":"lease.cleaned_up"' in raw
+
+
+@pytest.mark.asyncio
+async def test_stream_timeout_maps_provider_code_and_cleans_up(tmp_path) -> None:
+    slow = HangingStreamTuple("slow")
+    good = PlanRecordingTuple("good")
+    dispatcher = Dispatcher(
+        adapters={"slow": slow, "good": good},
+        registry=ObservedRegistry(),
+        audit=AuditTrail(tmp_path / "audit.jsonl"),
+        jobs=JobStore(),
+    )
+    stream_plan = plan(["slow", "good"]).model_copy(update={"mode": ExecutionMode.STREAM, "timeout_seconds": 1})
+    events = []
+
+    async for event in dispatcher.execute_stream(stream_plan):
+        events.append(event)
+
+    assert events == ["data: ok\n\n"]
+    assert slow.cancelled
+    assert good.plan_types == [("start", CompiledPlan), ("stream", CompiledPlan)]
+    raw = (tmp_path / "audit.jsonl").read_text(encoding="utf-8")
+    assert '"event_type":"tuple.timeout"' in raw
+    assert '"code":"PROVIDER_POLL_TIMEOUT"' in raw
+    assert '"event_type":"lease.cleaned_up"' in raw
 
 
 @pytest.mark.asyncio

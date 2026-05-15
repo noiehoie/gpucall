@@ -5,6 +5,7 @@ import hashlib
 import hmac
 import json
 import os
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from time import monotonic
 from typing import Callable
@@ -27,6 +28,26 @@ from gpucall.domain import (
 from gpucall.execution.base import TupleAdapter, RemoteHandle
 from gpucall.provider_errors import is_provider_temporary_unavailable, provider_error_class, should_suppress_provider_family
 from gpucall.registry import ObservedRegistry
+
+
+@dataclass(frozen=True)
+class ProviderEgressAttempt:
+    plan_id: str
+    tuple: str
+    provider_family: str
+    workload_scope: str
+    mode: str
+    attempt: int
+
+    def audit_payload(self) -> dict[str, object]:
+        return {
+            "plan_id": self.plan_id,
+            "tuple": self.tuple,
+            "provider_family": self.provider_family,
+            "workload_scope": self.workload_scope,
+            "mode": self.mode,
+            "attempt": self.attempt,
+        }
 
 
 class JobStore:
@@ -104,16 +125,16 @@ class Dispatcher:
                     )
                     break
                 family = self.admission.family_for(tuple)
+                egress_attempt = ProviderEgressAttempt(
+                    plan_id=plan.plan_id,
+                    tuple=tuple,
+                    provider_family=family,
+                    workload_scope=workload_scope,
+                    mode=plan.mode.value,
+                    attempt=attempt,
+                )
                 if max_family_attempts > 0 and family_attempts.get(family, 0) >= max_family_attempts:
-                    self.audit.append(
-                        "tuple.admission_rejected",
-                        {
-                            "plan_id": plan.plan_id,
-                            "tuple": tuple,
-                            "reason": "provider_family_attempt_limit",
-                            "provider_family": family,
-                        },
-                    )
+                    self._audit_egress_admission_rejected(egress_attempt, reason="provider_family_attempt_limit")
                     last_error = TupleError(
                         "provider family fallback attempt limit reached",
                         retryable=True,
@@ -131,15 +152,10 @@ class Dispatcher:
                         wait_seconds=_admission_wait_seconds(plan),
                     )
                     if not decision.allowed:
-                        self.audit.append(
-                            "tuple.admission_rejected",
-                            {
-                                "plan_id": plan.plan_id,
-                                "tuple": tuple,
-                                "reason": decision.reason,
-                                "workload_scope": workload_scope,
-                                "suppressed_until_seconds": decision.suppressed_until_seconds,
-                            },
+                        self._audit_egress_admission_rejected(
+                            egress_attempt,
+                            reason=decision.reason,
+                            suppressed_until_seconds=decision.suppressed_until_seconds,
                         )
                         last_error = TupleError(
                             "tuple is temporarily unavailable due to runtime admission constraints",
@@ -151,11 +167,12 @@ class Dispatcher:
                     admission_lease = decision.lease
                     started_attempts += 1
                     family_attempts[family] = family_attempts.get(family, 0) + 1
+                    self._audit_egress_admission_accepted(egress_attempt)
                     _enforce_pre_execution_security_gate(plan)
                     handle = await adapter.start(plan)
                     self.audit.append(
                         "lease.started",
-                        {**_lease_audit(handle), "plan_id": plan.plan_id, "tuple": tuple, "attempt": attempt},
+                        {**_lease_audit(handle), **egress_attempt.audit_payload()},
                     )
                     result = await asyncio.wait_for(adapter.wait(handle, plan), timeout=plan.timeout_seconds)
                     result = _validate_and_register_tuple_output(self, plan, result)
@@ -215,11 +232,7 @@ class Dispatcher:
                             suppress_family=should_suppress_provider_family(exc.code),
                         )
 
-                    event_type = "tuple.provider_temporary_failure" if is_provider_error else "tuple.failed"
-                    self.audit.append(
-                        event_type,
-                        {"plan_id": plan.plan_id, "tuple": tuple, "error": _tuple_error_audit(exc)},
-                    )
+                    self._audit_egress_failure(egress_attempt, exc, provider_temporary=is_provider_error)
 
                     if not _provider_error_fallback_eligible(exc):
                         raise
@@ -239,7 +252,10 @@ class Dispatcher:
                         code=last_error.code,
                         suppress_family=should_suppress_provider_family(last_error.code),
                     )
-                    self.audit.append("tuple.timeout", {"plan_id": plan.plan_id, "tuple": tuple})
+                    self.audit.append(
+                        "tuple.timeout",
+                        {**egress_attempt.audit_payload(), "error": _tuple_error_audit(last_error)},
+                    )
                     break
                 except Exception as exc:
                     last_error = TupleError(
@@ -253,16 +269,12 @@ class Dispatcher:
                     )
                     self.audit.append(
                         "tuple.failed",
-                        {
-                            "plan_id": plan.plan_id,
-                            "tuple": tuple,
-                            "error": _exception_audit(exc, retryable=True),
-                        },
+                        {**egress_attempt.audit_payload(), "error": _exception_audit(exc, retryable=True)},
                     )
                     break
                 finally:
                     if handle is not None:
-                        await self._cleanup_remote(adapter, handle, plan_id=plan.plan_id, tuple=tuple, attempt=attempt)
+                        await self._cleanup_remote(adapter, handle, egress_attempt=egress_attempt)
                     await self.admission.release(admission_lease)
         if last_error is not None:
             raise last_error
@@ -289,16 +301,16 @@ class Dispatcher:
                 )
                 break
             family = self.admission.family_for(tuple)
+            egress_attempt = ProviderEgressAttempt(
+                plan_id=plan.plan_id,
+                tuple=tuple,
+                provider_family=family,
+                workload_scope=workload_scope,
+                mode=plan.mode.value,
+                attempt=1,
+            )
             if max_family_attempts > 0 and family_attempts.get(family, 0) >= max_family_attempts:
-                self.audit.append(
-                    "tuple.admission_rejected",
-                    {
-                        "plan_id": plan.plan_id,
-                        "tuple": tuple,
-                        "reason": "provider_family_attempt_limit",
-                        "provider_family": family,
-                    },
-                )
+                self._audit_egress_admission_rejected(egress_attempt, reason="provider_family_attempt_limit")
                 last_error = TupleError(
                     "provider family fallback attempt limit reached",
                     retryable=True,
@@ -309,6 +321,7 @@ class Dispatcher:
             started = monotonic()
             handle: RemoteHandle | None = None
             admission_lease: AdmissionLease | None = None
+            stream_yielded = False
             try:
                 decision = await self.admission.acquire_with_wait(
                     tuple,
@@ -316,15 +329,10 @@ class Dispatcher:
                     wait_seconds=_admission_wait_seconds(plan),
                 )
                 if not decision.allowed:
-                    self.audit.append(
-                        "tuple.admission_rejected",
-                        {
-                            "plan_id": plan.plan_id,
-                            "tuple": tuple,
-                            "reason": decision.reason,
-                            "workload_scope": workload_scope,
-                            "suppressed_until_seconds": decision.suppressed_until_seconds,
-                        },
+                    self._audit_egress_admission_rejected(
+                        egress_attempt,
+                        reason=decision.reason,
+                        suppressed_until_seconds=decision.suppressed_until_seconds,
                     )
                     last_error = TupleError(
                         "tuple is temporarily unavailable due to runtime admission constraints",
@@ -336,11 +344,19 @@ class Dispatcher:
                 admission_lease = decision.lease
                 started_attempts += 1
                 family_attempts[family] = family_attempts.get(family, 0) + 1
+                self._audit_egress_admission_accepted(egress_attempt)
                 _enforce_pre_execution_security_gate(plan)
                 handle = await adapter.start(plan)
-                self.audit.append("lease.started", {**_lease_audit(handle), "plan_id": plan.plan_id, "tuple": tuple})
-                async for event in adapter.stream(handle, plan):
-                    yield _validate_stream_event(plan, event)
+                self.audit.append("lease.started", {**_lease_audit(handle), **egress_attempt.audit_payload()})
+                stream_iter = adapter.stream(handle, plan).__aiter__()
+                while True:
+                    try:
+                        event = await asyncio.wait_for(stream_iter.__anext__(), timeout=plan.timeout_seconds)
+                    except StopAsyncIteration:
+                        break
+                    validated = _validate_stream_event(plan, event)
+                    stream_yielded = True
+                    yield validated
                 self.registry.record(
                     self._observation(tuple, started, success=True)
                 )
@@ -359,14 +375,31 @@ class Dispatcher:
                         suppress_family=should_suppress_provider_family(exc.code),
                     )
 
-                event_type = "tuple.provider_temporary_failure" if is_provider_error else "tuple.failed"
-                self.audit.append(
-                    event_type,
-                    {"plan_id": plan.plan_id, "tuple": tuple, "error": _tuple_error_audit(exc)},
-                )
+                self._audit_egress_failure(egress_attempt, exc, provider_temporary=is_provider_error)
 
-                if not _provider_error_fallback_eligible(exc):
+                if stream_yielded or not _provider_error_fallback_eligible(exc):
                     raise
+            except asyncio.TimeoutError:
+                last_error = TupleError(
+                    "tuple stream timed out",
+                    retryable=True,
+                    status_code=504,
+                    code=ProviderErrorCode.PROVIDER_POLL_TIMEOUT,
+                )
+                self.registry.record(
+                    self._observation(tuple, started, success=False)
+                )
+                await self.admission.suppress(
+                    tuple,
+                    code=last_error.code,
+                    suppress_family=should_suppress_provider_family(last_error.code),
+                )
+                self.audit.append(
+                    "tuple.timeout",
+                    {**egress_attempt.audit_payload(), "error": _tuple_error_audit(last_error)},
+                )
+                if stream_yielded:
+                    raise last_error
             except Exception as exc:
                 last_error = TupleError(
                     "tuple raised unexpected exception",
@@ -379,11 +412,13 @@ class Dispatcher:
                 )
                 self.audit.append(
                     "tuple.failed",
-                    {"plan_id": plan.plan_id, "tuple": tuple, "error": _exception_audit(exc, retryable=True)},
+                    {**egress_attempt.audit_payload(), "error": _exception_audit(exc, retryable=True)},
                 )
+                if stream_yielded:
+                    raise last_error
             finally:
                 if handle is not None:
-                    await self._cleanup_remote(adapter, handle, plan_id=plan.plan_id, tuple=tuple)
+                    await self._cleanup_remote(adapter, handle, egress_attempt=egress_attempt)
                 await self.admission.release(admission_lease)
         if last_error is not None:
             raise last_error
@@ -399,19 +434,40 @@ class Dispatcher:
         adapter: TupleAdapter,
         handle: RemoteHandle,
         *,
-        plan_id: str,
-        tuple: str,
-        attempt: int | None = None,
+        egress_attempt: ProviderEgressAttempt,
     ) -> None:
-        payload: dict[str, object] = {**_lease_audit(handle), "plan_id": plan_id, "tuple": tuple}
-        if attempt is not None:
-            payload["attempt"] = attempt
+        payload: dict[str, object] = {**_lease_audit(handle), **egress_attempt.audit_payload()}
         try:
             await asyncio.wait_for(adapter.cancel_remote(handle), timeout=_remote_cleanup_timeout_seconds())
         except Exception as exc:
             self.audit.append("lease.cleanup_failed", {**payload, "error": _exception_audit(exc, retryable=True)})
             return
         self.audit.append("lease.cleaned_up", payload)
+
+    def _audit_egress_admission_accepted(self, attempt: ProviderEgressAttempt) -> None:
+        self.audit.append("tuple.egress_admission_accepted", attempt.audit_payload())
+
+    def _audit_egress_admission_rejected(
+        self,
+        attempt: ProviderEgressAttempt,
+        *,
+        reason: str,
+        suppressed_until_seconds: float | None = None,
+    ) -> None:
+        payload = {**attempt.audit_payload(), "reason": reason}
+        if suppressed_until_seconds is not None:
+            payload["suppressed_until_seconds"] = suppressed_until_seconds
+        self.audit.append("tuple.admission_rejected", payload)
+
+    def _audit_egress_failure(
+        self,
+        attempt: ProviderEgressAttempt,
+        exc: TupleError,
+        *,
+        provider_temporary: bool,
+    ) -> None:
+        event_type = "tuple.provider_temporary_failure" if provider_temporary else "tuple.failed"
+        self.audit.append(event_type, {**attempt.audit_payload(), "error": _tuple_error_audit(exc)})
 
     async def submit_async(self, plan: CompiledPlan, *, owner_identity: str | None = None) -> JobRecord:
         stored_plan = _storage_safe_plan(plan)
