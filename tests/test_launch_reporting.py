@@ -362,6 +362,26 @@ def test_runpod_billing_guard_ignores_exited_workers() -> None:
     assert summary["live_blocked"] is False
 
 
+def test_live_cost_audit_ignores_exited_workers_in_runtime_summary() -> None:
+    from gpucall.cli import _runpod_endpoint_runtime_cost
+
+    runtime_cost = _runpod_endpoint_runtime_cost(
+        object(),
+        {
+            "id": "endpoint-1",
+            "workersMin": 0,
+            "workersMax": 2,
+            "workers": [
+                {"id": "worker-1", "desiredStatus": "EXITED"},
+                {"id": "worker-2", "status": "terminated"},
+            ],
+        },
+    )
+
+    assert runtime_cost["summary"]["active_workers"] == 0
+    assert runtime_cost["summary"]["live_blocked"] is False
+
+
 def test_runpod_billing_guard_does_not_block_ready_serverless_workers() -> None:
     from gpucall.execution_surfaces.managed_endpoint import runpod_serverless_billing_guard_findings
 
