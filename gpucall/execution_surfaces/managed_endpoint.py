@@ -632,7 +632,7 @@ def _runpod_active_worker_count(payload: dict[str, Any]) -> int:
     for key in ("activeWorkers", "active_workers", "workers"):
         value = payload.get(key)
         if isinstance(value, list):
-            return len(value)
+            return sum(1 for item in value if _runpod_worker_entry_active(item))
         if isinstance(value, dict):
             total = 0
             for nested_key in ("running", "ready", "initializing", "throttled", "unhealthy"):
@@ -647,6 +647,21 @@ def _runpod_active_worker_count(payload: dict[str, Any]) -> int:
             except (TypeError, ValueError):
                 pass
     return 0
+
+
+def _runpod_worker_entry_active(worker: object) -> bool:
+    if not isinstance(worker, dict):
+        return True
+    status = str(
+        worker.get("desiredStatus")
+        or worker.get("desired_status")
+        or worker.get("status")
+        or worker.get("state")
+        or ""
+    ).strip().lower()
+    if status in {"exited", "exit", "stopped", "terminated", "deleted", "dead"}:
+        return False
+    return True
 
 
 def _runpod_active_pod_count(endpoint: dict[str, Any]) -> int:
