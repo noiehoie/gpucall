@@ -2371,8 +2371,15 @@ def _cost_audit_report(config, creds: dict[str, dict[str, str]], *, config_dir: 
         "tuples": [_provider_cost_audit_row(tuple) for tuple in sorted(config.tuples.values(), key=lambda item: item.name)],
     }
     if live:
-        report["live"] = _live_cost_audit(config.tuples, creds)
+        report["live"] = _live_cost_audit(_live_cost_audit_tuples(config), creds)
     return report
+
+
+def _live_cost_audit_tuples(config) -> dict[str, object]:
+    allowed = set(getattr(getattr(config.policy, "tuples", None), "allow", []) or [])
+    if not allowed:
+        return config.tuples
+    return {name: tuple_spec for name, tuple_spec in config.tuples.items() if name in allowed}
 
 
 def cleanup_audit_command(config_dir: Path) -> None:

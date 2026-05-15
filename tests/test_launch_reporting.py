@@ -87,6 +87,19 @@ def test_production_launch_report_blocks_without_live_requirements(tmp_path, mon
     assert "managed_endpoint:openai-chat-completions:qwen2.5-1.5b-instruct:runpod-vllm-openai" not in labels
 
 
+def test_live_cost_audit_uses_policy_allowlist_when_present(tmp_path, monkeypatch) -> None:
+    from gpucall.cli import _live_cost_audit_tuples
+    from gpucall.config import load_config
+
+    monkeypatch.setenv("GPUCALL_STATE_DIR", str(tmp_path / "state"))
+    config = load_config(copy_config(tmp_path))
+    config.policy.tuples.allow = ["runpod-vllm-ampere48-qwen2-5-vl-7b-instruct"]
+
+    tuples = _live_cost_audit_tuples(config)
+
+    assert set(tuples) == {"runpod-vllm-ampere48-qwen2-5-vl-7b-instruct"}
+
+
 def test_gateway_smoke_uses_v2_inline_inputs(monkeypatch) -> None:
     from gpucall.cli import _gateway_smoke_summary
 
