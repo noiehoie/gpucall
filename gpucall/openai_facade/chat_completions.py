@@ -1,11 +1,12 @@
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, Mapping
 
 from jsonschema import Draft202012Validator
 from jsonschema.exceptions import ValidationError
+from pydantic import ValidationError as PydanticValidationError
 
 from gpucall.domain import ChatMessage, ExecutionMode, ResponseFormat, TaskRequest
 from gpucall.openai_contract import (
@@ -19,12 +20,70 @@ from gpucall.openai_contract import (
 GPUCALL_OPENAI_EXTENSION_FIELDS = frozenset({"intent", "task_family"})
 _REQUEST_VALIDATOR = Draft202012Validator(OPENAI_CHAT_COMPLETIONS_REQUEST_SCHEMA)
 
+_GOVERNANCE_FIELD_MAP = {
+    "messages": "TaskRequest.messages",
+    "metadata": "TaskRequest.metadata",
+    "max_completion_tokens": "TaskRequest.max_tokens",
+    "max_tokens": "TaskRequest.max_tokens",
+    "stream": "TaskRequest.mode",
+    "temperature": "TaskRequest.temperature",
+    "top_p": "TaskRequest.top_p",
+    "stop": "TaskRequest.stop",
+    "seed": "TaskRequest.seed",
+    "presence_penalty": "TaskRequest.presence_penalty",
+    "frequency_penalty": "TaskRequest.frequency_penalty",
+    "tools": "TaskRequest.tools",
+    "tool_choice": "TaskRequest.tool_choice",
+    "functions": "TaskRequest.functions",
+    "function_call": "TaskRequest.function_call",
+    "stream_options": "TaskRequest.stream_options",
+    "n": "TaskRequest.n",
+    "response_format": "TaskRequest.response_format",
+}
+_METADATA_ONLY_FIELDS = frozenset({"model", "user"})
+
 
 class OpenAIProtocolError(ValueError):
-    def __init__(self, message: str, *, code: str = "invalid_request_error", status_code: int = 400) -> None:
+    def __init__(
+        self,
+        message: str,
+        *,
+        code: str = "invalid_request_error",
+        status_code: int = 400,
+        admission_report: "OpenAIAdmissionReport | None" = None,
+    ) -> None:
         super().__init__(message)
         self.code = code
         self.status_code = status_code
+        self.admission_report = admission_report
+
+
+@dataclass(frozen=True)
+class OpenAIAdmissionReport:
+    protocol: str = "openai.chat.completions"
+    governance_contract: str = "TaskRequest"
+    admitted: tuple[str, ...] = ()
+    transformed: dict[str, str] = field(default_factory=dict)
+    rejected: tuple[str, ...] = ()
+    ignored: tuple[str, ...] = ()
+    metadata_only: tuple[str, ...] = ()
+    gpucall_extensions: tuple[str, ...] = ()
+    model_policy: str = "metadata_only"
+    model_value: str = "gpucall:auto"
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "protocol": self.protocol,
+            "governance_contract": self.governance_contract,
+            "admitted": list(self.admitted),
+            "transformed": dict(self.transformed),
+            "rejected": list(self.rejected),
+            "ignored": list(self.ignored),
+            "metadata_only": list(self.metadata_only),
+            "gpucall_extensions": list(self.gpucall_extensions),
+            "model_policy": self.model_policy,
+            "model_value": self.model_value,
+        }
 
 
 @dataclass(frozen=True)
@@ -34,6 +93,7 @@ class OpenAIChatAdmission:
     stream: bool
     raw_supported_payload: dict[str, Any]
     gpucall_extensions: dict[str, Any]
+    report: OpenAIAdmissionReport
 
 
 def admit_openai_chat_completion(payload: Mapping[str, Any], *, inline_bytes_limit: int) -> OpenAIChatAdmission:
@@ -49,34 +109,51 @@ def admit_openai_chat_completion(payload: Mapping[str, Any], *, inline_bytes_lim
             code="payload_too_large",
             status_code=413,
         )
-    response_format = ResponseFormat.model_validate(raw["response_format"]) if raw.get("response_format") is not None else None
-    task_request = TaskRequest(
-        task="infer",
-        mode=ExecutionMode.STREAM if raw.get("stream") else ExecutionMode.SYNC,
-        intent=_openai_request_intent(raw, extensions),
-        messages=messages,
-        max_tokens=raw.get("max_tokens") or raw.get("max_completion_tokens"),
-        temperature=raw.get("temperature"),
-        top_p=raw.get("top_p"),
-        stop=raw.get("stop"),
-        seed=raw.get("seed"),
-        presence_penalty=raw.get("presence_penalty"),
-        frequency_penalty=raw.get("frequency_penalty"),
-        tools=raw.get("tools"),
-        tool_choice=raw.get("tool_choice"),
-        functions=raw.get("functions"),
-        function_call=raw.get("function_call"),
-        stream_options=raw.get("stream_options"),
-        n=raw.get("n"),
-        response_format=response_format,
-        metadata=_openai_request_metadata(raw, extensions),
-    )
+    try:
+        response_format = ResponseFormat.model_validate(raw["response_format"]) if raw.get("response_format") is not None else None
+    except PydanticValidationError as exc:
+        raise OpenAIProtocolError(
+            f"OpenAI facade response_format is not supported by the governance contract: {_safe_pydantic_message(exc)}",
+            code="unsupported_openai_field",
+            status_code=400,
+            admission_report=_admission_report(raw, extensions, rejected=("response_format",)),
+        ) from exc
+    try:
+        task_request = TaskRequest(
+            task="infer",
+            mode=ExecutionMode.STREAM if raw.get("stream") else ExecutionMode.SYNC,
+            intent=_openai_request_intent(raw, extensions),
+            messages=messages,
+            max_tokens=_openai_max_tokens(raw),
+            temperature=raw.get("temperature"),
+            top_p=raw.get("top_p"),
+            stop=raw.get("stop"),
+            seed=raw.get("seed"),
+            presence_penalty=raw.get("presence_penalty"),
+            frequency_penalty=raw.get("frequency_penalty"),
+            tools=raw.get("tools"),
+            tool_choice=raw.get("tool_choice"),
+            functions=raw.get("functions"),
+            function_call=raw.get("function_call"),
+            stream_options=raw.get("stream_options"),
+            n=raw.get("n"),
+            response_format=response_format,
+            metadata=_openai_request_metadata(raw, extensions),
+        )
+    except PydanticValidationError as exc:
+        raise OpenAIProtocolError(
+            f"OpenAI request cannot be admitted to the governance contract: {_safe_pydantic_message(exc)}",
+            code="unsupported_openai_field",
+            status_code=400,
+            admission_report=_admission_report(raw, extensions, rejected=_pydantic_locations(exc)),
+        ) from exc
     return OpenAIChatAdmission(
         task_request=task_request,
         requested_model=str(raw.get("model") or "gpucall:auto"),
         stream=bool(raw.get("stream")),
         raw_supported_payload=raw,
         gpucall_extensions=extensions,
+        report=_admission_report(raw, extensions),
     )
 
 
@@ -112,6 +189,11 @@ def _reject_unsupported_fields(payload: Mapping[str, Any]) -> None:
         and payload.get("max_tokens") != payload.get("max_completion_tokens")
     ):
         unsupported.append("max_tokens and max_completion_tokens conflict")
+    metadata = payload.get("metadata")
+    if isinstance(metadata, Mapping):
+        for key in sorted(str(key) for key in metadata):
+            if key.startswith(("openai.", "gpucall.")):
+                unsupported.append(f"metadata.{key}")
     stream_options = payload.get("stream_options")
     if isinstance(stream_options, Mapping):
         allowed = {
@@ -126,9 +208,7 @@ def _reject_unsupported_fields(payload: Mapping[str, Any]) -> None:
             unsupported.append("stream_options_without_stream")
         if "include_usage" in stream_options and not isinstance(stream_options.get("include_usage"), bool):
             unsupported.append("stream_options.include_usage")
-        if "include_obfuscation" in stream_options and not isinstance(stream_options.get("include_obfuscation"), bool):
-            unsupported.append("stream_options.include_obfuscation")
-        if stream_options.get("include_obfuscation") is True:
+        if "include_obfuscation" in stream_options:
             unsupported.append("stream_options.include_obfuscation")
     if not unsupported:
         return
@@ -137,6 +217,7 @@ def _reject_unsupported_fields(payload: Mapping[str, Any]) -> None:
         f"OpenAI facade does not support these fields yet: {fields}",
         code="unsupported_openai_field",
         status_code=400,
+        admission_report=_admission_report(payload, {}, rejected=sorted(set(unsupported))),
     )
 
 
@@ -144,7 +225,14 @@ def openai_message_to_chat_message(message: Mapping[str, Any]) -> ChatMessage:
     payload = dict(message)
     if payload.get("content") is not None:
         payload["content"] = _message_content_to_text(payload.get("content"))
-    return ChatMessage.model_validate(payload)
+    try:
+        return ChatMessage.model_validate(payload)
+    except PydanticValidationError as exc:
+        raise OpenAIProtocolError(
+            f"OpenAI message is not supported by the governance chat contract: {_safe_pydantic_message(exc)}",
+            code="unsupported_openai_field",
+            status_code=400,
+        ) from exc
 
 
 def _message_content_to_text(content: Any) -> str:
@@ -224,11 +312,56 @@ def _openai_request_metadata(payload: Mapping[str, Any], extensions: Mapping[str
             metadata[key] = _metadata_value(value)
     intent = _openai_request_intent(payload, extensions)
     if intent:
-        metadata.setdefault("intent", intent)
+        metadata["intent"] = intent
     return metadata
+
+
+def _safe_pydantic_message(error: PydanticValidationError) -> str:
+    first = error.errors(include_url=False)[0] if error.errors(include_url=False) else {}
+    location = ".".join(str(part) for part in first.get("loc", ())) or "<request>"
+    message = str(first.get("msg") or "value does not match the governance contract")
+    return f"{location}: {message}".replace("\n", " ")
+
+
+def _pydantic_locations(error: PydanticValidationError) -> tuple[str, ...]:
+    locations: list[str] = []
+    for item in error.errors(include_url=False):
+        location = ".".join(str(part) for part in item.get("loc", ())) or "<request>"
+        locations.append(location)
+    return tuple(sorted(set(locations)))
+
+
+def _openai_max_tokens(payload: Mapping[str, Any]) -> Any:
+    if payload.get("max_tokens") is not None:
+        return payload.get("max_tokens")
+    return payload.get("max_completion_tokens")
 
 
 def _metadata_value(value: Any) -> str:
     if isinstance(value, str):
         return value
     return json.dumps(value, sort_keys=True, separators=(",", ":"))
+
+
+def _admission_report(
+    payload: Mapping[str, Any],
+    extensions: Mapping[str, Any],
+    *,
+    rejected: list[str] | tuple[str, ...] = (),
+) -> OpenAIAdmissionReport:
+    admitted = sorted(str(key) for key in payload if key in _GOVERNANCE_FIELD_MAP)
+    metadata_only = sorted(str(key) for key in payload if key in _METADATA_ONLY_FIELDS)
+    transformed = {key: _GOVERNANCE_FIELD_MAP[key] for key in admitted}
+    for key in sorted(str(key) for key in extensions):
+        transformed[f"gpucall.{key}"] = "TaskRequest.intent" if key in {"intent", "task_family"} else "TaskRequest.metadata"
+    model_value = str(payload.get("model") or "gpucall:auto")
+    return OpenAIAdmissionReport(
+        admitted=tuple(admitted),
+        transformed=transformed,
+        rejected=tuple(sorted(str(item) for item in rejected)),
+        ignored=(),
+        metadata_only=tuple(metadata_only),
+        gpucall_extensions=tuple(sorted(str(key) for key in extensions)),
+        model_policy="gpucall_auto_or_metadata_only",
+        model_value=model_value,
+    )
