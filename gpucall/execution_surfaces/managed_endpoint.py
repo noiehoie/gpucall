@@ -12,6 +12,7 @@ from gpucall.live_catalog import live_error, live_info, price_per_second_from_ma
 from gpucall.targeting import is_configured_target
 
 RUNPOD_API_BASE = "https://api.runpod.ai/v2"
+RUNPOD_REST_API_BASE = "https://rest.runpod.io/v1"
 RUNPOD_SERVERLESS_BILLING_GUARD_CHECK = "runpod_serverless_billing_guard"
 
 
@@ -98,7 +99,7 @@ def _request_exception_to_tuple_error(exc: Exception, message: str) -> TupleErro
 def runpod_endpoint_catalog_findings(tuples: list[Any], credentials: dict[str, dict[str, str]]) -> list[dict[str, Any]]:
     api_key = credentials.get("runpod", {}).get("api_key")
     findings: list[dict[str, Any]] = []
-    inventory_by_base_url: dict[str, list[dict[str, Any]]] = {}
+    inventory_rows: list[dict[str, Any]] | None = None
     for tuple in tuples:
         if not api_key:
             findings.append(live_error(tuple, dimension="credential", reason="missing RunPod API key; cannot verify endpoint health"))
@@ -107,12 +108,11 @@ def runpod_endpoint_catalog_findings(tuples: list[Any], credentials: dict[str, d
             findings.append(live_error(tuple, dimension="endpoint", field="target", reason="RunPod endpoint target is not configured"))
             continue
         base_url = str(tuple.endpoint or RUNPOD_API_BASE).rstrip("/")
+        inventory_base_url = RUNPOD_REST_API_BASE
         health: dict[str, Any] | None = None
-        inventory_rows = inventory_by_base_url.get(base_url)
         if inventory_rows is None:
-            inventory_rows = _runpod_endpoint_live_inventory_rows(api_key, base_url)
-            inventory_by_base_url[base_url] = inventory_rows
-        endpoint = _runpod_endpoint_live_inventory_row(tuple, api_key, base_url, rows=inventory_rows)
+            inventory_rows = _runpod_endpoint_live_inventory_rows(api_key, inventory_base_url)
+        endpoint = _runpod_endpoint_live_inventory_row(tuple, api_key, inventory_base_url, rows=inventory_rows)
         if endpoint is None:
             findings.append(
                 live_error(
@@ -120,7 +120,7 @@ def runpod_endpoint_catalog_findings(tuples: list[Any], credentials: dict[str, d
                     dimension="endpoint",
                     field="runpod_endpoint_inventory",
                     reason="configured RunPod endpoint was not present in live endpoint inventory",
-                    source=f"{base_url}/endpoints",
+                    source=f"{inventory_base_url}/endpoints",
                 )
             )
             continue
@@ -133,7 +133,7 @@ def runpod_endpoint_catalog_findings(tuples: list[Any], credentials: dict[str, d
                     dimension="cost",
                     field=str(blocker.get("check") or RUNPOD_SERVERLESS_BILLING_GUARD_CHECK),
                     reason=str(blocker.get("reason") or "RunPod Serverless billing guard blocked this endpoint"),
-                    source=f"{base_url}/endpoints",
+                    source=f"{inventory_base_url}/endpoints",
                     raw={
                         "endpoint_id": blocker.get("endpoint_id"),
                         "workers_min": blocker.get("workers_min"),
@@ -145,7 +145,7 @@ def runpod_endpoint_catalog_findings(tuples: list[Any], credentials: dict[str, d
                 )
             )
         if blocked_by_billing_guard:
-            price = _runpod_endpoint_live_price(tuple, api_key, base_url, endpoint=endpoint)
+            price = _runpod_endpoint_live_price(tuple, api_key, inventory_base_url, endpoint=endpoint)
             if price is not None:
                 findings.append(
                     live_info(
@@ -197,7 +197,7 @@ def runpod_endpoint_catalog_findings(tuples: list[Any], credentials: dict[str, d
                         dimension="endpoint",
                         field=str(blocker.get("check") or RUNPOD_SERVERLESS_BILLING_GUARD_CHECK),
                         reason=str(blocker.get("reason") or "RunPod Serverless billing guard blocked this endpoint"),
-                        source=f"{base_url}/endpoints",
+                        source=f"{inventory_base_url}/endpoints",
                         raw={
                             "endpoint_id": blocker.get("endpoint_id"),
                             "workers_min": blocker.get("workers_min"),
@@ -208,7 +208,7 @@ def runpod_endpoint_catalog_findings(tuples: list[Any], credentials: dict[str, d
                         },
                     )
                 )
-        price = _runpod_endpoint_live_price(tuple, api_key, base_url, endpoint=endpoint)
+        price = _runpod_endpoint_live_price(tuple, api_key, inventory_base_url, endpoint=endpoint)
         if price is not None:
             findings.append(
                 live_info(

@@ -58,6 +58,8 @@ def test_hyperstack_live_catalog_check_rejects_unknown_image(monkeypatch) -> Non
 
 
 def test_runpod_live_catalog_records_price_and_blocks_unavailable_stock(monkeypatch) -> None:
+    calls: list[str] = []
+
     class FakeResponse:
         status_code = 200
 
@@ -72,6 +74,7 @@ def test_runpod_live_catalog_records_price_and_blocks_unavailable_stock(monkeypa
             return None
 
         def get(self, url: str, **kwargs):
+            calls.append(url)
             if url.endswith("/endpoint-1/health"):
                 return FakeResponse({"workers": {"ready": 0, "running": 0, "initializing": 0, "throttled": 1, "unhealthy": 0}})
             if url.endswith("/endpoints"):
@@ -109,9 +112,12 @@ def test_runpod_live_catalog_records_price_and_blocks_unavailable_stock(monkeypa
     findings = evidence[tuple.name]["findings"]
     assert any(item.get("live_stock_state") == "unavailable" for item in findings)
     assert any(item.get("live_price_per_second") == 0.00042 for item in findings)
+    assert calls == ["https://rest.runpod.io/v1/endpoints", "https://api.runpod.ai/v2/endpoint-1/health"]
 
 
 def test_runpod_live_catalog_blocks_serverless_billing_guard(monkeypatch) -> None:
+    calls: list[str] = []
+
     class FakeResponse:
         status_code = 200
 
@@ -126,6 +132,7 @@ def test_runpod_live_catalog_blocks_serverless_billing_guard(monkeypatch) -> Non
             return None
 
         def get(self, url: str, **kwargs):
+            calls.append(url)
             if url.endswith("/endpoint-1/health"):
                 return FakeResponse({"workers": {"ready": 1, "running": 0, "initializing": 0, "throttled": 0, "unhealthy": 0}})
             if url.endswith("/endpoints"):
@@ -176,6 +183,7 @@ def test_runpod_live_catalog_blocks_serverless_billing_guard(monkeypatch) -> Non
     billing_findings = [item for item in findings if item.get("field") == "runpod_serverless_billing_guard"]
     assert billing_findings
     assert {item["raw"]["live_reason"] for item in billing_findings} >= {"active_workers_present"}
+    assert calls == ["https://rest.runpod.io/v1/endpoints"]
 
 
 def test_runpod_health_rejection_treats_nonnumeric_worker_counts_as_zero() -> None:
