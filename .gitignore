@@ -17,6 +17,7 @@ audit/
 credentials.yml
 config/credentials.yml
 config/object_store.yml
+config/.modal.toml
 config/gpucall_hyperstack_ed25519
 config/gpucall_hyperstack_ed25519.pub
 dist/
