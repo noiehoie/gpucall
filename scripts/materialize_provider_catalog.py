@@ -74,6 +74,7 @@ def main() -> None:
         row
         for row in load_tuple_candidate_payloads(args.config_dir)
         if str(row.get("name") or "").startswith(PRODUCTION_ELIGIBLE_PREFIXES)
+        and row.get("production_generation_allowed", True) is not False
     ]
     models = load_model_ids(args.config_dir)
     for root in (args.config_dir, args.templates_dir):

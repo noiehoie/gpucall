@@ -166,6 +166,59 @@ def test_runpod_live_catalog_accepts_items_inventory_shape(monkeypatch) -> None:
     assert any(item.get("live_price_per_second") == 0.00042 for item in findings)
 
 
+def test_runpod_live_catalog_matches_endpoint_id_not_name(monkeypatch) -> None:
+    calls: list[str] = []
+
+    class FakeResponse:
+        status_code = 200
+
+        def __init__(self, payload: dict) -> None:
+            self._payload = payload
+
+        def json(self) -> dict:
+            return self._payload
+
+    class FakeSession:
+        def mount(self, *_args, **_kwargs) -> None:
+            return None
+
+        def get(self, url: str, **_kwargs):
+            calls.append(url)
+            if url.endswith("/endpoints"):
+                return FakeResponse({"endpoints": [{"id": "different-endpoint", "name": "endpoint-1"}]})
+            raise AssertionError("endpoint health must not be queried when inventory id does not match")
+
+    fake_requests = __import__("types").SimpleNamespace(Session=lambda: FakeSession())
+    fake_adapters = __import__("types").SimpleNamespace(HTTPAdapter=lambda **_kwargs: object())
+    fake_retry = __import__("types").SimpleNamespace(Retry=lambda **_kwargs: object())
+    modules = __import__("sys").modules
+    monkeypatch.setitem(modules, "requests", fake_requests)
+    monkeypatch.setitem(modules, "requests.adapters", fake_adapters)
+    monkeypatch.setitem(modules, "urllib3.util.retry", fake_retry)
+    tuple = ExecutionTupleSpec(
+        name="runpod-vllm-serverless",
+        adapter="runpod-vllm-serverless",
+        gpu="AMPERE_16",
+        vram_gb=16,
+        max_model_len=8192,
+        cost_per_second=0.00045,
+        modes=["sync"],
+        target="endpoint-1",
+        image="runpod/worker-v1-vllm:v2.18.1",
+        endpoint_contract="openai-chat-completions",
+        input_contracts=["chat_messages"],
+        output_contract="openai-chat-completions",
+        stream_contract="none",
+        model="Qwen/Qwen2.5-1.5B-Instruct",
+    )
+
+    evidence = live_tuple_catalog_evidence({tuple.name: tuple}, {"runpod": {"api_key": "rk_test"}})
+
+    assert evidence[tuple.name]["status"] == "blocked"
+    assert evidence[tuple.name]["findings"][0]["field"] == "runpod_endpoint_inventory"
+    assert calls == ["https://rest.runpod.io/v1/endpoints"]
+
+
 def test_runpod_live_catalog_blocks_positive_workers_min(monkeypatch) -> None:
     calls: list[str] = []
 
@@ -195,6 +248,7 @@ def test_runpod_live_catalog_blocks_positive_workers_min(monkeypatch) -> None:
                                 "currentPricePerSecond": 0.00042,
                                 "workersMin": 1,
                                 "workersMax": 1,
+                                "activePods": {"running": 1},
                                 "workers": [{"id": "worker-1"}],
                             }
                         ]
@@ -233,8 +287,86 @@ def test_runpod_live_catalog_blocks_positive_workers_min(monkeypatch) -> None:
     findings = evidence[tuple.name]["findings"]
     billing_findings = [item for item in findings if item.get("field") == "runpod_serverless_billing_guard"]
     assert billing_findings
-    assert {item["raw"]["live_reason"] for item in billing_findings} >= {"workers_min_positive"}
+    assert {item["raw"]["live_reason"] for item in billing_findings} >= {"workers_min_positive", "active_pods_present"}
     assert calls == ["https://rest.runpod.io/v1/endpoints"]
+
+
+def test_runpod_live_catalog_allows_approved_standing_workers(monkeypatch) -> None:
+    calls: list[str] = []
+
+    class FakeResponse:
+        status_code = 200
+
+        def __init__(self, payload: dict) -> None:
+            self._payload = payload
+
+        def json(self) -> dict:
+            return self._payload
+
+    class FakeSession:
+        def mount(self, *_args, **_kwargs) -> None:
+            return None
+
+        def get(self, url: str, **_kwargs):
+            calls.append(url)
+            if url.endswith("/endpoints"):
+                return FakeResponse(
+                    {
+                        "endpoints": [
+                            {
+                                "id": "endpoint-1",
+                                "currentPricePerSecond": 0.00042,
+                                "workersMin": 1,
+                                "workersMax": 1,
+                                "activePods": {"running": 1},
+                            }
+                        ]
+                    }
+                )
+            if url.endswith("/endpoint-1/health"):
+                return FakeResponse({"workers": {"ready": 1, "running": 0, "initializing": 0, "throttled": 0, "unhealthy": 0}})
+            raise AssertionError(url)
+
+    fake_requests = __import__("types").SimpleNamespace(Session=lambda: FakeSession())
+    fake_adapters = __import__("types").SimpleNamespace(HTTPAdapter=lambda **_kwargs: object())
+    fake_retry = __import__("types").SimpleNamespace(Retry=lambda **_kwargs: object())
+    modules = __import__("sys").modules
+    monkeypatch.setitem(modules, "requests", fake_requests)
+    monkeypatch.setitem(modules, "requests.adapters", fake_adapters)
+    monkeypatch.setitem(modules, "urllib3.util.retry", fake_retry)
+    tuple = ExecutionTupleSpec(
+        name="runpod-vllm-serverless",
+        adapter="runpod-vllm-serverless",
+        gpu="AMPERE_16",
+        vram_gb=16,
+        max_model_len=8192,
+        cost_per_second=0.00045,
+        standing_cost_per_second=0.00045,
+        standing_cost_window_seconds=3600,
+        modes=["sync"],
+        target="endpoint-1",
+        image="runpod/worker-v1-vllm:v2.18.1",
+        endpoint_contract="openai-chat-completions",
+        input_contracts=["chat_messages"],
+        output_contract="openai-chat-completions",
+        stream_contract="none",
+        model="Qwen/Qwen2.5-1.5B-Instruct",
+        provider_params={
+            "worker_env": {"MODEL_NAME": "Qwen/Qwen2.5-1.5B-Instruct", "MAX_MODEL_LEN": "8192", "GPU_MEMORY_UTILIZATION": "0.9", "MAX_CONCURRENCY": "1"},
+            "cost_approval": {
+                "standing_workers_approved": True,
+                "approved_by": "operator",
+                "approved_at": "2026-05-16T00:00:00Z",
+                "reason": "bounded production warm pool",
+            },
+        },
+    )
+
+    evidence = live_tuple_catalog_evidence({tuple.name: tuple}, {"runpod": {"api_key": "rk_test"}})
+
+    assert evidence[tuple.name]["status"] == "live_revalidated"
+    assert not [item for item in evidence[tuple.name]["findings"] if item.get("field") == "runpod_serverless_billing_guard"]
+    assert calls == ["https://rest.runpod.io/v1/endpoints", "https://api.runpod.ai/v2/endpoint-1/health"]
 
 
 def test_runpod_health_rejection_treats_nonnumeric_worker_counts_as_zero() -> None:

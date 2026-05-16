@@ -61,6 +61,9 @@ def test_runpod_candidates_are_generated_from_catalog_source() -> None:
     assert sum(1 for row in runpod if row["adapter"] == "runpod-vllm-serverless") >= 108
     assert sum(1 for row in runpod if row["adapter"] == "runpod-serverless") >= 80
     assert sum(1 for row in runpod if row["adapter"] == "runpod-vllm-flashboot") >= 108
+    assert all(row["stream_contract"] == "none" for row in runpod if row["adapter"] == "runpod-vllm-serverless")
+    blocked_gpu_refs = {row["gpu"] for row in runpod if row.get("production_generation_allowed") is False}
+    assert {"BLACKWELL_180", "RUNPOD_B200"} <= blocked_gpu_refs
     assert any(row["model_ref"] == "qwen2.5-7b-instruct-1m" for row in runpod)
     assert any(
         row["model_ref"] == "qwen2.5-7b-instruct-1m-524k"

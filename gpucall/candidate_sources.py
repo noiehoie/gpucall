@@ -86,6 +86,8 @@ def _runpod_family_candidates(
             "configured_price_source": gpu.get("configured_price_source", common.get("configured_price_source") or common.get("pricing_source")),
             "configured_price_observed_at": gpu.get("configured_price_observed_at", common.get("configured_price_observed_at")),
             "configured_price_ttl_seconds": gpu.get("configured_price_ttl_seconds", common.get("configured_price_ttl_seconds")),
+            "production_generation_allowed": bool(gpu.get("production_generation_allowed", True)),
+            "production_generation_block_reason": gpu.get("production_generation_block_reason"),
             "scaledown_window_seconds": common.get("scaledown_window_seconds", 5),
             "min_billable_seconds": common.get("min_billable_seconds", 1),
             "billing_granularity_seconds": common.get("billing_granularity_seconds", 1),

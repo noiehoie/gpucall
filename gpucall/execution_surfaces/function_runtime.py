@@ -495,16 +495,22 @@ class RunpodVllmFlashBootAdapter(TupleAdapter):
         if not self.model:
             raise TupleError("RunPod FlashBoot model is not configured", retryable=False, status_code=400)
         resource_name = f"gpucall-flash-worker-{plan.plan_id}"
+        endpoint_mode = bool(self.endpoint_id)
         return RemoteHandle(
             tuple=self.name,
             remote_id=resource_name,
             expires_at=plan.expires_at(),
             account_ref="runpod",
             execution_surface="function_runtime",
-            resource_kind="function_runtime",
-            cleanup_required=True,
-            reaper_eligible=True,
-            meta={"resource_name": resource_name, "flash_function": True},
+            resource_kind="endpoint_request" if endpoint_mode else "function_runtime",
+            cleanup_required=not endpoint_mode,
+            reaper_eligible=not endpoint_mode,
+            meta={
+                "resource_name": resource_name,
+                "flash_function": True,
+                "owned_resource": not endpoint_mode,
+                **({"endpoint_id": self.endpoint_id} if endpoint_mode else {}),
+            },
         )
 
     async def wait(self, handle: RemoteHandle, plan: CompiledPlan) -> TupleResult:

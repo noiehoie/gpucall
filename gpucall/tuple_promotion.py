@@ -44,6 +44,9 @@ def promote_production_tuple(
     if not candidate_path:
         raise ValueError("candidate match does not include source path")
     candidate_payload = _load_candidate_payload(config_root, candidate)
+    if candidate_payload.get("production_generation_allowed") is False:
+        block_reason = str(candidate_payload.get("production_generation_block_reason") or "candidate is not validated against current official provider production contract")
+        raise ValueError("refusing to promote candidate with production generation disabled: " + block_reason)
     tuple = _tuple_from_candidate(candidate_payload, active_config=active_config)
     started = datetime.now(timezone.utc).isoformat()
     promotion_config = workspace / "config"

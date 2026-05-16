@@ -50,6 +50,8 @@ gpus:
   slug: blackwell180
   vram_gb: 180
   cost_per_second: 0.0024
+  production_generation_allowed: false
+  production_generation_block_reason: not validated against current official RunPod Serverless endpoint GPU type contract
 - ref: RUNPOD_A4000
   slug: a4000
   vram_gb: 16
@@ -122,6 +124,8 @@ gpus:
   slug: b200
   vram_gb: 180
   cost_per_second: 0.0024
+  production_generation_allowed: false
+  production_generation_block_reason: not validated against current official RunPod Serverless endpoint GPU type contract
 models:
 - ref: deepseek-r1-distill-llama-70b
   slug: deepseek-r1-distill-llama-70b
@@ -315,7 +319,7 @@ families:
   input_contracts:
   - chat_messages
   output_contract: openai-chat-completions
-  stream_contract: sse
+  stream_contract: none
   image: runpod/worker-v1-vllm:v2.18.1
   notes: General-purpose RunPod vLLM candidate. Requires endpoint id and billable
     validation artifact before production routing.

@@ -248,7 +248,8 @@ def _runpod_endpoint_live_inventory_row(tuple: Any, api_key: str, base_url: str,
     try:
         candidate_rows = rows if rows is not None else _runpod_endpoint_live_inventory_rows(api_key, base_url)
         for row in candidate_rows:
-            if str(row.get("id") or row.get("endpointId") or row.get("name") or "") != str(tuple.target):
+            endpoint_id = str(row.get("id") or row.get("endpointId") or row.get("endpoint_id") or "")
+            if endpoint_id != str(tuple.target):
                 continue
             return row
     except Exception:
@@ -298,7 +299,7 @@ class RunpodVllmServerlessAdapter(TupleAdapter):
     ) -> None:
         self.name = name
         self.api_key = api_key or os.getenv("GPUCALL_RUNPOD_API_KEY", "")
-        self.endpoint_id = endpoint_id or os.getenv("GPUCALL_RUNPOD_FLASH_ENDPOINT_ID", "")
+        self.endpoint_id = endpoint_id or os.getenv("GPUCALL_RUNPOD_ENDPOINT_ID", "")
         self.model = model
         self.max_model_len = max_model_len
         self.image = image
@@ -577,13 +578,18 @@ def runpod_serverless_billing_guard_summary(
     workers_max = _positive_int_from_mapping(endpoint, "workersMax", "workers_max", "maxWorkers", "max_workers")
     active_workers = max(_runpod_active_worker_count(endpoint), _runpod_active_worker_count(health or {}))
     active_pods = _runpod_active_pod_count(endpoint)
+    standing_spend_observed = workers_min > 0
+    standing_spend_approved = standing_spend_observed and not _standing_worker_approval_findings(tuple, workers_min=workers_min)
+    active_pods_approved = active_pods > 0 and active_pods <= workers_min and standing_spend_approved
 
     return {
         "workers_min": workers_min,
         "workers_max": workers_max,
         "active_workers": active_workers,
         "active_pods": active_pods,
-        "live_blocked": bool(workers_min > 0 or active_pods > 0),
+        "standing_spend_approved": standing_spend_approved,
+        "active_pods_approved": active_pods_approved,
+        "live_blocked": bool((standing_spend_observed and not standing_spend_approved) or (active_pods > 0 and not active_pods_approved)),
     }
 
 
@@ -605,21 +611,27 @@ def runpod_serverless_billing_guard_findings(
         "active_pods": summary["active_pods"],
     }
     findings: list[dict[str, object]] = []
-    if int(summary["workers_min"]) > 0:
+    approval_findings = _standing_worker_approval_findings(tuple, workers_min=int(summary["workers_min"]))
+    if int(summary["workers_min"]) > 0 and approval_findings:
         findings.append(
             {
                 **base,
                 "live_reason": "workers_min_positive",
-                "reason": "live RunPod Serverless endpoint has workersMin > 0; standing workers can create continuous billing",
+                "reason": "live RunPod Serverless endpoint has workersMin > 0 without explicit standing cost approval: " + "; ".join(approval_findings),
                 "severity": "error",
             }
         )
-    if int(summary["active_pods"]) > 0:
+    if int(summary["active_pods"]) > 0 and not bool(summary["active_pods_approved"]):
+        active_reason = (
+            "live RunPod Serverless endpoint has active pods under an unapproved warm pool: " + "; ".join(approval_findings)
+            if approval_findings
+            else "live RunPod Serverless endpoint has active pods remaining outside the approved workersMin warm pool"
+        )
         findings.append(
             {
                 **base,
                 "live_reason": "active_pods_present",
-                "reason": "live RunPod Serverless endpoint has active pods remaining",
+                "reason": active_reason,
                 "severity": "error",
             }
         )
@@ -687,20 +699,21 @@ def _standing_worker_approval_findings(tuple: Any, *, workers_min: int) -> list[
     if workers_min <= 0:
         return []
     findings: list[str] = []
+    tuple_name = getattr(tuple, "name", "<unknown>")
     if getattr(tuple, "standing_cost_per_second", None) is None:
-        findings.append(f"tuple {tuple.name!r} warm RunPod workers require standing_cost_per_second")
+        findings.append(f"tuple {tuple_name!r} warm RunPod workers require standing_cost_per_second")
     if getattr(tuple, "standing_cost_window_seconds", None) is None:
-        findings.append(f"tuple {tuple.name!r} warm RunPod workers require standing_cost_window_seconds")
+        findings.append(f"tuple {tuple_name!r} warm RunPod workers require standing_cost_window_seconds")
     approval = (getattr(tuple, "provider_params", None) or {}).get("cost_approval")
     if not isinstance(approval, dict) or approval.get("standing_workers_approved") is not True:
-        findings.append(f"tuple {tuple.name!r} warm RunPod workers require provider_params.cost_approval.standing_workers_approved=true")
+        findings.append(f"tuple {tuple_name!r} warm RunPod workers require provider_params.cost_approval.standing_workers_approved=true")
         return findings
     if not str(approval.get("approved_by") or "").strip():
-        findings.append(f"tuple {tuple.name!r} warm RunPod worker approval requires provider_params.cost_approval.approved_by")
+        findings.append(f"tuple {tuple_name!r} warm RunPod worker approval requires provider_params.cost_approval.approved_by")
     if not str(approval.get("approved_at") or "").strip():
-        findings.append(f"tuple {tuple.name!r} warm RunPod worker approval requires provider_params.cost_approval.approved_at")
+        findings.append(f"tuple {tuple_name!r} warm RunPod worker approval requires provider_params.cost_approval.approved_at")
     if not str(approval.get("reason") or "").strip():
-        findings.append(f"tuple {tuple.name!r} warm RunPod worker approval requires provider_params.cost_approval.reason")
+        findings.append(f"tuple {tuple_name!r} warm RunPod worker approval requires provider_params.cost_approval.reason")
     return findings
 
 

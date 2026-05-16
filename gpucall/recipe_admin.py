@@ -1141,6 +1141,9 @@ def _candidate_match(candidate: Mapping[str, Any], *, config: Any, contract: Map
     engine = config.engines.get(engine_ref)
     if candidate.get("status") not in {None, "candidate", "ready_for_validation"}:
         reasons.append("candidate status is not eligible for promotion planning")
+    if candidate.get("production_generation_allowed") is False:
+        block_reason = str(candidate.get("production_generation_block_reason") or "candidate is not validated against current official provider production contract")
+        reasons.append("candidate production generation is disabled: " + block_reason)
     if model is None:
         reasons.append("candidate model_ref is not present in model catalog")
     if engine is None:

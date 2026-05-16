@@ -2775,7 +2775,7 @@ def _managed_endpoint_live_cost_audit(tuples: dict[str, object], creds: dict[str
 
 def _runpod_endpoint_inventory(api_key: str) -> dict[str, object]:
     return _http_json(
-        "https://rest.runpod.io/v1/endpoints?includeWorkers=true",
+        "https://rest.runpod.io/v1/endpoints?includeWorkers=true&includeTemplate=true",
         headers={"authorization": f"Bearer {api_key}", "accept": "application/json"},
     )
 

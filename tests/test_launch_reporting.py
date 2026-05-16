@@ -351,8 +351,82 @@ def test_live_cost_audit_accepts_approved_runpod_warm_workers() -> None:
 
     assert runtime_cost["summary"]["unmanaged_standing_cost"] is False
     assert runtime_cost["findings"] == []
+    assert runtime_cost["live_blocked"] is False
+    assert runtime_cost["live_blockers"] == []
+
+
+def test_live_cost_audit_blocks_active_pods_without_warm_pool() -> None:
+    from gpucall.cli import _runpod_endpoint_runtime_cost
+    from gpucall.domain import ExecutionTupleSpec
+
+    tuple = ExecutionTupleSpec(
+        name="runpod-vllm-serverless",
+        adapter="runpod-vllm-serverless",
+        gpu="AMPERE_16",
+        vram_gb=16,
+        max_model_len=8192,
+        cost_per_second=0.00016,
+        standing_cost_per_second=0.00016,
+        standing_cost_window_seconds=3600,
+        target="endpoint-1",
+        image="runpod/worker-v1-vllm:v2.18.1",
+        endpoint_contract="openai-chat-completions",
+        input_contracts=["chat_messages"],
+        output_contract="openai-chat-completions",
+        stream_contract="none",
+        model="Qwen/Qwen2.5-1.5B-Instruct",
+        provider_params={
+            "cost_approval": {
+                "standing_workers_approved": True,
+                "approved_by": "operator",
+                "approved_at": "2026-05-14T00:00:00Z",
+                "reason": "bounded warm pool for scheduled production window",
+            }
+        },
+    )
+
+    runtime_cost = _runpod_endpoint_runtime_cost(tuple, {"id": "endpoint-1", "workersMin": 0, "workersMax": 3, "activePods": {"running": 1}})
+
     assert runtime_cost["live_blocked"] is True
-    assert runtime_cost["live_blockers"][0]["check"] == "runpod_serverless_billing_guard"
+    assert runtime_cost["live_blockers"][0]["live_reason"] == "active_pods_present"
+    assert "outside the approved workersMin warm pool" in runtime_cost["live_blockers"][0]["reason"]
+
+
+def test_live_cost_audit_blocks_active_pods_above_approved_warm_pool() -> None:
+    from gpucall.cli import _runpod_endpoint_runtime_cost
+    from gpucall.domain import ExecutionTupleSpec
+
+    tuple = ExecutionTupleSpec(
+        name="runpod-vllm-serverless",
+        adapter="runpod-vllm-serverless",
+        gpu="AMPERE_16",
+        vram_gb=16,
+        max_model_len=8192,
+        cost_per_second=0.00016,
+        standing_cost_per_second=0.00016,
+        standing_cost_window_seconds=3600,
+        target="endpoint-1",
+        image="runpod/worker-v1-vllm:v2.18.1",
+        endpoint_contract="openai-chat-completions",
+        input_contracts=["chat_messages"],
+        output_contract="openai-chat-completions",
+        stream_contract="none",
+        model="Qwen/Qwen2.5-1.5B-Instruct",
+        provider_params={
+            "cost_approval": {
+                "standing_workers_approved": True,
+                "approved_by": "operator",
+                "approved_at": "2026-05-14T00:00:00Z",
+                "reason": "bounded warm pool for scheduled production window",
+            }
+        },
+    )
+
+    runtime_cost = _runpod_endpoint_runtime_cost(tuple, {"id": "endpoint-1", "workersMin": 1, "workersMax": 3, "activePods": {"running": 2}})
+
+    assert runtime_cost["live_blocked"] is True
+    assert runtime_cost["live_blockers"][0]["live_reason"] == "active_pods_present"
+    assert "outside the approved workersMin warm pool" in runtime_cost["live_blockers"][0]["reason"]
 
 
 def test_live_cost_audit_flags_unmanaged_runpod_warm_endpoint() -> None:

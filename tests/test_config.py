@@ -123,7 +123,7 @@ def test_runpod_vllm_tuple_examples_include_official_worker_env() -> None:
 
 def test_live_cost_audit_ignores_placeholder_runpod_endpoint(monkeypatch: pytest.MonkeyPatch) -> None:
     def fake_http_json(url: str, *args: object, **kwargs: object) -> dict[str, object]:
-        if url == "https://rest.runpod.io/v1/endpoints?includeWorkers=true":
+        if url == "https://rest.runpod.io/v1/endpoints?includeWorkers=true&includeTemplate=true":
             return {"ok": True, "body": []}
         raise AssertionError("placeholder RunPod endpoint health must not be queried")
 

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import contextlib
 import hashlib
 import json
@@ -810,6 +811,55 @@ async def test_runpod_vllm_stream_is_explicitly_unsupported() -> None:
         assert "streaming is not supported" in str(exc)
     else:  # pragma: no cover
         raise AssertionError("RunPod Flash stream unexpectedly started")
+
+
+def test_runpod_vllm_serverless_ignores_flash_endpoint_env(monkeypatch) -> None:
+    monkeypatch.delenv("GPUCALL_RUNPOD_ENDPOINT_ID", raising=False)
+    monkeypatch.setenv("GPUCALL_RUNPOD_FLASH_ENDPOINT_ID", "flash-endpoint")
+    adapter = RunpodVllmServerlessAdapter(
+        api_key="rk_test",
+        endpoint_contract="openai-chat-completions",
+        model="Qwen/Qwen2.5-1.5B-Instruct",
+    )
+
+    with pytest.raises(TupleError) as caught:
+        asyncio.run(adapter.start(plan_payload_plan()))
+
+    assert caught.value.status_code == 400
+    assert "endpoint_id is not configured" in str(caught.value)
+
+
+def test_runpod_vllm_serverless_uses_generic_endpoint_env(monkeypatch) -> None:
+    monkeypatch.setenv("GPUCALL_RUNPOD_ENDPOINT_ID", "endpoint-1")
+    monkeypatch.setenv("GPUCALL_RUNPOD_FLASH_ENDPOINT_ID", "flash-endpoint")
+    adapter = RunpodVllmServerlessAdapter(
+        api_key="rk_test",
+        endpoint_contract="openai-chat-completions",
+        model="Qwen/Qwen2.5-1.5B-Instruct",
+    )
+
+    handle = asyncio.run(adapter.start(plan_payload_plan()))
+
+    assert adapter.endpoint_id == "endpoint-1"
+    assert handle.execution_surface == "managed_endpoint"
+    assert handle.cleanup_required is False
+
+
+def test_runpod_flash_endpoint_mode_is_not_cleanup_owned() -> None:
+    adapter = RunpodVllmFlashBootAdapter(
+        api_key="rk_test",
+        endpoint_id="endpoint-1",
+        model="Qwen/Qwen2.5-1.5B-Instruct",
+    )
+
+    handle = asyncio.run(adapter.start(plan_payload_plan()))
+
+    assert handle.execution_surface == "function_runtime"
+    assert handle.resource_kind == "endpoint_request"
+    assert handle.cleanup_required is False
+    assert handle.reaper_eligible is False
+    assert handle.meta["owned_resource"] is False
+    assert handle.meta["endpoint_id"] == "endpoint-1"
 
 
 def test_runpod_vllm_uses_openai_chat_completions_route(monkeypatch) -> None:
