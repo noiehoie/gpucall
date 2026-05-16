@@ -558,10 +558,11 @@ async def test_async_upload_uses_clean_presigned_put_client(monkeypatch) -> None
         async def __aexit__(self, exc_type, exc, tb):
             return None
 
-        async def put(self, url, *, content, headers):
+        async def put(self, url, *, content, headers, **kwargs):
             nonlocal seen_upload_auth
             seen_upload_auth = headers.get("authorization")
             assert url == "https://bucket.example/upload"
+            assert kwargs.get("follow_redirects") is True
             return httpx.Response(200)
 
     async def handler(request: httpx.Request) -> httpx.Response:
