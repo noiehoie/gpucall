@@ -19,6 +19,7 @@ dependencies = [
   "pydantic>=2.7",
   "pyyaml>=6.0",
   "requests>=2.32",
+  "urllib3>=2.7.0",
   "uvicorn>=0.30",
 ]
 
@@ -35,7 +36,7 @@ providers = [
   "hyperstack>=1.51.2a0",
   "modal>=1.0",
   "ovh>=1.2",
-  "paramiko>=3.4",
+  "paramiko>=3.4,<4",
   "runpod>=1.7",
   "runpod-flash>=0.1",
 ]
