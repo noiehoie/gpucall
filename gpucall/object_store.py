@@ -2,10 +2,11 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 from pathlib import PurePosixPath
-from urllib.parse import urlparse
+from urllib.parse import unquote, urlparse
 from uuid import uuid4
 
 import boto3
+from botocore.config import Config
 
 from gpucall.credentials import load_credentials
 from gpucall.domain import DataRef, ObjectStoreConfig, PresignGetRequest, PresignGetResponse, PresignPutRequest, PresignPutResponse
@@ -15,18 +16,28 @@ class ObjectStore:
     def __init__(self, config: ObjectStoreConfig) -> None:
         self.config = config
         kwargs = {}
-        if config.endpoint is not None:
-            kwargs["endpoint_url"] = str(config.endpoint)
+        s3_config_kwargs = {"signature_version": "s3v4", "s3": {"addressing_style": "virtual"}}
+
         if config.region:
             kwargs["region_name"] = config.region
+            s3_config_kwargs["region_name"] = config.region
+
+        if config.endpoint is not None:
+            kwargs["endpoint_url"] = str(config.endpoint)
+
         aws = load_credentials().get("aws", {})
         if aws.get("access_key_id") and aws.get("secret_access_key"):
             kwargs["aws_access_key_id"] = aws["access_key_id"]
             kwargs["aws_secret_access_key"] = aws["secret_access_key"]
+
         if aws.get("endpoint_url") and "endpoint_url" not in kwargs:
             kwargs["endpoint_url"] = aws["endpoint_url"]
+
         if aws.get("region") and "region_name" not in kwargs:
             kwargs["region_name"] = aws["region"]
+            s3_config_kwargs["region_name"] = aws["region"]
+
+        kwargs["config"] = Config(**s3_config_kwargs)
         self.client = boto3.client("s3", **kwargs)
 
     def presign_put(self, request: PresignPutRequest, *, tenant_prefix: str | None = None) -> PresignPutResponse:
@@ -74,12 +85,14 @@ class ObjectStore:
 
     def _key_for(self, name: str, *, tenant_prefix: str | None = None) -> str:
         clean = PurePosixPath(name).name or "object"
-        prefix = self.config.prefix.rstrip("/")
+        prefix = self.config.prefix.strip("/")
+        parts: list[str] = [prefix] if prefix else []
         if tenant_prefix:
             safe_tenant = PurePosixPath(tenant_prefix).name
             if safe_tenant:
-                prefix = f"{prefix}/tenants/{safe_tenant}"
-        return f"{prefix}/{uuid4().hex}/{clean}"
+                parts.extend(["tenants", safe_tenant])
+        parts.extend([uuid4().hex, clean])
+        return "/".join(parts)
 
     def _validate_ref(self, ref: DataRef, *, tenant_prefix: str | None = None) -> None:
         if ref.expires_at is not None and ref.expires_at <= datetime.now(timezone.utc):
@@ -87,13 +100,13 @@ class ObjectStore:
         bucket, key = self._bucket_key(ref)
         if bucket != self.config.bucket:
             raise ValueError("data_ref bucket is not allowed")
-        prefix = self.config.prefix.rstrip("/") + "/"
-        if not key.startswith(prefix):
+        prefix = self.config.prefix.strip("/")
+        if prefix and not key.startswith(f"{prefix}/"):
             raise ValueError("data_ref key is outside configured prefix")
         if tenant_prefix:
             safe_tenant = PurePosixPath(tenant_prefix).name
             if safe_tenant:
-                tenant_prefix_key = f"{self.config.prefix.rstrip('/')}/tenants/{safe_tenant}/"
+                tenant_prefix_key = f"{prefix}/tenants/{safe_tenant}/" if prefix else f"tenants/{safe_tenant}/"
                 if not key.startswith(tenant_prefix_key):
                     raise ValueError("data_ref key is outside tenant object prefix")
 
@@ -102,4 +115,4 @@ class ObjectStore:
         parsed = urlparse(str(ref.uri))
         if parsed.scheme != "s3":
             raise ValueError("data_ref must use s3://")
-        return parsed.netloc, parsed.path.lstrip("/")
+        return parsed.netloc, unquote(parsed.path.lstrip("/"))

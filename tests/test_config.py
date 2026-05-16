@@ -15,7 +15,14 @@ import pytest
 import yaml
 
 from gpucall.config import ConfigError, load_config
-from gpucall.cli import _bounded_live_tuple_catalog_findings, _managed_endpoint_live_cost_audit, _provider_smoke_request
+from gpucall.cli import (
+    _iaas_vm_live_cost_audit,
+    _bounded_live_tuple_catalog_findings,
+    _managed_endpoint_live_cost_audit,
+    _provider_smoke_request,
+    _runpod_endpoint_inventory,
+    _runpod_endpoint_inventory_by_id,
+)
 from gpucall.compiler import GovernanceCompiler, GovernanceError
 from gpucall.domain import DataRef, ExecutionMode, ExecutionTupleSpec, InlineValue, ObjectStoreConfig, Recipe, SecurityTier, TaskRequest, recipe_requirements
 from gpucall.registry import ObservedRegistry
@@ -144,6 +151,86 @@ def test_live_cost_audit_ignores_placeholder_runpod_endpoint(monkeypatch: pytest
     assert report["configured"] is True
     assert report["endpoints"] == []
     assert report["unmanaged_endpoint_findings"] == []
+
+
+def test_runpod_endpoint_inventory_follows_next_page(monkeypatch: pytest.MonkeyPatch) -> None:
+    seen_urls: list[str] = []
+
+    def fake_http_json(url: str, *args: object, **kwargs: object) -> dict[str, object]:
+        seen_urls.append(url)
+        if url == "https://rest.runpod.io/v1/endpoints?includeWorkers=true&includeTemplate=true":
+            return {"ok": True, "body": {"endpoints": [{"id": "endpoint-1"}], "next": "https://rest.runpod.io/v1/endpoints?page=2"}}
+        if url == "https://rest.runpod.io/v1/endpoints?page=2":
+            return {"ok": True, "body": {"items": [{"id": "endpoint-2"}]}}
+        raise AssertionError(f"unexpected url: {url}")
+
+    monkeypatch.setattr("gpucall.cli._http_json", fake_http_json)
+
+    inventory = _runpod_endpoint_inventory("secret")
+    by_id = _runpod_endpoint_inventory_by_id(inventory)
+
+    assert seen_urls == [
+        "https://rest.runpod.io/v1/endpoints?includeWorkers=true&includeTemplate=true",
+        "https://rest.runpod.io/v1/endpoints?page=2",
+    ]
+    assert sorted(by_id) == ["endpoint-1", "endpoint-2"]
+
+
+def test_managed_endpoint_live_cost_audit_keeps_runpod_rows_with_unsupported_family(monkeypatch: pytest.MonkeyPatch) -> None:
+    def fake_http_json(url: str, *args: object, **kwargs: object) -> dict[str, object]:
+        if url == "https://rest.runpod.io/v1/endpoints?includeWorkers=true&includeTemplate=true":
+            return {"ok": True, "body": [{"id": "endpoint-1", "workersMin": 0}]}
+        if url == "https://api.runpod.ai/v2/endpoint-1/health":
+            return {"ok": True, "body": {"healthy": True}}
+        raise AssertionError(f"unexpected url: {url}")
+
+    monkeypatch.setattr("gpucall.cli._http_json", fake_http_json)
+    report = _managed_endpoint_live_cost_audit(
+        {
+            "runpod": SimpleNamespace(
+                name="runpod",
+                adapter="runpod-vllm-serverless",
+                execution_surface=SimpleNamespace(value="managed_endpoint"),
+                endpoint="https://api.runpod.ai/v2",
+                target="endpoint-1",
+            ),
+            "other": SimpleNamespace(
+                name="other",
+                adapter="other-managed",
+                execution_surface=SimpleNamespace(value="managed_endpoint"),
+                endpoint="https://other.example/v1",
+                target="endpoint-2",
+            ),
+        },
+        {"runpod": {"api_key": "secret"}},
+    )
+
+    assert report["ok"] is False
+    assert report["unsupported_credential_families"] == ["other-managed"]
+    assert report["endpoints"][0]["endpoint_id"] == "endpoint-1"
+
+
+def test_iaas_vm_live_cost_audit_checks_each_endpoint(monkeypatch: pytest.MonkeyPatch) -> None:
+    seen_urls: list[str] = []
+
+    def fake_http_json(url: str, *args: object, **kwargs: object) -> dict[str, object]:
+        seen_urls.append(url)
+        return {"ok": True, "body": []}
+
+    monkeypatch.setattr("gpucall.cli._http_json", fake_http_json)
+    report = _iaas_vm_live_cost_audit(
+        {
+            "one": SimpleNamespace(adapter="hyperstack", execution_surface=SimpleNamespace(value="iaas_vm"), endpoint="https://one.example/v1"),
+            "two": SimpleNamespace(adapter="hyperstack", execution_surface=SimpleNamespace(value="iaas_vm"), endpoint="https://two.example/v1"),
+        },
+        {"hyperstack": {"api_key": "secret"}},
+    )
+
+    assert seen_urls == [
+        "https://one.example/v1/core/virtual-machines",
+        "https://two.example/v1/core/virtual-machines",
+    ]
+    assert sorted(report["virtual_machines_by_endpoint"]) == ["https://one.example/v1", "https://two.example/v1"]
 
 
 def test_recipe_v3_rejects_provider_resource_fields() -> None:

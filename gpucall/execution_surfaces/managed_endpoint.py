@@ -5,7 +5,7 @@ from datetime import datetime, timezone
 import os
 import time
 from typing import Any
-from urllib.parse import urlparse
+from urllib.parse import urljoin, urlparse
 
 from gpucall.domain import TupleError
 from gpucall.live_catalog import live_error, live_info, price_per_second_from_mapping
@@ -111,7 +111,19 @@ def runpod_endpoint_catalog_findings(tuples: list[Any], credentials: dict[str, d
         inventory_base_url = RUNPOD_REST_API_BASE
         health: dict[str, Any] | None = None
         if inventory_rows is None:
-            inventory_rows = _runpod_endpoint_live_inventory_rows(api_key, inventory_base_url)
+            try:
+                inventory_rows = _runpod_endpoint_live_inventory_rows(api_key, inventory_base_url)
+            except TupleError as exc:
+                findings.append(
+                    live_error(
+                        tuple,
+                        dimension="endpoint",
+                        field="runpod_endpoint_inventory",
+                        reason=str(exc),
+                        source=f"{inventory_base_url}/endpoints",
+                    )
+                )
+                continue
         endpoint = _runpod_endpoint_live_inventory_row(tuple, api_key, inventory_base_url, rows=inventory_rows)
         if endpoint is None:
             findings.append(
@@ -224,24 +236,78 @@ def runpod_endpoint_catalog_findings(tuples: list[Any], credentials: dict[str, d
 
 def _runpod_endpoint_live_inventory_rows(api_key: str, base_url: str) -> list[dict[str, Any]]:
     try:
-        response = requests_session().get(
-            f"{base_url}/endpoints",
-            params={"includeWorkers": "true", "includeTemplate": "true"},
-            headers={"authorization": f"Bearer {api_key}", "accept": "application/json"},
-            timeout=10,
-        )
-        if response.status_code not in {200, 201, 202}:
-            return []
-        payload = response.json()
-        if isinstance(payload, dict):
-            rows = payload.get("endpoints") or payload.get("data") or payload.get("items") or payload.get("results")
-        else:
-            rows = payload
-        if not isinstance(rows, list):
-            return []
-        return [row for row in rows if isinstance(row, dict)]
-    except Exception:
+        session = requests_session()
+        url = f"{base_url}/endpoints"
+        params: dict[str, str] | None = {"includeWorkers": "true", "includeTemplate": "true"}
+        rows: list[dict[str, Any]] = []
+        seen_urls: set[str] = set()
+        while url:
+            if url in seen_urls:
+                raise TupleError("RunPod endpoint inventory pagination loop", retryable=True, status_code=502)
+            if len(seen_urls) >= 100:
+                raise TupleError("RunPod endpoint inventory pagination exceeded 100 pages", retryable=True, status_code=502)
+            seen_urls.add(url)
+            response = session.get(
+                url,
+                params=params,
+                headers={"authorization": f"Bearer {api_key}", "accept": "application/json"},
+                timeout=10,
+            )
+            params = None
+            if response.status_code not in {200, 201, 202}:
+                raise TupleError(f"RunPod endpoint inventory failed: {response.status_code}", retryable=True, status_code=502)
+            payload = response.json()
+            rows.extend(_runpod_inventory_rows(payload))
+            url = _runpod_inventory_next_url(payload, current_url=url)
+        return rows
+    except TupleError:
+        raise
+    except Exception as exc:
+        raise TupleError(
+            f"RunPod endpoint inventory lookup failed: {type(exc).__name__}: {exc}",
+            retryable=True,
+            status_code=502,
+            code="PROVIDER_UPSTREAM_UNAVAILABLE",
+        ) from exc
+
+
+def _runpod_inventory_rows(payload: object) -> list[dict[str, Any]]:
+    if isinstance(payload, dict):
+        raw = payload.get("endpoints") or payload.get("data") or payload.get("items") or payload.get("results")
+    else:
+        raw = payload
+    if not isinstance(raw, list):
         return []
+    return [row for row in raw if isinstance(row, dict)]
+
+
+def _runpod_inventory_next_url(payload: object, *, current_url: str) -> str:
+    if not isinstance(payload, dict):
+        return ""
+    for key in ("next", "nextUrl", "next_url"):
+        raw = payload.get(key)
+        if isinstance(raw, str) and raw.strip():
+            return urljoin(current_url, raw.strip())
+    links = payload.get("links")
+    raw = links.get("next") if isinstance(links, dict) else None
+    return urljoin(current_url, raw.strip()) if isinstance(raw, str) and raw.strip() else ""
+
+
+def _append_vision_text_content(parts: list[str], content: Any) -> None:
+    if content is None:
+        return
+    if isinstance(content, str):
+        if content:
+            parts.append(content)
+        return
+    if isinstance(content, list):
+        for item in content:
+            if isinstance(item, dict) and item.get("type") in {"text", "input_text"} and isinstance(item.get("text"), str):
+                parts.append(item["text"])
+                continue
+            raise TupleError("RunPod worker-vLLM vision route only accepts text message parts plus DataRef images", retryable=False, status_code=400)
+        return
+    raise TupleError("RunPod worker-vLLM vision route received invalid message content", retryable=False, status_code=400)
 
 
 def _runpod_endpoint_live_inventory_row(tuple: Any, api_key: str, base_url: str, *, rows: list[dict[str, Any]] | None = None) -> dict[str, Any] | None:
@@ -344,9 +410,8 @@ class RunpodVllmServerlessAdapter(TupleAdapter):
     def _call_sync(self, plan: CompiledPlan) -> TupleResult:
         if plan.input_refs and plan.task != "vision":
             raise TupleError("RunPod worker-vLLM only accepts DataRef inputs for vision", retryable=True, status_code=502)
-        if not plan.messages:
-            if not plan.input_refs:
-                raise TupleError("RunPod worker-vLLM openai-chat-completions contract requires compiled messages", retryable=True, status_code=502)
+        if not plan.messages and not plan.inline_inputs and not plan.input_refs:
+            raise TupleError("RunPod worker-vLLM openai-chat-completions contract requires messages, inline inputs, or input refs", retryable=True, status_code=502)
         health = self._health_sync()
         rejection_reason = runpod_vllm_health_preflight_rejection_reason(health, mode=plan.mode.value)
         if rejection_reason:
@@ -366,7 +431,8 @@ class RunpodVllmServerlessAdapter(TupleAdapter):
         return openai_chat_completion_result(json_or_error(response, "RunPod worker-vLLM OpenAI chat completions failed"))
 
     def _payload(self, plan: CompiledPlan) -> dict[str, Any]:
-        return openai_chat_payload_from_plan(plan, model=self.model, stream=False, messages=self._messages(plan))
+        messages = self._messages(plan) if plan.input_refs else None
+        return openai_chat_payload_from_plan(plan, model=self.model, stream=False, messages=messages)
 
     def _messages(self, plan: CompiledPlan) -> list[dict[str, Any]]:
         if plan.input_refs:
@@ -394,30 +460,38 @@ class RunpodVllmServerlessAdapter(TupleAdapter):
         if plan.task != "vision":
             raise TupleError("RunPod worker-vLLM only accepts DataRef inputs for vision", retryable=False, status_code=400)
         image_refs = [ref for ref in plan.input_refs if str(ref.content_type or "").lower().startswith("image/")]
+        non_image_refs = [ref for ref in plan.input_refs if not str(ref.content_type or "").lower().startswith("image/")]
+        if non_image_refs:
+            raise TupleError("RunPod worker-vLLM vision route only accepts image DataRef inputs", retryable=False, status_code=400)
         if not image_refs:
             raise TupleError("RunPod worker-vLLM vision route requires image DataRef input", retryable=False, status_code=400)
 
         messages: list[dict[str, Any]] = []
-        prompt_parts: list[str] = []
         for message in plan.messages:
-            if message.role == "system":
+            if message.role in {"system", "developer"}:
                 messages.append({"role": "system", "content": message.content})
-            elif message.content:
-                prompt_parts.append(message.content)
+            elif message.role == "user":
+                prompt_parts: list[str] = []
+                _append_vision_text_content(prompt_parts, message.content)
+                if prompt_parts:
+                    messages.append({"role": "user", "content": [{"type": "text", "text": part} for part in prompt_parts]})
+            else:
+                item = message.model_dump(mode="json", exclude_none=True)
+                messages.append(item)
+
+        tail_content: list[dict[str, Any]] = []
         for key in sorted(plan.inline_inputs):
             value = plan.inline_inputs[key]
             if value.value:
-                prompt_parts.append(value.value)
-
-        content: list[dict[str, Any]] = []
-        prompt = "\n".join(part for part in prompt_parts if part).strip()
-        if prompt:
-            content.append({"type": "text", "text": prompt})
+                tail_content.append({"type": "text", "text": str(value.value)})
         for ref in image_refs:
-            content.append({"type": "image_url", "image_url": {"url": self._safe_image_ref_url(ref)}})
-        if not content:
+            tail_content.append({"type": "image_url", "image_url": {"url": self._safe_image_ref_url(ref)}})
+        if not tail_content:
             raise TupleError("RunPod worker-vLLM vision route requires prompt or image content", retryable=False, status_code=400)
-        messages.append({"role": "user", "content": content})
+        if messages and messages[-1].get("role") == "user" and isinstance(messages[-1].get("content"), list):
+            messages[-1]["content"].extend(tail_content)
+        else:
+            messages.append({"role": "user", "content": tail_content})
         return messages
 
     def _safe_image_ref_url(self, ref: Any) -> str:
@@ -472,12 +546,13 @@ def runpod_vllm_health_rejection_reason(health: dict[str, Any]) -> str | None:
         return "health response did not include workers"
     ready = _positive_int_from_mapping(workers, "ready")
     running = _positive_int_from_mapping(workers, "running")
+    idle = _positive_int_from_mapping(workers, "idle")
     initializing = _positive_int_from_mapping(workers, "initializing")
     throttled = _positive_int_from_mapping(workers, "throttled")
     unhealthy = _positive_int_from_mapping(workers, "unhealthy")
     if unhealthy > 0:
         return "workers.unhealthy is non-zero"
-    if ready + running > 0:
+    if idle + ready + running > 0:
         return None
     if initializing > 0:
         return "workers are still initializing"

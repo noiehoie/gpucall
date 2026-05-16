@@ -22,6 +22,7 @@ from gpucall_sdk.openai_contract import (
 DEFAULT_AUTO_UPLOAD_THRESHOLD_BYTES = 8 * 1024
 DEFAULT_REQUEST_TIMEOUT_SECONDS = 600.0
 DEFAULT_ASYNC_POLL_TIMEOUT_SECONDS = 600.0
+MIN_ASYNC_POLL_INTERVAL_SECONDS = 0.25
 SUPPORTED_TASKS = {"infer", "vision", "transcribe", "convert", "train", "fine-tune", "split-infer"}
 TERMINAL_JOB_STATES = {
     "SUCCEEDED",
@@ -227,10 +228,17 @@ class GPUCallClient:
         )
         self._raise_for_status(response)
         presign = response.json()
-        upload = httpx.put(presign["upload_url"], content=body, headers={"content-type": mime}, timeout=self.client.timeout)
+        upload_url, data_ref = _require_presign_put_response(presign)
+        upload = httpx.put(
+            upload_url,
+            content=body,
+            headers={"content-type": mime},
+            timeout=self.client.timeout,
+            follow_redirects=True,
+        )
         if upload.status_code >= 400:
             raise RuntimeError(f"object upload failed: {upload.status_code}")
-        return presign["data_ref"]
+        return data_ref
 
     def infer(
         self,
@@ -252,17 +260,20 @@ class GPUCallClient:
         functions: list[dict[str, Any]] | None = None,
         function_call: str | dict[str, Any] | None = None,
         stream_options: dict[str, Any] | None = None,
+        n: int | None = None,
         messages: list[dict[str, Any]] | None = None,
         intent: str | None = None,
         task_family: str | None = None,
         metadata: dict[str, Any] | None = None,
         idempotency_key: str | None = None,
+        webhook_url: str | None = None,
         auto_upload: bool = True,
         poll: bool = True,
         poll_interval: float = 1.0,
         poll_timeout: float = DEFAULT_ASYNC_POLL_TIMEOUT_SECONDS,
         request_timeout: float | None = None,
     ) -> dict[str, Any]:
+        _validate_non_stream_mode(mode)
         payload = self._task_payload(
             task=task,
             mode=mode,
@@ -281,11 +292,13 @@ class GPUCallClient:
             functions=functions,
             function_call=function_call,
             stream_options=stream_options,
+            n=n,
             messages=messages,
             intent=intent,
             task_family=task_family,
             metadata=metadata,
             idempotency_key=idempotency_key,
+            webhook_url=webhook_url,
             auto_upload=auto_upload,
         )
         try:
@@ -312,6 +325,7 @@ class GPUCallClient:
         task_family: str | None = None,
         metadata: dict[str, Any] | None = None,
         idempotency_key: str | None = None,
+        webhook_url: str | None = None,
         response_format: dict[str, Any] | None = None,
         poll: bool = True,
         poll_timeout: float = DEFAULT_ASYNC_POLL_TIMEOUT_SECONDS,
@@ -326,6 +340,7 @@ class GPUCallClient:
             task_family=task_family,
             metadata=metadata,
             idempotency_key=idempotency_key,
+            webhook_url=webhook_url,
             response_format=response_format,
             poll=poll,
             poll_timeout=poll_timeout,
@@ -339,6 +354,14 @@ class GPUCallClient:
         files: list[str | Path] | None = None,
         task: str = "infer",
         response_format: dict[str, Any] | None = None,
+        max_tokens: int | None = None,
+        temperature: float | None = None,
+        top_p: float | None = None,
+        stop: str | list[str] | None = None,
+        seed: int | None = None,
+        presence_penalty: float | None = None,
+        frequency_penalty: float | None = None,
+        stream_options: dict[str, Any] | None = None,
     ):
         payload = self._task_payload(
             task=task,
@@ -346,8 +369,14 @@ class GPUCallClient:
             prompt=prompt,
             files=files,
             response_format=response_format,
-            max_tokens=None,
-            temperature=None,
+            max_tokens=max_tokens,
+            temperature=temperature,
+            top_p=top_p,
+            stop=stop,
+            seed=seed,
+            presence_penalty=presence_penalty,
+            frequency_penalty=frequency_penalty,
+            stream_options=stream_options,
         )
         with self.client.stream("POST", "/v2/tasks/stream", json=payload) as response:
             self._emit_warnings(response)
@@ -357,6 +386,7 @@ class GPUCallClient:
                     yield chunk
 
     def poll_job(self, job_id: str, *, interval: float = 1.0, timeout: float = DEFAULT_ASYNC_POLL_TIMEOUT_SECONDS) -> dict[str, Any]:
+        interval = _normalized_poll_interval(interval)
         deadline = time.monotonic() + timeout
         while time.monotonic() < deadline:
             response = self.client.get(f"/v2/jobs/{job_id}")
@@ -366,7 +396,7 @@ class GPUCallClient:
             if job["state"] in TERMINAL_JOB_STATES:
                 return job
             time.sleep(interval)
-        raise TimeoutError(f"job {job_id} did not finish within {timeout}s")
+        raise GPUCallColdStartTimeout(f"job {job_id} did not finish within {timeout}s")
 
     def _task_payload(
         self,
@@ -388,11 +418,13 @@ class GPUCallClient:
         functions: list[dict[str, Any]] | None = None,
         function_call: str | dict[str, Any] | None = None,
         stream_options: dict[str, Any] | None = None,
+        n: int | None = None,
         messages: list[dict[str, Any]] | None = None,
         intent: str | None = None,
         task_family: str | None = None,
         metadata: dict[str, Any] | None = None,
         idempotency_key: str | None = None,
+        webhook_url: str | None = None,
         auto_upload: bool = True,
     ) -> dict[str, Any]:
         _validate_task(task)
@@ -431,12 +463,13 @@ class GPUCallClient:
             "functions": functions,
             "function_call": function_call,
             "stream_options": stream_options,
+            "n": n,
         }
         for key, value in optional.items():
             if value is not None:
                 payload[key] = value
         if mode == "async":
-            payload["webhook_url"] = None
+            payload["webhook_url"] = webhook_url
         return payload
 
     def _emit_warnings(self, response: httpx.Response) -> None:
@@ -505,17 +538,20 @@ class AsyncGPUCallClient:
         functions: list[dict[str, Any]] | None = None,
         function_call: str | dict[str, Any] | None = None,
         stream_options: dict[str, Any] | None = None,
+        n: int | None = None,
         messages: list[dict[str, Any]] | None = None,
         intent: str | None = None,
         task_family: str | None = None,
         metadata: dict[str, Any] | None = None,
         idempotency_key: str | None = None,
+        webhook_url: str | None = None,
         auto_upload: bool = True,
         poll: bool = True,
         poll_interval: float = 1.0,
         poll_timeout: float = DEFAULT_ASYNC_POLL_TIMEOUT_SECONDS,
         request_timeout: float | None = None,
     ) -> dict[str, Any]:
+        _validate_non_stream_mode(mode)
         payload = await self._task_payload(
             task=task,
             mode=mode,
@@ -534,11 +570,13 @@ class AsyncGPUCallClient:
             functions=functions,
             function_call=function_call,
             stream_options=stream_options,
+            n=n,
             messages=messages,
             intent=intent,
             task_family=task_family,
             metadata=metadata,
             idempotency_key=idempotency_key,
+            webhook_url=webhook_url,
             auto_upload=auto_upload,
         )
         try:
@@ -565,6 +603,7 @@ class AsyncGPUCallClient:
         task_family: str | None = None,
         metadata: dict[str, Any] | None = None,
         idempotency_key: str | None = None,
+        webhook_url: str | None = None,
         response_format: dict[str, Any] | None = None,
         poll: bool = True,
         poll_timeout: float = DEFAULT_ASYNC_POLL_TIMEOUT_SECONDS,
@@ -579,6 +618,7 @@ class AsyncGPUCallClient:
             task_family=task_family,
             metadata=metadata,
             idempotency_key=idempotency_key,
+            webhook_url=webhook_url,
             response_format=response_format,
             poll=poll,
             poll_timeout=poll_timeout,
@@ -592,6 +632,14 @@ class AsyncGPUCallClient:
         files: list[str | Path] | None = None,
         task: str = "infer",
         response_format: dict[str, Any] | None = None,
+        max_tokens: int | None = None,
+        temperature: float | None = None,
+        top_p: float | None = None,
+        stop: str | list[str] | None = None,
+        seed: int | None = None,
+        presence_penalty: float | None = None,
+        frequency_penalty: float | None = None,
+        stream_options: dict[str, Any] | None = None,
     ):
         payload = await self._task_payload(
             task=task,
@@ -599,8 +647,14 @@ class AsyncGPUCallClient:
             prompt=prompt,
             files=files,
             response_format=response_format,
-            max_tokens=None,
-            temperature=None,
+            max_tokens=max_tokens,
+            temperature=temperature,
+            top_p=top_p,
+            stop=stop,
+            seed=seed,
+            presence_penalty=presence_penalty,
+            frequency_penalty=frequency_penalty,
+            stream_options=stream_options,
         )
         async with self.client.stream("POST", "/v2/tasks/stream", json=payload) as response:
             _emit_warnings(response)
@@ -623,13 +677,20 @@ class AsyncGPUCallClient:
         )
         _raise_for_status(response)
         presign = response.json()
+        upload_url, data_ref = _require_presign_put_response(presign)
         async with httpx.AsyncClient(timeout=self.client.timeout) as upload_client:
-            upload = await upload_client.put(str(presign["upload_url"]), content=body, headers={"content-type": mime})
+            upload = await upload_client.put(
+                upload_url,
+                content=body,
+                headers={"content-type": mime},
+                follow_redirects=True,
+            )
         if upload.status_code >= 400:
             raise RuntimeError(f"object upload failed: {upload.status_code}")
-        return presign["data_ref"]
+        return data_ref
 
     async def poll_job(self, job_id: str, *, interval: float = 1.0, timeout: float = DEFAULT_ASYNC_POLL_TIMEOUT_SECONDS) -> dict[str, Any]:
+        interval = _normalized_poll_interval(interval)
         deadline = time.monotonic() + timeout
         while time.monotonic() < deadline:
             response = await self.client.get(f"/v2/jobs/{job_id}")
@@ -639,7 +700,7 @@ class AsyncGPUCallClient:
             if job["state"] in TERMINAL_JOB_STATES:
                 return job
             await _sleep(interval)
-        raise TimeoutError(f"job {job_id} did not finish within {timeout}s")
+        raise GPUCallColdStartTimeout(f"job {job_id} did not finish within {timeout}s")
 
     async def _task_payload(
         self,
@@ -661,11 +722,13 @@ class AsyncGPUCallClient:
         functions: list[dict[str, Any]] | None = None,
         function_call: str | dict[str, Any] | None = None,
         stream_options: dict[str, Any] | None = None,
+        n: int | None = None,
         messages: list[dict[str, Any]] | None = None,
         intent: str | None = None,
         task_family: str | None = None,
         metadata: dict[str, Any] | None = None,
         idempotency_key: str | None = None,
+        webhook_url: str | None = None,
         auto_upload: bool = True,
     ) -> dict[str, Any]:
         _validate_task(task)
@@ -704,12 +767,13 @@ class AsyncGPUCallClient:
             "functions": functions,
             "function_call": function_call,
             "stream_options": stream_options,
+            "n": n,
         }
         for key, value in optional.items():
             if value is not None:
                 payload[key] = value
         if mode == "async":
-            payload["webhook_url"] = None
+            payload["webhook_url"] = webhook_url
         return payload
 
 
@@ -755,6 +819,8 @@ class _ChatCompletionsResource:
         **extra: Any,
     ) -> dict[str, Any]:
         _reject_extra_openai_fields(extra)
+        if mode == "stream":
+            raise GPUCallCallerRoutingError("chat.completions.create does not return streamed chunks; use GPUCallClient.stream")
         message_payload = _normalize_messages(messages)
         request_metadata = _openai_metadata(
             metadata=metadata,
@@ -792,19 +858,24 @@ class _ChatCompletionsResource:
             functions=functions,
             function_call=function_call,
             stream_options=stream_options,
+            n=n,
             intent=intent,
             task_family=task_family,
             metadata=request_metadata,
             idempotency_key=idempotency_key,
+            webhook_url=None,
             poll=True,
             poll_interval=poll_interval,
             poll_timeout=poll_timeout,
             request_timeout=request_timeout,
         )
+        _raise_if_failed_job_result(result)
         value = _extract_result_text(result)
         tool_calls = _extract_tool_calls(result)
         function_call = _extract_function_call(result)
-        _raise_if_empty_output(value, tool_calls=tool_calls, function_call=function_call)
+        refusal = _extract_refusal(result)
+        openai_choices = _extract_openai_choices(result)
+        _raise_if_empty_output(value, tool_calls=tool_calls, function_call=function_call, refusal=refusal)
         output_validated = _extract_output_validated(result)
         response = _openai_like_response(
             model,
@@ -814,6 +885,8 @@ class _ChatCompletionsResource:
             tool_calls=tool_calls,
             function_call=function_call,
             finish_reason=_extract_finish_reason(result),
+            openai_choices=openai_choices,
+            refusal=refusal,
         )
         if parse_json:
             if output_validated is False:
@@ -867,6 +940,8 @@ class _AsyncChatCompletionsResource:
         **extra: Any,
     ) -> dict[str, Any]:
         _reject_extra_openai_fields(extra)
+        if mode == "stream":
+            raise GPUCallCallerRoutingError("chat.completions.create does not return streamed chunks; use AsyncGPUCallClient.stream")
         message_payload = _normalize_messages(messages)
         request_metadata = _openai_metadata(
             metadata=metadata,
@@ -904,19 +979,24 @@ class _AsyncChatCompletionsResource:
             functions=functions,
             function_call=function_call,
             stream_options=stream_options,
+            n=n,
             intent=intent,
             task_family=task_family,
             metadata=request_metadata,
             idempotency_key=idempotency_key,
+            webhook_url=None,
             poll=True,
             poll_interval=poll_interval,
             poll_timeout=poll_timeout,
             request_timeout=request_timeout,
         )
+        _raise_if_failed_job_result(result)
         value = _extract_result_text(result)
         tool_calls = _extract_tool_calls(result)
         function_call = _extract_function_call(result)
-        _raise_if_empty_output(value, tool_calls=tool_calls, function_call=function_call)
+        refusal = _extract_refusal(result)
+        openai_choices = _extract_openai_choices(result)
+        _raise_if_empty_output(value, tool_calls=tool_calls, function_call=function_call, refusal=refusal)
         output_validated = _extract_output_validated(result)
         response = _openai_like_response(
             model,
@@ -926,6 +1006,8 @@ class _AsyncChatCompletionsResource:
             tool_calls=tool_calls,
             function_call=function_call,
             finish_reason=_extract_finish_reason(result),
+            openai_choices=openai_choices,
+            refusal=refusal,
         )
         if parse_json:
             if output_validated is False:
@@ -939,7 +1021,7 @@ class _AsyncChatCompletionsResource:
 
 def _normalize_messages(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
     normalized: list[dict[str, Any]] = []
-    allowed_keys = {"role", "content", "name", "tool_calls", "tool_call_id", "function_call"}
+    allowed_keys = {"role", "content", "name", "tool_calls", "tool_call_id", "function_call", "refusal"}
     for message in messages:
         extra = sorted(set(message) - allowed_keys)
         if extra:
@@ -949,9 +1031,9 @@ def _normalize_messages(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
         content = _normalize_message_content(message.get("content") if has_content else "")
         _validate_openai_message(role=role, content=content, message=message, has_content=has_content)
         item: dict[str, Any] = {"role": role}
-        if has_content or not any(message.get(key) is not None for key in ("tool_calls", "tool_call_id", "function_call")):
+        if has_content or not any(message.get(key) is not None for key in ("tool_calls", "tool_call_id", "function_call", "refusal")):
             item["content"] = content
-        for key in ("name", "tool_calls", "tool_call_id", "function_call"):
+        for key in ("name", "tool_calls", "tool_call_id", "function_call", "refusal"):
             if message.get(key) is not None:
                 item[key] = message[key]
         normalized.append(item)
@@ -967,10 +1049,12 @@ def _validate_openai_message(*, role: str, content: str | None, message: dict[st
         if not has_content or content is None or not isinstance(message.get("name"), str):
             raise GPUCallCallerRoutingError("function messages require content and name")
         return
-    if role == "assistant" and (message.get("tool_calls") is not None or message.get("function_call") is not None):
+    if role == "assistant" and (
+        message.get("tool_calls") is not None or message.get("function_call") is not None or message.get("refusal") is not None
+    ):
         return
     if not has_content or content is None:
-        raise GPUCallCallerRoutingError("message content is required unless assistant tool_calls/function_call is present")
+        raise GPUCallCallerRoutingError("message content is required unless assistant tool_calls/function_call/refusal is present")
 
 
 def _normalize_message_content(content: Any) -> str | None:
@@ -1005,6 +1089,23 @@ def _validate_task(task: str) -> None:
         f"unsupported gpucall task {task!r}; keep task as one of {sorted(SUPPORTED_TASKS)} "
         "and pass workload purpose with intent=... or task_family=..."
     )
+
+
+def _validate_non_stream_mode(mode: str) -> None:
+    if mode == "stream":
+        raise GPUCallCallerRoutingError("infer(mode='stream') does not return streamed chunks; use stream()")
+    if mode not in {"sync", "async"}:
+        raise GPUCallCallerRoutingError("mode must be 'sync' or 'async'")
+
+
+def _normalized_poll_interval(interval: float) -> float:
+    try:
+        value = float(interval)
+    except (TypeError, ValueError) as exc:
+        raise GPUCallCallerRoutingError("poll interval must be numeric") from exc
+    if value < 0:
+        raise GPUCallCallerRoutingError("poll interval must be non-negative")
+    return max(value, MIN_ASYNC_POLL_INTERVAL_SECONDS)
 
 
 def _openai_metadata(
@@ -1067,6 +1168,18 @@ def _reject_extra_openai_fields(extra: dict[str, Any]) -> None:
         raise GPUCallCallerRoutingError(f"unsupported OpenAI chat.completions fields: {fields}")
 
 
+def _require_presign_put_response(presign: Any) -> tuple[str, dict[str, Any]]:
+    if not isinstance(presign, dict):
+        raise RuntimeError("invalid presign response: expected object")
+    upload_url = presign.get("upload_url")
+    data_ref = presign.get("data_ref")
+    if not isinstance(upload_url, str) or not upload_url:
+        raise RuntimeError("invalid presign response: missing upload_url")
+    if not isinstance(data_ref, dict):
+        raise RuntimeError("invalid presign response: missing data_ref")
+    return upload_url, data_ref
+
+
 def _metadata_value(value: Any) -> str:
     if isinstance(value, str):
         return value
@@ -1083,13 +1196,29 @@ def _extract_result_text(result: dict[str, Any]) -> str:
     return value if isinstance(value, str) else ""
 
 
+def _raise_if_failed_job_result(result: dict[str, Any]) -> None:
+    if result.get("state") != "FAILED":
+        return
+    failure_artifact = result.get("failure_artifact")
+    detail = result.get("error") or result.get("detail") or "gpucall async job failed"
+    code = result.get("provider_error_code") or result.get("code")
+    raise GPUCallProviderRuntimeError(
+        str(detail),
+        status_code=502,
+        code=str(code) if code is not None else None,
+        response_body=result,
+        failure_artifact=failure_artifact if isinstance(failure_artifact, dict) else None,
+    )
+
+
 def _raise_if_empty_output(
     value: str,
     *,
     tool_calls: list[dict[str, Any]] | None = None,
     function_call: dict[str, Any] | None = None,
+    refusal: str | None = None,
 ) -> None:
-    if not value.strip() and not tool_calls and not function_call:
+    if not value.strip() and not tool_calls and not function_call and refusal is None:
         raise GPUCallEmptyOutputError("gpucall returned an empty output")
 
 
@@ -1123,6 +1252,22 @@ def _extract_finish_reason(result: dict[str, Any]) -> str | None:
     return finish_reason if isinstance(finish_reason, str) else None
 
 
+def _extract_refusal(result: dict[str, Any]) -> str | None:
+    payload = result.get("result") or {}
+    refusal = payload.get("refusal")
+    return refusal if isinstance(refusal, str) else None
+
+
+def _extract_openai_choices(result: dict[str, Any]) -> list[dict[str, Any]] | None:
+    payload = result.get("result") or {}
+    choices = payload.get("openai_choices")
+    if choices is None:
+        return None
+    if not isinstance(choices, list) or not all(isinstance(choice, dict) for choice in choices):
+        raise GPUCallProviderRuntimeError("gpucall returned invalid openai_choices", status_code=502, response_body=result)
+    return choices or None
+
+
 def _openai_like_response(
     model: str,
     content: str,
@@ -1132,28 +1277,33 @@ def _openai_like_response(
     tool_calls: list[dict[str, Any]] | None = None,
     function_call: dict[str, Any] | None = None,
     finish_reason: str | None = None,
+    openai_choices: list[dict[str, Any]] | None = None,
+    refusal: str | None = None,
 ) -> dict[str, Any]:
     message: dict[str, Any] = {
         "role": "assistant",
-        "content": content if content else (None if tool_calls or function_call else ""),
+        "content": None if refusal is not None else (content if content else (None if tool_calls or function_call else "")),
     }
     if tool_calls:
         message["tool_calls"] = tool_calls
     if function_call:
         message["function_call"] = function_call
+    if refusal is not None:
+        message["refusal"] = refusal
     resolved_finish_reason = finish_reason or ("tool_calls" if tool_calls else ("function_call" if function_call else "stop"))
+    choices = openai_choices or [
+        {
+            "index": 0,
+            "message": message,
+            "finish_reason": resolved_finish_reason,
+        }
+    ]
     response: dict[str, Any] = {
         "id": f"chatcmpl-{hashlib.sha256(f'{time.time()}:{content}'.encode()).hexdigest()[:24]}",
         "object": "chat.completion",
         "created": int(time.time()),
         "model": model,
-        "choices": [
-            {
-                "index": 0,
-                "message": message,
-                "finish_reason": resolved_finish_reason,
-            }
-        ],
+        "choices": choices,
         "usage": usage,
     }
     if output_validated is not None:

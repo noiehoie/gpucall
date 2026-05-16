@@ -41,7 +41,7 @@ def plan_payload(plan: CompiledPlan) -> dict[str, Any]:
         "stop_tokens": plan.stop_tokens,
         "repetition_penalty": plan.repetition_penalty,
         "guided_decoding": plan.guided_decoding,
-        "trust_remote_code": bool(trust_policy.get("trust_remote_code")) if isinstance(trust_policy, dict) else False,
+        "trust_remote_code": trust_policy.get("trust_remote_code") is True if isinstance(trust_policy, dict) else False,
         "attestations": plan.attestations,
     }
 
@@ -76,13 +76,14 @@ def openai_chat_payload_from_plan(
         "tool_choice": plan.tool_choice,
         "functions": plan.functions,
         "function_call": plan.function_call,
-        "stream_options": plan.stream_options,
         "n": plan.n,
         "response_format": _openai_response_format(plan) if plan.response_format is not None else None,
     }
     for key, value in optional.items():
         if value is not None:
             payload[key] = value
+    if stream and plan.stream_options is not None:
+        payload["stream_options"] = plan.stream_options
     return payload
 
 
@@ -90,8 +91,10 @@ def _openai_response_format(plan: CompiledPlan) -> dict[str, Any]:
     response_format = plan.response_format
     if response_format is None:
         raise TupleError("OpenAI response_format requested without response format", retryable=False, status_code=400)
-    if response_format.type is not ResponseFormatType.JSON_SCHEMA:
-        return response_format.model_dump(mode="json")
+    if response_format.type is ResponseFormatType.JSON_OBJECT:
+        return {"type": "json_object"}
+    if response_format.type is ResponseFormatType.TEXT:
+        return {"type": "text"}
     if response_format.json_schema is None:
         raise TupleError("json_schema response_format requires schema", retryable=False, status_code=400)
     return {
@@ -111,19 +114,22 @@ def _schema_name(recipe_name: str) -> str:
 
 def _openai_messages_from_plan(plan: CompiledPlan) -> list[dict[str, Any]]:
     messages: list[dict[str, Any]] = []
-    has_system_message = any(message.role == "system" for message in plan.messages)
-    if plan.system_prompt and not has_system_message:
+    has_matching_system_prompt = any(message.role == "system" and message.content == plan.system_prompt for message in plan.messages)
+    if plan.system_prompt and not has_matching_system_prompt:
         messages.append({"role": "system", "content": plan.system_prompt})
     for message in plan.messages:
         item = message.model_dump(mode="json", exclude_none=True)
         messages.append(item)
-    if plan.messages:
-        return messages
-    if "prompt" in plan.inline_inputs:
-        return [*messages, {"role": "user", "content": plan.inline_inputs["prompt"].value}]
     if plan.inline_inputs:
-        return [*messages, {"role": "user", "content": "\n".join(value.value for value in plan.inline_inputs.values())}]
-    return messages or [{"role": "user", "content": ""}]
+        parts: list[str] = []
+        prompt = plan.inline_inputs.get("prompt")
+        if prompt is not None:
+            parts.append(str(prompt.value))
+        parts.extend(str(value.value) for key, value in plan.inline_inputs.items() if key != "prompt")
+        return [*messages, {"role": "user", "content": "\n".join(parts)}]
+    if messages and any(message.role not in {"system", "developer"} for message in plan.messages):
+        return messages
+    return [*messages, {"role": "user", "content": ""}]
 
 
 def gpucall_tuple_result(value: Any) -> TupleResult:
@@ -131,7 +137,10 @@ def gpucall_tuple_result(value: Any) -> TupleResult:
         return value
     if isinstance(value, dict):
         if value.get("kind") in {"inline", "ref", "artifact_manifest"}:
-            return TupleResult.model_validate(value)
+            try:
+                return TupleResult.model_validate(value)
+            except ValueError as exc:
+                raise TupleError("tuple output does not match gpucall TupleResult contract", retryable=True, status_code=502) from exc
     raise TupleError(f"tuple output does not match gpucall TupleResult contract: {type(value).__name__}", retryable=True, status_code=502)
 
 
@@ -158,6 +167,7 @@ def openai_chat_completion_result(value: Any) -> TupleResult:
     first_tool_calls: list[dict[str, Any]] | None = None
     first_function_call: dict[str, Any] | None = None
     first_finish_reason: str | None = None
+    first_refusal: str | None = None
     for index, raw_choice in enumerate(choices):
         if not isinstance(raw_choice, dict):
             raise TupleError("OpenAI-compatible response has invalid choice", retryable=True, status_code=502)
@@ -170,40 +180,46 @@ def openai_chat_completion_result(value: Any) -> TupleResult:
         content: Any = None
         tool_calls: Any = None
         function_call: Any = None
+        refusal: Any = None
         if isinstance(message, dict):
             content = message.get("content")
             tool_calls = message.get("tool_calls")
             function_call = message.get("function_call")
+            refusal = message.get("refusal")
         if content is not None and not isinstance(content, str):
             raise TupleError("OpenAI-compatible response has non-string assistant content", retryable=True, status_code=502)
+        if refusal is not None and not isinstance(refusal, str):
+            raise TupleError("OpenAI-compatible response has invalid refusal", retryable=True, status_code=502)
         if tool_calls is not None and not isinstance(tool_calls, list):
             raise TupleError("OpenAI-compatible response has invalid tool_calls", retryable=True, status_code=502)
         if isinstance(tool_calls, list):
             for item in tool_calls:
                 if not _is_openai_tool_call(item):
                     raise TupleError("OpenAI-compatible response has invalid tool_calls", retryable=True, status_code=502)
-        if function_call is not None and not isinstance(function_call, dict):
+        if function_call is not None and not _is_openai_function_call(function_call):
             raise TupleError("OpenAI-compatible response has invalid function_call", retryable=True, status_code=502)
-        if content is None and not tool_calls and not function_call:
-            raise TupleError("OpenAI-compatible response missing assistant content, tool_calls, or function_call", retryable=True, status_code=502)
+        if content is None and not tool_calls and not function_call and refusal is None:
+            raise TupleError("OpenAI-compatible response missing assistant content, tool_calls, function_call, or refusal", retryable=True, status_code=502)
         normalized_choices.append(choice)
         if index == 0:
             first_content = content
             first_tool_calls = tool_calls
             first_function_call = function_call
             first_finish_reason = finish_reason
+            first_refusal = refusal
 
-    usage: dict[str, int] = {}
+    usage: dict[str, Any] = {}
     raw_usage = value.get("usage")
     if isinstance(raw_usage, dict):
-        usage = {str(k): v for k, v in raw_usage.items() if isinstance(v, int) and not isinstance(v, bool)}
+        usage = {str(k): v for k, v in raw_usage.items()}
     return TupleResult(
         kind="inline",
-        value=first_content,
+        value=first_content if first_content is not None else first_refusal,
         usage=usage,
         tool_calls=first_tool_calls,
         function_call=first_function_call,
         finish_reason=first_finish_reason,
+        refusal=first_refusal,
         openai_choices=normalized_choices,
     )
 
@@ -224,3 +240,11 @@ def _is_openai_tool_call(value: Any) -> bool:
             return False
         return isinstance(custom.get("name"), str) and isinstance(custom.get("input"), str)
     return False
+
+
+def _is_openai_function_call(value: Any) -> bool:
+    return (
+        isinstance(value, dict)
+        and isinstance(value.get("name"), str)
+        and isinstance(value.get("arguments"), str)
+    )

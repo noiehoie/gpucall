@@ -2,8 +2,9 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from types import SimpleNamespace
 
-from gpucall.cli import launch_check_command
+from gpucall.cli import _production_placeholder_tuples, launch_check_command
 
 
 def test_launch_check_summary_default(tmp_path, monkeypatch, capsys):
@@ -85,3 +86,38 @@ def test_launch_check_output_json_keeps_summary_stdout(tmp_path, monkeypatch, ca
     assert f"details_json: {output_json}" in output
     assert "- gateway_live_smoke" in output
     assert json.loads(output_json.read_text(encoding="utf-8"))["blockers"][0]["check"] == "gateway_live_smoke"
+
+
+def test_production_placeholder_gate_respects_policy_allowlist() -> None:
+    config = SimpleNamespace(
+        policy=SimpleNamespace(tuples=SimpleNamespace(allow=["runpod-real"], deny=[])),
+        tuples={
+            "runpod-real": SimpleNamespace(
+                adapter="runpod-vllm-serverless",
+                endpoint="https://api.runpod.ai/v2",
+                target="vllm-realendpoint",
+            ),
+            "runpod-placeholder": SimpleNamespace(
+                adapter="runpod-vllm-serverless",
+                endpoint="https://api.runpod.ai/v2",
+                target="RUNPOD_ENDPOINT_ID_PLACEHOLDER",
+            ),
+        },
+    )
+
+    assert _production_placeholder_tuples(config) == []
+
+
+def test_production_placeholder_gate_blocks_allowed_placeholder() -> None:
+    config = SimpleNamespace(
+        policy=SimpleNamespace(tuples=SimpleNamespace(allow=["runpod-placeholder"], deny=[])),
+        tuples={
+            "runpod-placeholder": SimpleNamespace(
+                adapter="runpod-vllm-serverless",
+                endpoint="https://api.runpod.ai/v2",
+                target="RUNPOD_ENDPOINT_ID_PLACEHOLDER",
+            ),
+        },
+    )
+
+    assert _production_placeholder_tuples(config) == ["runpod-placeholder"]

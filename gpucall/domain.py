@@ -347,6 +347,7 @@ class ChatMessage(BaseModel):
     tool_calls: list[dict[str, Any]] | None = None
     tool_call_id: str | None = None
     function_call: dict[str, Any] | None = None
+    refusal: str | None = None
 
     @model_validator(mode="after")
     def validate_openai_message_contract(self) -> "ChatMessage":
@@ -359,10 +360,10 @@ class ChatMessage(BaseModel):
             if not self.name or not has_content:
                 raise ValueError("function messages require content and name")
             return self
-        if self.role == "assistant" and (self.tool_calls or self.function_call):
+        if self.role == "assistant" and (self.tool_calls or self.function_call or self.refusal is not None):
             return self
         if not has_content:
-            raise ValueError("message content is required unless assistant tool_calls/function_call is present")
+            raise ValueError("message content is required unless assistant tool_calls/function_call/refusal is present")
         return self
 
 
@@ -822,12 +823,30 @@ class TupleResult(BaseModel):
     value: str | None = None
     ref: DataRef | None = None
     artifact_manifest: ArtifactManifest | None = None
-    usage: dict[str, int] = Field(default_factory=dict)
+    usage: dict[str, Any] = Field(default_factory=dict)
     output_validated: bool | None = None
     tool_calls: list[dict[str, Any]] | None = None
     function_call: dict[str, Any] | None = None
     finish_reason: str | None = None
+    refusal: str | None = None
     openai_choices: list[dict[str, Any]] | None = None
+
+    @model_validator(mode="after")
+    def validate_result_payload(self) -> "TupleResult":
+        if self.kind == "ref" and self.ref is None:
+            raise ValueError("ref result requires ref")
+        if self.kind == "artifact_manifest" and self.artifact_manifest is None:
+            raise ValueError("artifact_manifest result requires artifact_manifest")
+        if (
+            self.kind == "inline"
+            and self.value is None
+            and not self.tool_calls
+            and self.function_call is None
+            and self.refusal is None
+            and not self.openai_choices
+        ):
+            raise ValueError("inline result requires value, tool_calls, function_call, refusal, or openai_choices")
+        return self
 
 
 def _context_budget_for(payload: dict[str, Any]) -> int:

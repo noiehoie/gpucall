@@ -57,6 +57,7 @@ def test_python_sdk_uploads_file_and_sends_data_ref(tmp_path, monkeypatch) -> No
         nonlocal uploaded
         uploaded = True
         assert url == "https://example.com/upload"
+        assert kwargs.get("follow_redirects") is True
         return httpx.Response(200)
 
     def handler(request: httpx.Request) -> httpx.Response:
@@ -164,6 +165,22 @@ def test_python_sdk_sends_idempotency_key() -> None:
     assert sent_payload["task"] == "infer"
 
 
+def test_python_sdk_sends_async_webhook_url() -> None:
+    sent_payload = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal sent_payload
+        sent_payload = json.loads(request.read())
+        return httpx.Response(202, json={"job_id": "job-1", "state": "PENDING"})
+
+    client = GPUCallClient("http://gpucall.test", transport=httpx.MockTransport(handler))
+
+    result = client.infer(mode="async", poll=False, webhook_url="https://example.com/hook")
+
+    assert result["job_id"] == "job-1"
+    assert sent_payload["webhook_url"] == "https://example.com/hook"
+
+
 def test_python_sdk_default_and_per_request_timeouts_are_cold_start_safe() -> None:
     seen_timeout = {}
 
@@ -212,6 +229,59 @@ def test_python_sdk_chat_completions_create_returns_openai_like_shape() -> None:
     assert sent_payload["inline_inputs"] == {}
 
 
+def test_python_sdk_chat_sends_n_and_preserves_openai_choices() -> None:
+    sent_payload = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal sent_payload
+        sent_payload = json.loads(request.read())
+        return httpx.Response(
+            200,
+            json={
+                "result": {
+                    "kind": "inline",
+                    "value": "one",
+                    "openai_choices": [
+                        {"index": 0, "message": {"role": "assistant", "content": "one"}, "finish_reason": "stop"},
+                        {"index": 1, "message": {"role": "assistant", "content": "two"}, "finish_reason": "stop"},
+                    ],
+                    "usage": {"prompt_tokens": 1, "completion_tokens": 2, "total_tokens": 3},
+                }
+            },
+        )
+
+    client = GPUCallClient("http://gpucall.test", transport=httpx.MockTransport(handler))
+
+    result = client.chat.completions.create(messages=[{"role": "user", "content": "pick"}], n=2)
+
+    assert sent_payload["n"] == 2
+    assert len(result["choices"]) == 2
+    assert result["choices"][1]["message"]["content"] == "two"
+    assert result["usage"]["total_tokens"] == 3
+
+
+def test_python_sdk_chat_rejects_invalid_openai_choices() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"result": {"kind": "inline", "value": "one", "openai_choices": ["bad"]}})
+
+    client = GPUCallClient("http://gpucall.test", transport=httpx.MockTransport(handler))
+
+    with pytest.raises(GPUCallProviderRuntimeError, match="invalid openai_choices"):
+        client.chat.completions.create(messages=[{"role": "user", "content": "pick"}])
+
+
+def test_python_sdk_chat_preserves_refusal_response_field() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"result": {"kind": "inline", "value": "cannot comply", "refusal": "cannot comply"}})
+
+    client = GPUCallClient("http://gpucall.test", transport=httpx.MockTransport(handler))
+
+    result = client.chat.completions.create(messages=[{"role": "user", "content": "bad request"}])
+
+    assert result["choices"][0]["message"]["content"] is None
+    assert result["choices"][0]["message"]["refusal"] == "cannot comply"
+
+
 def test_python_sdk_rejects_structured_message_content_without_flattening() -> None:
     client = GPUCallClient("http://gpucall.test", transport=httpx.MockTransport(lambda request: httpx.Response(500)))
 
@@ -241,6 +311,46 @@ def test_python_sdk_rejects_legacy_structured_message_content() -> None:
                 }
             ]
         )
+
+
+def test_python_sdk_chat_create_rejects_stream_mode() -> None:
+    client = GPUCallClient("http://gpucall.test", transport=httpx.MockTransport(lambda request: httpx.Response(500)))
+
+    with pytest.raises(GPUCallCallerRoutingError, match="streamed chunks"):
+        client.chat.completions.create(messages=[{"role": "user", "content": "hello"}], mode="stream")
+
+
+def test_python_sdk_chat_accepts_assistant_refusal_history() -> None:
+    sent_payload = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal sent_payload
+        sent_payload = json.loads(request.read())
+        return httpx.Response(200, json={"result": {"kind": "inline", "value": "ok"}})
+
+    client = GPUCallClient("http://gpucall.test", transport=httpx.MockTransport(handler))
+
+    client.chat.completions.create(messages=[{"role": "assistant", "refusal": "cannot comply"}])
+
+    assert sent_payload["messages"] == [{"role": "assistant", "refusal": "cannot comply"}]
+
+
+def test_python_sdk_chat_failed_async_job_maps_to_provider_error() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/v2/tasks/async":
+            return httpx.Response(202, json={"job_id": "job-1", "state": "PENDING"})
+        if request.url.path == "/v2/jobs/job-1":
+            return httpx.Response(
+                200,
+                json={"job_id": "job-1", "state": "FAILED", "error": "capacity unavailable", "provider_error_code": "PROVIDER_CAPACITY_UNAVAILABLE"},
+            )
+        return httpx.Response(404)
+
+    client = GPUCallClient("http://gpucall.test", transport=httpx.MockTransport(handler))
+
+    with pytest.raises(GPUCallProviderRuntimeError) as exc_info:
+        client.chat.completions.create(messages=[{"role": "user", "content": "hello"}], mode="async", poll_interval=0)
+    assert exc_info.value.code == "PROVIDER_CAPACITY_UNAVAILABLE"
 
 
 def test_python_sdk_chat_preserves_large_messages_without_flat_upload(monkeypatch) -> None:
@@ -388,6 +498,16 @@ def test_python_sdk_timeout_maps_to_cold_start_timeout() -> None:
         client.infer()
 
 
+def test_python_sdk_poll_timeout_maps_to_cold_start_timeout() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"job_id": "job-1", "state": "RUNNING"})
+
+    client = GPUCallClient("http://gpucall.test", transport=httpx.MockTransport(handler))
+
+    with pytest.raises(GPUCallColdStartTimeout):
+        client.poll_job("job-1", interval=0, timeout=0.001)
+
+
 def test_python_sdk_circuit_breaker_is_scoped_by_task_intent_mode_transport() -> None:
     breaker = GPUCallCircuitBreaker(failure_threshold=2, recovery_timeout_seconds=60)
     vision_scope = GPUCallCircuitScope(task="vision", intent="understand_document_image", mode="sync", transport="v2")
@@ -460,13 +580,29 @@ def test_python_sdk_redacts_presigned_urls_from_http_logs() -> None:
 
 
 def test_python_sdk_streams_chunks() -> None:
+    sent_payload = {}
+
     def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal sent_payload
         assert request.url.path == "/v2/tasks/stream"
+        sent_payload = json.loads(request.read())
         return httpx.Response(200, text=": heartbeat\n\ndata: hello\n\n")
 
     client = GPUCallClient("http://gpucall.test", transport=httpx.MockTransport(handler))
 
-    assert list(client.stream(prompt="hi")) == [": heartbeat\n\ndata: hello\n\n"]
+    assert list(client.stream(prompt="hi", max_tokens=12, temperature=0.2)) == [": heartbeat\n\ndata: hello\n\n"]
+    assert sent_payload["max_tokens"] == 12
+    assert sent_payload["temperature"] == 0.2
+
+
+def test_python_sdk_upload_rejects_malformed_presign_response() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"ok": True})
+
+    client = GPUCallClient("http://gpucall.test", transport=httpx.MockTransport(handler))
+
+    with pytest.raises(RuntimeError, match="missing upload_url"):
+        client.upload_bytes(b"hello", name="input.txt")
 
 
 def test_python_sdk_emits_warning_header() -> None:
@@ -488,6 +624,13 @@ def test_python_sdk_has_no_caller_routing_selector() -> None:
         client.infer(provider="local-echo")
 
 
+def test_python_sdk_infer_rejects_stream_mode() -> None:
+    client = GPUCallClient("http://gpucall.test", transport=httpx.MockTransport(lambda request: httpx.Response(500)))
+
+    with pytest.raises(GPUCallCallerRoutingError, match="use stream"):
+        client.infer(mode="stream")
+
+
 async def test_async_python_sdk_polls_accepted_job() -> None:
     calls = 0
 
@@ -507,6 +650,40 @@ async def test_async_python_sdk_polls_accepted_job() -> None:
     assert result["state"] == "COMPLETED"
 
 
+async def test_async_python_sdk_chat_sends_n_and_preserves_openai_choices() -> None:
+    sent_payload = {}
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal sent_payload
+        sent_payload = json.loads(request.read())
+        return httpx.Response(
+            200,
+            json={
+                "result": {
+                    "kind": "inline",
+                    "value": "one",
+                    "openai_choices": [
+                        {"index": 0, "message": {"role": "assistant", "content": "one"}, "finish_reason": "stop"},
+                        {"index": 1, "message": {"role": "assistant", "content": "two"}, "finish_reason": "stop"},
+                    ],
+                }
+            },
+        )
+
+    async with AsyncGPUCallClient("http://gpucall.test", transport=httpx.MockTransport(handler)) as client:
+        result = await client.chat.completions.create(messages=[{"role": "user", "content": "pick"}], n=2)
+
+    assert sent_payload["n"] == 2
+    assert len(result["choices"]) == 2
+    assert result["choices"][1]["message"]["content"] == "two"
+
+
+async def test_async_python_sdk_infer_rejects_stream_mode() -> None:
+    async with AsyncGPUCallClient("http://gpucall.test", transport=httpx.MockTransport(lambda request: httpx.Response(500))) as client:
+        with pytest.raises(GPUCallCallerRoutingError, match="use stream"):
+            await client.infer(mode="stream")
+
+
 async def test_async_python_sdk_uploads_presigned_url_without_api_auth(monkeypatch) -> None:
     seen_upload_auth = "not-called"
 
@@ -520,10 +697,11 @@ async def test_async_python_sdk_uploads_presigned_url_without_api_auth(monkeypat
         async def __aexit__(self, exc_type, exc, tb):
             return None
 
-        async def put(self, url, *, content, headers):
+        async def put(self, url, *, content, headers, **kwargs):
             nonlocal seen_upload_auth
             seen_upload_auth = headers.get("authorization")
             assert url == "https://bucket.example/upload"
+            assert kwargs.get("follow_redirects") is True
             return httpx.Response(200)
 
     async def handler(request: httpx.Request) -> httpx.Response:

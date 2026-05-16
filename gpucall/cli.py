@@ -15,6 +15,7 @@ import sys
 from pathlib import Path
 from datetime import datetime, timezone
 from importlib.resources import files
+from urllib.parse import urljoin
 
 import httpx
 import uvicorn
@@ -514,7 +515,8 @@ def _bounded_live_tuple_catalog_findings(tuples, credentials: dict[str, dict[str
         return live_tuple_catalog_findings(tuples, credentials)
 
     methods = mp.get_all_start_methods()
-    context = mp.get_context("fork" if "fork" in methods else methods[0])
+    start_method = "spawn" if sys.platform == "darwin" and "spawn" in methods else ("fork" if "fork" in methods else methods[0])
+    context = mp.get_context(start_method)
     result_queue = context.Queue(maxsize=1)
     process = context.Process(target=_live_tuple_catalog_findings_worker, args=(tuples, credentials, result_queue))
     process.start()
@@ -1599,12 +1601,7 @@ def build_launch_report(config_dir: Path, *, url: str | None = None, api_key: st
                     "requirement": "same production tuple live success with object-store/DataRef evidence",
                 }
             )
-        placeholder_tuples = [
-            name
-            for name, t in config.tuples.items()
-            if str(getattr(t, "adapter", "")).startswith("runpod")
-            and not has_configured_endpoint_or_target(getattr(t, "endpoint", None), getattr(t, "target", None))
-        ]
+        placeholder_tuples = _production_placeholder_tuples(config)
         if placeholder_tuples:
             production_blockers.append({"check": "real_endpoint_id_required", "tuples": placeholder_tuples})
         if tuple_validation_gaps:
@@ -2280,6 +2277,22 @@ def _required_live_validation_tuples(config) -> list[dict[str, object]]:
     return [tuples[key] for key in sorted(tuples)]
 
 
+def _production_placeholder_tuples(config) -> list[str]:
+    allowed = set(config.policy.tuples.allow)
+    denied = set(config.policy.tuples.deny)
+    placeholders: list[str] = []
+    for name, tuple in config.tuples.items():
+        if allowed and name not in allowed:
+            continue
+        if name in denied:
+            continue
+        if not str(getattr(tuple, "adapter", "")).startswith("runpod"):
+            continue
+        if not is_configured_target(getattr(tuple, "target", None)):
+            placeholders.append(name)
+    return sorted(placeholders)
+
+
 def _live_validation_artifacts_by_tuple(config, config_dir: Path | None = None) -> dict[str, object]:
     root = default_state_dir() / "tuple-validation"
     if not root.exists():
@@ -2653,6 +2666,19 @@ def _live_cost_audit_findings(live: object) -> list[dict[str, object]]:
                         "reason": command_result.get("error") or command_result.get("stderr") or "live cost audit failed",
                     }
                 )
+        vm_by_endpoint = section.get("virtual_machines_by_endpoint")
+        if isinstance(vm_by_endpoint, dict):
+            for endpoint, command_result in sorted(vm_by_endpoint.items()):
+                if isinstance(command_result, dict) and command_result.get("ok") is False:
+                    findings.append(
+                        {
+                            "surface_contract": surface_contract,
+                            "check": "virtual_machines",
+                            "endpoint": endpoint,
+                            "status_code": command_result.get("status_code"),
+                            "reason": command_result.get("error") or "live cost audit failed",
+                        }
+                    )
         endpoints = section.get("endpoints")
         if isinstance(endpoints, list):
             for endpoint in endpoints:
@@ -2738,15 +2764,23 @@ def _managed_endpoint_live_cost_audit(tuples: dict[str, object], creds: dict[str
             "unmanaged_endpoint_findings": _runpod_unmanaged_endpoint_findings(inventory, configured_endpoint_ids=set()),
         }
     families = sorted({vendor_family_for_adapter(str(getattr(tuple_spec, "adapter", "") or "")) for tuple_spec in endpoint_tuples})
-    if families != ["runpod"]:
-        return {"configured": True, "ok": False, "credential_families": families, "error": "managed endpoint live cost probe supports RunPod credentials only"}
-    api_key = creds.get(families[0], {}).get("api_key")
+    runpod_tuples = [tuple_spec for tuple_spec in endpoint_tuples if vendor_family_for_adapter(str(getattr(tuple_spec, "adapter", "") or "")) == "runpod"]
+    unsupported_families = [family for family in families if family != "runpod"]
+    if not runpod_tuples:
+        return {
+            "configured": True,
+            "ok": False,
+            "credential_families": families,
+            "unsupported_credential_families": unsupported_families,
+            "error": "managed endpoint live cost probe supports RunPod credentials only",
+        }
+    api_key = creds.get("runpod", {}).get("api_key")
     if not api_key:
-        return {"configured": True, "ok": False, "credential_families": families, "error": "managed endpoint api_key is not configured"}
+        return {"configured": True, "ok": False, "credential_families": families, "error": "managed endpoint runpod api_key is not configured"}
     rows: list[dict[str, object]] = []
     inventory = _runpod_endpoint_inventory(api_key)
     inventory_by_id = _runpod_endpoint_inventory_by_id(inventory)
-    for tuple_spec in endpoint_tuples:
+    for tuple_spec in runpod_tuples:
         base_url = str(getattr(tuple_spec, "endpoint", None) or "https://api.runpod.ai/v2").rstrip("/")
         endpoint_id = str(getattr(tuple_spec, "target"))
         runtime_cost = _runpod_endpoint_runtime_cost(tuple_spec, inventory_by_id.get(endpoint_id))
@@ -2767,17 +2801,68 @@ def _managed_endpoint_live_cost_audit(tuples: dict[str, object], creds: dict[str
     return {
         "configured": True,
         "credential_families": families,
+        "unsupported_credential_families": unsupported_families,
+        "ok": not unsupported_families,
+        "error": "unsupported managed endpoint credential families: " + ", ".join(unsupported_families) if unsupported_families else None,
         "endpoint_inventory": inventory,
         "endpoints": rows,
-        "unmanaged_endpoint_findings": _runpod_unmanaged_endpoint_findings(inventory, configured_endpoint_ids={str(getattr(t, "target")) for t in endpoint_tuples}),
+        "unmanaged_endpoint_findings": _runpod_unmanaged_endpoint_findings(inventory, configured_endpoint_ids={str(getattr(t, "target")) for t in runpod_tuples}),
     }
 
 
 def _runpod_endpoint_inventory(api_key: str) -> dict[str, object]:
-    return _http_json(
-        "https://rest.runpod.io/v1/endpoints?includeWorkers=true&includeTemplate=true",
-        headers={"authorization": f"Bearer {api_key}", "accept": "application/json"},
-    )
+    first_url = "https://rest.runpod.io/v1/endpoints?includeWorkers=true&includeTemplate=true"
+    url = first_url
+    rows: list[object] = []
+    seen_urls: set[str] = set()
+    last_page: dict[str, object] | None = None
+    while url and url not in seen_urls and len(seen_urls) < 100:
+        seen_urls.add(url)
+        page = _http_json(url, headers={"authorization": f"Bearer {api_key}", "accept": "application/json"})
+        if page.get("ok") is not True:
+            return page
+        last_page = page
+        body = page.get("body")
+        page_rows = _runpod_endpoint_inventory_rows(body)
+        if page_rows is not None:
+            rows.extend(page_rows)
+        url = _runpod_endpoint_inventory_next_url(body, current_url=url)
+    if url and len(seen_urls) >= 100:
+        return {
+            "ok": False,
+            "status_code": 502,
+            "body": {"endpoints": rows, "partial": True},
+            "error": "RunPod endpoint inventory pagination exceeded 100 pages",
+        }
+    if rows:
+        return {"ok": True, "status_code": 200, "body": {"endpoints": rows}}
+    if last_page is not None:
+        return last_page
+    return {"ok": True, "status_code": 200, "body": {"endpoints": []}}
+
+
+def _runpod_endpoint_inventory_rows(body: object) -> list[object] | None:
+    if isinstance(body, list):
+        return body
+    if not isinstance(body, dict):
+        return None
+    rows = body.get("endpoints") or body.get("data") or body.get("items") or body.get("results")
+    return rows if isinstance(rows, list) else None
+
+
+def _runpod_endpoint_inventory_next_url(body: object, *, current_url: str) -> str:
+    if not isinstance(body, dict):
+        return ""
+    for key in ("next", "nextUrl", "next_url"):
+        raw = body.get(key)
+        if isinstance(raw, str) and raw.strip():
+            return urljoin(current_url, raw.strip())
+    links = body.get("links")
+    if isinstance(links, dict):
+        raw = links.get("next")
+        if isinstance(raw, str) and raw.strip():
+            return urljoin(current_url, raw.strip())
+    return ""
 
 
 def _runpod_endpoint_inventory_by_id(inventory: dict[str, object]) -> dict[str, dict[str, object]]:
@@ -2961,14 +3046,20 @@ def _iaas_vm_live_cost_audit(tuples: dict[str, object], creds: dict[str, dict[st
     api_key = creds.get(families[0], {}).get("api_key")
     if not api_key:
         return {"configured": True, "ok": False, "credential_families": families, "error": "iaas_vm api_key is not configured"}
-    base_url = str(getattr(vm_tuples[0], "endpoint", None) or "https://infrahub-api.nexgencloud.com/v1").rstrip("/")
+    endpoint_results: dict[str, dict[str, object]] = {}
+    for tuple_spec in vm_tuples:
+        base_url = str(getattr(tuple_spec, "endpoint", None) or "https://infrahub-api.nexgencloud.com/v1").rstrip("/")
+        if base_url in endpoint_results:
+            continue
+        endpoint_results[base_url] = _http_json(
+            f"{base_url}/core/virtual-machines",
+            headers={"api_key": api_key, "accept": "application/json", "content-type": "application/json"},
+        )
     return {
         "configured": True,
         "credential_families": families,
-        "virtual_machines": _http_json(
-            f"{base_url}/core/virtual-machines",
-            headers={"api_key": api_key, "accept": "application/json", "content-type": "application/json"},
-        ),
+        "virtual_machines": next(iter(endpoint_results.values())) if len(endpoint_results) == 1 else {"ok": all(result.get("ok") is True for result in endpoint_results.values()), "body": endpoint_results},
+        "virtual_machines_by_endpoint": endpoint_results,
     }
 
 

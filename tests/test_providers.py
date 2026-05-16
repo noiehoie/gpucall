@@ -90,6 +90,153 @@ def test_openai_chat_completion_result_preserves_finish_reason_and_function_call
     assert result.finish_reason == "function_call"
 
 
+def test_openai_chat_completion_result_preserves_usage_details() -> None:
+    result = openai_chat_completion_result(
+        {
+            "choices": [
+                {
+                    "message": {"role": "assistant", "content": "ok"},
+                    "finish_reason": "stop",
+                }
+            ],
+            "usage": {
+                "prompt_tokens": 5,
+                "completion_tokens": 3,
+                "prompt_tokens_details": {"cached_tokens": 2},
+            },
+        }
+    )
+
+    assert result.usage["prompt_tokens"] == 5
+    assert result.usage["prompt_tokens_details"] == {"cached_tokens": 2}
+
+
+def test_openai_chat_payload_keeps_inline_prompt_when_only_system_message_exists() -> None:
+    plan = plan_payload_plan().model_copy(
+        update={
+            "system_prompt": "Answer directly.",
+            "messages": [ChatMessage(role="system", content="Answer directly.")],
+            "inline_inputs": {"prompt": InlineValue(value="say gpucall-ok", content_type="text/plain")},
+        }
+    )
+
+    payload = openai_chat_payload_from_plan(plan, model="model", stream=False)
+
+    assert payload["messages"] == [
+        {"role": "system", "content": "Answer directly."},
+        {"role": "user", "content": "say gpucall-ok"},
+    ]
+
+
+def test_openai_chat_payload_preserves_recipe_and_caller_system_messages() -> None:
+    plan = plan_payload_plan().model_copy(
+        update={
+            "system_prompt": "Return JSON only.",
+            "messages": [ChatMessage(role="system", content="Caller system instruction.")],
+            "inline_inputs": {"prompt": InlineValue(value="question", content_type="text/plain")},
+        }
+    )
+
+    payload = openai_chat_payload_from_plan(plan, model="model", stream=False)
+
+    assert payload["messages"] == [
+        {"role": "system", "content": "Return JSON only."},
+        {"role": "system", "content": "Caller system instruction."},
+        {"role": "user", "content": "question"},
+    ]
+
+
+def test_openai_chat_payload_sends_stream_options_only_for_streaming() -> None:
+    plan = plan_payload_plan().model_copy(
+        update={
+            "inline_inputs": {"prompt": InlineValue(value="hello", content_type="text/plain")},
+            "stream_options": {"include_usage": True},
+        }
+    )
+
+    sync_payload = openai_chat_payload_from_plan(plan, model="model", stream=False)
+    stream_payload = openai_chat_payload_from_plan(plan, model="model", stream=True)
+
+    assert "stream_options" not in sync_payload
+    assert stream_payload["stream_options"] == {"include_usage": True}
+
+
+def test_openai_chat_payload_preserves_prompt_and_extra_inline_inputs() -> None:
+    plan = plan_payload_plan().model_copy(
+        update={
+            "inline_inputs": {
+                "prompt": InlineValue(value="question", content_type="text/plain"),
+                "context": InlineValue(value="context", content_type="text/plain"),
+            },
+        }
+    )
+
+    payload = openai_chat_payload_from_plan(plan, model="model", stream=False)
+
+    assert payload["messages"][-1]["content"] == "question\ncontext"
+
+
+def test_openai_chat_payload_preserves_developer_prompt_and_inline_inputs() -> None:
+    plan = plan_payload_plan().model_copy(
+        update={
+            "messages": [ChatMessage(role="developer", content="Answer tersely.")],
+            "inline_inputs": {"prompt": InlineValue(value="question", content_type="text/plain")},
+        }
+    )
+
+    payload = openai_chat_payload_from_plan(plan, model="model", stream=False)
+
+    assert payload["messages"] == [
+        {"role": "developer", "content": "Answer tersely."},
+        {"role": "user", "content": "question"},
+    ]
+
+
+def test_openai_chat_payload_preserves_user_message_and_inline_inputs() -> None:
+    plan = plan_payload_plan().model_copy(
+        update={
+            "messages": [ChatMessage(role="user", content="message question")],
+            "inline_inputs": {"prompt": InlineValue(value="inline question", content_type="text/plain")},
+        }
+    )
+
+    payload = openai_chat_payload_from_plan(plan, model="model", stream=False)
+
+    assert payload["messages"] == [
+        {"role": "user", "content": "message question"},
+        {"role": "user", "content": "inline question"},
+    ]
+
+
+def test_openai_chat_payload_preserves_assistant_refusal_history() -> None:
+    plan = plan_payload_plan().model_copy(
+        update={
+            "messages": [ChatMessage(role="assistant", refusal="cannot comply")],
+        }
+    )
+
+    payload = openai_chat_payload_from_plan(plan, model="model", stream=False)
+
+    assert payload["messages"] == [
+        {"role": "assistant", "refusal": "cannot comply"},
+    ]
+
+
+def test_openai_chat_payload_adds_empty_user_for_system_only_plan() -> None:
+    plan = plan_payload_plan().model_copy(
+        update={
+            "messages": [ChatMessage(role="system", content="Answer directly.")],
+        }
+    )
+
+    payload = openai_chat_payload_from_plan(plan, model="model", stream=False)
+
+    assert payload["messages"] == [
+        {"role": "system", "content": "Answer directly."},
+        {"role": "user", "content": ""},
+    ]
+
+
 def test_openai_chat_completion_result_rejects_malformed_tool_call() -> None:
     with pytest.raises(TupleError, match="invalid tool_calls"):
         openai_chat_completion_result(
@@ -102,6 +249,36 @@ def test_openai_chat_completion_result_rejects_malformed_tool_call() -> None:
                 ]
             }
         )
+
+
+def test_openai_chat_completion_result_rejects_malformed_function_call() -> None:
+    with pytest.raises(TupleError, match="invalid function_call"):
+        openai_chat_completion_result(
+            {
+                "choices": [
+                    {
+                        "message": {"role": "assistant", "content": None, "function_call": {"name": "lookup"}},
+                        "finish_reason": "function_call",
+                    }
+                ]
+            }
+        )
+
+
+def test_openai_chat_completion_result_preserves_refusal() -> None:
+    result = openai_chat_completion_result(
+        {
+            "choices": [
+                {
+                    "message": {"role": "assistant", "content": None, "refusal": "cannot comply"},
+                    "finish_reason": "stop",
+                }
+            ]
+        }
+    )
+
+    assert result.value == "cannot comply"
+    assert result.refusal == "cannot comply"
 
 
 def test_openai_chat_completion_result_preserves_multiple_choices() -> None:
@@ -471,6 +648,19 @@ def test_openai_worker_payload_wraps_normalized_json_schema_response_format() ->
     }
 
 
+def test_openai_worker_payload_strips_non_schema_response_format_fields() -> None:
+    plan = plan_payload_plan().model_copy(
+        update={
+            "inline_inputs": {"prompt": InlineValue(value="return json", content_type="text/plain")},
+            "response_format": ResponseFormat(type=ResponseFormatType.JSON_OBJECT),
+        }
+    )
+
+    payload = openai_chat_payload_from_plan(plan, model="model", stream=False)
+
+    assert payload["response_format"] == {"type": "json_object"}
+
+
 def test_internal_worker_payload_keeps_normalized_json_schema_response_format() -> None:
     schema = {"type": "object", "required": ["ok"], "properties": {"ok": {"type": "boolean"}}}
     plan = CompiledPlan(
@@ -683,6 +873,18 @@ def test_provider_payload_contains_refs_not_dereferenced_data() -> None:
     assert "bytes_payload" not in payload
 
 
+def test_plan_payload_requires_boolean_trust_remote_code() -> None:
+    plan = plan_payload_plan().model_copy(
+        update={"attestations": {"model_trust_policy": {"trust_remote_code": "false"}}}
+    )
+    trusted = plan_payload_plan().model_copy(
+        update={"attestations": {"model_trust_policy": {"trust_remote_code": True}}}
+    )
+
+    assert plan_payload(plan)["trust_remote_code"] is False
+    assert plan_payload(trusted)["trust_remote_code"] is True
+
+
 def test_modal_stream_uses_explicit_deployed_remote_gen(monkeypatch) -> None:
     calls: dict[str, object] = {}
 
@@ -843,6 +1045,29 @@ def test_runpod_vllm_serverless_uses_generic_endpoint_env(monkeypatch) -> None:
     assert adapter.endpoint_id == "endpoint-1"
     assert handle.execution_surface == "managed_endpoint"
     assert handle.cleanup_required is False
+
+
+def test_runpod_vllm_payload_preserves_inline_prompt_with_recipe_system_message() -> None:
+    adapter = RunpodVllmServerlessAdapter(
+        api_key="rk_test",
+        endpoint_id="endpoint-1",
+        endpoint_contract="openai-chat-completions",
+        model="Qwen/Qwen2.5-1.5B-Instruct",
+    )
+    plan = plan_payload_plan().model_copy(
+        update={
+            "system_prompt": "Answer directly.",
+            "messages": [ChatMessage(role="system", content="Answer directly.")],
+            "inline_inputs": {"prompt": InlineValue(value="say gpucall-ok", content_type="text/plain")},
+        }
+    )
+
+    payload = adapter._payload(plan)
+
+    assert payload["messages"] == [
+        {"role": "system", "content": "Answer directly."},
+        {"role": "user", "content": "say gpucall-ok"},
+    ]
 
 
 def test_runpod_flash_endpoint_mode_is_not_cleanup_owned() -> None:
@@ -1381,6 +1606,145 @@ async def test_runpod_vllm_vision_data_ref_uses_openai_image_url(monkeypatch) ->
     ]
 
 
+def test_runpod_vllm_vision_messages_preserve_assistant_history_and_text_parts() -> None:
+    adapter = RunpodVllmServerlessAdapter(
+        api_key="rk_test",
+        endpoint_id="endpoint-1",
+        image="runpod/worker-v1-vllm:v2.18.1",
+        endpoint_contract="openai-chat-completions",
+        model="Qwen/Qwen2.5-VL-7B-Instruct",
+    )
+    ref = DataRef(
+        uri="https://objects.example/image.png?signature=redacted",
+        sha256="a" * 64,
+        bytes=1024,
+        content_type="image/png",
+        gateway_presigned=True,
+    )
+    plan = plan_payload_plan().model_copy(
+        update={
+            "task": "vision",
+            "input_refs": [ref],
+            "messages": [
+                ChatMessage(role="assistant", content="Previous answer."),
+                ChatMessage(role="user", content=[{"type": "text", "text": "Read this."}]),
+            ],
+        }
+    )
+
+    messages = adapter._vision_messages(plan)
+
+    assert messages == [
+        {"role": "assistant", "content": "Previous answer."},
+        {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": "Read this."},
+                {"type": "image_url", "image_url": {"url": "https://objects.example/image.png?signature=redacted"}},
+            ],
+        },
+    ]
+
+
+def test_runpod_vllm_vision_messages_reject_non_image_refs() -> None:
+    adapter = RunpodVllmServerlessAdapter(
+        api_key="rk_test",
+        endpoint_id="endpoint-1",
+        image="runpod/worker-v1-vllm:v2.18.1",
+        endpoint_contract="openai-chat-completions",
+        model="Qwen/Qwen2.5-VL-7B-Instruct",
+    )
+    plan = plan_payload_plan().model_copy(
+        update={
+            "task": "vision",
+            "input_refs": [
+                DataRef(
+                    uri="https://objects.example/file.txt?signature=redacted",
+                    sha256="a" * 64,
+                    bytes=1024,
+                    content_type="text/plain",
+                    gateway_presigned=True,
+                )
+            ],
+        }
+    )
+
+    with pytest.raises(TupleError, match="only accepts image DataRef"):
+        adapter._vision_messages(plan)
+
+
+def test_runpod_vllm_live_inventory_follows_next_page(monkeypatch) -> None:
+    from gpucall.execution_surfaces.managed_endpoint import _runpod_endpoint_live_inventory_rows
+
+    class FakeResponse:
+        def __init__(self, payload: dict[str, object]) -> None:
+            self.status_code = 200
+            self._payload = payload
+
+        def json(self) -> dict[str, object]:
+            return self._payload
+
+    class FakeSession:
+        def __init__(self) -> None:
+            self.urls: list[str] = []
+
+        def mount(self, *_args, **_kwargs) -> None:
+            return None
+
+        def get(self, url: str, **kwargs):
+            self.urls.append(url)
+            if url == "https://rest.runpod.io/v1/endpoints":
+                assert kwargs["params"] == {"includeWorkers": "true", "includeTemplate": "true"}
+                return FakeResponse({"endpoints": [{"id": "endpoint-1"}], "next": "https://rest.runpod.io/v1/endpoints?page=2"})
+            if url == "https://rest.runpod.io/v1/endpoints?page=2":
+                assert kwargs["params"] is None
+                return FakeResponse({"items": [{"id": "endpoint-2"}]})
+            raise AssertionError(f"unexpected url: {url}")
+
+    session = FakeSession()
+    fake_requests = types.SimpleNamespace(Session=lambda: session)
+    fake_adapters = types.SimpleNamespace(HTTPAdapter=lambda **_kwargs: object())
+    fake_retry = types.SimpleNamespace(Retry=lambda **_kwargs: object())
+    monkeypatch.setitem(sys.modules, "requests", fake_requests)
+    monkeypatch.setitem(sys.modules, "requests.adapters", fake_adapters)
+    monkeypatch.setitem(sys.modules, "urllib3.util.retry", fake_retry)
+
+    rows = _runpod_endpoint_live_inventory_rows("rk_test", "https://rest.runpod.io/v1")
+
+    assert [row["id"] for row in rows] == ["endpoint-1", "endpoint-2"]
+
+
+def test_runpod_vllm_live_inventory_raises_on_pagination_failure(monkeypatch) -> None:
+    from gpucall.execution_surfaces.managed_endpoint import _runpod_endpoint_live_inventory_rows
+
+    class FakeResponse:
+        status_code = 503
+
+        def json(self) -> dict[str, object]:
+            return {}
+
+    class FakeSession:
+        def mount(self, *_args, **_kwargs) -> None:
+            return None
+
+        def get(self, *_args, **_kwargs):
+            return FakeResponse()
+
+    fake_requests = types.SimpleNamespace(Session=lambda: FakeSession())
+    fake_adapters = types.SimpleNamespace(HTTPAdapter=lambda **_kwargs: object())
+    fake_retry = types.SimpleNamespace(Retry=lambda **_kwargs: object())
+    monkeypatch.setitem(sys.modules, "requests", fake_requests)
+    monkeypatch.setitem(sys.modules, "requests.adapters", fake_adapters)
+    monkeypatch.setitem(sys.modules, "urllib3.util.retry", fake_retry)
+
+    with pytest.raises(TupleError, match="inventory failed"):
+        _runpod_endpoint_live_inventory_rows("rk_test", "https://rest.runpod.io/v1")
+
+
+def test_runpod_vllm_health_accepts_idle_workers() -> None:
+    assert runpod_vllm_health_rejection_reason({"workers": {"idle": 1, "running": 0, "ready": 0, "unhealthy": 0}}) is None
+
+
 async def test_runpod_vllm_vision_data_ref_requires_gateway_presigned_url() -> None:
     adapter = RunpodVllmServerlessAdapter(
         api_key="rk_test",
@@ -1533,6 +1897,18 @@ def test_gpucall_tuple_result_rejects_heuristic_output_shapes() -> None:
 
     with pytest.raises(TupleError, match="TupleResult contract"):
         gpucall_tuple_result({"output": "ok"})
+
+
+def test_gpucall_tuple_result_rejects_empty_ref_results() -> None:
+    with pytest.raises(TupleError, match="TupleResult contract"):
+        gpucall_tuple_result({"kind": "ref"})
+    with pytest.raises(TupleError, match="TupleResult contract"):
+        gpucall_tuple_result({"kind": "artifact_manifest"})
+
+
+def test_gpucall_tuple_result_rejects_empty_inline_result() -> None:
+    with pytest.raises(TupleError, match="TupleResult contract"):
+        gpucall_tuple_result({"kind": "inline"})
 
 
 def test_local_ollama_rejects_data_refs_without_leaking_uri() -> None:
