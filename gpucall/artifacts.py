@@ -1,12 +1,12 @@
 from __future__ import annotations
 
 import json
-import os
 import sqlite3
 from pathlib import Path
 from typing import Iterable
 
 from gpucall.domain import ArtifactManifest
+from gpucall.state_contracts import ArtifactStateRegistry, postgres_state_dsn_from_env
 
 
 class SQLiteArtifactRegistry:
@@ -230,8 +230,8 @@ class PostgresArtifactRegistry:
         self._conn.commit()
 
 
-def build_artifact_registry(state_dir: Path) -> SQLiteArtifactRegistry | PostgresArtifactRegistry:
-    database_url = os.getenv("GPUCALL_DATABASE_URL") or os.getenv("DATABASE_URL")
-    if database_url and database_url.startswith(("postgres://", "postgresql://")):
+def build_artifact_registry(state_dir: Path) -> ArtifactStateRegistry:
+    database_url = postgres_state_dsn_from_env()
+    if database_url:
         return PostgresArtifactRegistry(database_url)
     return SQLiteArtifactRegistry(state_dir / "artifacts.db")

@@ -63,7 +63,7 @@ from gpucall.compiler import GovernanceCompiler, GovernanceError
 from gpucall.config import ConfigError, default_config_dir, default_state_dir, load_config
 from gpucall.credentials import credentials_path, load_credentials, save_credentials
 from gpucall.admission import AdmissionController, PostgresAdmissionController
-from gpucall.dispatcher import Dispatcher, JobStore, LeaseReaper, TupleReconciler, is_terminal_job_state
+from gpucall.dispatcher import Dispatcher, LeaseReaper, TupleReconciler, is_terminal_job_state
 from gpucall.domain import ApiKeyHandoffMode, ExecutionMode, JobRecord, JobState, TenantSpec, TupleError, TaskRequest, recipe_requirements
 from gpucall.domain import PresignGetRequest, PresignGetResponse, PresignPutRequest, PresignPutResponse
 from gpucall.object_store import ObjectStore
@@ -82,6 +82,7 @@ from gpucall.registry import ObservedRegistry
 from gpucall.routing import route_warning_tags
 from gpucall.tuple_catalog import live_tuple_catalog_evidence
 from gpucall.sqlite_store import SQLiteIdempotencyStore, SQLiteJobStore
+from gpucall.state_contracts import AdmissionStateController, IdempotencyStateStore, JobStateStore, postgres_state_dsn_from_env
 from gpucall.tenant import (
     TenantBudgetError,
     build_tenant_usage_ledger,
@@ -98,7 +99,7 @@ class Runtime(BaseModel):
 
     compiler: GovernanceCompiler
     dispatcher: Dispatcher
-    jobs: JobStore
+    jobs: JobStateStore
     reaper: LeaseReaper
     reconciler: TupleReconciler
     artifact_registry: Any
@@ -122,28 +123,23 @@ class BootstrapTenantKeyRequest(BaseModel):
     object_prefix: str | None = None
 
 
-def _database_url() -> str | None:
-    value = os.getenv("GPUCALL_DATABASE_URL") or os.getenv("DATABASE_URL")
-    return value.strip() if value and value.strip() else None
-
-
-def _job_store(state_dir: Path):
-    database_url = _database_url()
-    if database_url and database_url.startswith(("postgres://", "postgresql://")):
+def _job_store(state_dir: Path) -> JobStateStore:
+    database_url = postgres_state_dsn_from_env()
+    if database_url:
         return PostgresJobStore(database_url)
     return SQLiteJobStore(state_dir / "state.db")
 
 
-def _idempotency_store(state_dir: Path):
-    database_url = _database_url()
-    if database_url and database_url.startswith(("postgres://", "postgresql://")):
+def _idempotency_store(state_dir: Path) -> IdempotencyStateStore:
+    database_url = postgres_state_dsn_from_env()
+    if database_url:
         return PostgresIdempotencyStore(database_url)
     return SQLiteIdempotencyStore(state_dir / "idempotency.db")
 
 
-def _admission_controller(tuples: dict[str, Any]) -> AdmissionController:
-    database_url = _database_url()
-    if database_url and database_url.startswith(("postgres://", "postgresql://")):
+def _admission_controller(tuples: dict[str, Any]) -> AdmissionStateController:
+    database_url = postgres_state_dsn_from_env()
+    if database_url:
         return PostgresAdmissionController(database_url, tuples)
     return AdmissionController(tuples)
 
@@ -677,7 +673,13 @@ def create_app(config_dir: Path | None = None) -> FastAPI:
                 idempotency_release(request, current_idempotency_cache(), request_hash=idempotency_hash_value, identity=idempotency_identity_value)
             record_error_code(runtime, exc.code)
             return governance_error_response(exc, request=request)
+        except HTTPException:
+            refund_request_budget(runtime, plan)
+            if idempotency_reserved and idempotency_identity_value and idempotency_hash_value:
+                idempotency_release(request, current_idempotency_cache(), request_hash=idempotency_hash_value, identity=idempotency_identity_value)
+            raise
         except ValueError as exc:
+            refund_request_budget(runtime, plan)
             if idempotency_reserved and idempotency_identity_value and idempotency_hash_value:
                 idempotency_release(request, current_idempotency_cache(), request_hash=idempotency_hash_value, identity=idempotency_identity_value)
             raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -804,6 +806,9 @@ def create_app(config_dir: Path | None = None) -> FastAPI:
         if request.mode is not ExecutionMode.ASYNC:
             raise HTTPException(status_code=400, detail="use /v2/tasks/async with mode=async")
         plan = None
+        idempotency_reserved = False
+        idempotency_identity_value = None
+        idempotency_hash_value = None
         try:
             enforce_gateway_owned_routing(request)
             plan = runtime.compiler.compile(request)
@@ -871,7 +876,13 @@ def create_app(config_dir: Path | None = None) -> FastAPI:
                 idempotency_release(request, current_idempotency_cache(), request_hash=idempotency_hash_value, identity=idempotency_identity_value)
             record_error_code(runtime, exc.code)
             return governance_error_response(exc, request=request)
+        except HTTPException:
+            refund_request_budget(runtime, plan)
+            if idempotency_reserved and idempotency_identity_value and idempotency_hash_value:
+                idempotency_release(request, current_idempotency_cache(), request_hash=idempotency_hash_value, identity=idempotency_identity_value)
+            raise
         except ValueError as exc:
+            refund_request_budget(runtime, plan)
             if idempotency_reserved and idempotency_identity_value and idempotency_hash_value:
                 idempotency_release(request, current_idempotency_cache(), request_hash=idempotency_hash_value, identity=idempotency_identity_value)
             raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -906,7 +917,11 @@ def create_app(config_dir: Path | None = None) -> FastAPI:
         except GovernanceError as exc:
             record_error_code(runtime, exc.code)
             return governance_error_response(exc, request=request)
+        except HTTPException:
+            refund_request_budget(runtime, plan)
+            raise
         except ValueError as exc:
+            refund_request_budget(runtime, plan)
             raise HTTPException(status_code=400, detail=str(exc)) from exc
 
         async def events():
@@ -962,6 +977,15 @@ def create_app(config_dir: Path | None = None) -> FastAPI:
                 record_error_code(runtime, exc.code)
                 status_code = 207
                 results.append({"index": index, "ok": False, "status_code": governance_status_code(exc), "code": exc.code, "error": str(exc)})
+                if not request.continue_on_error:
+                    break
+            except HTTPException:
+                refund_request_budget(runtime, plan)
+                raise
+            except ValueError as exc:
+                refund_request_budget(runtime, plan)
+                status_code = 207
+                results.append({"index": index, "ok": False, "status_code": 400, "error": str(exc)})
                 if not request.continue_on_error:
                     break
             except TupleError as exc:

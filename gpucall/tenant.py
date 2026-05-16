@@ -10,6 +10,7 @@ from typing import Any
 
 from gpucall.credentials import load_credentials
 from gpucall.domain import TenantSpec
+from gpucall.state_contracts import TenantUsageState, postgres_state_dsn_from_env
 
 
 class TenantBudgetError(RuntimeError):
@@ -289,9 +290,9 @@ class PostgresTenantUsageLedger:
         self._conn.close()
 
 
-def build_tenant_usage_ledger(state_dir: Path) -> TenantUsageLedger | PostgresTenantUsageLedger:
-    database_url = os.getenv("GPUCALL_DATABASE_URL") or os.getenv("DATABASE_URL")
-    if database_url and database_url.startswith(("postgres://", "postgresql://")):
+def build_tenant_usage_ledger(state_dir: Path) -> TenantUsageState:
+    database_url = postgres_state_dsn_from_env()
+    if database_url:
         return PostgresTenantUsageLedger(database_url)
     return TenantUsageLedger(state_dir / "tenant_usage.db")
 

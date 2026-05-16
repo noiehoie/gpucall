@@ -16,7 +16,7 @@ from gpucall.compiler import GovernanceError
 from gpucall.domain import DataRef, PresignGetRequest, TaskRequest, TupleError
 from gpucall.provider_errors import provider_error_class
 from gpucall.routing import route_warning_tags
-from gpucall.sqlite_store import SQLiteIdempotencyStore
+from gpucall.state_contracts import IdempotencyStateStore
 from gpucall.tenant import TenantBudgetError, enforce_tenant_budget, tenant_identity
 
 if TYPE_CHECKING:
@@ -428,7 +428,7 @@ async def idempotency_execution_lock(
 
 def idempotency_lookup(
     request: TaskRequest,
-    cache: SQLiteIdempotencyStore | PostgresIdempotencyStore,
+    cache: IdempotencyStateStore,
     *,
     request_hash: str,
     identity: str,
@@ -451,7 +451,7 @@ def idempotency_lookup(
 
 def idempotency_reserve(
     request: TaskRequest,
-    cache: SQLiteIdempotencyStore | PostgresIdempotencyStore,
+    cache: IdempotencyStateStore,
     *,
     request_hash: str,
     identity: str,
@@ -465,7 +465,7 @@ def idempotency_reserve(
 
 def idempotency_store(
     request: TaskRequest,
-    cache: SQLiteIdempotencyStore | PostgresIdempotencyStore,
+    cache: IdempotencyStateStore,
     status: int,
     content: dict[str, Any],
     headers: dict[str, str],
@@ -487,7 +487,7 @@ def idempotency_store(
 
 def idempotency_release(
     request: TaskRequest,
-    cache: SQLiteIdempotencyStore | PostgresIdempotencyStore,
+    cache: IdempotencyStateStore,
     *,
     request_hash: str,
     identity: str,

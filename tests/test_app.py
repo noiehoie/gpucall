@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import datetime, timezone
 from pathlib import Path
 import yaml
 
@@ -23,7 +24,7 @@ from gpucall.credentials import save_credentials
 from gpucall.dispatcher import Dispatcher, JobStore
 from gpucall.domain import CompiledPlan, DataRef, ExecutionMode, JobState, PresignGetResponse, TupleResult, TaskRequest
 from gpucall.registry import ObservedRegistry
-from gpucall.sqlite_store import SQLiteJobStore
+from gpucall.sqlite_store import SQLiteIdempotencyStore, SQLiteJobStore
 
 
 class ChangingPresignObjectStore:
@@ -123,6 +124,28 @@ def test_database_url_selects_postgres_stores(monkeypatch, tmp_path) -> None:
     assert app_module._admission_controller({}).dsn == "postgresql://user:pass@db/gpucall"
     assert app_module.build_tenant_usage_ledger(tmp_path).dsn == "postgresql://user:pass@db/gpucall"
     assert app_module.build_artifact_registry(tmp_path).dsn == "postgresql://user:pass@db/gpucall"
+
+
+def test_non_postgres_database_url_keeps_sqlite_state_fallback(monkeypatch, tmp_path) -> None:
+    from gpucall import app as app_module
+    from gpucall.admission import AdmissionController
+    from gpucall.artifacts import SQLiteArtifactRegistry, build_artifact_registry
+    from gpucall.tenant import TenantUsageLedger, build_tenant_usage_ledger
+
+    monkeypatch.setenv("GPUCALL_DATABASE_URL", "sqlite:///tmp/not-postgres.db")
+    monkeypatch.delenv("DATABASE_URL", raising=False)
+
+    jobs = app_module._job_store(tmp_path)
+    idempotency = app_module._idempotency_store(tmp_path)
+    try:
+        assert isinstance(jobs, SQLiteJobStore)
+        assert isinstance(idempotency, SQLiteIdempotencyStore)
+        assert isinstance(app_module._admission_controller({}), AdmissionController)
+        assert isinstance(build_tenant_usage_ledger(tmp_path), TenantUsageLedger)
+        assert isinstance(build_artifact_registry(tmp_path), SQLiteArtifactRegistry)
+    finally:
+        jobs.close()
+        idempotency.close()
 
 
 def test_sync_endpoint_auto_selects_recipe(tmp_path) -> None:
@@ -545,6 +568,110 @@ def test_tenant_budget_reservation_is_refunded_on_tuple_error(tmp_path, monkeypa
 
     assert response.status_code == 503
     assert usage["tenant-a"]["daily_estimated_spend_usd"] == 0.0
+
+
+def test_tenant_budget_reservation_is_refunded_when_dataref_object_store_missing(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("GPUCALL_TENANT_API_KEYS", "tenant-a:secret-a")
+    root = copy_config(tmp_path)
+    surface_path = root / "surfaces" / "local-echo.yml"
+    surface = yaml.safe_load(surface_path.read_text(encoding="utf-8"))
+    surface["cost_per_second"] = 1
+    surface_path.write_text(yaml.safe_dump(surface, sort_keys=False), encoding="utf-8")
+    policy_path = root / "policy.yml"
+    policy = yaml.safe_load(policy_path.read_text(encoding="utf-8"))
+    policy["cost_policy"]["require_budget_for_high_cost_tuple"] = False
+    policy_path.write_text(yaml.safe_dump(policy, sort_keys=False), encoding="utf-8")
+    tenant_path = root / "tenants" / "tenant-a.yml"
+    tenant_path.write_text("name: tenant-a\nrequests_per_minute: 120\ndaily_budget_usd: 100\nobject_prefix: tenant-a\n", encoding="utf-8")
+
+    with TestClient(create_app(root)) as client:
+        response = client.post(
+            "/v2/tasks/sync",
+            json={
+                "task": "infer",
+                "mode": "sync",
+                "input_refs": [{"uri": "s3://bucket/prompt.txt", "sha256": "a" * 64, "bytes": 1, "content_type": "text/plain"}],
+            },
+            headers={"authorization": "Bearer secret-a"},
+        )
+        usage = client.app.state.runtime.tenant_usage.summary(client.app.state.runtime.tenants)
+
+    assert response.status_code == 400
+    assert "object store is required" in response.json()["detail"]
+    assert usage["tenant-a"]["daily_estimated_spend_usd"] == 0.0
+
+
+def test_anonymous_object_access_rejection_refunds_budget(tmp_path, monkeypatch) -> None:
+    monkeypatch.delenv("GPUCALL_ALLOW_ANONYMOUS_OBJECTS", raising=False)
+    root = copy_config(tmp_path)
+    surface_path = root / "surfaces" / "local-echo.yml"
+    surface = yaml.safe_load(surface_path.read_text(encoding="utf-8"))
+    surface["cost_per_second"] = 1
+    surface_path.write_text(yaml.safe_dump(surface, sort_keys=False), encoding="utf-8")
+    policy_path = root / "policy.yml"
+    policy = yaml.safe_load(policy_path.read_text(encoding="utf-8"))
+    policy["cost_policy"]["require_budget_for_high_cost_tuple"] = False
+    policy_path.write_text(yaml.safe_dump(policy, sort_keys=False), encoding="utf-8")
+
+    with TestClient(create_app(root)) as client:
+        response = client.post(
+            "/v2/tasks/sync",
+            json={
+                "task": "infer",
+                "mode": "sync",
+                "input_refs": [{"uri": "s3://bucket/prompt.txt", "sha256": "a" * 64, "bytes": 1, "content_type": "text/plain"}],
+            },
+        )
+        anonymous_spend = client.app.state.runtime.tenant_usage.spend_since("anonymous", datetime.fromtimestamp(0, timezone.utc))
+
+    assert response.status_code == 401
+    assert anonymous_spend == 0.0
+
+
+def test_batch_dataref_object_store_missing_returns_item_error_and_refunds_budget(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("GPUCALL_TENANT_API_KEYS", "tenant-a:secret-a")
+    root = copy_config(tmp_path)
+    surface_path = root / "surfaces" / "local-echo.yml"
+    surface = yaml.safe_load(surface_path.read_text(encoding="utf-8"))
+    surface["cost_per_second"] = 1
+    surface_path.write_text(yaml.safe_dump(surface, sort_keys=False), encoding="utf-8")
+    policy_path = root / "policy.yml"
+    policy = yaml.safe_load(policy_path.read_text(encoding="utf-8"))
+    policy["cost_policy"]["require_budget_for_high_cost_tuple"] = False
+    policy_path.write_text(yaml.safe_dump(policy, sort_keys=False), encoding="utf-8")
+    tenant_path = root / "tenants" / "tenant-a.yml"
+    tenant_path.write_text("name: tenant-a\nrequests_per_minute: 120\ndaily_budget_usd: 100\nobject_prefix: tenant-a\n", encoding="utf-8")
+
+    with TestClient(create_app(root)) as client:
+        response = client.post(
+            "/v2/tasks/batch",
+            json={
+                "requests": [
+                    {
+                        "task": "infer",
+                        "mode": "sync",
+                        "input_refs": [{"uri": "s3://bucket/prompt.txt", "sha256": "a" * 64, "bytes": 1, "content_type": "text/plain"}],
+                    }
+                ]
+            },
+            headers={"authorization": "Bearer secret-a"},
+        )
+        usage = client.app.state.runtime.tenant_usage.summary(client.app.state.runtime.tenants)
+
+    payload = response.json()
+    assert response.status_code == 207
+    assert payload["ok"] is False
+    assert payload["results"][0]["status_code"] == 400
+    assert "object store is required" in payload["results"][0]["error"]
+    assert usage["tenant-a"]["daily_estimated_spend_usd"] == 0.0
+
+
+def test_async_governance_error_does_not_depend_on_idempotency_locals(tmp_path) -> None:
+    with TestClient(create_app(copy_config(tmp_path))) as client:
+        response = client.post("/v2/tasks/async", json={"task": "unknown", "mode": "async"})
+
+    assert response.status_code == 400
+    assert response.json()["code"] == "GOVERNANCE_ERROR"
 
 
 def test_tenant_object_prefix_is_applied_to_presign_put(tmp_path, monkeypatch) -> None:

@@ -17,10 +17,19 @@ import pytest
 from fastapi.testclient import TestClient
 
 from gpucall.artifacts import SQLiteArtifactRegistry
+from gpucall.admission import AdmissionController
 from gpucall.domain import TenantSpec, TupleError
 from gpucall.local_dataref_worker import _fetch_dataref_texts, _validate_dataref_fetch_uri, create_app, run_dataref_openai_request
 from gpucall.postgres_store import PostgresIdempotencyStore
-from gpucall.sqlite_store import SQLiteIdempotencyStore
+from gpucall.state_contracts import (
+    AdmissionStateController,
+    ArtifactStateRegistry,
+    IdempotencyStateStore,
+    JobStateStore,
+    TenantUsageState,
+    postgres_state_dsn_from_env,
+)
+from gpucall.sqlite_store import SQLiteIdempotencyStore, SQLiteJobStore
 from gpucall.tenant import PostgresTenantUsageLedger, TenantBudgetError, TenantUsageLedger, enforce_tenant_budget
 from gpucall.worker_contracts.io import fetch_data_ref_bytes
 
@@ -40,6 +49,23 @@ print(sorted(p.name for p in root.glob("*")) if root.exists() else [])
 """
     completed = subprocess.run([sys.executable, "-c", code], check=True, capture_output=True, text=True, env=env)
     assert completed.stdout.strip() == "[]"
+
+
+def test_state_boundary_contracts_cover_sqlite_runtime_adapters(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("GPUCALL_DATABASE_URL", raising=False)
+    monkeypatch.delenv("DATABASE_URL", raising=False)
+    jobs = SQLiteJobStore(tmp_path / "state.db")
+    idempotency = SQLiteIdempotencyStore(tmp_path / "idempotency.db")
+    try:
+        assert postgres_state_dsn_from_env() is None
+        assert isinstance(jobs, JobStateStore)
+        assert isinstance(idempotency, IdempotencyStateStore)
+        assert isinstance(TenantUsageLedger(tmp_path / "tenant_usage.db"), TenantUsageState)
+        assert isinstance(SQLiteArtifactRegistry(tmp_path / "artifacts.db"), ArtifactStateRegistry)
+        assert isinstance(AdmissionController({}), AdmissionStateController)
+    finally:
+        jobs.close()
+        idempotency.close()
 
 
 def test_s3_dataref_bytes_verify_declared_sha(monkeypatch: pytest.MonkeyPatch) -> None:
