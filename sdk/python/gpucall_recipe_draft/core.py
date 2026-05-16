@@ -298,7 +298,7 @@ def draft_from_intake(intake: Mapping[str, Any]) -> dict[str, Any]:
             "name": recipe_name,
             "task": task,
             "intent": intent,
-            "auto_select": True,
+            "auto_select": False,
             "data_classification": classification,
             "allowed_modes": [_str_or_none(sanitized.get("mode")) or "sync"],
             "required_model_capabilities": capabilities,

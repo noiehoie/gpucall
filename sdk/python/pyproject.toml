@@ -30,6 +30,7 @@ gpucall_sdk = ["openai_contract/*.json"]
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["tests"]
+pythonpath = ["."]
 markers = [
   "integration: requires a running gpucall gateway",
 ]

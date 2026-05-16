@@ -11,6 +11,7 @@ from gpucall.config import load_config
 from gpucall.compiler import GovernanceCompiler
 from gpucall.domain import ChatMessage, ExecutionMode, RecipeAdminAutomationConfig, ResponseFormat, ResponseFormatType, TaskRequest
 from gpucall.execution.contracts import official_contract
+from gpucall.recipe_admin_files import move_submission
 from gpucall.recipe_admin import (
     _auto_existing_tuple_report,
     _auto_select_shadowing,
@@ -21,6 +22,7 @@ from gpucall.recipe_admin import (
     main,
     process_inbox,
     process_quality_inbox,
+    quality_feedback_report,
     quality_feedback_status,
     recipe_request_status,
     review_artifact,
@@ -722,6 +724,171 @@ def test_admin_process_inbox_can_auto_promote_long_text_candidate_without_valida
     assert "modal-h200x4-qwen25-14b-1m" in report["admin_review"]["eligible_tuples"]
     assert report["promotion"]["decision"] == "SKIPPED_NO_TUPLE_CANDIDATE"
     assert not (inbox / "reports" / "rr-rank.promotion.json").exists()
+
+
+def test_admin_quality_feedback_report_is_not_production_materialization() -> None:
+    report = quality_feedback_report(
+        {
+            "phase": "deterministic-quality-feedback-intake",
+            "sanitized_request": {
+                "task": "vision",
+                "intent": "understand_document_image",
+                "classification": "confidential",
+                "expected_output": "headline_list",
+                "runtime_selection": {
+                    "observed_recipe": "vision-image-standard",
+                    "observed_tuple": "modal-h100-qwen25-vl-7b",
+                    "observed_tuple_model": "qwen25-vl-7b",
+                    "output_validated": False,
+                },
+                "quality_feedback": {
+                    "kind": "insufficient_ocr",
+                    "observed_output_kind": "short_answer",
+                    "reason": "redacted caller-side quality failure summary",
+                },
+            },
+            "redaction_report": {
+                "prompt_body_forwarded": False,
+                "output_body_forwarded": False,
+                "data_ref_uri_forwarded": False,
+                "presigned_url_forwarded": False,
+            },
+        }
+    )
+
+    assert report["decision"] == "ACCEPT"
+    assert report["phase"] == "quality-feedback-review"
+    assert report["production_config_written"] is False
+    assert "canonical_recipe" not in report
+    assert "activation_paths" not in report
+    assert report["next_actions"] == ["review observed tuple quality evidence before changing production routing"]
+
+
+def test_submission_move_uses_unique_destination_without_overwrite(tmp_path, monkeypatch) -> None:
+    source = tmp_path / "rr.json"
+    processed = tmp_path / "processed"
+    processed.mkdir()
+    source.write_text("new", encoding="utf-8")
+    (processed / "rr.json").write_text("existing", encoding="utf-8")
+    (processed / "rr-123-1.json").write_text("collision", encoding="utf-8")
+    monkeypatch.setattr("gpucall.recipe_admin_files.time.time_ns", lambda: 123)
+
+    destination = move_submission(source, processed / "rr.json")
+
+    assert destination == processed / "rr-123-2.json"
+    assert destination.read_text(encoding="utf-8") == "new"
+    assert (processed / "rr.json").read_text(encoding="utf-8") == "existing"
+    assert (processed / "rr-123-1.json").read_text(encoding="utf-8") == "collision"
+
+
+def test_process_inbox_moves_processed_submission_to_failed_if_index_update_fails(tmp_path, monkeypatch) -> None:
+    inbox = tmp_path / "inbox"
+    output_dir = tmp_path / "recipes"
+    inbox.mkdir()
+    (inbox / "rr-index.json").write_text(
+        json.dumps(
+            {
+                "sanitized_request": {
+                    "task": "infer",
+                    "mode": "sync",
+                    "intent": "summarize_text",
+                    "classification": "confidential",
+                    "desired_capabilities": ["summarization"],
+                },
+                "redaction_report": {"prompt_body_forwarded": False, "data_ref_uri_forwarded": False, "presigned_url_forwarded": False},
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    def fail_mark_processed(self, *args, **kwargs):
+        raise RuntimeError("index update failed")
+
+    monkeypatch.setattr(RecipeRequestIndex, "mark_processed", fail_mark_processed)
+
+    results = process_inbox(inbox_dir=inbox, output_dir=output_dir, accept_all=True)
+
+    assert results == [{"submission": str(inbox / "failed" / "rr-index.json"), "ok": False, "error": "index update failed"}]
+    assert not (inbox / "processed" / "rr-index.json").exists()
+    assert (inbox / "failed" / "rr-index.json").exists()
+
+
+def test_process_quality_inbox_moves_processed_submission_to_failed_if_index_update_fails(tmp_path, monkeypatch) -> None:
+    inbox = tmp_path / "quality"
+    inbox.mkdir()
+    (inbox / "qf-index.json").write_text(
+        json.dumps(
+            {
+                "phase": "deterministic-quality-feedback-intake",
+                "sanitized_request": {
+                    "task": "vision",
+                    "intent": "understand_document_image",
+                    "quality_feedback": {"kind": "insufficient_ocr", "reason": "redacted summary"},
+                },
+                "redaction_report": {
+                    "prompt_body_forwarded": False,
+                    "output_body_forwarded": False,
+                    "data_ref_uri_forwarded": False,
+                    "presigned_url_forwarded": False,
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    def fail_mark_processed(self, *args, **kwargs):
+        raise RuntimeError("quality index update failed")
+
+    monkeypatch.setattr(QualityFeedbackIndex, "mark_processed", fail_mark_processed)
+
+    results = process_quality_inbox(inbox_dir=inbox)
+
+    assert results == [{"submission": str(inbox / "failed" / "qf-index.json"), "ok": False, "error": "quality index update failed"}]
+    assert not (inbox / "processed" / "qf-index.json").exists()
+    assert (inbox / "failed" / "qf-index.json").exists()
+
+
+def test_existing_tuple_activation_checks_staged_config_before_active_write(tmp_path, monkeypatch) -> None:
+    config_dir = tmp_path / "config"
+    shutil.copytree("gpucall/config_templates", config_dir)
+    report_dir = tmp_path / "reports"
+    report_dir.mkdir()
+    recipe = load_config(config_dir).recipes["text-infer-standard"].model_dump(mode="json")
+    recipe["name"] = "infer-staged-activation-draft"
+    recipe["intent"] = "staged_activation"
+    recipe["auto_select"] = False
+    target = config_dir / "recipes" / "infer-staged-activation-draft.yml"
+
+    def fail_check(command):
+        return {"returncode": 1, "stdout": "", "stderr": "staged config rejected"}
+
+    monkeypatch.setattr("gpucall.recipe_admin._run_admin_check", fail_check)
+
+    report = _auto_existing_tuple_report(
+        {
+            "canonical_recipe": recipe,
+            "eligible_tuples": ["modal-a10g"],
+            "live_validation": {"matched": [{"tuple": "modal-a10g", "recipe": recipe["name"], "path": "/tmp/modal-a10g.json"}]},
+        },
+        request_id="rr-stage",
+        automation=RecipeAdminAutomationConfig(
+            recipe_inbox_auto_materialize=True,
+            recipe_inbox_auto_validate_existing_tuples=True,
+            recipe_inbox_auto_activate_existing_validated_recipe=True,
+            recipe_inbox_auto_run_validate_config=True,
+            recipe_inbox_auto_require_auto_select_safe=False,
+        ),
+        report_dir=report_dir,
+        config_dir=config_dir,
+        validation_dir=tmp_path / "tuple-validation",
+        force=False,
+    )
+
+    assert report["decision"] == "VALIDATE_CONFIG_FAILED"
+    assert report["activated"] is False
+    assert "activation_paths" not in report
+    assert "staged_activation_paths" in report
+    assert not target.exists()
 
 
 def test_admin_process_inbox_links_existing_recipe_without_overwrite(tmp_path) -> None:

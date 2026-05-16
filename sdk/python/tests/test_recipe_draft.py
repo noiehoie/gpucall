@@ -127,6 +127,47 @@ def test_draft_uses_sanitized_intake_only() -> None:
     assert draft["workload_contract"]["input_contracts"] == ["image", "data_refs", "text"]
 
 
+def test_draft_does_not_select_provider_model_gpu_runtime_tuple_or_fallback() -> None:
+    intake = {
+        "sanitized_request": {
+            "task": "infer",
+            "mode": "sync",
+            "intent": "summarize_text",
+            "classification": "confidential",
+            "desired_capabilities": ["summarization"],
+            "runtime_selection": {
+                "provider": "modal",
+                "model": "qwen2.5",
+                "gpu": "h100",
+                "runtime": "vllm",
+                "tuple": "modal-h100",
+                "fallback": ["runpod-h100"],
+            },
+            "error": {
+                "context": {
+                    "provider": "modal",
+                    "model": "qwen2.5",
+                    "gpu": "h100",
+                    "requested_tuple": "modal-h100",
+                    "fallback": ["runpod-h100"],
+                }
+            },
+        }
+    }
+
+    draft = draft_from_intake(intake)
+    serialized = json.dumps(draft, sort_keys=True)
+
+    assert draft["source"] == "sanitized_request_only"
+    assert draft["proposed_recipe"]["name"] == "infer-summarize-text-draft"
+    assert draft["proposed_recipe"]["auto_select"] is False
+    for forbidden_key in ("runtime_selection", "provider", "model", "gpu", "runtime", "tuple", "requested_tuple", "fallback"):
+        assert forbidden_key not in draft["proposed_recipe"]
+        assert forbidden_key not in draft["workload_contract"]
+    for forbidden_value in ("modal", "qwen2.5", "h100", "runpod", "vllm"):
+        assert forbidden_value not in serialized
+
+
 def test_recipe_draft_cli_intake_and_draft(tmp_path, capsys) -> None:
     error_path = tmp_path / "error.json"
     intake_path = tmp_path / "intake.json"

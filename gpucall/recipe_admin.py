@@ -28,6 +28,7 @@ from gpucall.recipe_authoring import (
     build_authoring_bundle,
     parse_authoring_proposal,
 )
+from gpucall.recipe_admin_files import move_submission
 from gpucall.recipe_materialize import (
     canonical_recipe_from_artifact,
     contract_narrowing_reasons,
@@ -36,7 +37,12 @@ from gpucall.recipe_materialize import (
     to_yaml,
     write_recipe_yaml,
 )
-from gpucall.quality_feedback_index import QualityFeedbackIndex, default_quality_feedback_index_path
+from gpucall.recipe_admin_quality import (
+    process_quality_inbox,
+    quality_feedback_report,
+    quality_feedback_status,
+    quality_inbox_command_report,
+)
 from gpucall.recipe_request_index import RecipeRequestIndex, default_recipe_request_index_path
 from gpucall.readiness import build_readiness_report
 from gpucall.tuple_promotion import promote_candidate, promote_production_tuple
@@ -380,6 +386,7 @@ def process_inbox(
     for path in sorted(inbox.glob("*.json")):
         if path.parent != inbox:
             continue
+        current_path = path
         request_id = path.stem
         try:
             submission = _load_json(str(path))
@@ -391,7 +398,7 @@ def process_inbox(
             recipe = canonical_recipe_from_artifact(artifact, catalog=catalog)
             report = materialization_report(artifact, recipe, catalog=catalog)
             report["admin_review"] = review
-            recipe_path = output / f"{recipe['name']}.yml"
+            recipe_path = _recipe_yaml_path(output, recipe["name"])
             if recipe_path.exists() and not force:
                 report["processing_action"] = "existing_recipe_linked"
             elif recipe_path.exists() and force and not allow_contract_narrowing:
@@ -438,133 +445,15 @@ def process_inbox(
             report_path = reports / f"{path.stem}.report.json"
             report_path.write_text(json.dumps(report, ensure_ascii=False, indent=2, sort_keys=True) + "\n", encoding="utf-8")
             destination = processed / path.name
-            destination = _move_submission(path, destination)
+            destination = move_submission(current_path, destination)
+            current_path = destination
             index.mark_processed(request_id, original_path=destination, report_path=report_path, recipe_path=recipe_path)
             results.append({"submission": str(destination), "recipe": str(recipe_path), "report": str(report_path), "ok": True})
         except Exception as exc:
-            destination = failed / path.name
-            destination = _move_submission(path, destination)
+            destination = move_submission(current_path, failed / current_path.name) if current_path.exists() else failed / path.name
             index.mark_failed(request_id, original_path=destination, error=str(exc))
             results.append({"submission": str(destination), "ok": False, "error": str(exc)})
     return results
-
-
-def process_quality_inbox(
-    *,
-    inbox_dir: str | Path,
-    processed_dir: str | Path | None = None,
-    failed_dir: str | Path | None = None,
-    report_dir: str | Path | None = None,
-    index_db: str | Path | None = None,
-    config_dir: str | Path | None = None,
-) -> list[dict[str, Any]]:
-    inbox = Path(inbox_dir)
-    processed = Path(processed_dir) if processed_dir else inbox / "processed"
-    failed = Path(failed_dir) if failed_dir else inbox / "failed"
-    reports = Path(report_dir) if report_dir else inbox / "reports"
-    processed.mkdir(parents=True, exist_ok=True)
-    failed.mkdir(parents=True, exist_ok=True)
-    reports.mkdir(parents=True, exist_ok=True)
-    index = QualityFeedbackIndex(index_db or default_quality_feedback_index_path(inbox))
-    results: list[dict[str, Any]] = []
-    for path in sorted(inbox.glob("*.json")):
-        if path.parent != inbox:
-            continue
-        feedback_id = path.stem
-        report_path: Path | None = None
-        try:
-            submission = _load_json(str(path))
-            feedback_id = index.upsert_pending(path, submission)["feedback_id"]
-            report = quality_feedback_report(submission, config_dir=config_dir)
-            if report.get("decision") == "REJECT":
-                raise ValueError("quality feedback rejected: " + "; ".join(_finding_reasons(report.get("blockers"))))
-            report_path = reports / f"{path.stem}.report.json"
-            report_path.write_text(json.dumps(report, ensure_ascii=False, indent=2, sort_keys=True) + "\n", encoding="utf-8")
-            destination = _move_submission(path, processed / path.name)
-            index.mark_processed(feedback_id, original_path=destination, report_path=report_path)
-            results.append({"submission": str(destination), "report": str(report_path), "ok": True})
-        except Exception as exc:
-            destination = _move_submission(path, failed / path.name)
-            index.mark_failed(feedback_id, original_path=destination, error=str(exc), report_path=report_path)
-            results.append({"submission": str(destination), "ok": False, "error": str(exc)})
-    return results
-
-
-def quality_feedback_report(
-    submission_or_intake: Mapping[str, Any],
-    *,
-    config_dir: str | Path | None = None,
-) -> dict[str, Any]:
-    started = datetime.now(timezone.utc).isoformat()
-    report: dict[str, Any] = {
-        "schema_version": 1,
-        "phase": "quality-feedback-review",
-        "reviewed_at": started,
-        "decision": "ACCEPT",
-        "blockers": [],
-        "warnings": [],
-        "findings": [],
-        "next_actions": [],
-    }
-    artifact = _artifact_from_submission(submission_or_intake)
-    report["feedback_id"] = submission_or_intake.get("request_id") if isinstance(submission_or_intake, Mapping) else None
-    report["submission_kind"] = submission_or_intake.get("kind") if isinstance(submission_or_intake, Mapping) else None
-    if artifact.get("phase") != "deterministic-quality-feedback-intake":
-        report["blockers"].append({"check": "phase", "reason": "submission is not deterministic quality feedback intake"})
-    _review_redaction(artifact, report)
-    sanitized = _mapping(artifact.get("sanitized_request"))
-    quality = _mapping(sanitized.get("quality_feedback"))
-    runtime = _mapping(sanitized.get("runtime_selection"))
-    if not sanitized:
-        report["blockers"].append({"check": "sanitized_request", "reason": "missing sanitized_request"})
-    if not quality:
-        report["blockers"].append({"check": "quality_feedback", "reason": "missing quality_feedback"})
-    output_contract_feedback = _mapping(quality.get("output_contract_feedback"))
-    report["task"] = sanitized.get("task")
-    report["intent"] = sanitized.get("intent")
-    report["classification"] = sanitized.get("classification")
-    report["expected_output"] = sanitized.get("expected_output")
-    report["observed"] = {
-        "recipe": runtime.get("observed_recipe"),
-        "tuple": runtime.get("observed_tuple"),
-        "tuple_model": runtime.get("observed_tuple_model"),
-        "output_validated": runtime.get("output_validated"),
-    }
-    report["quality_feedback"] = {
-        "kind": quality.get("kind"),
-        "observed_output_kind": quality.get("observed_output_kind"),
-        "reason": quality.get("reason"),
-    }
-    if output_contract_feedback:
-        report["output_contract_feedback"] = {
-            "response_format": output_contract_feedback.get("response_format"),
-            "expected_json_schema_present": bool(output_contract_feedback.get("expected_json_schema")),
-            "observed_json_schema_present": bool(output_contract_feedback.get("observed_json_schema")),
-            "schema_success_count": output_contract_feedback.get("schema_success_count"),
-            "schema_failure_count": output_contract_feedback.get("schema_failure_count"),
-            "raw_output_forwarded": bool(output_contract_feedback.get("raw_output_forwarded")),
-        }
-        if output_contract_feedback.get("raw_output_forwarded"):
-            report["blockers"].append({"check": "output_contract_feedback", "reason": "raw output must not be forwarded"})
-    if config_dir and sanitized.get("task"):
-        try:
-            config = load_config(Path(config_dir))
-            matching = [
-                recipe.name
-                for recipe in config.recipes.values()
-                if str(recipe.task) == str(sanitized.get("task")) and (not sanitized.get("intent") or recipe.intent == normalize_intent(str(sanitized.get("intent"))))
-            ]
-            report["matching_recipes"] = sorted(matching)
-        except Exception as exc:
-            report["warnings"].append({"check": "config", "reason": str(exc)})
-    if quality.get("kind") in {"schema_mismatch", "schema_noncompliance", "missing_required_json_field", "malformed_business_output"}:
-        report["next_actions"].append("review structured-output schema adherence for the observed tuple")
-        report["next_actions"].append("consider recipe schema tightening or promotion of a stronger JSON-capable tuple")
-    else:
-        report["next_actions"].append("review observed tuple quality evidence before changing production routing")
-    if report["blockers"]:
-        report["decision"] = "REJECT"
-    return report
 
 
 def author_recipe_proposal(
@@ -832,23 +721,30 @@ def _auto_existing_tuple_report(
         report["reason"] = shadowing["reason"]
         _write_auto_existing_report(report_dir, request_id, report)
         return report
-    recipe_path = _write_recipe_guarded(Path(config_dir).expanduser() / "recipes" / f"{active_recipe['name']}.yml", active_recipe, force=force)
-    report["activated"] = True
-    report["activation_paths"] = {"recipe": str(recipe_path)}
+    active_config_dir = Path(config_dir).expanduser()
+    active_recipe_path = _recipe_yaml_path(active_config_dir / "recipes", active_recipe["name"])
+    check_config_dir = active_config_dir
+    if automation.recipe_inbox_auto_run_validate_config or automation.recipe_inbox_auto_run_launch_check:
+        check_config_dir = _stage_activation_config(active_config_dir, report_dir, request_id)
+        staged_recipe_path = _write_recipe_guarded(_recipe_yaml_path(check_config_dir / "recipes", active_recipe["name"]), active_recipe, force=force)
+        report["staged_activation_paths"] = {"recipe": str(staged_recipe_path)}
     if automation.recipe_inbox_auto_run_validate_config:
-        check = _run_admin_check([sys.executable, "-m", "gpucall.cli", "validate-config", "--config-dir", str(config_dir)])
+        check = _run_admin_check([sys.executable, "-m", "gpucall.cli", "validate-config", "--config-dir", str(check_config_dir)])
         report["checks"].append(check)
         if check["returncode"] != 0:
-            report["decision"] = "ACTIVATED_VALIDATE_CONFIG_FAILED"
+            report["decision"] = "VALIDATE_CONFIG_FAILED"
             _write_auto_existing_report(report_dir, request_id, report)
             return report
     if automation.recipe_inbox_auto_run_launch_check:
-        check = _run_admin_check([sys.executable, "-m", "gpucall.cli", "launch-check", "--profile", "static", "--config-dir", str(config_dir)])
+        check = _run_admin_check([sys.executable, "-m", "gpucall.cli", "launch-check", "--profile", "static", "--config-dir", str(check_config_dir)])
         report["checks"].append(check)
         if check["returncode"] != 0:
-            report["decision"] = "ACTIVATED_LAUNCH_CHECK_FAILED"
+            report["decision"] = "LAUNCH_CHECK_FAILED"
             _write_auto_existing_report(report_dir, request_id, report)
             return report
+    recipe_path = _write_recipe_guarded(active_recipe_path, active_recipe, force=force)
+    report["activated"] = True
+    report["activation_paths"] = {"recipe": str(recipe_path)}
     report["decision"] = "ACTIVATED" if active_recipe.get("auto_select") is True else "ACTIVATED_NO_AUTO_SELECT"
     _write_auto_existing_report(report_dir, request_id, report)
     return report
@@ -858,6 +754,24 @@ def _write_auto_existing_report(report_dir: Path, request_id: str, report: dict[
     report_path = report_dir / f"{request_id}.existing-tuple-activation.json"
     report["auto_existing_tuple_report_path"] = str(report_path)
     report_path.write_text(json.dumps(report, ensure_ascii=False, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+
+
+def _stage_activation_config(config_dir: Path, report_dir: Path, request_id: str) -> Path:
+    safe_id = "".join(ch if ch.isalnum() or ch in "._-" else "_" for ch in request_id) or "request"
+    destination = report_dir / f"{safe_id}.activation-config"
+    for attempt in range(1, 10_000):
+        if not destination.exists():
+            shutil.copytree(config_dir, destination)
+            return destination
+        destination = report_dir / f"{safe_id}.activation-config-{time.time_ns()}-{attempt}"
+    raise FileExistsError(f"could not create activation staging config under {report_dir}")
+
+
+def _recipe_yaml_path(root: Path, recipe_name: Any) -> Path:
+    name = str(recipe_name)
+    if not name or name in {".", ".."} or "/" in name or "\\" in name or Path(name).name != name:
+        raise ValueError(f"unsafe recipe name for YAML path: {name!r}")
+    return root / f"{name}.yml"
 
 
 def _write_recipe_guarded(path: Path, payload: Mapping[str, Any], *, force: bool) -> Path:
@@ -1026,43 +940,6 @@ def recipe_request_status(request_id: str, inbox_dir: str | Path, *, index_db: s
     return {"request_id": request_id, "state": "missing"}
 
 
-def quality_feedback_status(feedback_id: str, inbox_dir: str | Path, *, index_db: str | Path | None = None) -> dict[str, Any]:
-    inbox = Path(inbox_dir)
-    db_path = Path(index_db) if index_db is not None else default_quality_feedback_index_path(inbox)
-    index_record: dict[str, Any] | None = None
-    if db_path.exists():
-        index_record = QualityFeedbackIndex(db_path).get(feedback_id)
-    candidates = [
-        ("pending", inbox / f"{feedback_id}.json"),
-        ("processed", inbox / "processed" / f"{feedback_id}.json"),
-        ("failed", inbox / "failed" / f"{feedback_id}.json"),
-    ]
-    for state, path in candidates:
-        if path.exists():
-            result: dict[str, Any] = {"feedback_id": feedback_id, "state": state, "path": str(path)}
-            if index_record is not None:
-                result["index_record"] = index_record
-            report_path = inbox / "reports" / f"{feedback_id}.report.json"
-            if report_path.exists():
-                result["report_path"] = str(report_path)
-                try:
-                    result["report"] = json.loads(report_path.read_text(encoding="utf-8"))
-                except json.JSONDecodeError:
-                    result["report_error"] = "invalid report JSON"
-            return result
-    if index_record is not None:
-        result = {"feedback_id": feedback_id, "state": index_record.get("status") or "indexed", "path": index_record.get("original_path"), "index_record": index_record}
-        report_path = index_record.get("report_path")
-        if report_path and Path(str(report_path)).exists():
-            result["report_path"] = str(report_path)
-            try:
-                result["report"] = json.loads(Path(str(report_path)).read_text(encoding="utf-8"))
-            except json.JSONDecodeError:
-                result["report_error"] = "invalid report JSON"
-        return result
-    return {"feedback_id": feedback_id, "state": "missing"}
-
-
 def inbox_command_report(
     *,
     action: str,
@@ -1123,31 +1000,6 @@ def inbox_command_report(
                 except Exception as exc:
                     reports.append({"recipe": recipe_name, "error": str(exc)})
         return {"phase": "recipe-inbox-readiness", "inbox_dir": str(inbox), "index_db": str(db_path), "readiness": reports}
-    raise AssertionError(action)
-
-
-def quality_inbox_command_report(
-    *,
-    action: str,
-    inbox_dir: str | Path,
-    feedback_id: str | None = None,
-    index_db: str | Path | None = None,
-    config_dir: str | Path | None = None,
-) -> dict[str, Any]:
-    inbox = Path(inbox_dir)
-    db_path = Path(index_db) if index_db else default_quality_feedback_index_path(inbox)
-    if action == "list":
-        rows = QualityFeedbackIndex(db_path).list() if db_path.exists() else []
-        return {"phase": "quality-feedback-inbox-list", "inbox_dir": str(inbox), "index_db": str(db_path), "feedback": rows}
-    if action == "status":
-        if not feedback_id:
-            raise SystemExit("quality-inbox status requires --feedback-id")
-        return quality_feedback_status(feedback_id, inbox, index_db=db_path)
-    if action == "process":
-        return {
-            "phase": "quality-feedback-inbox-process",
-            "processed": process_quality_inbox(inbox_dir=inbox, index_db=db_path, config_dir=config_dir),
-        }
     raise AssertionError(action)
 
 
@@ -1653,14 +1505,6 @@ def _artifact_from_submission(data: Mapping[str, Any]) -> Mapping[str, Any]:
             return intake
         raise ValueError("submission does not contain intake or draft")
     return data
-
-
-def _move_submission(source: Path, destination: Path) -> Path:
-    destination.parent.mkdir(parents=True, exist_ok=True)
-    if destination.exists():
-        destination = destination.with_name(destination.stem + "-" + str(int(time.time())) + destination.suffix)
-    shutil.move(str(source), str(destination))
-    return destination
 
 
 def _load_json(path: str) -> dict[str, Any]:
