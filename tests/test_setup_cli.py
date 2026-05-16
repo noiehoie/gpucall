@@ -130,7 +130,7 @@ recipe_automation:
 handoff_assets:
   onboarding_prompt_url: https://assets.example/gpucall/onboarding-prompt.md
   onboarding_manual_url: https://assets.example/gpucall/onboarding-manual.md
-  caller_sdk_wheel_url: https://assets.example/gpucall/gpucall_sdk-2.0.8-py3-none-any.whl
+  caller_sdk_wheel_url: https://assets.example/gpucall/gpucall_sdk-2.0.17-py3-none-any.whl
 external_systems:
   - name: example-system
     expected_workloads: [infer, vision]
@@ -166,7 +166,7 @@ launch:
     assert automation.recipe_inbox_promotion_work_dir == "/srv/gpucall/state/recipe_requests/promotions"
     assert automation.onboarding_prompt_url == "https://assets.example/gpucall/onboarding-prompt.md"
     assert automation.onboarding_manual_url == "https://assets.example/gpucall/onboarding-manual.md"
-    assert automation.caller_sdk_wheel_url == "https://assets.example/gpucall/gpucall_sdk-2.0.8-py3-none-any.whl"
+    assert automation.caller_sdk_wheel_url == "https://assets.example/gpucall/gpucall_sdk-2.0.17-py3-none-any.whl"
     assert object_store is not None
     assert object_store.bucket == "gpucall-data"
     assert credentials["auth"]["api_keys"].startswith("gpk_")
@@ -279,7 +279,7 @@ tenant_onboarding:
 handoff_assets:
   onboarding_prompt_url: https://assets.example/docs/prompt.md
   onboarding_manual_url: https://assets.example/docs/manual.md
-  caller_sdk_wheel_url: https://assets.example/sdk/gpucall_sdk-2.0.8-py3-none-any.whl
+  caller_sdk_wheel_url: https://assets.example/sdk/gpucall_sdk-2.0.17-py3-none-any.whl
 """.lstrip(),
         encoding="utf-8",
     )
@@ -289,4 +289,4 @@ handoff_assets:
 
     assert "https://assets.example/docs/prompt.md" in prompt
     assert "https://assets.example/docs/manual.md" in prompt
-    assert "https://assets.example/sdk/gpucall_sdk-2.0.8-py3-none-any.whl" in prompt
+    assert "https://assets.example/sdk/gpucall_sdk-2.0.17-py3-none-any.whl" in prompt

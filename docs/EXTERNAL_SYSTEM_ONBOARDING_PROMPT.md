@@ -31,7 +31,7 @@ Important boundary for external-system agents:
 Caller SDK helper wheel:
 
 ```bash
-uv tool install https://github.com/noiehoie/gpucall/releases/download/v2.0.16/gpucall_sdk-2.0.16-py3-none-any.whl
+uv tool install https://github.com/noiehoie/gpucall/releases/download/v2.0.17/gpucall_sdk-2.0.17-py3-none-any.whl
 gpucall-recipe-draft --help
 ```
 
@@ -48,7 +48,7 @@ deployment instruction:
 - `<admin-inbox>`: approved local or SSH inbox for sanitized recipe requests
 - `<canary-command>`: smallest representative command for that system
 - `<gpucall-sdk-wheel-url>`: caller SDK helper wheel URL; default is
-  `https://github.com/noiehoie/gpucall/releases/download/v2.0.16/gpucall_sdk-2.0.16-py3-none-any.whl`, or an operator-hosted
+  `https://github.com/noiehoie/gpucall/releases/download/v2.0.17/gpucall_sdk-2.0.17-py3-none-any.whl`, or an operator-hosted
   mirror for the installed environment
 
 Strict acceptance rule:

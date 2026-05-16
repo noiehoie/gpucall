@@ -148,7 +148,7 @@ def test_admin_automation_configure_trusted_bootstrap(tmp_path, capsys) -> None:
         recipe_promotion_work_dir="/srv/gpucall/state/recipe_requests/promotions",
         onboarding_prompt_url="https://assets.example/docs/prompt.md",
         onboarding_manual_url="https://assets.example/docs/manual.md",
-        caller_sdk_wheel_url="https://assets.example/sdk/gpucall_sdk-2.0.8-py3-none-any.whl",
+        caller_sdk_wheel_url="https://assets.example/sdk/gpucall_sdk-2.0.17-py3-none-any.whl",
         manifest=None,
         gateway_url=None,
         recipe_inbox=None,
@@ -172,7 +172,7 @@ def test_admin_automation_configure_trusted_bootstrap(tmp_path, capsys) -> None:
     assert report["admin_automation"]["trusted_bootstrap"]["allowed_hosts"] == ["trusted-host"]
     assert report["admin_automation"]["handoff_assets"]["onboarding_prompt_url"] == "https://assets.example/docs/prompt.md"
     assert report["admin_automation"]["handoff_assets"]["onboarding_manual_url"] == "https://assets.example/docs/manual.md"
-    assert report["admin_automation"]["handoff_assets"]["caller_sdk_wheel_url"] == "https://assets.example/sdk/gpucall_sdk-2.0.8-py3-none-any.whl"
+    assert report["admin_automation"]["handoff_assets"]["caller_sdk_wheel_url"] == "https://assets.example/sdk/gpucall_sdk-2.0.17-py3-none-any.whl"
     assert "api_key_handoff_mode: trusted_bootstrap" in admin_yml
     assert "recipe_inbox_auto_promote_candidates: true" in admin_yml
     assert "recipe_inbox_auto_billable_validation: true" in admin_yml
