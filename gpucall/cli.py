@@ -1556,7 +1556,18 @@ def build_launch_report(config_dir: Path, *, url: str | None = None, api_key: st
     live_artifacts = _live_validation_artifacts_by_tuple(config, config_dir=config_dir)
     production_dataref_artifacts = _production_dataref_live_validation_artifacts_by_tuple(config, config_dir=config_dir)
     capacity_unavailable_tuples = _capacity_unavailable_validation_tuples(config, config_dir=config_dir)
-    production_live_tuple_keys = set(production_dataref_artifacts) | set(gateway_live_tuples)
+    production_dataref_required_tuple_keys = _production_dataref_required_tuple_keys(config)
+    production_standard_artifacts = {
+        key: artifact
+        for key, artifact in live_artifacts.items()
+        if key not in production_dataref_required_tuple_keys
+    }
+    production_live_tuple_keys = _production_live_validation_tuple_keys(
+        config,
+        live_artifacts=live_artifacts,
+        production_dataref_artifacts=production_dataref_artifacts,
+        gateway_live_tuples=gateway_live_tuples,
+    )
     missing_live_tuples = [
         item
         for item in required_live_tuples
@@ -1595,10 +1606,12 @@ def build_launch_report(config_dir: Path, *, url: str | None = None, api_key: st
                     "check": "tuple_live_validation",
                     "missing_tuples": missing_live_tuples,
                     "required_tuples": required_live_tuples,
-                    "accepted_artifact_keys": sorted(production_dataref_artifacts),
+                    "accepted_artifact_keys": sorted(production_live_tuple_keys),
+                    "accepted_dataref_artifact_keys": sorted(production_dataref_artifacts),
+                    "accepted_standard_artifact_keys": sorted(production_standard_artifacts),
                     "accepted_gateway_live_tuple_keys": gateway_live_tuples,
                     "capacity_unavailable_tuples": capacity_unavailable_tuples,
-                    "requirement": "same production tuple live success with object-store/DataRef evidence",
+                    "requirement": "same production tuple live success; object-store/DataRef evidence is required only for DataRef-capable production tuples",
                 }
             )
         placeholder_tuples = _production_placeholder_tuples(config)
@@ -1625,6 +1638,8 @@ def build_launch_report(config_dir: Path, *, url: str | None = None, api_key: st
             "capacity_unavailable_tuples": capacity_unavailable_tuples,
             "artifacts_by_tuple": live_artifacts,
             "production_dataref_artifacts_by_tuple": production_dataref_artifacts,
+            "production_standard_artifacts_by_tuple": production_standard_artifacts,
+            "production_dataref_required_tuple_keys": sorted(production_dataref_required_tuple_keys),
         },
         "release_gates": release_gates,
         "code_static_go": release_gates["code_static_go"],
@@ -2293,7 +2308,12 @@ def _production_placeholder_tuples(config) -> list[str]:
     return sorted(placeholders)
 
 
-def _live_validation_artifacts_by_tuple(config, config_dir: Path | None = None) -> dict[str, object]:
+def _live_validation_artifacts_by_tuple(
+    config,
+    config_dir: Path | None = None,
+    *,
+    require_dataref_evidence: bool = False,
+) -> dict[str, object]:
     root = default_state_dir() / "tuple-validation"
     if not root.exists():
         return {}
@@ -2314,6 +2334,8 @@ def _live_validation_artifacts_by_tuple(config, config_dir: Path | None = None) 
             continue
         if not _live_validation_artifact_valid(data):
             continue
+        if require_dataref_evidence and not _live_validation_artifact_has_dataref_evidence(data):
+            continue
         tuple = providers_by_name.get(str(data.get("tuple") or ""))
         if tuple is None:
             continue
@@ -2333,14 +2355,48 @@ def _live_validation_artifacts_by_tuple(config, config_dir: Path | None = None) 
 
 
 def _production_dataref_live_validation_artifacts_by_tuple(config, config_dir: Path | None = None) -> dict[str, object]:
-    artifacts = _live_validation_artifacts_by_tuple(config, config_dir=config_dir)
-    return {
-        key: artifact
-        for key, artifact in artifacts.items()
-        if isinstance(artifact, dict)
-        and isinstance(artifact.get("data"), dict)
-        and _live_validation_artifact_has_dataref_evidence(artifact["data"])
-    }
+    return _live_validation_artifacts_by_tuple(config, config_dir=config_dir, require_dataref_evidence=True)
+
+
+def _production_dataref_required_tuple_keys(config) -> set[str]:
+    keys: set[str] = set()
+    for item in _required_live_validation_tuples(config):
+        tuple = config.tuples.get(str(item.get("tuple") or ""))
+        if tuple is None:
+            continue
+        if _tuple_requires_dataref_launch_evidence(tuple):
+            keys.add(str(item["tuple_key"]))
+    return keys
+
+
+def _production_live_validation_tuple_keys(
+    config,
+    *,
+    live_artifacts: dict[str, object],
+    production_dataref_artifacts: dict[str, object],
+    gateway_live_tuples: list[str],
+    dataref_required_keys: set[str] | None = None,
+) -> set[str]:
+    accepted = set(gateway_live_tuples)
+    dataref_required_keys = _production_dataref_required_tuple_keys(config) if dataref_required_keys is None else set(dataref_required_keys)
+    for key, artifact in live_artifacts.items():
+        if key in dataref_required_keys:
+            if key in production_dataref_artifacts:
+                accepted.add(key)
+            continue
+        if isinstance(artifact, dict) and config.tuples.get(str(artifact.get("tuple") or "")) is not None:
+            accepted.add(key)
+    return accepted
+
+
+def _tuple_requires_dataref_launch_evidence(tuple) -> bool:
+    input_contracts = {str(value) for value in (getattr(tuple, "input_contracts", None) or [])}
+    if "data_refs" not in input_contracts:
+        return False
+    adapter = str(getattr(tuple, "adapter", "") or "").lower()
+    if "dataref" in adapter:
+        return True
+    return bool({"image", "audio", "video", "document"} & input_contracts)
 
 
 def _gateway_smoke_live_tuples(gateway_smoke: dict[str, object] | None, config) -> list[str]:

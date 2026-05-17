@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 import json
+import os
 
 import yaml
 
@@ -598,6 +599,102 @@ def test_production_dataref_validation_artifacts_require_dataref_evidence(tmp_pa
 
     artifacts = _production_dataref_live_validation_artifacts_by_tuple(config, config_dir=root)
     assert tuple_evidence_key(tuple_spec) in artifacts
+
+
+def test_production_dataref_validation_keeps_older_dataref_artifact_when_newer_inline_exists(tmp_path, monkeypatch) -> None:
+    from gpucall.cli import _git_commit, _production_dataref_live_validation_artifacts_by_tuple
+    from gpucall.config import load_config
+    from gpucall.execution.contracts import official_contract, official_contract_hash, tuple_evidence_key
+
+    monkeypatch.setenv("GPUCALL_STATE_DIR", str(tmp_path / "state"))
+    root = copy_config(tmp_path)
+    config = load_config(root)
+    tuple_spec = config.tuples["modal-vision-a10g"]
+    contract = official_contract(tuple_spec)
+    artifact_dir = tmp_path / "state" / "tuple-validation"
+    artifact_dir.mkdir(parents=True)
+    base_payload = {
+        "tuple": tuple_spec.name,
+        "recipe": "vision-image-standard",
+        "mode": "sync",
+        "started_at": "2026-01-01T00:00:00+00:00",
+        "ended_at": "2026-01-01T00:00:01+00:00",
+        "commit": _git_commit(),
+        "config_hash": "policy-only-drift",
+        "governance_hash": "c" * 64,
+        "validation_schema_version": 1,
+        "passed": True,
+        "cleanup": {"required": False, "completed": None},
+        "cost": {"observed": None, "estimated": None},
+        "audit": {"event_ids": []},
+        "official_contract": contract,
+        "official_contract_hash": official_contract_hash(contract),
+    }
+    older_dataref = artifact_dir / "older-dataref.json"
+    newer_inline = artifact_dir / "newer-inline.json"
+    older_dataref.write_text(
+        json.dumps(
+            {
+                **base_payload,
+                "dataref_evidence": {
+                    "input_ref_count": 1,
+                    "input_ref_content_types": ["image/png"],
+                    "object_store_dataref_used": True,
+                    "gateway_presigned_input_refs": True,
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    newer_inline.write_text(json.dumps(base_payload), encoding="utf-8")
+    os.utime(older_dataref, (1000, 1000))
+    os.utime(newer_inline, (2000, 2000))
+
+    artifacts = _production_dataref_live_validation_artifacts_by_tuple(config, config_dir=root)
+
+    key = tuple_evidence_key(tuple_spec)
+    assert key in artifacts
+    assert artifacts[key]["path"].endswith("older-dataref.json")
+
+
+def test_production_live_validation_accepts_text_only_artifact_without_dataref() -> None:
+    from types import SimpleNamespace
+
+    from gpucall.cli import _production_live_validation_tuple_keys, _tuple_requires_dataref_launch_evidence
+
+    text_tuple = SimpleNamespace(name="text", adapter="runpod-vllm-serverless", input_contracts=["chat_messages"])
+    vision_tuple = SimpleNamespace(name="vision", adapter="runpod-vllm-serverless", input_contracts=["chat_messages", "image", "data_refs"])
+    local_dataref_tuple = SimpleNamespace(name="local-dataref", adapter="local-dataref-openai-worker", input_contracts=["data_refs"])
+    config = SimpleNamespace(tuples={"text": text_tuple, "vision": vision_tuple, "local-dataref": local_dataref_tuple})
+
+    assert _tuple_requires_dataref_launch_evidence(text_tuple) is False
+    assert _tuple_requires_dataref_launch_evidence(vision_tuple) is True
+    assert _tuple_requires_dataref_launch_evidence(local_dataref_tuple) is True
+
+    live_artifacts = {
+        "text-key": {"tuple": "text", "data": {"passed": True}},
+        "vision-key": {"tuple": "vision", "data": {"passed": True}},
+    }
+    accepted = _production_live_validation_tuple_keys(
+        config,
+        live_artifacts=live_artifacts,
+        production_dataref_artifacts={},
+        gateway_live_tuples=[],
+        dataref_required_keys={"vision-key"},
+    )
+
+    assert "text-key" in accepted
+    assert "vision-key" not in accepted
+
+    accepted_with_dataref = _production_live_validation_tuple_keys(
+        config,
+        live_artifacts=live_artifacts,
+        production_dataref_artifacts={"vision-key": live_artifacts["vision-key"]},
+        gateway_live_tuples=[],
+        dataref_required_keys={"vision-key"},
+    )
+
+    assert accepted_with_dataref == {"text-key", "vision-key"}
 
 
 def test_launch_report_blocks_smoke_provider_in_auto_recipe(tmp_path, monkeypatch) -> None:
