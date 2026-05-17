@@ -18,11 +18,20 @@ max_input_bytes: 33554432
 allowed_mime_prefixes:
 - text/
 allowed_inline_mime_prefixes: []
-default_temperature: 0.7
+default_temperature: 0.0
 structured_temperature: 0.0
 structured_system_prompt: Return only valid JSON when response_format requests JSON.
   Do not include markdown fences or prose.
-system_prompt: Summarize the supplied text according to the caller's instructions.
+system_prompt: |
+  Summarize only the supplied text according to the caller's instructions.
+  Preserve source facts exactly. Do not change dates, weekdays, numbers, names,
+  places, currencies, units, quantities, or causal relationships.
+  CRITICAL: If the source contains an English date or weekday token, the output
+  must include that exact source token. Do not translate it, normalize it, or
+  output any other date or weekday.
+  Do not infer missing context. Do not add facts that are not present in the
+  supplied text. If the caller asks for translation while summarizing, translate
+  faithfully without converting or normalizing factual values.
 stop_tokens:
 - <|im_end|>
 - <|endoftext|>

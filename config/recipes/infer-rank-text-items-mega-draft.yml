@@ -16,17 +16,19 @@ token_estimation_profile: generic_utf8
 max_input_bytes: 1073741824
 allowed_mime_prefixes:
 - text/
-default_temperature: 0.7
+default_temperature: 0.0
 structured_temperature: 0.0
-structured_system_prompt: Return only valid JSON when response_format requests JSON.
-  Do not include markdown fences or prose.
-system_prompt: Answer the user's request directly.
+structured_system_prompt: Return exactly one valid JSON object when response_format
+  requests JSON. The response must start with { and end with }. Do not include
+  markdown fences, prose, reasoning, comments, or trailing text. Preserve the caller's
+  requested keys, item identifiers, ranks, and ranking criteria exactly.
+system_prompt: Compare the provided text items, apply the caller's ranking criteria, and return the ranked result directly.
 stop_tokens:
 - <|im_end|>
 - <|endoftext|>
 repetition_penalty: 1.05
 guided_decoding: true
-output_validation_attempts: 1
+output_validation_attempts: 3
 required_model_capabilities:
 - instruction_following
 output_contract: plain-text

@@ -5,7 +5,7 @@ from datetime import datetime, timedelta, timezone
 import pytest
 
 from gpucall.compiler import GovernanceCompiler, GovernanceError
-from gpucall.domain import CostPolicy, DataRef, EngineSpec, ExecutionMode, ModelSpec, Policy, TuplePolicy, ExecutionTupleSpec, Recipe, RecipeQualityFloor, ResponseFormat, ResponseFormatType, TaskRequest
+from gpucall.domain import ChatMessage, CostPolicy, DataRef, EngineSpec, ExecutionMode, ModelSpec, Policy, TuplePolicy, ExecutionTupleSpec, Recipe, RecipeQualityFloor, ResponseFormat, ResponseFormatType, TaskRequest
 from gpucall.domain import TupleObservation
 from gpucall.registry import ObservedRegistry
 
@@ -162,11 +162,12 @@ def test_compiler_preserves_chat_messages_and_recipe_generation_contract() -> No
         )
     )
 
-    assert [message.model_dump(exclude_none=True) for message in plan.messages] == [
-        {"role": "system", "content": "Return JSON only."},
-        {"role": "system", "content": "caller sys"},
-        {"role": "user", "content": "hello"},
-    ]
+    assert [message.role for message in plan.messages] == ["system", "user"]
+    system_content = str(plan.messages[0].content)
+    assert "caller sys" in system_content
+    assert "Gateway recipe contract" in system_content
+    assert system_content.index("caller sys") < system_content.index("Return JSON only.")
+    assert plan.messages[1].model_dump(exclude_none=True) == {"role": "user", "content": "hello"}
     assert plan.system_prompt == "Return JSON only."
     assert plan.temperature == 0.0
     assert plan.stop_tokens == ["<stop>"]
@@ -619,6 +620,27 @@ def test_compiler_carries_response_format_into_plan() -> None:
     plan = compiler.compile(request)
 
     assert plan.response_format.type == "json_object"
+
+
+def test_compiler_merges_caller_system_under_gateway_recipe_contract() -> None:
+    request = TaskRequest(
+        task="infer",
+        mode="sync",
+        recipe="r1",
+        messages=[
+            ChatMessage(role="system", content="caller wants Japanese"),
+            ChatMessage(role="user", content="Alpha acquired Beta on Monday."),
+        ],
+    )
+
+    messages = GovernanceCompiler._compiled_messages(request, "preserve source facts")
+
+    assert [message.role for message in messages] == ["system", "user"]
+    system_content = str(messages[0].content)
+    assert "caller wants Japanese" in system_content
+    assert "Gateway recipe contract" in system_content
+    assert system_content.index("caller wants Japanese") < system_content.index("preserve source facts")
+    assert messages[1].content == "Alpha acquired Beta on Monday."
 
 
 def test_compiler_normalizes_openai_json_schema_response_format() -> None:

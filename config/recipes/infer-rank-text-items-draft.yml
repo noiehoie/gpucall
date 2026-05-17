@@ -18,17 +18,19 @@ max_input_bytes: 536870912
 allowed_mime_prefixes:
 - text/
 allowed_inline_mime_prefixes: []
-default_temperature: 0.2
+default_temperature: 0.0
 structured_temperature: 0.0
-structured_system_prompt: Return only valid JSON when response_format requests JSON.
-  Do not include markdown fences or prose.
+structured_system_prompt: Return exactly one valid JSON object when response_format
+  requests JSON. The response must start with { and end with }. Do not include
+  markdown fences, prose, reasoning, comments, or trailing text. Preserve the caller's
+  requested keys, item identifiers, ranks, and ranking criteria exactly.
 system_prompt: Compare the provided text items, apply the caller's ranking criteria, and return the ranked result directly.
 stop_tokens:
 - <|im_end|>
 - <|endoftext|>
 repetition_penalty: 1.05
 guided_decoding: true
-output_validation_attempts: 1
+output_validation_attempts: 3
 artifact_export: false
 requires_key_release: false
 required_model_capabilities:

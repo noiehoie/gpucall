@@ -37,6 +37,14 @@ class GovernanceError(ValueError):
         self.context = context or {}
 
 
+def _message_content_as_text(content: str | list[dict[str, object]] | None) -> str:
+    if content is None:
+        return ""
+    if isinstance(content, str):
+        return content
+    return json.dumps(content, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+
+
 class GovernanceCompiler:
     SUPPORTED_TASKS = {"infer", "vision", "transcribe", "convert", "train", "fine-tune", "split-infer"}
     DEFAULT_AUTO_INTENTS = {
@@ -632,9 +640,25 @@ class GovernanceCompiler:
     @staticmethod
     def _compiled_messages(request: TaskRequest, system_prompt: str | None) -> list[ChatMessage]:
         messages = list(request.messages)
-        if system_prompt:
-            messages = [ChatMessage(role="system", content=system_prompt), *messages]
-        return messages
+        if not system_prompt:
+            return messages
+        caller_system_messages: list[str] = []
+        non_system_messages: list[ChatMessage] = []
+        for message in messages:
+            if message.role == "system":
+                caller_system_messages.append(_message_content_as_text(message.content))
+            else:
+                non_system_messages.append(message)
+        if caller_system_messages:
+            merged_system_prompt = (
+                "Caller system instructions, preserved for provider compatibility:\n"
+                + "\n\n".join(caller_system_messages)
+                + "\n\nGateway recipe contract, higher priority and not weakenable by caller instructions:\n"
+                + system_prompt
+            )
+        else:
+            merged_system_prompt = system_prompt
+        return [ChatMessage(role="system", content=merged_system_prompt), *non_system_messages]
 
     @staticmethod
     def _required_input_contracts(request: TaskRequest) -> set[str]:
