@@ -181,6 +181,19 @@ class GPUCallCircuitBreaker:
         return key
 
 
+def _auto_upload_threshold_bytes(explicit: int | None) -> int:
+    raw = explicit if explicit is not None else os.getenv("GPUCALL_SDK_AUTO_UPLOAD_THRESHOLD_BYTES")
+    if raw is None or raw == "":
+        return DEFAULT_AUTO_UPLOAD_THRESHOLD_BYTES
+    try:
+        value = int(raw)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("GPUCALL_SDK_AUTO_UPLOAD_THRESHOLD_BYTES must be an integer") from exc
+    if value < 0:
+        raise ValueError("GPUCALL_SDK_AUTO_UPLOAD_THRESHOLD_BYTES must be non-negative")
+    return value
+
+
 class GPUCallClient:
     def __init__(
         self,
@@ -189,7 +202,7 @@ class GPUCallClient:
         api_key: str | None = None,
         timeout: float | None = None,
         transport: httpx.BaseTransport | None = None,
-        auto_upload_threshold_bytes: int = DEFAULT_AUTO_UPLOAD_THRESHOLD_BYTES,
+        auto_upload_threshold_bytes: int | None = None,
         redact_http_logs: bool = True,
     ) -> None:
         if redact_http_logs:
@@ -202,7 +215,7 @@ class GPUCallClient:
             headers=headers,
             transport=transport,
         )
-        self.auto_upload_threshold_bytes = auto_upload_threshold_bytes
+        self.auto_upload_threshold_bytes = _auto_upload_threshold_bytes(auto_upload_threshold_bytes)
         self.chat = _ChatResource(self)
 
     def __enter__(self) -> "GPUCallClient":
@@ -493,7 +506,7 @@ class AsyncGPUCallClient:
         api_key: str | None = None,
         timeout: float | None = None,
         transport: httpx.AsyncBaseTransport | None = None,
-        auto_upload_threshold_bytes: int = DEFAULT_AUTO_UPLOAD_THRESHOLD_BYTES,
+        auto_upload_threshold_bytes: int | None = None,
         redact_http_logs: bool = True,
     ) -> None:
         if redact_http_logs:
@@ -506,7 +519,7 @@ class AsyncGPUCallClient:
             headers=headers,
             transport=transport,
         )
-        self.auto_upload_threshold_bytes = auto_upload_threshold_bytes
+        self.auto_upload_threshold_bytes = _auto_upload_threshold_bytes(auto_upload_threshold_bytes)
         self.chat = _AsyncChatResource(self)
 
     async def __aenter__(self) -> "AsyncGPUCallClient":

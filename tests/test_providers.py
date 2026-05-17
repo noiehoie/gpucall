@@ -1673,6 +1673,40 @@ def test_runpod_vllm_vision_messages_reject_non_image_refs() -> None:
         adapter._vision_messages(plan)
 
 
+def test_runpod_vllm_vision_dataref_byte_limit_env_is_validated(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("GPUCALL_RUNPOD_VLLM_MAX_IMAGE_REF_BYTES", "not-an-int")
+    adapter = RunpodVllmServerlessAdapter(
+        api_key="rk_test",
+        endpoint_id="endpoint-1",
+        image="runpod/worker-v1-vllm:v2.18.1",
+        endpoint_contract="openai-chat-completions",
+        model="Qwen/Qwen2.5-VL-7B-Instruct",
+    )
+    plan = plan_payload_plan().model_copy(
+        update={
+            "task": "vision",
+            "input_refs": [
+                DataRef(
+                    uri="https://objects.example/file.png?signature=redacted",
+                    sha256="a" * 64,
+                    bytes=1024,
+                    content_type="image/png",
+                    gateway_presigned=True,
+                )
+            ],
+        }
+    )
+
+    with pytest.raises(TupleError, match="byte limit must be an integer"):
+        adapter._vision_messages(plan)
+
+
+def test_runpod_live_inventory_preserves_explicit_empty_first_result_key() -> None:
+    from gpucall.execution_surfaces.managed_endpoint import _runpod_inventory_rows
+
+    assert _runpod_inventory_rows({"endpoints": [], "items": [{"id": "should-not-leak"}]}) == []
+
+
 def test_runpod_vllm_live_inventory_follows_next_page(monkeypatch) -> None:
     from gpucall.execution_surfaces.managed_endpoint import _runpod_endpoint_live_inventory_rows
 

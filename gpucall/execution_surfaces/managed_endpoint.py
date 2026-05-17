@@ -273,7 +273,11 @@ def _runpod_endpoint_live_inventory_rows(api_key: str, base_url: str) -> list[di
 
 def _runpod_inventory_rows(payload: object) -> list[dict[str, Any]]:
     if isinstance(payload, dict):
-        raw = payload.get("endpoints") or payload.get("data") or payload.get("items") or payload.get("results")
+        raw = None
+        for key in ("endpoints", "data", "items", "results"):
+            if key in payload:
+                raw = payload[key]
+                break
     else:
         raw = payload
     if not isinstance(raw, list):
@@ -308,6 +312,17 @@ def _append_vision_text_content(parts: list[str], content: Any) -> None:
             raise TupleError("RunPod worker-vLLM vision route only accepts text message parts plus DataRef images", retryable=False, status_code=400)
         return
     raise TupleError("RunPod worker-vLLM vision route received invalid message content", retryable=False, status_code=400)
+
+
+def _runpod_ref_byte_limit(env_name: str, label: str) -> int:
+    raw = os.getenv(env_name, os.getenv("GPUCALL_WORKER_MAX_REF_BYTES", "16777216"))
+    try:
+        limit = int(raw)
+    except (TypeError, ValueError) as exc:
+        raise TupleError(f"RunPod worker-vLLM {label} DataRef byte limit must be an integer", retryable=False, status_code=400) from exc
+    if limit <= 0:
+        raise TupleError(f"RunPod worker-vLLM {label} DataRef byte limit must be positive", retryable=False, status_code=400)
+    return limit
 
 
 def _runpod_endpoint_live_inventory_row(tuple: Any, api_key: str, base_url: str, *, rows: list[dict[str, Any]] | None = None) -> dict[str, Any] | None:
@@ -482,7 +497,7 @@ class RunpodVllmServerlessAdapter(TupleAdapter):
         tail_content: list[dict[str, Any]] = []
         for key in sorted(plan.inline_inputs):
             value = plan.inline_inputs[key]
-            if value.value:
+            if value.value is not None:
                 tail_content.append({"type": "text", "text": str(value.value)})
         for ref in image_refs:
             tail_content.append({"type": "image_url", "image_url": {"url": self._safe_image_ref_url(ref)}})
@@ -505,7 +520,7 @@ class RunpodVllmServerlessAdapter(TupleAdapter):
             raise TupleError("RunPod worker-vLLM vision DataRefs must have image content_type", retryable=False, status_code=400)
         if ref.sha256 is None:
             raise TupleError("RunPod worker-vLLM vision DataRefs require sha256 metadata", retryable=False, status_code=400)
-        max_bytes = int(os.getenv("GPUCALL_RUNPOD_VLLM_MAX_IMAGE_REF_BYTES", os.getenv("GPUCALL_WORKER_MAX_REF_BYTES", "16777216")))
+        max_bytes = _runpod_ref_byte_limit("GPUCALL_RUNPOD_VLLM_MAX_IMAGE_REF_BYTES", "image")
         if ref.bytes is None or int(ref.bytes) <= 0:
             raise TupleError("RunPod worker-vLLM vision DataRefs require positive bytes metadata", retryable=False, status_code=400)
         if int(ref.bytes) > max_bytes:

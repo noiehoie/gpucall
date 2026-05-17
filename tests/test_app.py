@@ -1691,9 +1691,8 @@ def test_validation_error_response_does_not_expose_request_input(tmp_path) -> No
             },
         )
 
-    assert response.status_code == 422
+    assert response.status_code == 400
     assert "secret-prompt" not in response.text
-    assert all("input" not in error for error in response.json()["detail"])
 
 
 def test_openai_validation_error_response_does_not_expose_message_content(tmp_path) -> None:

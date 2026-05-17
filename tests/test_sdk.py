@@ -404,6 +404,21 @@ def test_python_sdk_default_auto_upload_threshold_matches_gateway_inline_limit()
     assert client.auto_upload_threshold_bytes == 8 * 1024
 
 
+def test_python_sdk_auto_upload_threshold_can_be_set_by_env(monkeypatch) -> None:
+    monkeypatch.setenv("GPUCALL_SDK_AUTO_UPLOAD_THRESHOLD_BYTES", "262144")
+
+    client = GPUCallClient("http://gpucall.test", transport=httpx.MockTransport(lambda request: httpx.Response(500)))
+
+    assert client.auto_upload_threshold_bytes == 262144
+
+
+def test_python_sdk_rejects_invalid_auto_upload_threshold_env(monkeypatch) -> None:
+    monkeypatch.setenv("GPUCALL_SDK_AUTO_UPLOAD_THRESHOLD_BYTES", "not-an-int")
+
+    with pytest.raises(ValueError, match="must be an integer"):
+        GPUCallClient("http://gpucall.test", transport=httpx.MockTransport(lambda request: httpx.Response(500)))
+
+
 def test_python_sdk_chat_parse_json_raises_with_raw_text() -> None:
     def handler(request: httpx.Request) -> httpx.Response:
         return httpx.Response(

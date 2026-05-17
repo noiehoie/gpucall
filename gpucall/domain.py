@@ -311,7 +311,7 @@ class DataRef(BaseModel):
 
 
 class InlineValue(BaseModel):
-    value: str = Field(max_length=8192)
+    value: str = Field(max_length=1048576)
     content_type: str = "text/plain"
 
 
