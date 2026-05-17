@@ -643,6 +643,52 @@ def test_compiler_merges_caller_system_under_gateway_recipe_contract() -> None:
     assert messages[1].content == "Alpha acquired Beta on Monday."
 
 
+def test_compiler_adds_fact_lock_for_summarize_text() -> None:
+    compiler = build_compiler()
+    compiler.policy = compiler.policy.model_copy(update={"inline_bytes_limit": 1000})
+    compiler.recipes["r1"] = compiler.recipes["r1"].model_copy(
+        update={
+            "intent": "summarize_text",
+            "system_prompt": "Summarize the source without adding facts.",
+        }
+    )
+    request = TaskRequest(
+        task="infer",
+        mode="sync",
+        recipe="r1",
+        inline_inputs={
+            "prompt": {
+                "value": "Alpha acquired Beta on Monday for $5 million. Revenue fell -10% after 5 miles.",
+            }
+        },
+    )
+
+    plan = compiler.compile(request)
+
+    assert plan.system_prompt is not None
+    assert "Deterministic source fact tokens" in plan.system_prompt
+    assert "Monday" in plan.system_prompt
+    assert "$5 million" in plan.system_prompt
+    assert "-10%" in plan.system_prompt
+    assert "5 miles" in plan.system_prompt
+    assert "\n- 5 m\n" not in plan.system_prompt
+
+
+def test_compiler_does_not_add_fact_lock_for_other_intents() -> None:
+    compiler = build_compiler()
+    compiler.policy = compiler.policy.model_copy(update={"inline_bytes_limit": 1000})
+    request = TaskRequest(
+        task="infer",
+        mode="sync",
+        recipe="r1",
+        inline_inputs={"prompt": {"value": "Alpha acquired Beta on Monday for $5 million."}},
+    )
+
+    plan = compiler.compile(request)
+
+    assert plan.system_prompt is None or "Deterministic source fact tokens" not in plan.system_prompt
+
+
 def test_compiler_normalizes_openai_json_schema_response_format() -> None:
     compiler = build_compiler()
     compiler.recipes["r1"] = compiler.recipes["r1"].model_copy(update={"guided_decoding": True})

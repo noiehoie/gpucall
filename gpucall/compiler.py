@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 from datetime import datetime, timezone
 from math import ceil
 
@@ -43,6 +44,75 @@ def _message_content_as_text(content: str | list[dict[str, object]] | None) -> s
     if isinstance(content, str):
         return content
     return json.dumps(content, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+
+
+_WEEKDAY_TOKEN_RE = re.compile(r"\b(?:Monday|Tuesday|Wednesday|Thursday|Friday|Saturday|Sunday)\b", re.IGNORECASE)
+_NUMERIC_FACT_TOKEN_RE = re.compile(
+    r"(?<![\w.])[-+]?(?:[$€£¥]\s*)?(?:\d{1,3}(?:[,.]\d{3})+(?:[,.]\d+)?|\d+(?:[,.]\d+)?|\.\d+)(?:\s*(?:%|(?:percentage|percent|trillion|billion|million|thousand|miles?|years?|months?|weeks?|days?|hours?|km|kg|bn|g|m)\b))?",
+    re.IGNORECASE,
+)
+
+
+def _append_deterministic_fact_lock(system_prompt: str | None, request: TaskRequest, recipe: Recipe) -> str | None:
+    if recipe.intent != "summarize_text":
+        return system_prompt
+    tokens = _source_fact_tokens(request)
+    if not tokens:
+        return system_prompt
+    fact_lock = (
+        "Deterministic source fact tokens that must be preserved verbatim in the summary:\n"
+        + "\n".join(f"- {token}" for token in tokens)
+        + "\nDo not translate, convert, round, omit, or replace these tokens."
+    )
+    return f"{system_prompt}\n\n{fact_lock}" if system_prompt else fact_lock
+
+
+def _source_fact_tokens(request: TaskRequest) -> list[str]:
+    tokens: list[str] = []
+    for text in _request_text_fragments(request):
+        matches = [
+            *((match.start(), match.group(0).strip()) for match in _WEEKDAY_TOKEN_RE.finditer(text)),
+            *((match.start(), match.group(0).strip()) for match in _NUMERIC_FACT_TOKEN_RE.finditer(text)),
+        ]
+        tokens.extend(token for _, token in sorted(matches))
+    seen: set[str] = set()
+    deduped: list[str] = []
+    for token in tokens:
+        normalized = token.lower()
+        if normalized in seen:
+            continue
+        seen.add(normalized)
+        deduped.append(token)
+        if len(deduped) >= 12:
+            break
+    return deduped
+
+
+def _request_text_fragments(request: TaskRequest) -> list[str]:
+    fragments: list[str] = []
+    for item in request.inline_inputs.values():
+        if isinstance(item, str):
+            fragments.append(item)
+        elif isinstance(item, dict):
+            value = item.get("value")
+            if isinstance(value, str):
+                fragments.append(value)
+        else:
+            value = getattr(item, "value", None)
+            if isinstance(value, str):
+                fragments.append(value)
+    for message in request.messages:
+        if message.role == "system":
+            continue
+        content = message.content
+        if isinstance(content, str):
+            fragments.append(content)
+        elif isinstance(content, list):
+            for part in content:
+                text = part.get("text") if isinstance(part, dict) else None
+                if isinstance(text, str):
+                    fragments.append(text)
+    return fragments
 
 
 class GovernanceCompiler:
@@ -105,6 +175,7 @@ class GovernanceCompiler:
         if compiled_temperature is None:
             compiled_temperature = recipe.structured_temperature if structured else recipe.default_temperature
         effective_system_prompt = recipe.structured_system_prompt if structured and recipe.structured_system_prompt else recipe.system_prompt
+        effective_system_prompt = _append_deterministic_fact_lock(effective_system_prompt, request, recipe)
         compiled_messages = self._compiled_messages(request, effective_system_prompt)
 
         compiled_stop_tokens = list(recipe.stop_tokens)

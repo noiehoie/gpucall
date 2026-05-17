@@ -29,6 +29,9 @@ system_prompt: |
   CRITICAL: If the source contains an English date or weekday token, the output
   must include that exact source token. Do not translate it, normalize it, or
   output any other date or weekday.
+  CRITICAL: If the source contains a numeric, currency, percentage, unit, or
+  measurement token, the output must include the exact source token. Do not
+  convert, round, translate, omit, or normalize it.
   Do not infer missing context. Do not add facts that are not present in the
   supplied text. If the caller asks for translation while summarizing, translate
   faithfully without converting or normalizing factual values.
