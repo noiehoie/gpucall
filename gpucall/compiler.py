@@ -4,8 +4,8 @@ import hashlib
 import json
 import re
 from datetime import datetime, timezone
-from math import ceil
 
+from gpucall.costing import estimate_tuple_cost
 from gpucall.domain import (
     CompileArtifact,
     CompiledPlan,
@@ -25,7 +25,6 @@ from gpucall.domain import (
 )
 from gpucall.domain import ChatMessage, ResponseFormatType
 from gpucall.execution.contracts import account_ref_for_spec
-from gpucall.price_freshness import tuple_configured_price_freshness
 from gpucall.registry import ObservedRegistry
 from gpucall.routing import classification_rank, is_production_route_candidate, requested_output_contract, requires_openai_chat_contract, tuple_route_rejection_reason, required_model_len, token_budget
 from gpucall.targeting import is_configured_target
@@ -614,47 +613,7 @@ class GovernanceCompiler:
         recipe: Recipe,
         timeout_seconds: int,
     ) -> dict[str, float | int | str]:
-        cold_start_seconds = float(tuple.expected_cold_start_seconds or recipe.expected_cold_start_seconds or 0)
-        idle_seconds = float(tuple.scaledown_window_seconds or 0)
-        runtime_seconds = float(timeout_seconds)
-        standing_cost_seconds = float(tuple.standing_cost_window_seconds or 0)
-        endpoint_cost_seconds = float(tuple.endpoint_cost_window_seconds or 0)
-        billable_seconds = cold_start_seconds + runtime_seconds + idle_seconds
-        if tuple.min_billable_seconds is not None:
-            billable_seconds = max(billable_seconds, float(tuple.min_billable_seconds))
-        if tuple.billing_granularity_seconds:
-            granularity = float(tuple.billing_granularity_seconds)
-            billable_seconds = ceil(billable_seconds / granularity) * granularity
-        cost_per_second = float(tuple.cost_per_second)
-        price_freshness = tuple_configured_price_freshness(tuple)
-        execution_cost_usd = cost_per_second * billable_seconds
-        standing_cost_per_second = float(tuple.standing_cost_per_second or 0)
-        endpoint_cost_per_second = float(tuple.endpoint_cost_per_second or 0)
-        standing_cost_usd = standing_cost_per_second * standing_cost_seconds
-        endpoint_cost_usd = endpoint_cost_per_second * endpoint_cost_seconds
-        return {
-            "method": "cost_per_second_times_cold_start_runtime_idle_and_standing_estimate",
-            "tuple": tuple.name,
-            "cost_per_second": cost_per_second,
-            "configured_price_source": tuple.configured_price_source or "",
-            "configured_price_observed_at": tuple.configured_price_observed_at or "",
-            "configured_price_ttl_seconds": float(tuple.configured_price_ttl_seconds or 0),
-            "price_freshness": price_freshness.value,
-            "cold_start_seconds": cold_start_seconds,
-            "runtime_seconds": runtime_seconds,
-            "idle_seconds": idle_seconds,
-            "billable_seconds": billable_seconds,
-            "standing_cost_per_second": standing_cost_per_second,
-            "standing_cost_seconds": standing_cost_seconds,
-            "endpoint_cost_per_second": endpoint_cost_per_second,
-            "endpoint_cost_seconds": endpoint_cost_seconds,
-            "cold_start_cost_usd": cost_per_second * cold_start_seconds,
-            "idle_cost_usd": cost_per_second * idle_seconds,
-            "standing_cost_usd": standing_cost_usd,
-            "endpoint_cost_usd": endpoint_cost_usd,
-            "execution_cost_usd": execution_cost_usd,
-            "estimated_cost_usd": execution_cost_usd + standing_cost_usd + endpoint_cost_usd,
-        }
+        return estimate_tuple_cost(tuple, recipe, timeout_seconds=timeout_seconds)
 
     def _effective_cost_policy(self, recipe: Recipe) -> CostPolicy:
         base = self.policy.cost_policy

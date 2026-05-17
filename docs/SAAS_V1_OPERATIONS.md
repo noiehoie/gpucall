@@ -38,10 +38,14 @@ Legacy `auth.api_keys` and `GPUCALL_API_KEYS` remain supported and map to the `d
 Before provider execution, the gateway:
 
 - compiles the deterministic plan
-- reads `attestations.cost_estimate.estimated_cost_usd`
+- reads `attestations.cost_estimate.budget_reservation_usd`
 - checks `max_request_estimated_cost_usd`
 - checks daily and monthly projected spend
-- records accepted estimated spend in `$GPUCALL_STATE_DIR/tenant_usage.db`
+- records accepted request-budget reservation in `$GPUCALL_STATE_DIR/tenant_usage.db`
+
+`estimated_cost_usd` remains visible for audit and includes separately declared
+fixed or warm-capacity cost. Tenant spend gates use `budget_reservation_usd` so
+shared fixed capacity is not charged once per caller request.
 
 Rejected requests return `402 TENANT_BUDGET_EXCEEDED` before provider execution.
 

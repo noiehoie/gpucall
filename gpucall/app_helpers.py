@@ -13,6 +13,7 @@ from fastapi import HTTPException, Request
 from fastapi.responses import JSONResponse
 
 from gpucall.compiler import GovernanceError
+from gpucall.costing import budget_reservation_usd
 from gpucall.domain import DataRef, PresignGetRequest, TaskRequest, TupleError
 from gpucall.provider_errors import provider_error_class
 from gpucall.routing import route_warning_tags
@@ -49,7 +50,7 @@ async def enforce_request_budget(runtime: Runtime, request: Request, plan: Any) 
     tenant_name = tenant_identity(tenant_id, api_key)
     tenant = runtime.tenants.get(tenant_name) or runtime.tenants.get("default")
     cost = getattr(plan, "attestations", {}).get("cost_estimate", {}) if getattr(plan, "attestations", None) else {}
-    estimated = float(cost.get("estimated_cost_usd") or 0)
+    estimated = budget_reservation_usd(cost)
     tuple_chain = list(getattr(plan, "tuple_chain", []) or [])
     await asyncio.to_thread(
         enforce_tenant_budget,
@@ -318,7 +319,7 @@ def safe_request_summary(request: TaskRequest | None) -> dict[str, Any]:
     input_ref_bytes = [ref.bytes for ref in request.input_refs if ref.bytes is not None]
     input_ref_content_types = sorted({ref.content_type for ref in request.input_refs if ref.content_type})
     inline_content_types = sorted({item.content_type for item in request.inline_inputs.values() if item.content_type})
-    message_lengths = [len(message.content.encode("utf-8")) for message in request.messages]
+    message_lengths = [_message_content_bytes(message.content) for message in request.messages]
     return {
         "task": request.task,
         "mode": request.mode.value,
@@ -335,6 +336,14 @@ def safe_request_summary(request: TaskRequest | None) -> dict[str, Any]:
         "response_format": request.response_format.type.value if request.response_format is not None else None,
         "max_tokens": request.max_tokens,
     }
+
+
+def _message_content_bytes(content: object) -> int:
+    if content is None:
+        return 0
+    if isinstance(content, str):
+        return len(content.encode("utf-8"))
+    return len(json.dumps(content, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8"))
 
 
 def redaction_guarantee() -> dict[str, bool]:
@@ -362,7 +371,7 @@ def worker_readable_request(request: TaskRequest, runtime: Runtime, *, tenant_pr
         raise ValueError("object store is required for data_ref worker access")
     converted = [_worker_readable_ref(ref, runtime, tenant_prefix=tenant_prefix) for ref in request.input_refs]
     updates: dict[str, Any] = {"input_refs": converted}
-    if request.split_learning is not None:
+    if request.split_learning is not None and request.split_learning.activation_ref is not None:
         converted_activation = _worker_readable_ref(request.split_learning.activation_ref, runtime, tenant_prefix=tenant_prefix)
         updates["split_learning"] = request.split_learning.model_copy(update={"activation_ref": converted_activation})
     return request.model_copy(update=updates)

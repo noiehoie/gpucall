@@ -9,12 +9,16 @@ from gpucall.cli import seed_liveness
 
 
 class _Compiler:
-    def __init__(self, estimated_cost: float) -> None:
+    def __init__(self, estimated_cost: float, budget_reservation: float | None = None) -> None:
         self.recipes = {"text-infer-standard": SimpleNamespace(name="text-infer-standard", task="infer")}
         self.estimated_cost = estimated_cost
+        self.budget_reservation = budget_reservation
 
     def compile(self, _request):
-        return SimpleNamespace(attestations={"cost_estimate": {"estimated_cost_usd": self.estimated_cost}})
+        cost = {"estimated_cost_usd": self.estimated_cost}
+        if self.budget_reservation is not None:
+            cost["budget_reservation_usd"] = self.budget_reservation
+        return SimpleNamespace(attestations={"cost_estimate": cost})
 
 
 class _Dispatcher:
@@ -25,8 +29,8 @@ class _Dispatcher:
         self.executions += 1
 
 
-def _runtime(estimated_cost: float) -> SimpleNamespace:
-    return SimpleNamespace(compiler=_Compiler(estimated_cost), dispatcher=_Dispatcher())
+def _runtime(estimated_cost: float, budget_reservation: float | None = None) -> SimpleNamespace:
+    return SimpleNamespace(compiler=_Compiler(estimated_cost, budget_reservation), dispatcher=_Dispatcher())
 
 
 @pytest.mark.asyncio
@@ -49,3 +53,13 @@ async def test_seed_liveness_enforces_budget_before_execution(monkeypatch) -> No
         await seed_liveness(Path("config"), "text-infer-standard", 2, budget_usd=0.25)
 
     assert runtime.dispatcher.executions == 1
+
+
+@pytest.mark.asyncio
+async def test_seed_liveness_budget_uses_request_reservation(monkeypatch) -> None:
+    runtime = _runtime(estimated_cost=1.25, budget_reservation=0.05)
+    monkeypatch.setattr("gpucall.cli.build_runtime", lambda _config_dir: runtime)
+
+    await seed_liveness(Path("config"), "text-infer-standard", 2, budget_usd=0.1)
+
+    assert runtime.dispatcher.executions == 2

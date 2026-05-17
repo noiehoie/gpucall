@@ -39,4 +39,5 @@ required_model_capabilities:
 - instruction_following
 output_contract: plain-text
 expected_cold_start_seconds: null
+expected_runtime_seconds: 180
 cost_policy: null

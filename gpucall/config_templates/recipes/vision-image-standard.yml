@@ -13,6 +13,7 @@ latency_class: standard
 quality_floor: standard
 timeout_seconds: 600
 lease_ttl_seconds: 900
+expected_runtime_seconds: 90
 token_estimation_profile: generic_utf8
 max_input_bytes: 16777216
 allowed_mime_prefixes:

@@ -5,7 +5,7 @@ from datetime import datetime, timedelta, timezone
 import pytest
 
 from gpucall.compiler import GovernanceCompiler, GovernanceError
-from gpucall.domain import ChatMessage, CostPolicy, DataRef, EngineSpec, ExecutionMode, ModelSpec, Policy, TuplePolicy, ExecutionTupleSpec, Recipe, RecipeQualityFloor, ResponseFormat, ResponseFormatType, TaskRequest
+from gpucall.domain import ChatMessage, CostPolicy, DataRef, EngineSpec, ExecutionMode, ExecutionSurface, ModelSpec, Policy, TuplePolicy, ExecutionTupleSpec, Recipe, RecipeQualityFloor, ResponseFormat, ResponseFormatType, TaskRequest
 from gpucall.domain import TupleObservation
 from gpucall.registry import ObservedRegistry
 
@@ -1157,6 +1157,69 @@ def test_standing_tuple_cost_is_reported_in_attestation() -> None:
 
     assert plan.attestations["cost_estimate"]["standing_cost_usd"] == pytest.approx(7.2)
     assert plan.attestations["cost_estimate"]["estimated_cost_usd"] == pytest.approx(7.2)
+
+
+def test_runpod_managed_endpoint_keeps_standing_cost_out_of_request_budget() -> None:
+    compiler = build_compiler()
+    compiler.policy = compiler.policy.model_copy(update={"max_timeout_seconds": 180, "max_lease_ttl_seconds": 240})
+    compiler.tuples = {
+        "p1": compiler.tuples["p1"].model_copy(
+            update={
+                "adapter": "runpod-vllm-serverless",
+                "execution_surface": ExecutionSurface.MANAGED_ENDPOINT,
+                "cost_per_second": 0.00034,
+                "standing_cost_per_second": 0.00034,
+                "standing_cost_window_seconds": 3600,
+                "scaledown_window_seconds": 5,
+                "min_billable_seconds": 1,
+                "billing_granularity_seconds": 1,
+            }
+        )
+    }
+    compiler.recipes["r1"] = compiler.recipes["r1"].model_copy(
+        update={"timeout_seconds": 180, "lease_ttl_seconds": 240, "expected_runtime_seconds": 120}
+    )
+    request = TaskRequest(task="infer", mode="sync", recipe="r1")
+
+    plan = compiler.compile(request)
+    cost = plan.attestations["cost_estimate"]
+
+    assert cost["provider_billing_model"] == "runpod_serverless_managed_endpoint"
+    assert cost["runtime_seconds"] == pytest.approx(120)
+    assert cost["runtime_seconds_source"] == "recipe.expected_runtime_seconds"
+    assert cost["standing_cost_usd"] == pytest.approx(1.224)
+    assert cost["marginal_cost_usd"] == pytest.approx(0.0425)
+    assert cost["estimated_cost_usd"] == pytest.approx(1.2665)
+    assert cost["budget_reservation_usd"] == pytest.approx(0.0425)
+
+
+def test_hyperstack_vm_lease_is_request_budget_reservation() -> None:
+    compiler = build_compiler()
+    compiler.tuples = {
+        "p1": compiler.tuples["p1"].model_copy(
+            update={
+                "adapter": "hyperstack",
+                "execution_surface": ExecutionSurface.IAAS_VM,
+                "cost_per_second": 0.000375,
+                "min_billable_seconds": 60,
+                "billing_granularity_seconds": 60,
+                "scaledown_window_seconds": 0,
+            }
+        )
+    }
+    compiler.recipes["r1"] = compiler.recipes["r1"].model_copy(update={"expected_runtime_seconds": 10})
+    request = TaskRequest(task="infer", mode="sync", recipe="r1")
+
+    plan = compiler.compile(request)
+    cost = plan.attestations["cost_estimate"]
+
+    assert cost["provider_billing_model"] == "iaas_vm_lease"
+    assert cost["cost_scope"] == "request_lease_marginal"
+    assert cost["runtime_seconds"] == pytest.approx(10)
+    assert cost["billable_seconds"] == pytest.approx(60)
+    assert cost["lease_cost_usd"] == pytest.approx(0.0225)
+    assert cost["marginal_cost_usd"] == pytest.approx(0.0225)
+    assert cost["budget_reservation_usd"] == pytest.approx(0.0225)
 
 
 def test_requested_tuple_must_be_eligible() -> None:

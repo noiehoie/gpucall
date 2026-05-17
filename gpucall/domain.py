@@ -478,6 +478,7 @@ class Recipe(BaseModel):
     required_model_capabilities: list[str] = Field(default_factory=list)
     output_contract: str | None = None
     expected_cold_start_seconds: PositiveInt | None = None
+    expected_runtime_seconds: NonNegativeFloat | None = None
     cost_policy: CostPolicy | None = None
 
     @model_validator(mode="before")
@@ -635,6 +636,7 @@ class ExecutionTupleSpec(BaseModel):
     configured_price_observed_at: str | None = None
     configured_price_ttl_seconds: NonNegativeFloat | None = None
     expected_cold_start_seconds: PositiveInt | None = None
+    expected_runtime_seconds: NonNegativeFloat | None = None
     scaledown_window_seconds: NonNegativeFloat | None = None
     min_billable_seconds: NonNegativeFloat | None = None
     billing_granularity_seconds: NonNegativeFloat | None = None

@@ -35,6 +35,7 @@ from gpucall.cli_commands.setup import add_setup_parser, run_setup_command
 from gpucall.compiler import GovernanceCompiler
 from gpucall.config import ConfigError, default_config_dir, default_state_dir, load_config
 from gpucall.configure import configure_command
+from gpucall.costing import budget_reservation_usd
 from gpucall.credentials import configured_credentials, credentials_path, load_credentials
 from gpucall.domain import ExecutionMode, JobState, PresignPutRequest, TupleError, TaskRequest, recipe_requirements
 from gpucall.domain import ApiKeyHandoffMode
@@ -1788,7 +1789,7 @@ async def seed_liveness(
             inline_inputs={"prompt": {"value": "gpucall liveness seed"}},
         )
         plan = runtime.compiler.compile(request)
-        estimated = float((plan.attestations.get("cost_estimate") or {}).get("estimated_cost_usd") or 0.0)
+        estimated = budget_reservation_usd(plan.attestations.get("cost_estimate") or {})
         if estimated <= 0.0 and not allow_zero_estimate:
             raise SystemExit("seed-liveness refuses zero-cost estimates unless --allow-zero-estimate is set")
         if reserved_cost + estimated > budget_usd:
@@ -1825,7 +1826,7 @@ async def provider_smoke_command(
     if request.input_refs or request.split_learning is not None:
         worker_request = worker_readable_request(request, runtime)
         plan = plan_with_worker_refs(plan, worker_request.input_refs, split_learning=worker_request.split_learning)
-    estimated = float((plan.attestations.get("cost_estimate") or {}).get("estimated_cost_usd") or 0.0)
+    estimated = budget_reservation_usd(plan.attestations.get("cost_estimate") or {})
     if estimated <= 0.0 and not allow_zero_estimate:
         raise SystemExit("tuple-smoke refuses zero-cost estimates unless --allow-zero-estimate is set")
     if estimated > budget_usd:
