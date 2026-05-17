@@ -38,30 +38,45 @@ def token_budget(request: TaskRequest, policy: Policy) -> int | None:
     return int(request.max_tokens * float(policy.tokenizer_safety_multiplier))
 
 
+def output_context_tokens(request: TaskRequest) -> int:
+    return int(request.max_tokens or 0)
+
+
 def required_model_len(request: TaskRequest, recipe: Recipe, policy: Policy) -> int:
-    output_budget = token_budget(request, policy) or 0
-    inline_bytes = sum(len(item.value.encode("utf-8")) for item in request.inline_inputs.values())
-    message_bytes = sum(_chat_message_bytes(message) for message in request.messages)
-    openai_control_bytes = _message_bytes(
-        {
-            key: value
-            for key, value in {
-                "tools": request.tools,
-                "tool_choice": request.tool_choice,
-                "functions": request.functions,
-                "function_call": request.function_call,
-                "stream_options": request.stream_options,
-            }.items()
-            if value is not None
-        }
+    output_budget = output_context_tokens(request)
+    inline_tokens = sum(_inline_input_tokens(item, recipe.token_estimation_profile) for item in request.inline_inputs.values())
+    message_tokens = sum(_chat_message_tokens(message, recipe.token_estimation_profile) for message in request.messages)
+    recipe_prompt_tokens = _recipe_prompt_tokens(request, recipe)
+    openai_control_tokens = _estimated_text_tokens(
+        _message_bytes(
+            {
+                key: value
+                for key, value in {
+                    "tools": request.tools,
+                    "tool_choice": request.tool_choice,
+                    "functions": request.functions,
+                    "function_call": request.function_call,
+                    "stream_options": request.stream_options,
+                }.items()
+                if value is not None
+            }
+        ),
+        recipe.token_estimation_profile,
+        "application/json",
     )
     if recipe.task == "vision":
         image_refs = [ref for ref in request.input_refs if str(ref.content_type or "").startswith("image/")]
-        non_image_bytes = sum(int(ref.bytes or 0) for ref in request.input_refs if ref not in image_refs)
-        estimated_input_tokens = math.ceil((inline_bytes + message_bytes + openai_control_bytes + non_image_bytes) * float(policy.tokenizer_safety_multiplier))
+        non_image_tokens = sum(_data_ref_estimated_tokens(ref, recipe.token_estimation_profile) for ref in request.input_refs if ref not in image_refs)
+        estimated_input_tokens = math.ceil(
+            (inline_tokens + message_tokens + recipe_prompt_tokens + openai_control_tokens + non_image_tokens)
+            * float(policy.tokenizer_safety_multiplier)
+        )
         return max(1, estimated_input_tokens + (256 * len(image_refs)) + output_budget)
-    ref_bytes = sum(int(ref.bytes or 0) for ref in request.input_refs)
-    estimated_input_tokens = math.ceil((inline_bytes + message_bytes + openai_control_bytes + ref_bytes) * float(policy.tokenizer_safety_multiplier))
+    ref_tokens = sum(_data_ref_estimated_tokens(ref, recipe.token_estimation_profile) for ref in request.input_refs)
+    estimated_input_tokens = math.ceil(
+        (inline_tokens + message_tokens + recipe_prompt_tokens + openai_control_tokens + ref_tokens)
+        * float(policy.tokenizer_safety_multiplier)
+    )
     return max(1, estimated_input_tokens + output_budget)
 
 
@@ -83,6 +98,56 @@ def _chat_message_bytes(message: object) -> int:
     else:
         return _message_bytes(getattr(message, "content", None))
     return len(json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8"))
+
+
+def _chat_message_tokens(message: object, profile: str) -> int:
+    return _estimated_text_tokens(_chat_message_bytes(message), profile, "application/json")
+
+
+def _inline_input_tokens(item: object, profile: str) -> int:
+    if isinstance(item, str):
+        return _estimated_text_tokens(len(item.encode("utf-8")), profile, "text/plain")
+    if isinstance(item, dict):
+        value = item.get("value")
+        if isinstance(value, str):
+            return _estimated_text_tokens(len(value.encode("utf-8")), profile, item.get("content_type") or "text/plain")
+        return 0
+    value = getattr(item, "value", None)
+    if isinstance(value, str):
+        return _estimated_text_tokens(len(value.encode("utf-8")), profile, getattr(item, "content_type", None) or "text/plain")
+    return 0
+
+
+def _recipe_prompt_tokens(request: TaskRequest, recipe: Recipe) -> int:
+    structured = request.response_format is not None and request.response_format.type is not ResponseFormatType.TEXT
+    prompt = recipe.structured_system_prompt if structured and recipe.structured_system_prompt else recipe.system_prompt
+    return _estimated_text_tokens(len(prompt.encode("utf-8")), recipe.token_estimation_profile, "text/plain") if prompt else 0
+
+
+def _data_ref_estimated_tokens(ref: object, profile: str) -> int:
+    return _estimated_text_tokens(int(getattr(ref, "bytes", None) or 0), profile, getattr(ref, "content_type", None))
+
+
+def _estimated_text_tokens(byte_count: int, profile: str, content_type: object = None) -> int:
+    if byte_count <= 0:
+        return 0
+    if not _is_textual_content_type(content_type):
+        return byte_count
+    return math.ceil(byte_count / _bytes_per_token_floor(profile))
+
+
+def _bytes_per_token_floor(profile: str) -> float:
+    normalized = (profile or "generic_utf8").strip().lower().replace("-", "_")
+    if normalized in {"qwen", "qwen_utf8"} or normalized.startswith(("qwen2", "qwen3")):
+        return 3.0
+    return 1.0
+
+
+def _is_textual_content_type(content_type: object) -> bool:
+    if content_type is None:
+        return False
+    value = str(content_type).split(";", 1)[0].strip().lower()
+    return value.startswith("text/") or value in {"application/json", "application/x-ndjson"} or value.endswith("+json")
 
 
 def requested_output_contract(request: TaskRequest, recipe: Recipe) -> str | None:

@@ -13,7 +13,7 @@ latency_class: batch
 quality_floor: standard
 timeout_seconds: 600
 lease_ttl_seconds: 900
-token_estimation_profile: generic_utf8
+token_estimation_profile: qwen
 max_input_bytes: 134217728
 allowed_mime_prefixes:
 - text/

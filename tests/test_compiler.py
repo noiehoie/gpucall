@@ -8,6 +8,7 @@ from gpucall.compiler import GovernanceCompiler, GovernanceError
 from gpucall.domain import ChatMessage, CostPolicy, DataRef, EngineSpec, ExecutionMode, ExecutionSurface, ModelSpec, Policy, TuplePolicy, ExecutionTupleSpec, Recipe, RecipeQualityFloor, ResponseFormat, ResponseFormatType, TaskRequest
 from gpucall.domain import TupleObservation
 from gpucall.registry import ObservedRegistry
+from gpucall.routing import required_model_len
 
 
 def build_compiler() -> GovernanceCompiler:
@@ -64,6 +65,64 @@ def test_compiler_applies_tokenizer_safety_margin() -> None:
     plan = compiler.compile(request)
 
     assert plan.token_budget == 100
+
+
+def test_qwen_profile_estimates_text_dataref_context_without_fetching_body() -> None:
+    compiler = build_compiler()
+    recipe = compiler.recipes["r1"].model_copy(
+        update={
+            "name": "rank",
+            "intent": "rank_text_items",
+            "context_budget_tokens": 131072,
+            "max_input_bytes": 134217728,
+            "token_estimation_profile": "qwen",
+        }
+    )
+    compiler.recipes = {"rank": recipe}
+    compiler.tuples = {
+        name: tuple.model_copy(update={"vram_gb": 80, "max_model_len": 131072, "input_contracts": ["text", "data_refs"]})
+        for name, tuple in compiler.tuples.items()
+    }
+    request = TaskRequest(
+        task="infer",
+        mode="async",
+        recipe="rank",
+        intent="rank_text_items",
+        input_refs=[
+            DataRef(uri="s3://bucket/group-d.txt", sha256="a" * 64, bytes=220313, content_type="text/plain")
+        ],
+        max_tokens=32768,
+    )
+
+    plan = compiler.compile(request)
+
+    assert plan.attestations["context_estimate"]["required_model_len"] <= 131072
+    assert plan.token_budget == 40960
+
+
+def test_generic_utf8_keeps_conservative_dataref_context_estimate() -> None:
+    compiler = build_compiler()
+    recipe = compiler.recipes["r1"].model_copy(
+        update={
+            "name": "rank",
+            "intent": "rank_text_items",
+            "context_budget_tokens": 131072,
+            "max_input_bytes": 134217728,
+            "token_estimation_profile": "generic_utf8",
+        }
+    )
+    request = TaskRequest(
+        task="infer",
+        mode="async",
+        recipe="rank",
+        intent="rank_text_items",
+        input_refs=[
+            DataRef(uri="s3://bucket/group-d.txt", sha256="a" * 64, bytes=220313, content_type="text/plain")
+        ],
+        max_tokens=32768,
+    )
+
+    assert required_model_len(request, recipe, compiler.policy) > 131072
 
 
 def test_compiler_auto_selects_recipe_when_omitted() -> None:
@@ -173,7 +232,10 @@ def test_compiler_preserves_chat_messages_and_recipe_generation_contract() -> No
     assert plan.stop_tokens == ["<stop>"]
     assert plan.repetition_penalty == 1.05
     assert plan.guided_decoding is True
-    assert plan.attestations["context_estimate"]["method"] == "utf8_bytes_times_policy_safety_multiplier_plus_output_budget"
+    assert (
+        plan.attestations["context_estimate"]["method"]
+        == "recipe_token_estimation_profile_plus_recipe_prompt_times_policy_safety_multiplier_plus_raw_output_context"
+    )
     snapshot = plan.attestations["recipe_snapshot"]
     assert snapshot["system_prompt"]["redacted"] is True
     assert snapshot["structured_system_prompt"]["redacted"] is True
@@ -586,7 +648,7 @@ def test_compiler_rejects_messages_mixed_with_inline_inputs() -> None:
 
 def test_compiler_rejects_margin_over_model_limit() -> None:
     compiler = build_compiler()
-    request = TaskRequest(task="infer", mode="sync", recipe="r1", max_tokens=81)
+    request = TaskRequest(task="infer", mode="sync", recipe="r1", max_tokens=101)
 
     with pytest.raises(GovernanceError):
         compiler.compile(request)

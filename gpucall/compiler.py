@@ -26,7 +26,7 @@ from gpucall.domain import (
 from gpucall.domain import ChatMessage, ResponseFormatType
 from gpucall.execution.contracts import account_ref_for_spec
 from gpucall.registry import ObservedRegistry
-from gpucall.routing import classification_rank, is_production_route_candidate, requested_output_contract, requires_openai_chat_contract, tuple_route_rejection_reason, required_model_len, token_budget
+from gpucall.routing import classification_rank, is_production_route_candidate, requested_output_contract, requires_openai_chat_contract, tuple_route_rejection_reason, output_context_tokens, required_model_len, token_budget
 from gpucall.targeting import is_configured_target
 
 
@@ -224,7 +224,7 @@ class GovernanceCompiler:
             },
         )
         plan.attestations["context_estimate"] = {
-            "method": "utf8_bytes_times_policy_safety_multiplier_plus_output_budget",
+            "method": "recipe_token_estimation_profile_plus_recipe_prompt_times_policy_safety_multiplier_plus_raw_output_context",
             "required_model_len": compiled_required_model_len,
             "token_budget": compiled_token_budget,
         }
@@ -304,10 +304,10 @@ class GovernanceCompiler:
         if request.mode not in recipe.allowed_modes:
             return f"mode {request.mode} is not allowed"
         if request.max_tokens is not None:
-            token_budget = self._token_budget(request)
+            token_budget = output_context_tokens(request)
             ceiling = recipe_requirements(recipe).context_budget_tokens
             if token_budget is not None and token_budget > ceiling:
-                return f"token budget {token_budget} exceeds recipe context budget {ceiling}"
+                return f"max_tokens {token_budget} exceeds recipe context budget {ceiling}"
         required_model_len = self._required_model_len(request, recipe)
         ceiling = recipe_requirements(recipe).context_budget_tokens
         if required_model_len > ceiling:
