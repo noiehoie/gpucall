@@ -5,6 +5,7 @@ import json
 
 import pytest
 
+import gpucall.migrate as migrate_module
 from gpucall.migrate import (
     assess_project,
     build_preflight_requests,
@@ -18,6 +19,11 @@ from gpucall.migrate import (
     trace_project,
 )
 from gpucall.workload_contract import compare_trace_to_contract, contract_to_recipe_intake
+
+
+@pytest.fixture(autouse=True)
+def _disable_helper_readiness_gate_for_existing_unit_tests(monkeypatch) -> None:
+    monkeypatch.setenv("GPUCALL_MIGRATION_READINESS_GATE", "0")
 
 
 def test_migrate_assess_detects_direct_provider_and_gpucall_paths(tmp_path) -> None:
@@ -619,6 +625,131 @@ def test_migrate_helper_routes_vision_and_large_text_through_async(tmp_path, mon
     assert async_payloads
     assert async_payloads[0]["mode"] == "async"
     assert async_payloads[0]["response_format"] == {"type": "json_object"}
+
+
+def test_migrate_helper_readiness_gate_blocks_before_dataref_upload(tmp_path, monkeypatch) -> None:
+    project = tmp_path / "project"
+    project.mkdir()
+    source = project / "client.py"
+    source.write_text("from openai import OpenAI\nclient = OpenAI()\n", encoding="utf-8")
+    monkeypatch.setenv("GPUCALL_BASE_URL", "http://127.0.0.1:9")
+    monkeypatch.setenv("GPUCALL_API_KEY", "x")
+    monkeypatch.setenv("GPUCALL_MIGRATION_READINESS_GATE", "1")
+    monkeypatch.setenv("GPUCALL_MIGRATION_MIN_REQUEST_INTERVAL_SECONDS", "0")
+
+    patch_suggestions(project, source="openai-app", apply=True)
+    namespace: dict[str, object] = {}
+    exec((project / "gpucall_migration.py").read_text(encoding="utf-8"), namespace)
+
+    calls: list[str] = []
+
+    def fake_get_json_request(url, **_kwargs):
+        calls.append(url)
+        return {
+            "recipes": [
+                {
+                    "task": "vision",
+                    "intent": "understand_document_image",
+                    "production_activated": False,
+                    "live_ready_tuple_count": 0,
+                    "eligible_tuple_count": 1,
+                    "live_blocked_tuples": [{"tuple": "modal-h200", "live_reason": "missing_route_validation_evidence"}],
+                }
+            ]
+        }
+
+    namespace["_get_json_request"] = fake_get_json_request
+    namespace["_upload_file"] = lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("upload should not run"))
+    namespace["_json_request"] = lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("task request should not run"))
+
+    image = project / "front.jpg"
+    image.write_bytes(b"fake")
+    with pytest.raises(RuntimeError, match="readiness gate blocked"):
+        namespace["gpucall_vision_file"](image, prompt="extract articles", timeout=1)
+
+    assert calls == ["http://127.0.0.1:9/v2/readiness/intents/understand_document_image"]
+
+
+def test_migrate_helper_readiness_gate_allows_live_ready_route(tmp_path, monkeypatch) -> None:
+    project = tmp_path / "project"
+    project.mkdir()
+    source = project / "client.py"
+    source.write_text("from openai import OpenAI\nclient = OpenAI()\n", encoding="utf-8")
+    monkeypatch.setenv("GPUCALL_BASE_URL", "http://127.0.0.1:9")
+    monkeypatch.setenv("GPUCALL_API_KEY", "x")
+    monkeypatch.setenv("GPUCALL_MIGRATION_READINESS_GATE", "1")
+    monkeypatch.setenv("GPUCALL_MIGRATION_MIN_REQUEST_INTERVAL_SECONDS", "0")
+    monkeypatch.setenv("GPUCALL_MIGRATION_POLL_INTERVAL_SECONDS", "0")
+
+    patch_suggestions(project, source="openai-app", apply=True)
+    namespace: dict[str, object] = {}
+    exec((project / "gpucall_migration.py").read_text(encoding="utf-8"), namespace)
+
+    namespace["_get_json_request"] = lambda *_args, **_kwargs: {
+        "recipes": [
+            {
+                "task": "vision",
+                "intent": "understand_document_image",
+                "production_activated": True,
+                "live_ready_tuple_count": 1,
+                "recipe": "vision-understand-document-image-draft",
+            }
+        ]
+    }
+    namespace["_upload_file"] = lambda *_args, **_kwargs: {
+        "uri": "s3://bucket/key",
+        "sha256": "0" * 64,
+        "bytes": 4,
+        "content_type": "image/jpeg",
+    }
+
+    def fake_json_request(_method, url, _payload, **_kwargs):
+        if url.endswith("/v2/tasks/async"):
+            return {"job_id": "j1", "state": "QUEUED", "status_url": "/v2/jobs/j1"}
+        if url.endswith("/v2/jobs/j1"):
+            return {"job_id": "j1", "state": "COMPLETED", "result": {"kind": "inline", "value": "ok"}}
+        raise AssertionError(url)
+
+    namespace["_json_request"] = fake_json_request
+    image = project / "front.jpg"
+    image.write_bytes(b"fake")
+
+    assert namespace["gpucall_vision_file"](image, prompt="extract articles", timeout=1) == "ok"
+
+
+def test_migrate_helper_json_get_sends_no_body(tmp_path, monkeypatch) -> None:
+    project = tmp_path / "project"
+    project.mkdir()
+    source = project / "client.py"
+    source.write_text("from openai import OpenAI\nclient = OpenAI()\n", encoding="utf-8")
+    monkeypatch.setenv("GPUCALL_BASE_URL", "http://127.0.0.1:9")
+    monkeypatch.setenv("GPUCALL_API_KEY", "x")
+    monkeypatch.setenv("GPUCALL_MIGRATION_MIN_REQUEST_INTERVAL_SECONDS", "0")
+
+    patch_suggestions(project, source="openai-app", apply=True)
+    namespace: dict[str, object] = {}
+    exec((project / "gpucall_migration.py").read_text(encoding="utf-8"), namespace)
+
+    observed: dict[str, object] = {}
+
+    class Response:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return None
+
+        def read(self) -> bytes:
+            return b'{"state":"COMPLETED"}'
+
+    def fake_urlopen(request, **_kwargs):
+        observed["data"] = request.data
+        return Response()
+
+    namespace["urllib"].request.urlopen = fake_urlopen
+
+    assert namespace["_json_request"]("GET", "http://127.0.0.1:9/v2/jobs/j1", {}, timeout=1) == {"state": "COMPLETED"}
+    assert observed["data"] is None
 
 
 def test_migrate_helper_keeps_medium_text_inline_for_text_tuple_compatibility(tmp_path, monkeypatch) -> None:
@@ -1439,6 +1570,36 @@ def test_migrate_cli_onboard_accepts_existing_log_files(tmp_path) -> None:
     ranking = next(item for item in contract["workloads"] if item["intent"] == "rank_text_items")
     assert ranking["quality_contract"]["metrics"]["min_topics"] == 12
     assert ranking["quality_contract"]["metrics"]["min_sources"] == 7
+
+
+def test_migrate_cli_onboard_fails_closed_when_gateway_readiness_blocks_canary(tmp_path, monkeypatch) -> None:
+    project = tmp_path / "project"
+    output = tmp_path / "out"
+    project.mkdir()
+    (project / "topic_engine.py").write_text("call_llm('rank topics')\n", encoding="utf-8")
+    monkeypatch.setenv("GPUCALL_MIGRATION_READINESS_GATE", "1")
+    monkeypatch.setenv("GPUCALL_BASE_URL", "http://127.0.0.1:9")
+    monkeypatch.setenv("GPUCALL_API_KEY", "x")
+
+    def fake_readiness_check(*, base_url, api_key, task, intent):
+        assert base_url == "http://127.0.0.1:9"
+        assert api_key == "x"
+        return {
+            "task": task,
+            "intent": intent,
+            "ok": False,
+            "reason": "no_production_ready_route",
+            "recipes": [{"recipe": "infer-rank-text-items", "blocked_reasons": ["missing_route_validation_evidence"]}],
+        }
+
+    monkeypatch.setattr(migrate_module, "_gateway_readiness_check", fake_readiness_check)
+
+    assert main(["onboard", str(project), "--source", "fixture", "--output-dir", str(output), "--yes"]) == 2
+
+    report = json.loads((output / "onboard-report.json").read_text(encoding="utf-8"))
+    assert report["ready_for_canary"] is False
+    assert report["gateway_readiness"]["ok"] is False
+    assert report["gateway_readiness"]["checks"][0]["reason"] == "no_production_ready_route"
 
 
 def test_contract_to_recipe_intake_preserves_contract_metadata() -> None:

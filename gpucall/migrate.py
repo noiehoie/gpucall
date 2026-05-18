@@ -1,12 +1,16 @@
 from __future__ import annotations
 
 import argparse
+import os
 import json
 import re
 import shlex
 import subprocess
 import sys
 import time
+import urllib.error
+import urllib.parse
+import urllib.request
 from dataclasses import dataclass
 from pathlib import Path
 from textwrap import dedent
@@ -79,6 +83,10 @@ def recipe_intakes_from_contract(contract: dict[str, Any]) -> dict[str, Any]:
         "intakes": intakes,
         "rejected": rejected,
     }
+
+
+def migration_readiness_gate_enabled() -> bool:
+    return os.environ.get("GPUCALL_MIGRATION_READINESS_GATE", "1").lower() not in {"0", "false", "no", "off"}
 
 
 @dataclass(frozen=True)
@@ -243,6 +251,9 @@ def main(argv: list[str] | None = None) -> int:
         if isinstance(recipe_intakes, dict):
             _write_outputs(recipe_intakes, output_dir, "recipe-intakes")
             _write_recipe_intake_files(recipe_intakes, output_dir / "recipe-intakes")
+        gateway_readiness = report.get("gateway_readiness")
+        if isinstance(gateway_readiness, dict) and gateway_readiness.get("ok") is False:
+            return 2
         return 0
     raise AssertionError(args.command)
 
@@ -428,6 +439,113 @@ def compare_project(
     return compare_trace_to_contract(contract, trace)
 
 
+def gateway_readiness_for_contract(contract: dict[str, Any]) -> dict[str, Any]:
+    checks: list[dict[str, Any]] = []
+    if not migration_readiness_gate_enabled():
+        return {"schema_version": 1, "phase": "gateway-readiness", "checked": False, "ok": True, "reason": "readiness_gate_disabled"}
+    base_url = os.environ.get("GPUCALL_BASE_URL", "").rstrip("/")
+    api_key = os.environ.get("GPUCALL_API_KEY", "")
+    if not base_url:
+        return {"schema_version": 1, "phase": "gateway-readiness", "checked": False, "ok": True, "reason": "GPUCALL_BASE_URL not set"}
+    if not api_key:
+        return {"schema_version": 1, "phase": "gateway-readiness", "checked": False, "ok": False, "reason": "GPUCALL_API_KEY not set"}
+    for workload in contract.get("workloads", []) or []:
+        if not isinstance(workload, dict):
+            continue
+        task = str(workload.get("task") or "")
+        intent = str(workload.get("intent") or "")
+        if not task or not intent or intent.startswith("unknown_workload_"):
+            continue
+        checks.append(_gateway_readiness_check(base_url=base_url, api_key=api_key, task=task, intent=intent))
+    ok = all(item.get("ok") is True for item in checks)
+    return {
+        "schema_version": 1,
+        "phase": "gateway-readiness",
+        "checked": bool(checks),
+        "ok": ok,
+        "checks": checks,
+        "failure_count": sum(1 for item in checks if item.get("ok") is not True),
+    }
+
+
+def _gateway_readiness_check(*, base_url: str, api_key: str, task: str, intent: str) -> dict[str, Any]:
+    url = base_url + "/v2/readiness/intents/" + urllib.parse.quote(intent, safe="")
+    timeout = _readiness_timeout_seconds()
+    try:
+        request = urllib.request.Request(url, headers={"Authorization": f"Bearer {api_key}"}, method="GET")
+        with urllib.request.urlopen(request, timeout=timeout) as response:
+            report = json.loads(response.read().decode("utf-8"))
+    except urllib.error.HTTPError as exc:
+        body = exc.read().decode("utf-8", errors="replace")[:500]
+        return {"task": task, "intent": intent, "ok": False, "reason": "readiness_http_error", "status": exc.code, "detail": body}
+    except Exception as exc:
+        return {"task": task, "intent": intent, "ok": False, "reason": "readiness_check_failed", "detail": str(exc)[:500]}
+    return _summarize_readiness_report(report, task=task, intent=intent)
+
+
+def _readiness_timeout_seconds() -> float:
+    raw = os.environ.get("GPUCALL_MIGRATION_READINESS_TIMEOUT_SECONDS", "10")
+    try:
+        return max(1.0, float(raw))
+    except ValueError:
+        return 10.0
+
+
+def _summarize_readiness_report(report: dict[str, Any], *, task: str, intent: str) -> dict[str, Any]:
+    recipes = report.get("recipes") if isinstance(report, dict) else None
+    matching = [
+        recipe
+        for recipe in recipes or []
+        if isinstance(recipe, dict) and recipe.get("intent") == intent and (not recipe.get("task") or recipe.get("task") == task)
+    ]
+    if not matching:
+        return {"task": task, "intent": intent, "ok": False, "reason": "no_matching_readiness_recipe"}
+    ready = [
+        recipe
+        for recipe in matching
+        if recipe.get("production_activated") is True and _safe_int(recipe.get("live_ready_tuple_count")) > 0
+    ]
+    if ready:
+        return {
+            "task": task,
+            "intent": intent,
+            "ok": True,
+            "recipe": ready[0].get("recipe"),
+            "live_ready_tuple_count": _safe_int(ready[0].get("live_ready_tuple_count")),
+            "recommended_mode": ready[0].get("recommended_mode"),
+        }
+    return {
+        "task": task,
+        "intent": intent,
+        "ok": False,
+        "reason": "no_production_ready_route",
+        "recipes": [_bounded_readiness_recipe(recipe) for recipe in matching[:5]],
+    }
+
+
+def _safe_int(value: Any) -> int:
+    try:
+        return int(value or 0)
+    except (TypeError, ValueError):
+        return 0
+
+
+def _bounded_readiness_recipe(recipe: dict[str, Any]) -> dict[str, Any]:
+    blocked = recipe.get("live_blocked_tuples") if isinstance(recipe.get("live_blocked_tuples"), list) else []
+    reasons = []
+    for item in blocked[:5]:
+        if isinstance(item, dict):
+            reasons.append(str(item.get("live_reason") or item.get("reason") or "blocked")[:160])
+    return {
+        "recipe": recipe.get("recipe"),
+        "production_activated": bool(recipe.get("production_activated")),
+        "eligible_tuple_count": _safe_int(recipe.get("eligible_tuple_count")),
+        "live_ready_tuple_count": _safe_int(recipe.get("live_ready_tuple_count")),
+        "current_caller_action": recipe.get("current_caller_action"),
+        "blocked_reasons": reasons,
+    }
+
+
 def onboard_project(
     project: Path,
     *,
@@ -458,6 +576,13 @@ def onboard_project(
     contract = draft_workload_contract(profile, source=source)
     recipe_intake = contract_to_recipe_intake(contract) if contract.get("workloads") else None
     recipe_intakes = recipe_intakes_from_contract(contract) if contract.get("workloads") else None
+    gateway_readiness = gateway_readiness_for_contract(contract) if contract.get("workloads") else {
+        "schema_version": 1,
+        "phase": "gateway-readiness",
+        "checked": False,
+        "ok": True,
+        "reason": "no_workloads",
+    }
     return {
         "schema_version": 1,
         "phase": "migration-onboard",
@@ -471,7 +596,9 @@ def onboard_project(
         "workload_contract": contract,
         "recipe_intake": recipe_intake,
         "recipe_intakes": recipe_intakes,
-        "next_actions": _onboard_next_actions(contract, trace_report),
+        "gateway_readiness": gateway_readiness,
+        "ready_for_canary": bool(gateway_readiness.get("ok") is True),
+        "next_actions": _onboard_next_actions(contract, trace_report, gateway_readiness),
     }
 
 
@@ -834,6 +961,7 @@ def _migration_helper_text(*, source: str | None) -> str:
             import threading
             import time
             import urllib.error
+            import urllib.parse
             import urllib.request
             from pathlib import Path
             from dataclasses import dataclass
@@ -848,6 +976,8 @@ def _migration_helper_text(*, source: str | None) -> str:
             )
             _PROVIDER_TEMPORARY_FAILURES_BY_SCOPE: dict[str, int] = {}
             _PROVIDER_TEMPORARY_FAILURE_LOCK = threading.Lock()
+            _READINESS_CACHE: dict[str, dict[str, Any]] = {}
+            _READINESS_LOCK = threading.Lock()
 
 
             class _AttrDict(dict):
@@ -874,6 +1004,15 @@ def _migration_helper_text(*, source: str | None) -> str:
                     self.state = state
                     self.error = error
                     self.provider_error_code = provider_error_code
+
+
+            class GPUCallReadinessError(RuntimeError):
+                def __init__(self, *, task: str, intent: str, summary: dict[str, Any]) -> None:
+                    reason = summary.get("reason") or "not_ready"
+                    super().__init__(f"gpucall readiness gate blocked request task={task} intent={intent} reason={reason}")
+                    self.task = task
+                    self.intent = intent
+                    self.summary = summary
 
 
             def _objectify(value: Any) -> Any:
@@ -1230,9 +1369,10 @@ def _migration_helper_text(*, source: str | None) -> str:
                 headers = {"Content-Type": "application/json"}
                 if auth:
                     headers.update(gpucall_openai_headers())
+                data = None if method.upper() == "GET" else json.dumps(payload).encode("utf-8")
                 request = urllib.request.Request(
                     url,
-                    data=json.dumps(payload).encode("utf-8"),
+                    data=data,
                     headers=headers,
                     method=method,
                 )
@@ -1252,7 +1392,7 @@ def _migration_helper_text(*, source: str | None) -> str:
                     except urllib.error.HTTPError as exc:
                         body = exc.read().decode("utf-8", errors="replace")[:2000]
                         if exc.code == 429 and attempt < rate_limit_retries:
-                            request.data = json.dumps(payload).encode("utf-8")
+                            request.data = data
                             time.sleep(_retry_after_seconds(exc, attempt))
                             continue
                         if _is_retryable_provider_http_error(exc, body) and attempt < provider_temporary_retries:
@@ -1264,7 +1404,7 @@ def _migration_helper_text(*, source: str | None) -> str:
                             if max_wait and (now - provider_temporary_wait_started + delay) > max_wait:
                                 raise GPUCallGatewayError(status=exc.code, body=body) from exc
                             _migration_log("provider-temporary-http-retry", status=exc.code, code=_gateway_error_code(body), attempt=attempt + 1, delay_seconds=delay)
-                            request.data = json.dumps(payload).encode("utf-8")
+                            request.data = data
                             time.sleep(delay)
                             continue
                         if retry_no_eligible and _is_retryable_no_eligible(exc, body) and attempt < no_eligible_retries:
@@ -1275,7 +1415,7 @@ def _migration_helper_text(*, source: str | None) -> str:
                             max_wait = _no_eligible_max_wait_seconds()
                             if max_wait and (now - no_eligible_wait_started + delay) > max_wait:
                                 raise GPUCallGatewayError(status=exc.code, body=body) from exc
-                            request.data = json.dumps(payload).encode("utf-8")
+                            request.data = data
                             time.sleep(delay)
                             continue
                         raise GPUCallGatewayError(status=exc.code, body=body) from exc
@@ -1284,6 +1424,120 @@ def _migration_helper_text(*, source: str | None) -> str:
 
             def _base_url() -> str:
                 return _required_env("GPUCALL_BASE_URL").rstrip("/")
+
+
+            def _readiness_gate_enabled() -> bool:
+                return os.environ.get("GPUCALL_MIGRATION_READINESS_GATE", "1").lower() not in {"0", "false", "no", "off"}
+
+
+            def _readiness_timeout_seconds() -> float:
+                return _float_env("GPUCALL_MIGRATION_READINESS_TIMEOUT_SECONDS", "10")
+
+
+            def _get_json_request(url: str, *, timeout: float | None = None, auth: bool = True) -> dict[str, Any]:
+                headers: dict[str, str] = {}
+                if auth:
+                    headers.update(gpucall_openai_headers())
+                request = urllib.request.Request(url, headers=headers, method="GET")
+                request_timeout = timeout if timeout is not None else _readiness_timeout_seconds()
+                _pace_gateway_request()
+                try:
+                    with urllib.request.urlopen(request, timeout=request_timeout) as response:
+                        body = response.read().decode("utf-8")
+                    return json.loads(body) if body else {}
+                except urllib.error.HTTPError as exc:
+                    body = exc.read().decode("utf-8", errors="replace")[:1000]
+                    raise GPUCallReadinessError(
+                        task="unknown",
+                        intent="unknown",
+                        summary={"reason": "readiness_http_error", "status": exc.code, "detail": body},
+                    ) from exc
+                except Exception as exc:
+                    raise GPUCallReadinessError(
+                        task="unknown",
+                        intent="unknown",
+                        summary={"reason": "readiness_check_failed", "detail": str(exc)[:500]},
+                    ) from exc
+
+
+            def _require_gateway_readiness(task: str, intent: str) -> None:
+                if not _readiness_gate_enabled():
+                    return
+                key = f"{task}:{intent}"
+                with _READINESS_LOCK:
+                    cached = _READINESS_CACHE.get(key)
+                if cached is None:
+                    url = _base_url() + "/v2/readiness/intents/" + urllib.parse.quote(intent, safe="")
+                    try:
+                        report = _get_json_request(url, timeout=_readiness_timeout_seconds())
+                    except GPUCallReadinessError as exc:
+                        summary = dict(exc.summary)
+                        summary.update({"task": task, "intent": intent})
+                    else:
+                        summary = _readiness_summary(report, task=task, intent=intent)
+                    with _READINESS_LOCK:
+                        _READINESS_CACHE[key] = summary
+                else:
+                    summary = cached
+                if summary.get("ok") is True:
+                    return
+                _migration_log("readiness-blocked", task=task, intent=intent, reason=summary.get("reason"))
+                raise GPUCallReadinessError(task=task, intent=intent, summary=summary)
+
+
+            def _readiness_summary(report: dict[str, Any], *, task: str, intent: str) -> dict[str, Any]:
+                recipes = report.get("recipes") if isinstance(report, dict) else None
+                matching = [
+                    recipe
+                    for recipe in recipes or []
+                    if isinstance(recipe, dict) and recipe.get("intent") == intent and (not recipe.get("task") or recipe.get("task") == task)
+                ]
+                if not matching:
+                    return {"task": task, "intent": intent, "ok": False, "reason": "no_matching_readiness_recipe"}
+                ready = [
+                    recipe
+                    for recipe in matching
+                    if recipe.get("production_activated") is True and _safe_int(recipe.get("live_ready_tuple_count")) > 0
+                ]
+                if ready:
+                    return {
+                        "task": task,
+                        "intent": intent,
+                        "ok": True,
+                        "recipe": ready[0].get("recipe"),
+                        "live_ready_tuple_count": _safe_int(ready[0].get("live_ready_tuple_count")),
+                        "recommended_mode": ready[0].get("recommended_mode"),
+                    }
+                return {
+                    "task": task,
+                    "intent": intent,
+                    "ok": False,
+                    "reason": "no_production_ready_route",
+                    "recipes": [_bounded_readiness_recipe(recipe) for recipe in matching[:5]],
+                }
+
+
+            def _safe_int(value: Any) -> int:
+                try:
+                    return int(value or 0)
+                except (TypeError, ValueError):
+                    return 0
+
+
+            def _bounded_readiness_recipe(recipe: dict[str, Any]) -> dict[str, Any]:
+                blocked = recipe.get("live_blocked_tuples") if isinstance(recipe.get("live_blocked_tuples"), list) else []
+                reasons = []
+                for item in blocked[:5]:
+                    if isinstance(item, dict):
+                        reasons.append(str(item.get("live_reason") or item.get("reason") or "blocked")[:160])
+                return {
+                    "recipe": recipe.get("recipe"),
+                    "production_activated": bool(recipe.get("production_activated")),
+                    "eligible_tuple_count": _safe_int(recipe.get("eligible_tuple_count")),
+                    "live_ready_tuple_count": _safe_int(recipe.get("live_ready_tuple_count")),
+                    "current_caller_action": recipe.get("current_caller_action"),
+                    "blocked_reasons": reasons,
+                }
 
 
             def _upload_file(path: Path, *, timeout: float | None = None) -> dict[str, Any]:
@@ -1527,6 +1781,7 @@ def _migration_helper_text(*, source: str | None) -> str:
                 with _GATEWAY_INFLIGHT_SEMAPHORE:
                     resolved_intent = intent or gpucall_guess_intent(prompt, system_prompt)
                     _migration_log("infer-start", intent=resolved_intent, prompt_bytes=len(body))
+                    _require_gateway_readiness("infer", resolved_intent)
                     payload: dict[str, Any] = {
                         "task": "infer",
                         "mode": "sync",
@@ -1582,6 +1837,7 @@ def _migration_helper_text(*, source: str | None) -> str:
                 with _GATEWAY_INFLIGHT_SEMAPHORE:
                     resolved_intent = intent or "understand_document_image"
                     _migration_log("vision-start", intent=resolved_intent, image_name=Path(image_path).name)
+                    _require_gateway_readiness("vision", resolved_intent)
                     data_ref = _upload_file(Path(image_path), timeout=timeout)
                     payload: dict[str, Any] = {
                         "task": "vision",
@@ -1987,12 +2243,14 @@ def _process_output_text(value: Any) -> str:
     return str(value)
 
 
-def _onboard_next_actions(contract: dict[str, Any], trace: dict[str, Any] | None) -> list[str]:
+def _onboard_next_actions(contract: dict[str, Any], trace: dict[str, Any] | None, gateway_readiness: dict[str, Any] | None = None) -> list[str]:
     actions = [
         "review workload-contract.json; it contains deterministic caller success metrics only",
         "materialize recipe-intake.json with gpucall-recipe-admin materialize --accept-all in a staging config",
         "run gpucall validate-config and launch-check before production activation",
     ]
+    if isinstance(gateway_readiness, dict) and gateway_readiness.get("ok") is False:
+        actions.insert(0, "do not run live caller canary until gpucall readiness reports a production-activated live-ready route for every workload")
     if trace is None:
         actions.insert(0, "run gpucall-migrate trace with the caller baseline command to populate quality metrics")
     if contract.get("workloads"):
@@ -2045,6 +2303,20 @@ def _markdown(report: dict[str, Any]) -> str:
         lines.append("## Metrics")
         for key, value in sorted(report["metrics"].items()):
             lines.append(f"- `{key}`: {value}")
+    if isinstance(report.get("gateway_readiness"), dict):
+        readiness = report["gateway_readiness"]
+        lines.append("")
+        lines.append("## Gateway Readiness")
+        lines.append(f"- checked: `{readiness.get('checked')}`")
+        lines.append(f"- ok: `{readiness.get('ok')}`")
+        if readiness.get("reason"):
+            lines.append(f"- reason: `{readiness.get('reason')}`")
+        for item in readiness.get("checks", []) or []:
+            if not isinstance(item, dict):
+                continue
+            lines.append(
+                f"- `{item.get('task')}` / `{item.get('intent')}` ok=`{item.get('ok')}` reason=`{item.get('reason', '')}`"
+            )
     if report.get("workloads"):
         lines.append("")
         lines.append("## Workloads")
