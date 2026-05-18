@@ -107,15 +107,20 @@ def workload_profile_from_assessment(
     detected = _detected_workloads(rows)
     trace_failures = _trace_failure_summary(trace_list)
     for workload in detected:
+        workload["has_baseline_trace"] = bool(trace_list)
         _attach_trace_metrics(workload, trace_list)
         if trace_failures:
             workload["baseline_trace_failures"] = dict(trace_failures)
+    observed_count = sum(1 for workload in detected if workload.get("observed_in_baseline") is True)
     return {
         "schema_version": PROFILE_SCHEMA_VERSION,
         "phase": "workload-profile",
         "source": source or _str_or_none(assessment.get("source")),
         "project": _str_or_none(assessment.get("project")),
         "summary": dict(assessment.get("summary") or {}),
+        "baseline_trace_present": bool(trace_list),
+        "observed_workload_count": observed_count,
+        "inventory_only_workload_count": max(0, len(detected) - observed_count) if trace_list else 0,
         "workloads": detected,
         "traces": [_trace_summary(item) for item in trace_list],
         "baseline_trace_failures": trace_failures,
@@ -135,12 +140,20 @@ def draft_workload_contract(profile: Mapping[str, Any], *, source: str | None = 
         workload = _contract_workload(raw)
         workloads.append(workload)
     workloads.sort(key=lambda item: (INTENT_ORDER.index(item["intent"]) if item["intent"] in INTENT_ORDER else 99, item["id"]))
+    primary_workload = next((item for item in workloads if item.get("materialization_candidate") is not False), None)
+    if primary_workload is None and workloads:
+        primary_workload = workloads[0]
+    observed_count = sum(1 for item in workloads if item.get("observed_in_baseline") is True)
+    inventory_only_count = sum(1 for item in workloads if item.get("inventory_only") is True)
     return {
         "schema_version": CONTRACT_SCHEMA_VERSION,
         "phase": "workload-contract",
         "source": source or _str_or_none(profile.get("source")),
         "project": _str_or_none(profile.get("project")),
-        "primary_workload_id": workloads[0]["id"] if workloads else None,
+        "primary_workload_id": primary_workload["id"] if primary_workload else None,
+        "baseline_trace_present": bool(profile.get("baseline_trace_present")),
+        "observed_workload_count": observed_count,
+        "inventory_only_workload_count": inventory_only_count,
         "workloads": workloads,
         "submission": {
             "llm_safe": True,
@@ -241,6 +254,8 @@ def contract_to_recipe_intake(contract: Mapping[str, Any], *, workload_id: str |
     is_incomplete = bool(grammar_blockers)
 
     mode = _first_mode(workload.get("modes"))
+    observed_in_baseline = bool(workload.get("observed_in_baseline"))
+    materialization_candidate = workload.get("materialization_candidate") is not False
     return {
         "schema_version": 1,
         "phase": "deterministic-contract-intake",
@@ -271,6 +286,8 @@ def contract_to_recipe_intake(contract: Mapping[str, Any], *, workload_id: str |
             "quality_contract": quality,
             "draft_grammar": {
                 "materialization_allowed": not is_incomplete,
+                "observed_in_baseline": observed_in_baseline,
+                "materialization_candidate": materialization_candidate,
                 "blockers": grammar_blockers,
                 "caller_bias": "overdeclare_when_uncertain",
                 "admin_policy": "reject_or_narrow_deterministically",
@@ -301,6 +318,9 @@ def _intake_grammar_blockers(*, workload: Mapping[str, Any], intent: str, output
         blockers.append("unknown workload requires operator intent mapping before materialization")
     if output_contract not in {"plain_text", "plain-text", "json_object", "json_schema"}:
         blockers.append(f"unsupported output_contract: {output_contract}")
+    if workload.get("materialization_candidate") is False:
+        blockers.append("workload was detected statically but not observed in the supplied baseline trace; run a targeted baseline trace before materialization")
+        return blockers
     if not quality:
         blockers.append("quality_contract is required")
     if quality.get("missing_baseline_metrics"):
@@ -652,6 +672,7 @@ def _workload_seed(task: str, intent: str, *, evidence: list[dict[str, Any]]) ->
         "intent": normalized_intent,
         "classification": "confidential",
         "modes": ["sync", "async"],
+        "observed_in_baseline": False,
         "input_profile": {
             "content_types": ["image/"] if task == "vision" else ["text/plain"],
             "max_bytes": max_bytes,
@@ -671,13 +692,16 @@ def _workload_seed(task: str, intent: str, *, evidence: list[dict[str, Any]]) ->
 def _attach_trace_metrics(workload: dict[str, Any], traces: list[Mapping[str, Any]]) -> None:
     intent = str(workload.get("intent") or "")
     merged = _empty_metrics()
+    matched_any = False
     for trace in traces:
         metrics = _metrics(trace)
         hints = set(str(item) for item in trace.get("workload_hints") or [])
         matched = intent in hints if hints else _metrics_match_intent(metrics, intent)
         if matched:
-            _merge_metrics(merged, metrics)
+            matched_any = True
+            _merge_metrics(merged, _metrics_for_workload(trace, workload))
     workload["trace_metrics"] = _finalize_metrics(merged)
+    workload["observed_in_baseline"] = matched_any
     input_profile = _mapping(workload.get("input_profile"))
     if workload["trace_metrics"].get("input_chars"):
         input_profile["observed_input_chars"] = workload["trace_metrics"]["input_chars"]
@@ -699,11 +723,20 @@ def _contract_workload(workload: Mapping[str, Any]) -> dict[str, Any]:
     quality = _quality_contract(intent, trace_metrics, output_profile)
     context_budget = _positive_int(input_profile.get("context_budget_tokens"), default=0)
     modes = _contract_modes(task=task, intent=intent, context_budget_tokens=context_budget, raw_modes=workload.get("modes"))
+    has_baseline_trace = bool(workload.get("has_baseline_trace"))
+    observed_in_baseline = bool(workload.get("observed_in_baseline"))
+    trace_failures = _mapping(workload.get("baseline_trace_failures"))
+    has_trace_failures = bool(trace_failures)
+    materialization_candidate = (not has_baseline_trace) or observed_in_baseline or has_trace_failures
     return {
         "id": str(workload.get("id") or f"{task}.{intent}"),
         "task": task,
         "intent": intent,
         "classification": str(workload.get("classification") or "confidential"),
+        "has_baseline_trace": has_baseline_trace,
+        "observed_in_baseline": observed_in_baseline,
+        "inventory_only": bool(has_baseline_trace and not observed_in_baseline and not has_trace_failures),
+        "materialization_candidate": materialization_candidate,
         "modes": modes,
         "required_capabilities": capabilities_for(task=task, intent=intent),
         "input_profile": input_profile,
@@ -718,7 +751,7 @@ def _contract_workload(workload: Mapping[str, Any]) -> dict[str, Any]:
             "recommended_mode": modes[0],
             "timeout_seconds": 1800 if task == "vision" else (900 if context_budget > 32768 else 180),
         },
-        "baseline_trace_failures": dict(_mapping(workload.get("baseline_trace_failures"))),
+        "baseline_trace_failures": dict(trace_failures),
         "evidence": list(workload.get("evidence") or [])[:20],
     }
 

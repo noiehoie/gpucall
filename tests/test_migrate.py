@@ -405,6 +405,21 @@ def test_migrate_patch_apply_rewrites_openai_client_constructor(tmp_path) -> Non
     assert "client = gpucall_openai_client()" in text
 
 
+def test_migrate_patch_apply_rewrites_openai_module_constructor(tmp_path) -> None:
+    project = tmp_path / "project"
+    project.mkdir()
+    source = project / "client.py"
+    source.write_text("import openai\nclient = openai.OpenAI()\n", encoding="utf-8")
+
+    report = patch_suggestions(project, source="openai-app", apply=True)
+
+    assert report["applied"] is True
+    text = source.read_text(encoding="utf-8")
+    assert "from gpucall_migration import gpucall_openai_client" in text
+    assert "client = gpucall_openai_client()" in text
+    assert "gpucall_migration.py" in report["changed_files"]
+
+
 def test_migrate_helper_fails_closed_without_gpucall_env(tmp_path) -> None:
     project = tmp_path / "project"
     project.mkdir()
@@ -1034,6 +1049,50 @@ def test_migrate_helper_retries_gateway_rate_limit_without_fallback(tmp_path, mo
     assert sleeps == [0.0]
 
 
+def test_migrate_helper_retries_transient_network_error_without_fallback(tmp_path, monkeypatch) -> None:
+    project = tmp_path / "project"
+    project.mkdir()
+    source = project / "client.py"
+    source.write_text("from openai import OpenAI\nclient = OpenAI()\n", encoding="utf-8")
+    monkeypatch.setenv("GPUCALL_BASE_URL", "http://127.0.0.1:9")
+    monkeypatch.setenv("GPUCALL_API_KEY", "x")
+    monkeypatch.setenv("GPUCALL_MIGRATION_MIN_REQUEST_INTERVAL_SECONDS", "0")
+    monkeypatch.setenv("GPUCALL_MIGRATION_NETWORK_BACKOFF_SECONDS", "0")
+    monkeypatch.setenv("GPUCALL_MIGRATION_NETWORK_RETRIES", "1")
+
+    patch_suggestions(project, source="openai-app", apply=True)
+    namespace: dict[str, object] = {}
+    exec((project / "gpucall_migration.py").read_text(encoding="utf-8"), namespace)
+
+    calls: list[str] = []
+    sleeps: list[float] = []
+
+    class Response:
+        status = 200
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return None
+
+        def read(self) -> bytes:
+            return b'{"result":{"kind":"inline","value":"ok"}}'
+
+    def fake_urlopen(request, **_kwargs):
+        calls.append(request.full_url)
+        if len(calls) == 1:
+            raise namespace["urllib"].error.URLError("temporary dns failure")
+        return Response()
+
+    namespace["urllib"].request.urlopen = fake_urlopen
+    namespace["time"].sleep = lambda seconds: sleeps.append(seconds)
+
+    assert namespace["gpucall_infer_text"]("small prompt", intent="rss_semantic_match", timeout=1) == "ok"
+    assert len(calls) == 2
+    assert sleeps == [0.0]
+
+
 def test_migrate_helper_retries_temporary_no_eligible_without_fallback(tmp_path, monkeypatch) -> None:
     project = tmp_path / "project"
     project.mkdir()
@@ -1545,6 +1604,21 @@ def test_migrate_cli_onboard_yes_applies_patch(tmp_path) -> None:
     assert not (project / "gpucall_migration.py").exists()
 
 
+def test_migrate_draft_contract_write_intake_handles_empty_workload_set(tmp_path) -> None:
+    project = tmp_path / "project"
+    output = tmp_path / "out"
+    project.mkdir()
+    (project / "plain.py").write_text("print('no llm here')\n", encoding="utf-8")
+
+    assert main(["draft-contract", str(project), "--source", "fixture", "--output-dir", str(output), "--write-intake"]) == 0
+
+    contract = json.loads((output / "workload-contract.json").read_text(encoding="utf-8"))
+    bundle = json.loads((output / "recipe-intakes.json").read_text(encoding="utf-8"))
+    assert contract["workloads"] == []
+    assert bundle["count"] == 0
+    assert not (output / "recipe-intake.json").exists()
+
+
 def test_migrate_cli_onboard_accepts_existing_log_files(tmp_path) -> None:
     project = tmp_path / "project"
     output = tmp_path / "out"
@@ -1716,6 +1790,80 @@ def test_migrate_cli_onboard_yes_defers_patch_when_gateway_readiness_is_not_ok(t
     assert source.read_text(encoding="utf-8") == original
     assert not (project / "gpucall_migration.py").exists()
     assert not (project / ".gpucall-migration" / "applied-patch.json").exists()
+
+
+def test_migrate_onboard_skips_unobserved_inventory_workloads_in_readiness(tmp_path, monkeypatch) -> None:
+    project = tmp_path / "project"
+    output = tmp_path / "out"
+    project.mkdir()
+    (project / "topic_engine.py").write_text("def run():\n    return call_llm('rank topics')\n", encoding="utf-8")
+    (project / "translate.py").write_text("def run():\n    return call_llm('translate headline')\n", encoding="utf-8")
+    baseline = _write_log(tmp_path, "baseline.log", "response_len=40461\nsource_count=14\nAnalysis complete: 15 topics ranked\n")
+    monkeypatch.setenv("GPUCALL_MIGRATION_READINESS_GATE", "1")
+    monkeypatch.setenv("GPUCALL_BASE_URL", "http://127.0.0.1:9")
+    monkeypatch.setenv("GPUCALL_API_KEY", "x")
+    called_intents: list[str] = []
+
+    def fake_readiness_check(*, base_url, api_key, task, intent):
+        called_intents.append(intent)
+        return {
+            "task": task,
+            "intent": intent,
+            "ok": False,
+            "reason": "no_production_ready_route",
+            "recipes": [{"recipe": "infer-rank-text-items", "blocked_reasons": ["missing_route_validation_evidence"]}],
+        }
+
+    monkeypatch.setattr(migrate_module, "_gateway_readiness_check", fake_readiness_check)
+
+    assert main(["onboard", str(project), "--source", "fixture", "--output-dir", str(output), "--log-file", str(baseline), "--yes"]) == 2
+
+    report = json.loads((output / "onboard-report.json").read_text(encoding="utf-8"))
+    contract = report["workload_contract"]
+    translate = next(item for item in contract["workloads"] if item["intent"] == "translate_text")
+    assert translate["observed_in_baseline"] is False
+    assert translate["inventory_only"] is True
+    assert translate["materialization_candidate"] is False
+    assert called_intents == ["rank_text_items"]
+    assert any(item["reason"] == "inventory_only_unobserved_workload" for item in report["gateway_readiness"]["checks"])
+    assert report["patch_defer_reason"] == "unobserved_workloads_require_baseline"
+    assert report["workload_observation"]["inventory_only_workload_count"] == 1
+
+
+def test_migrate_onboard_yes_defers_patch_when_unobserved_inventory_remains(tmp_path, monkeypatch) -> None:
+    project = tmp_path / "project"
+    output = tmp_path / "out"
+    project.mkdir()
+    source = project / "topic_engine.py"
+    original = (
+        "from anthropic import Anthropic\n"
+        "client = Anthropic()\n"
+        "def rank():\n"
+        "    return call_llm('rank topics')\n"
+        "def translate():\n"
+        "    return call_llm('translate headline')\n"
+    )
+    source.write_text(original, encoding="utf-8")
+    baseline = _write_log(tmp_path, "baseline.log", "response_len=40461\nsource_count=14\nAnalysis complete: 15 topics ranked\n")
+    monkeypatch.setenv("GPUCALL_MIGRATION_READINESS_GATE", "1")
+    monkeypatch.setenv("GPUCALL_BASE_URL", "http://127.0.0.1:9")
+    monkeypatch.setenv("GPUCALL_API_KEY", "x")
+
+    def fake_readiness_check(**_kwargs):
+        return {"task": "infer", "intent": "rank_text_items", "ok": True, "reason": "production_route_ready"}
+
+    monkeypatch.setattr(migrate_module, "_gateway_readiness_check", fake_readiness_check)
+
+    assert main(["onboard", str(project), "--source", "fixture", "--output-dir", str(output), "--log-file", str(baseline), "--yes"]) == 0
+
+    report = json.loads((output / "onboard-report.json").read_text(encoding="utf-8"))
+    assert report["gateway_readiness"]["ok"] is True
+    assert report["patch_apply_requested"] is True
+    assert report["patch_applied"] is False
+    assert report["patch_deferred"] is True
+    assert report["patch_defer_reason"] == "unobserved_workloads_require_baseline"
+    assert source.read_text(encoding="utf-8") == original
+    assert not (project / "gpucall_migration.py").exists()
 
 
 def test_migrate_onboard_command_loads_env_file_before_running_trace(tmp_path, monkeypatch) -> None:

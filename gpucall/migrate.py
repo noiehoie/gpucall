@@ -64,11 +64,22 @@ def recipe_intakes_from_contract(contract: dict[str, Any]) -> dict[str, Any]:
             if isinstance(intake.get("sanitized_request"), dict)
             else {}
         )
+        if draft_grammar.get("materialization_candidate") is False:
+            rejected.append(
+                {
+                    "workload_id": workload.get("id"),
+                    "intent": intake.get("sanitized_request", {}).get("intent"),
+                    "reason": "inventory_only_unobserved_workload",
+                    "blockers": list(draft_grammar.get("blockers") or []),
+                }
+            )
+            continue
         if draft_grammar.get("materialization_allowed") is False:
             rejected.append(
                 {
                     "workload_id": workload.get("id"),
                     "intent": intake.get("sanitized_request", {}).get("intent"),
+                    "reason": "recipe_draft_not_materializable",
                     "blockers": list(draft_grammar.get("blockers") or []),
                 }
             )
@@ -218,8 +229,9 @@ def main(argv: list[str] | None = None) -> int:
         )
         _write_outputs(report, output_dir, "workload-contract")
         if args.write_intake:
-            intake = contract_to_recipe_intake(report)
-            _write_outputs(intake, output_dir, "recipe-intake")
+            if report.get("workloads"):
+                intake = contract_to_recipe_intake(report)
+                _write_outputs(intake, output_dir, "recipe-intake")
             _write_outputs(recipe_intakes_from_contract(report), output_dir, "recipe-intakes")
         return 0
     if args.command == "compare":
@@ -546,6 +558,9 @@ def _gateway_readiness_for_contract(contract: dict[str, Any]) -> dict[str, Any]:
         if not isinstance(workload, dict):
             continue
         draft_check = _workload_draft_grammar_check(contract, workload)
+        if draft_check.get("reason") == "inventory_only_unobserved_workload":
+            checks.append(draft_check)
+            continue
         if draft_check.get("ok") is not True:
             checks.append(draft_check)
             continue
@@ -554,12 +569,14 @@ def _gateway_readiness_for_contract(contract: dict[str, Any]) -> dict[str, Any]:
         if not task or not intent or intent.startswith("unknown_workload_"):
             continue
         checks.append(_gateway_readiness_check(base_url=base_url, api_key=api_key, task=task, intent=intent))
-    ok = all(item.get("ok") is True for item in checks)
+    active_checks = [item for item in checks if item.get("reason") != "inventory_only_unobserved_workload"]
+    ok = bool(active_checks) and all(item.get("ok") is True for item in checks)
     return {
         "schema_version": 1,
         "phase": "gateway-readiness",
-        "checked": bool(checks),
+        "checked": bool(active_checks),
         "ok": ok,
+        "reason": "no_materialization_candidates" if checks and not active_checks else None,
         "checks": checks,
         "failure_count": sum(1 for item in checks if item.get("ok") is not True),
     }
@@ -586,6 +603,15 @@ def _workload_draft_grammar_check(contract: dict[str, Any], workload: dict[str, 
         else {}
     )
     if draft_grammar.get("materialization_allowed") is False:
+        if draft_grammar.get("materialization_candidate") is False:
+            return {
+                "task": task,
+                "intent": intent,
+                "workload_id": workload_id,
+                "ok": True,
+                "reason": "inventory_only_unobserved_workload",
+                "detail": "statically detected but not observed in baseline trace; skipping materialization",
+            }
         return {
             "task": task,
             "intent": intent,
@@ -717,6 +743,7 @@ def onboard_project(
     }
     patch_defer_reason = _onboard_patch_defer_reason(contract, gateway_readiness) if apply else None
     patch_report = patch_suggestions(project, source=source, apply=apply and patch_defer_reason is None)
+    observation_summary = _contract_observation_summary(contract)
     return {
         "schema_version": 1,
         "phase": "migration-onboard",
@@ -730,6 +757,7 @@ def onboard_project(
         "patch_deferred": bool(apply and patch_defer_reason is not None),
         "patch_defer_reason": patch_defer_reason,
         "changed_files": patch_report["changed_files"],
+        "workload_observation": observation_summary,
         "workload_trace": trace_report,
         "workload_profile": profile,
         "workload_contract": contract,
@@ -796,8 +824,15 @@ def _apply_migration_patch(project: Path, rows: list[dict[str, Any]], *, source:
         if "from openai import OpenAI" in updated:
             updated = updated.replace("from openai import OpenAI", "from gpucall_migration import gpucall_openai_client")
             updated = re.sub(r"\bOpenAI\s*\(", "gpucall_openai_client(", updated)
+        if "openai.OpenAI(" in updated:
+            updated = re.sub(
+                r"(?m)^(\s*)import openai\s*(?:#.*)?$",
+                r"\1from gpucall_migration import gpucall_openai_client",
+                updated,
+            )
+            updated = updated.replace("openai.OpenAI(", "gpucall_openai_client(")
         if updated != text:
-            helper_needed = "gpucall_migration" in updated
+            helper_needed |= "gpucall_migration" in updated
             if marker not in updated:
                 updated = _insert_after_future_imports(updated, marker + "\n")
             path.write_text(updated, encoding="utf-8")
@@ -1244,6 +1279,12 @@ def _migration_helper_text(*, source: str | None) -> str:
                 return max(0.0, _float_env("GPUCALL_MIGRATION_PROVIDER_TEMPORARY_MAX_WAIT_SECONDS", "45"))
 
 
+            def _network_backoff_seconds(attempt: int) -> float:
+                base = _float_env("GPUCALL_MIGRATION_NETWORK_BACKOFF_SECONDS", "2")
+                ceiling = _float_env("GPUCALL_MIGRATION_NETWORK_MAX_BACKOFF_SECONDS", "15")
+                return min(ceiling, base * float(attempt + 1))
+
+
             def _provider_temporary_failure_limit() -> int:
                 return _int_env("GPUCALL_MIGRATION_MAX_PROVIDER_TEMPORARY_FAILURES_PER_INTENT", "1")
 
@@ -1519,9 +1560,10 @@ def _migration_helper_text(*, source: str | None) -> str:
                 rate_limit_retries = _int_env("GPUCALL_MIGRATION_HTTP_RETRIES", "8")
                 no_eligible_retries = _int_env("GPUCALL_MIGRATION_NO_ELIGIBLE_RETRIES", "12")
                 provider_temporary_retries = _int_env("GPUCALL_MIGRATION_PROVIDER_TEMPORARY_RETRIES", "1")
+                network_retries = _int_env("GPUCALL_MIGRATION_NETWORK_RETRIES", "2")
                 no_eligible_wait_started: float | None = None
                 provider_temporary_wait_started: float | None = None
-                max_retries = max(rate_limit_retries, no_eligible_retries, provider_temporary_retries)
+                max_retries = max(rate_limit_retries, no_eligible_retries, provider_temporary_retries, network_retries)
                 for attempt in range(max_retries + 1):
                     _pace_gateway_request()
                     try:
@@ -1558,6 +1600,14 @@ def _migration_helper_text(*, source: str | None) -> str:
                             time.sleep(delay)
                             continue
                         raise GPUCallGatewayError(status=exc.code, body=body) from exc
+                    except urllib.error.URLError as exc:
+                        if attempt < network_retries:
+                            delay = _network_backoff_seconds(attempt)
+                            _migration_log("network-retry", reason=str(exc.reason)[:160], attempt=attempt + 1, delay_seconds=delay)
+                            request.data = data
+                            time.sleep(delay)
+                            continue
+                        raise GPUCallGatewayError(status=0, body=f"network_error:{exc.reason}") from exc
                 return json.loads(body) if body else {}
 
 
@@ -2410,11 +2460,21 @@ def _onboard_next_actions(contract: dict[str, Any], trace: dict[str, Any] | None
         actions.append("rerun gpucall-migrate onboard after the draft grammar blockers are cleared")
         return actions
 
+    unobserved = _unobserved_inventory_workloads(contract)
     actions = [
         "review workload-contract.json; it contains deterministic caller success metrics only",
         "materialize recipe-intake.json with gpucall-recipe-admin materialize --accept-all in a staging config",
         "run gpucall validate-config and launch-check before production activation",
     ]
+    if unobserved:
+        actions.insert(
+            0,
+            "do not apply automatic caller patches yet; inventory-only workloads were detected but not observed in the supplied baseline trace",
+        )
+        actions.insert(
+            1,
+            "run targeted gpucall-migrate trace/onboard for each unobserved workload before full-project patching",
+        )
     if isinstance(gateway_readiness, dict) and gateway_readiness.get("ok") is False:
         actions.insert(0, "do not run live caller canary until gpucall readiness reports a production-activated live-ready route for every workload")
     if trace is None:
@@ -2431,6 +2491,8 @@ def _onboard_patch_defer_reason(contract: dict[str, Any], gateway_readiness: dic
         return "gateway_readiness_missing"
     if _non_materializable_draft_blockers(gateway_readiness):
         return "recipe_draft_not_materializable"
+    if _unobserved_inventory_workloads(contract):
+        return "unobserved_workloads_require_baseline"
     if gateway_readiness.get("reason") == "readiness_gate_disabled":
         return None
     if not _readiness_checked_ok(gateway_readiness):
@@ -2451,6 +2513,36 @@ def _non_materializable_draft_blockers(gateway_readiness: dict[str, Any] | None)
             continue
         blockers.extend(str(item) for item in check.get("blockers", []) or [] if item)
     return blockers
+
+
+def _unobserved_inventory_workloads(contract: dict[str, Any]) -> list[dict[str, Any]]:
+    workloads: list[dict[str, Any]] = []
+    for workload in contract.get("workloads", []) or []:
+        if not isinstance(workload, dict):
+            continue
+        if workload.get("inventory_only") is True or workload.get("materialization_candidate") is False:
+            workloads.append(
+                {
+                    "workload_id": workload.get("id"),
+                    "task": workload.get("task"),
+                    "intent": workload.get("intent"),
+                    "evidence_count": len(workload.get("evidence") or []),
+                }
+            )
+    return workloads
+
+
+def _contract_observation_summary(contract: dict[str, Any]) -> dict[str, Any]:
+    workloads = [item for item in contract.get("workloads", []) or [] if isinstance(item, dict)]
+    unobserved = _unobserved_inventory_workloads(contract)
+    return {
+        "baseline_trace_present": bool(contract.get("baseline_trace_present")),
+        "workload_count": len(workloads),
+        "observed_workload_count": sum(1 for item in workloads if item.get("observed_in_baseline") is True),
+        "materialization_candidate_count": sum(1 for item in workloads if item.get("materialization_candidate") is not False),
+        "inventory_only_workload_count": len(unobserved),
+        "inventory_only_workloads": unobserved,
+    }
 
 
 def _has_failed_baseline_blocker(blockers: list[str]) -> bool:
