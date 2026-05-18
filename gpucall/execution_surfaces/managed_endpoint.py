@@ -466,7 +466,7 @@ class RunpodVllmServerlessAdapter(TupleAdapter):
 
     def _wait_native_sync(self, handle: RemoteHandle, plan: CompiledPlan) -> TupleResult:
         started_at = time.monotonic()
-        deadline = started_at + max(float(plan.timeout_seconds), 1.0)
+        deadline = started_at + _runpod_vllm_native_poll_timeout_seconds(plan)
         queue_seen_at: float | None = None
         queue_blocked_seen_at: float | None = None
         last_health_probe_at = started_at
@@ -779,6 +779,49 @@ def _runpod_vllm_openai_request_timeout_seconds(timeout_seconds: int | float) ->
     except ValueError:
         cap = 300.0
     return min(max(float(timeout_seconds), 1.0), cap)
+
+
+def _runpod_vllm_native_poll_timeout_seconds(plan: CompiledPlan) -> float:
+    raw = os.getenv("GPUCALL_RUNPOD_VLLM_NATIVE_POLL_TIMEOUT_SECONDS")
+    plan_timeout = max(float(plan.timeout_seconds), 1.0)
+    if raw:
+        try:
+            return min(max(float(raw), 1.0), plan_timeout)
+        except ValueError:
+            pass
+    runtime_seconds = _plan_expected_runtime_seconds(plan)
+    multiplier = _float_env("GPUCALL_RUNPOD_VLLM_NATIVE_RUNTIME_MULTIPLIER", 2.0, minimum=1.0)
+    floor = _float_env("GPUCALL_RUNPOD_VLLM_NATIVE_POLL_MIN_SECONDS", 60.0, minimum=1.0)
+    ceiling = _float_env("GPUCALL_RUNPOD_VLLM_NATIVE_POLL_MAX_SECONDS", 300.0, minimum=floor)
+    if runtime_seconds is None:
+        target = max(plan_timeout * 0.1, floor)
+    else:
+        target = max(runtime_seconds * multiplier, floor)
+    return min(target, ceiling, plan_timeout)
+
+
+def _plan_expected_runtime_seconds(plan: CompiledPlan) -> float | None:
+    cost_estimate = plan.attestations.get("cost_estimate")
+    if isinstance(cost_estimate, dict):
+        value = cost_estimate.get("runtime_seconds")
+        if isinstance(value, int | float) and value > 0:
+            return float(value)
+    recipe = plan.attestations.get("recipe_snapshot")
+    if isinstance(recipe, dict):
+        value = recipe.get("expected_runtime_seconds")
+        if isinstance(value, int | float) and value > 0:
+            return float(value)
+    return None
+
+
+def _float_env(name: str, default: float, *, minimum: float) -> float:
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    try:
+        return max(float(raw), minimum)
+    except ValueError:
+        return default
 
 
 def _runpod_vllm_runsync_result(data: dict[str, Any]) -> TupleResult:

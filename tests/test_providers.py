@@ -34,6 +34,7 @@ from gpucall.execution_surfaces.function_runtime import RunpodVllmFlashBootAdapt
 from gpucall.execution_surfaces.managed_endpoint import RunpodServerlessAdapter
 from gpucall.execution_surfaces.managed_endpoint import (
     RunpodVllmServerlessAdapter,
+    _runpod_vllm_native_poll_timeout_seconds,
     _runpod_vllm_queue_saturation_seconds,
     runpod_vllm_health_preflight_rejection_reason,
     runpod_vllm_health_rejection_code,
@@ -1318,6 +1319,81 @@ def test_runpod_vllm_async_queue_saturation_cancels_remote(monkeypatch) -> None:
         adapter._wait_native_sync(handle, plan)
 
     assert exc_info.value.code == "PROVIDER_QUEUE_SATURATED"
+    assert ("POST", "https://api.runpod.ai/v2/endpoint-1/cancel/job-1", None) in calls
+
+
+def test_runpod_vllm_native_poll_timeout_uses_runtime_estimate(monkeypatch) -> None:
+    monkeypatch.delenv("GPUCALL_RUNPOD_VLLM_NATIVE_POLL_TIMEOUT_SECONDS", raising=False)
+    monkeypatch.delenv("GPUCALL_RUNPOD_VLLM_NATIVE_RUNTIME_MULTIPLIER", raising=False)
+    monkeypatch.delenv("GPUCALL_RUNPOD_VLLM_NATIVE_POLL_MIN_SECONDS", raising=False)
+    monkeypatch.delenv("GPUCALL_RUNPOD_VLLM_NATIVE_POLL_MAX_SECONDS", raising=False)
+
+    plan = plan_payload_plan().model_copy(
+        update={
+            "mode": ExecutionMode.ASYNC,
+            "timeout_seconds": 1800,
+            "attestations": {"cost_estimate": {"runtime_seconds": 180}},
+        }
+    )
+
+    assert _runpod_vllm_native_poll_timeout_seconds(plan) == 300
+    monkeypatch.setenv("GPUCALL_RUNPOD_VLLM_NATIVE_POLL_MAX_SECONDS", "600")
+    assert _runpod_vllm_native_poll_timeout_seconds(plan) == 360
+    monkeypatch.setenv("GPUCALL_RUNPOD_VLLM_NATIVE_POLL_TIMEOUT_SECONDS", "45")
+    assert _runpod_vllm_native_poll_timeout_seconds(plan) == 45
+
+
+def test_runpod_vllm_native_poll_timeout_cancels_running_job(monkeypatch) -> None:
+    calls: list[tuple[str, str, dict[str, object] | None]] = []
+
+    class FakeResponse:
+        def __init__(self, status_code: int, data: dict[str, object]) -> None:
+            self.status_code = status_code
+            self._data = data
+            self.text = str(data)
+
+        def json(self) -> dict[str, object]:
+            return self._data
+
+    def fake_get(url: str, **_kwargs):
+        calls.append(("GET", url, None))
+        if url.endswith("/status/job-1"):
+            return FakeResponse(200, {"status": "IN_PROGRESS"})
+        return FakeResponse(404, {"error": "unexpected"})
+
+    def fake_post(url: str, **kwargs):
+        calls.append(("POST", url, kwargs.get("json")))
+        if url.endswith("/cancel/job-1"):
+            return FakeResponse(200, {"id": "job-1", "status": "CANCELLED"})
+        return FakeResponse(404, {"error": "unexpected"})
+
+    times = iter([0.0, 0.0, 2.0])
+    monkeypatch.setattr("gpucall.execution_surfaces.managed_endpoint._request_get", fake_get)
+    monkeypatch.setattr("gpucall.execution_surfaces.managed_endpoint._request_post", fake_post)
+    monkeypatch.setattr("gpucall.execution_surfaces.managed_endpoint.time.monotonic", lambda: next(times))
+    monkeypatch.setattr("gpucall.execution_surfaces.managed_endpoint.time.sleep", lambda _seconds: None)
+    monkeypatch.setenv("GPUCALL_RUNPOD_VLLM_NATIVE_POLL_TIMEOUT_SECONDS", "1")
+
+    adapter = RunpodVllmServerlessAdapter(
+        api_key="rk_test",
+        endpoint_id="endpoint-1",
+        endpoint_contract="openai-chat-completions",
+        model="Qwen/Qwen2.5-1.5B-Instruct",
+    )
+    plan = plan_payload_plan().model_copy(
+        update={"mode": ExecutionMode.ASYNC, "messages": [ChatMessage(role="user", content="hello")], "timeout_seconds": 60}
+    )
+    handle = RemoteHandle(
+        tuple=adapter.name,
+        remote_id="job-1",
+        expires_at=datetime.now(UTC),
+        meta={"official_vllm": True, "runpod_native_queue": True},
+    )
+
+    with pytest.raises(TupleError) as exc_info:
+        adapter._wait_native_sync(handle, plan)
+
+    assert exc_info.value.code == "PROVIDER_POLL_TIMEOUT"
     assert ("POST", "https://api.runpod.ai/v2/endpoint-1/cancel/job-1", None) in calls
 
 
