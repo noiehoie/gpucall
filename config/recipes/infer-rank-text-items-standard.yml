@@ -15,6 +15,7 @@ timeout_seconds: 600
 lease_ttl_seconds: 900
 token_estimation_profile: qwen
 max_input_bytes: 134217728
+max_output_tokens: 24000
 allowed_mime_prefixes:
 - text/
 allowed_inline_mime_prefixes: []
