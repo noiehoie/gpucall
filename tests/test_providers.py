@@ -1330,7 +1330,7 @@ def test_runpod_vllm_native_poll_timeout_uses_runtime_estimate(monkeypatch) -> N
 
     plan = plan_payload_plan().model_copy(
         update={
-            "mode": ExecutionMode.ASYNC,
+            "mode": ExecutionMode.SYNC,
             "timeout_seconds": 1800,
             "attestations": {"cost_estimate": {"runtime_seconds": 180}},
         }
@@ -1351,13 +1351,30 @@ def test_runpod_vllm_native_poll_timeout_accepts_legacy_estimated_runtime_key(mo
 
     plan = plan_payload_plan().model_copy(
         update={
-            "mode": ExecutionMode.ASYNC,
+            "mode": ExecutionMode.SYNC,
             "timeout_seconds": 1800,
             "attestations": {"cost_estimate": {"estimated_runtime_seconds": 180}},
         }
     )
 
     assert _runpod_vllm_native_poll_timeout_seconds(plan) == 360
+
+
+def test_runpod_vllm_native_poll_timeout_uses_plan_timeout_for_async(monkeypatch) -> None:
+    monkeypatch.delenv("GPUCALL_RUNPOD_VLLM_NATIVE_POLL_TIMEOUT_SECONDS", raising=False)
+    monkeypatch.delenv("GPUCALL_RUNPOD_VLLM_NATIVE_RUNTIME_MULTIPLIER", raising=False)
+    monkeypatch.delenv("GPUCALL_RUNPOD_VLLM_NATIVE_POLL_MIN_SECONDS", raising=False)
+    monkeypatch.delenv("GPUCALL_RUNPOD_VLLM_NATIVE_POLL_MAX_SECONDS", raising=False)
+
+    plan = plan_payload_plan().model_copy(
+        update={
+            "mode": ExecutionMode.ASYNC,
+            "timeout_seconds": 600,
+            "attestations": {"cost_estimate": {"runtime_seconds": 68.0, "cold_start_seconds": 180.0}},
+        }
+    )
+
+    assert _runpod_vllm_native_poll_timeout_seconds(plan) == 600
 
 
 def test_runpod_vllm_native_poll_timeout_includes_cold_start(monkeypatch) -> None:
@@ -1368,7 +1385,7 @@ def test_runpod_vllm_native_poll_timeout_includes_cold_start(monkeypatch) -> Non
 
     plan = plan_payload_plan().model_copy(
         update={
-            "mode": ExecutionMode.ASYNC,
+            "mode": ExecutionMode.SYNC,
             "timeout_seconds": 600,
             "attestations": {"cost_estimate": {"runtime_seconds": 68.0, "cold_start_seconds": 180.0}},
         }

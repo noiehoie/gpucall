@@ -789,6 +789,8 @@ def _runpod_vllm_native_poll_timeout_seconds(plan: CompiledPlan) -> float:
             return min(max(float(raw), 1.0), plan_timeout)
         except ValueError:
             pass
+    if plan.mode is not None and plan.mode.value == "async":
+        return plan_timeout
     runtime_seconds = _plan_expected_runtime_seconds(plan)
     cold_start_seconds = _plan_expected_cold_start_seconds(plan)
     multiplier = _float_env("GPUCALL_RUNPOD_VLLM_NATIVE_RUNTIME_MULTIPLIER", 2.0, minimum=1.0)
