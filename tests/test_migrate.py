@@ -738,7 +738,50 @@ def test_migrate_helper_does_not_retry_small_sync_preferred_no_eligible_as_async
     with pytest.raises(RuntimeError, match="NO_ELIGIBLE_TUPLE"):
         namespace["gpucall_infer_text"]("small prompt", intent="rss_semantic_match", timeout=1)
 
-    assert captured == [("POST", "http://127.0.0.1:9/v2/tasks/sync", {"timeout": 1, "floor_timeout": False, "retry_no_eligible": True})]
+    assert captured == [("POST", "http://127.0.0.1:9/v2/tasks/sync", {"timeout": 120.0, "floor_timeout": False, "retry_no_eligible": True})]
+
+
+def test_migrate_helper_retries_async_provider_temporary_failure(tmp_path, monkeypatch) -> None:
+    project = tmp_path / "project"
+    project.mkdir()
+    source = project / "client.py"
+    source.write_text("from openai import OpenAI\nclient = OpenAI()\n", encoding="utf-8")
+    monkeypatch.setenv("GPUCALL_BASE_URL", "http://127.0.0.1:9")
+    monkeypatch.setenv("GPUCALL_API_KEY", "x")
+    monkeypatch.setenv("GPUCALL_MIGRATION_MIN_REQUEST_INTERVAL_SECONDS", "0")
+    monkeypatch.setenv("GPUCALL_MIGRATION_POLL_INTERVAL_SECONDS", "0")
+    monkeypatch.setenv("GPUCALL_MIGRATION_PROVIDER_TEMPORARY_BACKOFF_SECONDS", "0")
+    monkeypatch.setenv("GPUCALL_MIGRATION_PROVIDER_TEMPORARY_RETRIES", "1")
+
+    patch_suggestions(project, source="openai-app", apply=True)
+    namespace: dict[str, object] = {}
+    exec((project / "gpucall_migration.py").read_text(encoding="utf-8"), namespace)
+
+    submitted = 0
+    captured: list[tuple[str, str, dict, dict]] = []
+
+    def fake_json_request(method, url, payload, **kwargs):
+        nonlocal submitted
+        captured.append((method, url, dict(payload), dict(kwargs)))
+        if url.endswith("/v2/tasks/async"):
+            submitted += 1
+            return {"job_id": f"j{submitted}", "state": "QUEUED", "status_url": f"/v2/jobs/j{submitted}"}
+        if url.endswith("/v2/jobs/j1"):
+            return {
+                "job_id": "j1",
+                "state": "FAILED",
+                "error": "tuple execution failed (PROVIDER_CAPACITY_UNAVAILABLE)",
+                "provider_error_code": "PROVIDER_CAPACITY_UNAVAILABLE",
+            }
+        if url.endswith("/v2/jobs/j2"):
+            return {"job_id": "j2", "state": "COMPLETED", "result": {"kind": "inline", "value": "ok"}}
+        raise AssertionError(url)
+
+    namespace["_json_request"] = fake_json_request
+    namespace["time"].sleep = lambda _seconds: None
+
+    assert namespace["gpucall_infer_text"]("short summary", intent="summarize_text", timeout=60) == "ok"
+    assert sum(1 for _method, url, _payload, _kwargs in captured if url.endswith("/v2/tasks/async")) == 2
 
 
 def test_migrate_helper_retries_gateway_rate_limit_without_fallback(tmp_path, monkeypatch) -> None:
@@ -830,6 +873,56 @@ def test_migrate_helper_retries_temporary_no_eligible_without_fallback(tmp_path,
                 "Service Unavailable",
                 {},
                 BytesIO(b'{"code":"NO_ELIGIBLE_TUPLE","detail":"no eligible tuple after policy"}'),
+            )
+        return Response()
+
+    namespace["urllib"].request.urlopen = fake_urlopen
+    namespace["time"].sleep = lambda seconds: sleeps.append(seconds)
+
+    assert namespace["gpucall_infer_text"]("small prompt", intent="rss_semantic_match", timeout=1) == "ok"
+    assert len(calls) == 2
+    assert sleeps == [0.0]
+
+
+def test_migrate_helper_retries_provider_temporary_http_503(tmp_path, monkeypatch) -> None:
+    project = tmp_path / "project"
+    project.mkdir()
+    source = project / "client.py"
+    source.write_text("from openai import OpenAI\nclient = OpenAI()\n", encoding="utf-8")
+    monkeypatch.setenv("GPUCALL_BASE_URL", "http://127.0.0.1:9")
+    monkeypatch.setenv("GPUCALL_API_KEY", "x")
+    monkeypatch.setenv("GPUCALL_MIGRATION_MIN_REQUEST_INTERVAL_SECONDS", "0")
+    monkeypatch.setenv("GPUCALL_MIGRATION_PROVIDER_TEMPORARY_BACKOFF_SECONDS", "0")
+    monkeypatch.setenv("GPUCALL_MIGRATION_PROVIDER_TEMPORARY_RETRIES", "1")
+
+    patch_suggestions(project, source="openai-app", apply=True)
+    namespace: dict[str, object] = {}
+    exec((project / "gpucall_migration.py").read_text(encoding="utf-8"), namespace)
+
+    calls: list[str] = []
+    sleeps: list[float] = []
+
+    class Response:
+        status = 200
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return None
+
+        def read(self) -> bytes:
+            return b'{"result":{"kind":"inline","value":"ok"}}'
+
+    def fake_urlopen(request, **_kwargs):
+        calls.append(request.full_url)
+        if len(calls) == 1:
+            raise namespace["urllib"].error.HTTPError(
+                request.full_url,
+                503,
+                "Service Unavailable",
+                {},
+                BytesIO(b'{"code":"PROVIDER_WORKER_THROTTLED","failure_artifact":{"failure_kind":"provider_temporary_unavailable"}}'),
             )
         return Response()
 

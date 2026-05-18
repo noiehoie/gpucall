@@ -822,6 +822,16 @@ def _migration_helper_text(*, source: str | None) -> str:
                     self.code = _gateway_error_code(body)
 
 
+            class GPUCallProviderTemporaryError(RuntimeError):
+                def __init__(self, *, state: str, error: Any, provider_error_code: str) -> None:
+                    super().__init__(
+                        f"gpucall async task failed state={state} error={error} provider_error_code={provider_error_code}"
+                    )
+                    self.state = state
+                    self.error = error
+                    self.provider_error_code = provider_error_code
+
+
             def _objectify(value: Any) -> Any:
                 if isinstance(value, dict):
                     return _AttrDict({key: _objectify(item) for key, item in value.items()})
@@ -891,11 +901,31 @@ def _migration_helper_text(*, source: str | None) -> str:
                 return max(0.0, _float_env("GPUCALL_MIGRATION_NO_ELIGIBLE_MAX_WAIT_SECONDS", "120"))
 
 
+            def _provider_temporary_backoff_seconds(attempt: int) -> float:
+                base = _float_env("GPUCALL_MIGRATION_PROVIDER_TEMPORARY_BACKOFF_SECONDS", "20")
+                ceiling = _float_env("GPUCALL_MIGRATION_PROVIDER_TEMPORARY_MAX_BACKOFF_SECONDS", "120")
+                return min(ceiling, base * float(attempt + 1))
+
+
+            def _provider_temporary_max_wait_seconds() -> float:
+                return max(0.0, _float_env("GPUCALL_MIGRATION_PROVIDER_TEMPORARY_MAX_WAIT_SECONDS", "900"))
+
+
             def _is_retryable_no_eligible(exc: urllib.error.HTTPError, body: str) -> bool:
                 if exc.code != 503:
                     return False
                 lowered = body.lower()
                 return "no_eligible_tuple" in lowered or "no eligible tuple" in lowered
+
+
+            def _is_retryable_provider_http_error(exc: urllib.error.HTTPError, body: str) -> bool:
+                if exc.code != 503:
+                    return False
+                code = _gateway_error_code(body)
+                if code in _retryable_provider_codes():
+                    return True
+                lowered = body.lower()
+                return "provider_temporary_unavailable" in lowered or "retry_later_or_wait_for_gpucall_fallback" in lowered
 
 
             def _gateway_error_code(body: str) -> str:
@@ -908,6 +938,52 @@ def _migration_helper_text(*, source: str | None) -> str:
                     pass
                 match = re.search(r'"code"\\s*:\\s*"([^"]+)"', body)
                 return match.group(1) if match else ""
+
+
+            def _retryable_provider_codes() -> set[str]:
+                return {
+                    "PROVIDER_RESOURCE_EXHAUSTED",
+                    "PROVIDER_CAPACITY_UNAVAILABLE",
+                    "PROVIDER_PROVISION_UNAVAILABLE",
+                    "PROVIDER_QUEUE_SATURATED",
+                    "PROVIDER_WORKER_INITIALIZING",
+                    "PROVIDER_WORKER_THROTTLED",
+                    "PROVIDER_TIMEOUT",
+                    "PROVIDER_POLL_TIMEOUT",
+                    "PROVIDER_JOB_FAILED",
+                    "PROVIDER_UNHEALTHY",
+                    "PROVIDER_BOOTING",
+                    "PROVIDER_PREEMPTED",
+                    "PROVIDER_MAINTENANCE",
+                    "PROVIDER_UPSTREAM_UNAVAILABLE",
+                    "PROVIDER_RATE_LIMITED",
+                    "PROVIDER_QUOTA_EXCEEDED",
+                    "PROVIDER_REGION_UNAVAILABLE",
+                    "PROVIDER_IMAGE_PULL_DELAY",
+                    "PROVIDER_MODEL_LOADING",
+                    "PROVIDER_CONCURRENCY_LIMIT",
+                    "PROVIDER_LEASE_EXPIRED",
+                    "PROVIDER_STALE_JOB",
+                    "PROVIDER_ERROR",
+                }
+
+
+            def _job_provider_error_code(job: dict[str, Any]) -> str:
+                code = job.get("provider_error_code")
+                if isinstance(code, str) and code:
+                    return code
+                error = job.get("error")
+                if isinstance(error, dict):
+                    nested = error.get("provider_error_code") or error.get("code")
+                    if isinstance(nested, str):
+                        return nested
+                text = str(error or "")
+                match = re.search(r"\\b(PROVIDER_[A-Z0-9_]+)\\b", text)
+                return match.group(1) if match else ""
+
+
+            def _is_retryable_provider_job_failure(job: dict[str, Any]) -> bool:
+                return _job_provider_error_code(job) in _retryable_provider_codes()
 
 
             def _gateway_error_required_model_len(body: str) -> int:
@@ -1025,10 +1101,10 @@ def _migration_helper_text(*, source: str | None) -> str:
                     or "突合" in text
                     or "マッチ" in text
                 )
-                if has_rss_source and explicit_match_contract:
-                    return "rss_semantic_match"
                 if has_news_ranking_contract:
                     return "rank_text_items"
+                if has_rss_source and explicit_match_contract:
+                    return "rss_semantic_match"
                 if has_summary_contract:
                     return "summarize_text"
                 if has_rss_source and has_match_contract:
@@ -1072,8 +1148,10 @@ def _migration_helper_text(*, source: str | None) -> str:
                 request_timeout = _gateway_timeout(timeout, floor=floor_timeout)
                 rate_limit_retries = _int_env("GPUCALL_MIGRATION_HTTP_RETRIES", "8")
                 no_eligible_retries = _int_env("GPUCALL_MIGRATION_NO_ELIGIBLE_RETRIES", "12")
+                provider_temporary_retries = _int_env("GPUCALL_MIGRATION_PROVIDER_TEMPORARY_RETRIES", "8")
                 no_eligible_wait_started: float | None = None
-                max_retries = max(rate_limit_retries, no_eligible_retries)
+                provider_temporary_wait_started: float | None = None
+                max_retries = max(rate_limit_retries, no_eligible_retries, provider_temporary_retries)
                 for attempt in range(max_retries + 1):
                     _pace_gateway_request()
                     try:
@@ -1085,6 +1163,17 @@ def _migration_helper_text(*, source: str | None) -> str:
                         if exc.code == 429 and attempt < rate_limit_retries:
                             request.data = json.dumps(payload).encode("utf-8")
                             time.sleep(_retry_after_seconds(exc, attempt))
+                            continue
+                        if _is_retryable_provider_http_error(exc, body) and attempt < provider_temporary_retries:
+                            now = time.monotonic()
+                            if provider_temporary_wait_started is None:
+                                provider_temporary_wait_started = now
+                            delay = _provider_temporary_backoff_seconds(attempt)
+                            max_wait = _provider_temporary_max_wait_seconds()
+                            if max_wait and (now - provider_temporary_wait_started + delay) > max_wait:
+                                raise GPUCallGatewayError(status=exc.code, body=body) from exc
+                            request.data = json.dumps(payload).encode("utf-8")
+                            time.sleep(delay)
                             continue
                         if retry_no_eligible and _is_retryable_no_eligible(exc, body) and attempt < no_eligible_retries:
                             now = time.monotonic()
@@ -1155,6 +1244,12 @@ def _migration_helper_text(*, source: str | None) -> str:
                 return caller_timeout
 
 
+            def _sync_request_timeout_seconds(timeout: float | None) -> float:
+                caller_timeout = float(timeout) if timeout is not None else 0.0
+                minimum = _float_env("GPUCALL_MIGRATION_SYNC_MIN_TIMEOUT_SECONDS", "120")
+                return max(caller_timeout, minimum)
+
+
             def _sync_preferred_intents() -> set[str]:
                 raw = os.environ.get(
                     "GPUCALL_MIGRATION_SYNC_PREFERRED_INTENTS",
@@ -1213,7 +1308,7 @@ def _migration_helper_text(*, source: str | None) -> str:
                             "POST",
                             _base_url() + "/v2/tasks/sync",
                             payload,
-                            timeout=timeout,
+                            timeout=_sync_request_timeout_seconds(timeout),
                             floor_timeout=False,
                             retry_no_eligible=not _should_skip_sync_no_eligible_retries(task, intent=intent, prompt_bytes=prompt_bytes),
                         )
@@ -1238,6 +1333,23 @@ def _migration_helper_text(*, source: str | None) -> str:
 
 
             def _submit_async_task_and_wait(payload: dict[str, Any], *, timeout: float | None = None, prompt_bytes: int = 0) -> dict[str, Any]:
+                provider_retries = _int_env("GPUCALL_MIGRATION_PROVIDER_TEMPORARY_RETRIES", "8")
+                wait_started = time.monotonic()
+                for attempt in range(provider_retries + 1):
+                    try:
+                        return _submit_async_task_once(payload, timeout=timeout, prompt_bytes=prompt_bytes)
+                    except GPUCallProviderTemporaryError:
+                        if attempt >= provider_retries:
+                            raise
+                        delay = _provider_temporary_backoff_seconds(attempt)
+                        max_wait = _provider_temporary_max_wait_seconds()
+                        if max_wait and (time.monotonic() - wait_started + delay) > max_wait:
+                            raise
+                        time.sleep(delay)
+                raise RuntimeError("gpucall async task provider temporary retries exhausted")
+
+
+            def _submit_async_task_once(payload: dict[str, Any], *, timeout: float | None = None, prompt_bytes: int = 0) -> dict[str, Any]:
                 task = str(payload.get("task") or "infer")
                 async_payload = dict(payload)
                 async_payload["mode"] = "async"
@@ -1267,6 +1379,12 @@ def _migration_helper_text(*, source: str | None) -> str:
                             raise RuntimeError("gpucall async task completed without inline result")
                         if state in {"FAILED", "CANCELLED", "EXPIRED"}:
                             cancel_on_exit = False
+                            if _is_retryable_provider_job_failure(job):
+                                raise GPUCallProviderTemporaryError(
+                                    state=state,
+                                    error=job.get("error"),
+                                    provider_error_code=_job_provider_error_code(job),
+                                )
                             raise RuntimeError(f"gpucall async task failed state={state} error={job.get('error')} provider_error_code={job.get('provider_error_code')}")
                         if time.monotonic() >= deadline:
                             raise TimeoutError(f"gpucall async task timed out after {wait_seconds:.1f}s job_id={job_id}")
