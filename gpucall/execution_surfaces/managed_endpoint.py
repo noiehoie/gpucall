@@ -804,6 +804,8 @@ def _plan_expected_runtime_seconds(plan: CompiledPlan) -> float | None:
     cost_estimate = plan.attestations.get("cost_estimate")
     if isinstance(cost_estimate, dict):
         value = cost_estimate.get("runtime_seconds")
+        if not isinstance(value, int | float):
+            value = cost_estimate.get("estimated_runtime_seconds")
         if isinstance(value, int | float) and value > 0:
             return float(value)
     recipe = plan.attestations.get("recipe_snapshot")

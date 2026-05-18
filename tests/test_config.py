@@ -730,6 +730,8 @@ def test_provider_smoke_uses_chat_messages_for_chat_only_provider(tmp_path) -> N
     assert request.messages[0].content == "gpucall tuple smoke"
     assert request.inline_inputs == {}
     assert request.max_tokens == 16
+    assert request.timeout_seconds == recipe.timeout_seconds
+    assert request.lease_ttl_seconds == recipe.lease_ttl_seconds
 
 
 def test_validate_config_cli(tmp_path) -> None:

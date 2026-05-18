@@ -2219,6 +2219,8 @@ def _provider_smoke_request(runtime, recipe, mode: ExecutionMode, tuple: str) ->
         recipe=recipe.name,
         requested_tuple=tuple,
         bypass_circuit_for_validation=True,
+        timeout_seconds=recipe.timeout_seconds,
+        lease_ttl_seconds=recipe.lease_ttl_seconds,
         messages=messages,
         inline_inputs=inline_inputs,
         input_refs=input_refs,
