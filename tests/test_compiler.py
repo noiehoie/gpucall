@@ -5,7 +5,7 @@ from datetime import datetime, timedelta, timezone
 import pytest
 
 from gpucall.compiler import GovernanceCompiler, GovernanceError
-from gpucall.domain import ChatMessage, CostPolicy, DataRef, EngineSpec, ExecutionMode, ExecutionSurface, ModelSpec, Policy, TuplePolicy, ExecutionTupleSpec, Recipe, RecipeQualityFloor, ResponseFormat, ResponseFormatType, TaskRequest
+from gpucall.domain import ChatMessage, CostPolicy, DataRef, EngineSpec, ExecutionMode, ExecutionSurface, InlineValue, ModelSpec, Policy, TuplePolicy, ExecutionTupleSpec, Recipe, RecipeQualityFloor, RecipeResourceClass, ResponseFormat, ResponseFormatType, TaskRequest, recipe_requirements
 from gpucall.domain import TupleObservation
 from gpucall.registry import ObservedRegistry
 from gpucall.routing import required_model_len
@@ -67,6 +67,56 @@ def test_compiler_applies_tokenizer_safety_margin() -> None:
     assert plan.token_budget == 100
 
 
+def test_compiler_applies_recipe_max_output_tokens_when_request_omits_cap() -> None:
+    compiler = build_compiler()
+    compiler.recipes["r1"] = compiler.recipes["r1"].model_copy(update={"max_output_tokens": 16})
+
+    plan = compiler.compile(TaskRequest(task="infer", mode="sync", recipe="r1"))
+
+    assert plan.max_tokens == 16
+    assert plan.token_budget == 20
+    assert plan.attestations["context_estimate"]["required_model_len"] >= 16
+
+
+def test_request_max_tokens_overrides_recipe_default_output_cap() -> None:
+    compiler = build_compiler()
+    compiler.recipes["r1"] = compiler.recipes["r1"].model_copy(update={"max_output_tokens": 16})
+
+    plan = compiler.compile(TaskRequest(task="infer", mode="sync", recipe="r1", max_tokens=8))
+
+    assert plan.max_tokens == 8
+    assert plan.token_budget == 10
+
+
+def test_recipe_default_output_cap_counts_against_context_budget() -> None:
+    compiler = build_compiler()
+    compiler.recipes["r1"] = compiler.recipes["r1"].model_copy(
+        update={"context_budget_tokens": 8, "max_output_tokens": 16}
+    )
+
+    with pytest.raises(GovernanceError) as exc_info:
+        compiler.compile(TaskRequest(task="infer", mode="sync", recipe="r1"))
+
+    assert exc_info.value.code == "REQUEST_EXCEEDS_RECIPE_CONTEXT"
+
+
+def test_explicit_large_context_budget_requires_large_vram_even_when_resource_class_standard() -> None:
+    recipe = Recipe(
+        name="rank-standard",
+        task="infer",
+        intent="rank_text_items",
+        allowed_modes=[ExecutionMode.ASYNC],
+        context_budget_tokens=131072,
+        resource_class=RecipeResourceClass.STANDARD,
+        timeout_seconds=600,
+        lease_ttl_seconds=900,
+        required_model_capabilities=["instruction_following"],
+        output_contract="plain-text",
+    )
+
+    assert recipe_requirements(recipe).minimum_vram_gb == 80
+
+
 def test_qwen_profile_estimates_text_dataref_context_without_fetching_body() -> None:
     compiler = build_compiler()
     recipe = compiler.recipes["r1"].model_copy(
@@ -98,6 +148,132 @@ def test_qwen_profile_estimates_text_dataref_context_without_fetching_body() -> 
 
     assert plan.attestations["context_estimate"]["required_model_len"] <= 131072
     assert plan.token_budget == 40960
+
+
+def test_controlled_local_runtime_uses_model_catalog_instead_of_gpu_vram_heuristic() -> None:
+    policy = Policy(
+        version="test",
+        inline_bytes_limit=1_000_000,
+        default_lease_ttl_seconds=30,
+        max_lease_ttl_seconds=300,
+        max_timeout_seconds=300,
+        tokenizer_safety_multiplier=1.25,
+        tuples=TuplePolicy(allow=[], deny=[]),
+    )
+    recipe = Recipe(
+        name="rank-standard",
+        task="infer",
+        intent="rank_text_items",
+        allowed_modes=[ExecutionMode.ASYNC],
+        context_budget_tokens=131072,
+        resource_class=RecipeResourceClass.STANDARD,
+        timeout_seconds=120,
+        lease_ttl_seconds=180,
+        token_estimation_profile="qwen",
+        required_model_capabilities=["instruction_following"],
+        output_contract="plain-text",
+    )
+    tuple = ExecutionTupleSpec(
+        name="local-ollama-gemma3",
+        adapter="local-ollama",
+        execution_surface=ExecutionSurface.LOCAL_RUNTIME,
+        controlled_runtime_ref="local-ollama-gemma3",
+        gpu="local",
+        vram_gb=4,
+        max_model_len=131072,
+        cost_per_second=0,
+        modes=[ExecutionMode.ASYNC],
+        endpoint="http://127.0.0.1:11434",
+        model="gemma3:4b",
+        model_ref="gemma3-local",
+        engine_ref="local-ollama",
+        input_contracts=["text", "chat_messages"],
+        output_contract="ollama-generate",
+        endpoint_contract="ollama-generate",
+    )
+    model = ModelSpec(
+        name="gemma3-local",
+        provider_model_id="gemma3:4b",
+        capabilities=["instruction_following"],
+        max_model_len=131072,
+        min_vram_gb=4,
+        supported_engines=["local-ollama"],
+        input_contracts=["text", "chat_messages"],
+        output_contracts=["ollama-generate", "plain-text"],
+    )
+    engine = EngineSpec(
+        name="local-ollama",
+        kind="local",
+        input_contracts=["text", "chat_messages"],
+        output_contracts=["ollama-generate", "plain-text"],
+    )
+    compiler = GovernanceCompiler(
+        policy=policy,
+        recipes={recipe.name: recipe},
+        tuples={tuple.name: tuple},
+        registry=ObservedRegistry(),
+        models={model.name: model},
+        engines={engine.name: engine},
+    )
+
+    plan = compiler.compile(
+        TaskRequest(
+            task="infer",
+            intent="rank_text_items",
+            mode=ExecutionMode.ASYNC,
+            inline_inputs={"prompt": InlineValue(value="rank these", content_type="text/plain")},
+            max_tokens=32,
+        )
+    )
+
+    assert plan.tuple_chain == ["local-ollama-gemma3"]
+
+
+def test_cloud_tuple_still_uses_recipe_vram_heuristic() -> None:
+    compiler = build_compiler()
+    compiler.policy = compiler.policy.model_copy(update={"tuples": TuplePolicy(allow=[], deny=[])})
+    recipe = compiler.recipes["r1"].model_copy(
+        update={
+            "name": "rank-standard",
+            "intent": "rank_text_items",
+            "context_budget_tokens": 131072,
+            "resource_class": RecipeResourceClass.STANDARD,
+            "max_input_bytes": 134217728,
+        }
+    )
+    compiler.recipes = {recipe.name: recipe}
+    compiler.tuples = {
+        "cloud-small": ExecutionTupleSpec(
+            name="cloud-small",
+            adapter="modal",
+            execution_surface=ExecutionSurface.FUNCTION_RUNTIME,
+            gpu="L4",
+            vram_gb=4,
+            max_model_len=131072,
+            cost_per_second=0.001,
+            modes=[ExecutionMode.ASYNC],
+            target="app:run",
+            model="test-model",
+            input_contracts=["text"],
+            output_contract="plain-text",
+            endpoint_contract="modal-function",
+        )
+    }
+
+    with pytest.raises(GovernanceError) as exc_info:
+        compiler.compile(
+            TaskRequest(
+                task="infer",
+                intent="rank_text_items",
+                mode=ExecutionMode.ASYNC,
+                inline_inputs={"prompt": InlineValue(value="rank these", content_type="text/plain")},
+                max_tokens=32,
+            )
+        )
+
+    context = exc_info.value.context
+    assert context is not None
+    assert context["tuple_rejections"]["cloud-small"] == "tuple vram_gb is below derived recipe requirement"
 
 
 def test_generic_utf8_keeps_conservative_dataref_context_estimate() -> None:
@@ -1052,7 +1228,7 @@ def test_recipe_budget_allows_high_cost_tuple_when_within_limit() -> None:
     plan = compiler.compile(request)
 
     assert plan.tuple_chain == ["p1"]
-    assert plan.attestations["cost_estimate"]["estimated_cost_usd"] == pytest.approx(6.6155)
+    assert plan.attestations["cost_estimate"]["estimated_cost_usd"] == pytest.approx(5.1005)
 
 
 def test_recipe_budget_rejects_tuple_when_estimate_exceeds_limit() -> None:
@@ -1250,9 +1426,102 @@ def test_runpod_managed_endpoint_keeps_standing_cost_out_of_request_budget() -> 
     assert cost["runtime_seconds"] == pytest.approx(120)
     assert cost["runtime_seconds_source"] == "recipe.expected_runtime_seconds"
     assert cost["standing_cost_usd"] == pytest.approx(1.224)
-    assert cost["marginal_cost_usd"] == pytest.approx(0.0425)
-    assert cost["estimated_cost_usd"] == pytest.approx(1.2665)
-    assert cost["budget_reservation_usd"] == pytest.approx(0.0425)
+    assert cost["idle_seconds"] == 0
+    assert cost["marginal_cost_usd"] == pytest.approx(0.0408)
+    assert cost["estimated_cost_usd"] == pytest.approx(1.2648)
+    assert cost["budget_reservation_usd"] == pytest.approx(0.0408)
+
+
+def test_function_runtime_cost_uses_token_throughput_not_timeout() -> None:
+    compiler = build_compiler()
+    compiler.policy = compiler.policy.model_copy(
+        update={
+            "inline_bytes_limit": 10000,
+            "max_timeout_seconds": 3600,
+            "max_lease_ttl_seconds": 3900,
+            "cost_policy": CostPolicy(require_fresh_price_for_budget=False),
+        }
+    )
+    compiler.tuples = {
+        "p1": compiler.tuples["p1"].model_copy(
+            update={
+                "adapter": "modal",
+                "execution_surface": ExecutionSurface.FUNCTION_RUNTIME,
+                "cost_per_second": 0.001,
+                "vram_gb": 80,
+                "max_model_len": 131072,
+                "expected_cold_start_seconds": 180,
+                "scaledown_window_seconds": 60,
+                "estimated_prefill_tokens_per_second": 1000,
+                "estimated_decode_tokens_per_second": 50,
+                "estimated_runtime_overhead_seconds": 10,
+                "runtime_estimate_safety_multiplier": 1.5,
+            }
+        )
+    }
+    compiler.recipes["r1"] = compiler.recipes["r1"].model_copy(
+        update={
+            "context_budget_tokens": 131072,
+            "timeout_seconds": 3600,
+            "lease_ttl_seconds": 3900,
+            "max_output_tokens": 1000,
+            "expected_cold_start_seconds": 90,
+        }
+    )
+    request = TaskRequest(
+        task="infer",
+        mode="async",
+        recipe="r1",
+        inline_inputs={"prompt": InlineValue(value="x" * 4000, content_type="text/plain")},
+    )
+
+    plan = compiler.compile(request)
+    cost = plan.attestations["cost_estimate"]
+
+    assert cost["runtime_seconds_source"] == "tuple.token_throughput_estimate"
+    assert cost["runtime_seconds"] < 3600
+    assert cost["idle_seconds"] == 0
+    assert cost["budget_reservation_usd"] < 1.0
+
+
+def test_missing_runtime_evidence_keeps_timeout_fail_closed_cost_estimate() -> None:
+    compiler = build_compiler()
+    compiler.policy = compiler.policy.model_copy(
+        update={
+            "inline_bytes_limit": 10000,
+            "max_timeout_seconds": 3600,
+            "max_lease_ttl_seconds": 3900,
+            "cost_policy": CostPolicy(require_fresh_price_for_budget=False),
+        }
+    )
+    compiler.tuples = {
+        "p1": compiler.tuples["p1"].model_copy(
+            update={
+                "adapter": "modal",
+                "execution_surface": ExecutionSurface.FUNCTION_RUNTIME,
+                "cost_per_second": 0.001,
+                "vram_gb": 80,
+                "max_model_len": 131072,
+                "expected_cold_start_seconds": 180,
+            }
+        )
+    }
+    compiler.recipes["r1"] = compiler.recipes["r1"].model_copy(
+        update={"context_budget_tokens": 131072, "timeout_seconds": 3600, "lease_ttl_seconds": 3900, "max_output_tokens": 1000}
+    )
+    request = TaskRequest(
+        task="infer",
+        mode="async",
+        recipe="r1",
+        inline_inputs={"prompt": InlineValue(value="x" * 4000, content_type="text/plain")},
+    )
+
+    plan = compiler.compile(request)
+    cost = plan.attestations["cost_estimate"]
+
+    assert cost["runtime_seconds"] == pytest.approx(3600)
+    assert cost["runtime_seconds_source"] == "timeout_seconds_fail_closed_fallback"
+    assert cost["budget_reservation_usd"] == pytest.approx(3.78)
 
 
 def test_hyperstack_vm_lease_is_request_budget_reservation() -> None:

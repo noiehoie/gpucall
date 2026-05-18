@@ -5,7 +5,7 @@ import json
 import re
 from datetime import datetime, timezone
 
-from gpucall.costing import estimate_tuple_cost
+from gpucall.costing import budget_reservation_usd, estimate_tuple_cost
 from gpucall.domain import (
     CompileArtifact,
     CompiledPlan,
@@ -26,7 +26,17 @@ from gpucall.domain import (
 from gpucall.domain import ChatMessage, ResponseFormatType
 from gpucall.execution.contracts import account_ref_for_spec
 from gpucall.registry import ObservedRegistry
-from gpucall.routing import classification_rank, is_production_route_candidate, requested_output_contract, requires_openai_chat_contract, tuple_route_rejection_reason, output_context_tokens, required_model_len, token_budget
+from gpucall.routing import (
+    classification_rank,
+    is_local_execution_tuple,
+    is_production_route_candidate,
+    requested_output_contract,
+    requires_openai_chat_contract,
+    tuple_route_rejection_reason,
+    output_context_tokens,
+    required_model_len,
+    token_budget,
+)
 from gpucall.targeting import is_configured_target
 
 
@@ -143,6 +153,7 @@ class GovernanceCompiler:
 
     def compile(self, request: TaskRequest) -> CompiledPlan:
         recipe = self._recipe_for(request)
+        request = self._request_with_recipe_defaults(request, recipe)
         self._validate_request_against_recipe(request, recipe)
         tuple_chain = self._tuple_chain(request, recipe, auto_selected=request.recipe is None)
 
@@ -267,6 +278,12 @@ class GovernanceCompiler:
             raise GovernanceError(f"request task {request.task!r} does not match recipe task {recipe.task!r}")
         return recipe
 
+    @staticmethod
+    def _request_with_recipe_defaults(request: TaskRequest, recipe: Recipe) -> TaskRequest:
+        if request.max_tokens is not None or recipe.max_output_tokens is None:
+            return request
+        return request.model_copy(update={"max_tokens": recipe.max_output_tokens})
+
     def _select_recipe(self, request: TaskRequest) -> Recipe:
         candidates: list[Recipe] = []
         rejected: list[str] = []
@@ -303,12 +320,13 @@ class GovernanceCompiler:
             return f"intent is {recipe.intent!r}"
         if request.mode not in recipe.allowed_modes:
             return f"mode {request.mode} is not allowed"
-        if request.max_tokens is not None:
-            token_budget = output_context_tokens(request)
+        effective_request = self._request_with_recipe_defaults(request, recipe)
+        if effective_request.max_tokens is not None:
+            token_budget = output_context_tokens(effective_request)
             ceiling = recipe_requirements(recipe).context_budget_tokens
             if token_budget is not None and token_budget > ceiling:
                 return f"max_tokens {token_budget} exceeds recipe context budget {ceiling}"
-        required_model_len = self._required_model_len(request, recipe)
+        required_model_len = self._required_model_len(effective_request, recipe)
         ceiling = recipe_requirements(recipe).context_budget_tokens
         if required_model_len > ceiling:
             return f"required model length {required_model_len} exceeds recipe context budget {ceiling}"
@@ -418,7 +436,7 @@ class GovernanceCompiler:
     ) -> list[str]:
         ordered = self._fit_ordered_tuples(tuples, request, recipe)
         ranked: list[str] = []
-        current_key: tuple[int, int, int, float] | None = None
+        current_key: tuple[int, int, int, int, int, float] | None = None
         current_group: list[str] = []
         for tuple in ordered:
             fit_key = self._tuple_fit_key(tuple, request, recipe)
@@ -437,15 +455,27 @@ class GovernanceCompiler:
     def _tuple_fit_key(self, name: str, request: TaskRequest, recipe: Recipe) -> tuple[int, int, int, int, int, float]:
         compiled_required_model_len = self._required_model_len(request, recipe)
         spec = self.tuples[name]
-        local_preference = 0 if spec.execution_surface and spec.execution_surface.value == "local_runtime" else 1
+
+        is_local = is_local_execution_tuple(spec)
+        if compiled_required_model_len > self.policy.local_large_context_threshold:
+            # For large workloads, prefer remote high-throughput tuples (priority 0) over local (priority 1)
+            local_preference = 1 if is_local else 0
+        else:
+            # For small workloads, continue to prefer local (priority 0) for low latency
+            local_preference = 0 if is_local else 1
+
         return (
             local_preference,
             self._route_quality_penalty(name, request, recipe),
             self._observed_reliability_tier(name),
             spec.vram_gb,
             spec.max_model_len - compiled_required_model_len,
-            float(spec.cost_per_second),
+            self._tuple_budget_reservation(spec, request, recipe),
         )
+
+    def _tuple_budget_reservation(self, tuple: ExecutionTupleSpec, request: TaskRequest, recipe: Recipe) -> float:
+        timeout = min(request.timeout_seconds or recipe.timeout_seconds, self.policy.max_timeout_seconds)
+        return budget_reservation_usd(self._cost_estimate(tuple, request, recipe, timeout))
 
     def _route_quality_penalty(self, name: str, request: TaskRequest, recipe: Recipe) -> int:
         if not (
@@ -613,7 +643,16 @@ class GovernanceCompiler:
         recipe: Recipe,
         timeout_seconds: int,
     ) -> dict[str, float | int | str]:
-        return estimate_tuple_cost(tuple, recipe, timeout_seconds=timeout_seconds)
+        required_len = self._required_model_len(request, recipe)
+        output_tokens = output_context_tokens(request)
+        input_tokens = max(0, required_len - output_tokens)
+        return estimate_tuple_cost(
+            tuple,
+            recipe,
+            timeout_seconds=timeout_seconds,
+            input_tokens=input_tokens,
+            output_tokens=output_tokens,
+        )
 
     def _effective_cost_policy(self, recipe: Recipe) -> CostPolicy:
         base = self.policy.cost_policy
@@ -649,7 +688,7 @@ class GovernanceCompiler:
         matching = [recipe for recipe in self.recipes.values() if recipe.task == request.task]
         if not matching:
             return required_model_len(request, self._synthetic_recipe_for(request), self.policy)
-        return max(required_model_len(request, recipe, self.policy) for recipe in matching)
+        return max(required_model_len(self._request_with_recipe_defaults(request, recipe), recipe, self.policy) for recipe in matching)
 
     def _largest_auto_recipe_model_len(self, task: str) -> int | None:
         values = [recipe_requirements(recipe).context_budget_tokens for recipe in self.recipes.values() if recipe.task == task and recipe.auto_select]

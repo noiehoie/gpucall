@@ -438,6 +438,7 @@ class Policy(BaseModel):
     max_lease_ttl_seconds: PositiveInt
     max_timeout_seconds: PositiveInt
     tokenizer_safety_multiplier: NonNegativeFloat = 1.25
+    local_large_context_threshold: PositiveInt = 32768
     tuples: TuplePolicy
     cost_policy: CostPolicy = Field(default_factory=CostPolicy)
     security: SecurityPolicy = Field(default_factory=SecurityPolicy)
@@ -457,12 +458,14 @@ class Recipe(BaseModel):
     quality_floor: RecipeQualityFloor = RecipeQualityFloor.STANDARD
     cost_ceiling_usd: NonNegativeFloat | None = None
     auto_select: bool = True
+    allow_local_large_context: bool = False
     data_classification: DataClassification = DataClassification.CONFIDENTIAL
     allowed_modes: list[ExecutionMode]
     timeout_seconds: PositiveInt
     lease_ttl_seconds: PositiveInt
     token_estimation_profile: str = "generic_utf8"
     max_input_bytes: PositiveInt | None = None
+    max_output_tokens: PositiveInt | None = None
     allowed_mime_prefixes: list[str] = Field(default_factory=list)
     allowed_inline_mime_prefixes: list[str] = Field(default_factory=list)
     default_temperature: float | None = Field(default=None, ge=0.0, le=2.0)
@@ -581,6 +584,9 @@ class ControlledRuntimeRoutingConfig(BaseModel):
     preference: Literal["prefer_when_eligible", "neutral", "last_resort"] = "prefer_when_eligible"
     allowed_tasks: list[str] = Field(default_factory=list)
     allowed_modes: list[ExecutionMode] = Field(default_factory=lambda: [ExecutionMode.ASYNC])
+    allowed_latency_classes: list[RecipeLatencyClass] = Field(
+        default_factory=lambda: [RecipeLatencyClass.INTERACTIVE, RecipeLatencyClass.STANDARD]
+    )
     require_validation_evidence: bool = True
 
 
@@ -637,6 +643,10 @@ class ExecutionTupleSpec(BaseModel):
     configured_price_ttl_seconds: NonNegativeFloat | None = None
     expected_cold_start_seconds: PositiveInt | None = None
     expected_runtime_seconds: NonNegativeFloat | None = None
+    estimated_prefill_tokens_per_second: NonNegativeFloat | None = None
+    estimated_decode_tokens_per_second: NonNegativeFloat | None = None
+    estimated_runtime_overhead_seconds: NonNegativeFloat | None = None
+    runtime_estimate_safety_multiplier: NonNegativeFloat | None = None
     scaledown_window_seconds: NonNegativeFloat | None = None
     min_billable_seconds: NonNegativeFloat | None = None
     billing_granularity_seconds: NonNegativeFloat | None = None
@@ -851,6 +861,30 @@ class TupleResult(BaseModel):
         return self
 
 
+ProviderAttemptOutcome = Literal[
+    "admission_rejected",
+    "provider_error",
+    "timeout",
+    "unexpected_error",
+    "output_rejected",
+    "success",
+]
+
+
+class ProviderAttemptRecord(BaseModel):
+    tuple: str
+    provider_family: str
+    workload_scope: str
+    mode: str
+    attempt: PositiveInt
+    outcome: ProviderAttemptOutcome
+    reason: str | None = None
+    provider_error_code: str | None = None
+    status_code: int | None = None
+    retryable: bool | None = None
+    elapsed_ms: NonNegativeFloat | None = None
+
+
 def _context_budget_for(payload: dict[str, Any]) -> int:
     resource_class = str(payload.get("resource_class") or "")
     return {
@@ -868,6 +902,10 @@ def _vram_for_recipe(payload: dict[str, Any], context_budget: int) -> int:
     resource_class = str(payload.get("resource_class") or "")
     if context_budget > 524288:
         return 320
+    if context_budget > 32768:
+        return 80
+    if context_budget > 8192:
+        return 24
     if resource_class == "smoke":
         return 1
     if resource_class == "light":
@@ -878,10 +916,6 @@ def _vram_for_recipe(payload: dict[str, Any], context_budget: int) -> int:
         return 24
     if resource_class in {"large", "exlarge", "ultralong"}:
         return 80
-    if context_budget > 32768:
-        return 80
-    if context_budget > 8192:
-        return 24
     return 16
 
 
@@ -918,3 +952,4 @@ class JobRecord(BaseModel):
     result: TupleResult | None = None
     error: str | None = None
     provider_error_code: ProviderErrorCode | None = None
+    attempts: list[ProviderAttemptRecord] = Field(default_factory=list)

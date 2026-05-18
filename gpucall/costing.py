@@ -12,11 +12,20 @@ def estimate_tuple_cost(
     recipe: Recipe,
     *,
     timeout_seconds: int,
+    input_tokens: int | None = None,
+    output_tokens: int | None = None,
 ) -> dict[str, float | int | str]:
     """Estimate provider cost without charging fixed/warm capacity to each request budget."""
+    billing_model = _billing_model(tuple_spec)
     cold_start_seconds = float(tuple_spec.expected_cold_start_seconds or recipe.expected_cold_start_seconds or 0)
-    runtime_seconds, runtime_source = _runtime_seconds(tuple_spec, recipe, timeout_seconds=timeout_seconds)
-    idle_seconds = float(tuple_spec.scaledown_window_seconds or 0)
+    runtime_seconds, runtime_source = _runtime_seconds(
+        tuple_spec,
+        recipe,
+        timeout_seconds=timeout_seconds,
+        input_tokens=input_tokens,
+        output_tokens=output_tokens,
+    )
+    idle_seconds = _idle_seconds(tuple_spec, billing_model)
     raw_billable_seconds = cold_start_seconds + runtime_seconds + idle_seconds
     billable_seconds = _rounded_billable_seconds(tuple_spec, raw_billable_seconds)
 
@@ -28,7 +37,6 @@ def estimate_tuple_cost(
     standing_cost_usd = standing_cost_per_second * standing_cost_seconds
     endpoint_cost_usd = endpoint_cost_per_second * endpoint_cost_seconds
 
-    billing_model = _billing_model(tuple_spec)
     if billing_model == "iaas_vm_lease":
         execution_cost_usd = 0.0
         lease_cost_usd = cost_per_second * billable_seconds
@@ -58,8 +66,14 @@ def estimate_tuple_cost(
         "price_freshness": price_freshness.value,
         "cold_start_seconds": cold_start_seconds,
         "timeout_seconds": int(timeout_seconds),
+        "input_tokens": int(input_tokens or 0),
+        "output_tokens": int(output_tokens or 0),
         "runtime_seconds": runtime_seconds,
         "runtime_seconds_source": runtime_source,
+        "estimated_prefill_tokens_per_second": float(tuple_spec.estimated_prefill_tokens_per_second or 0),
+        "estimated_decode_tokens_per_second": float(tuple_spec.estimated_decode_tokens_per_second or 0),
+        "estimated_runtime_overhead_seconds": float(tuple_spec.estimated_runtime_overhead_seconds or 0),
+        "runtime_estimate_safety_multiplier": float(tuple_spec.runtime_estimate_safety_multiplier or 1.0),
         "idle_seconds": idle_seconds,
         "raw_billable_seconds": raw_billable_seconds,
         "billable_seconds": billable_seconds,
@@ -90,7 +104,22 @@ def budget_reservation_usd(cost_estimate: Mapping[str, Any] | None) -> float:
     return float(value or 0.0)
 
 
-def _runtime_seconds(tuple_spec: ExecutionTupleSpec, recipe: Recipe, *, timeout_seconds: int) -> tuple[float, str]:
+def _runtime_seconds(
+    tuple_spec: ExecutionTupleSpec,
+    recipe: Recipe,
+    *,
+    timeout_seconds: int,
+    input_tokens: int | None = None,
+    output_tokens: int | None = None,
+) -> tuple[float, str]:
+    token_estimate = _token_runtime_seconds(
+        tuple_spec,
+        timeout_seconds=timeout_seconds,
+        input_tokens=input_tokens,
+        output_tokens=output_tokens,
+    )
+    if token_estimate is not None:
+        return token_estimate
     for source, value in (
         ("tuple.expected_runtime_seconds", tuple_spec.expected_runtime_seconds),
         ("recipe.expected_runtime_seconds", recipe.expected_runtime_seconds),
@@ -100,6 +129,41 @@ def _runtime_seconds(tuple_spec: ExecutionTupleSpec, recipe: Recipe, *, timeout_
         seconds = min(float(value), float(timeout_seconds))
         return seconds, source if seconds == float(value) else f"{source}_clamped_to_timeout"
     return float(timeout_seconds), "timeout_seconds_fail_closed_fallback"
+
+
+def _token_runtime_seconds(
+    tuple_spec: ExecutionTupleSpec,
+    *,
+    timeout_seconds: int,
+    input_tokens: int | None,
+    output_tokens: int | None,
+) -> tuple[float, str] | None:
+    if input_tokens is None and output_tokens is None:
+        return None
+    prefill_tps = float(tuple_spec.estimated_prefill_tokens_per_second or 0)
+    decode_tps = float(tuple_spec.estimated_decode_tokens_per_second or 0)
+    if prefill_tps <= 0 and decode_tps <= 0:
+        return None
+    if prefill_tps <= 0:
+        prefill_tps = decode_tps
+    if decode_tps <= 0:
+        decode_tps = prefill_tps
+    prefill_seconds = max(float(input_tokens or 0), 0.0) / prefill_tps
+    decode_seconds = max(float(output_tokens or 0), 0.0) / decode_tps
+    overhead_seconds = float(tuple_spec.estimated_runtime_overhead_seconds or 0)
+    multiplier = float(tuple_spec.runtime_estimate_safety_multiplier or 1.0)
+    raw_seconds = max(0.0, overhead_seconds + prefill_seconds + decode_seconds) * max(multiplier, 0.0)
+    seconds = min(raw_seconds, float(timeout_seconds))
+    source = "tuple.token_throughput_estimate"
+    if seconds != raw_seconds:
+        source += "_clamped_to_timeout"
+    return seconds, source
+
+
+def _idle_seconds(tuple_spec: ExecutionTupleSpec, billing_model: str) -> float:
+    if billing_model in {"function_runtime", "runpod_serverless_function", "runpod_serverless_managed_endpoint"}:
+        return 0.0
+    return float(tuple_spec.scaledown_window_seconds or 0)
 
 
 def _rounded_billable_seconds(tuple_spec: ExecutionTupleSpec, raw_seconds: float) -> float:
