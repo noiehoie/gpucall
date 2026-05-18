@@ -637,6 +637,11 @@ def _rewrite_news_style_local_gateway_calls(text: str) -> str:
 
 def _rewrite_hosted_anthropic_gateway_calls(text: str) -> str:
     updated = text
+    updated = re.sub(
+        r'if backend == "anthropic" and not os\.environ\.get\("NEWS_ANTHROPIC_API_KEY", ""\):',
+        'if backend == "anthropic" and not os.environ.get("NEWS_ANTHROPIC_API_KEY", "") and not gpucall_should_use_gateway():',
+        updated,
+    )
     text_hook = "    from src.util.claude_cli import call_claude_p\n"
     text_replacement = (
         "    if gpucall_should_use_gateway():\n"
@@ -707,7 +712,11 @@ def _rewrite_hosted_anthropic_gateway_calls(text: str) -> str:
     )
 
     import_line = _gpucall_migration_import_line()
-    if updated != text and ("gpucall_infer_text(" in updated or "gpucall_vision_file(" in updated) and import_line not in updated:
+    if updated != text and (
+        "gpucall_should_use_gateway(" in updated
+        or "gpucall_infer_text(" in updated
+        or "gpucall_vision_file(" in updated
+    ) and import_line not in updated:
         updated = _insert_after_future_imports(updated, import_line)
     return updated
 
@@ -1137,7 +1146,11 @@ def _migration_helper_text(*, source: str | None) -> str:
                 else:
                     env_timeout = float(os.environ.get("GPUCALL_MIGRATION_POLL_TIMEOUT_SECONDS", "1800"))
                 caller_timeout = float(timeout) if timeout is not None else env_timeout
-                if task == "vision" or prompt_bytes > int(os.environ.get("GPUCALL_MIGRATION_ASYNC_TEXT_BYTES", "65536")):
+                if (
+                    task == "vision"
+                    or intent in _async_intents()
+                    or prompt_bytes > int(os.environ.get("GPUCALL_MIGRATION_ASYNC_TEXT_BYTES", "65536"))
+                ):
                     return max(caller_timeout, env_timeout)
                 return caller_timeout
 
@@ -1150,10 +1163,20 @@ def _migration_helper_text(*, source: str | None) -> str:
                 return {item.strip() for item in raw.split(",") if item.strip()}
 
 
+            def _async_intents() -> set[str]:
+                raw = os.environ.get(
+                    "GPUCALL_MIGRATION_ASYNC_INTENTS",
+                    "summarize_text,rank_text_items,understand_document_image",
+                )
+                return {item.strip() for item in raw.split(",") if item.strip()}
+
+
             def _should_submit_async(task: str, *, intent: str, prompt_bytes: int) -> bool:
                 if os.environ.get("GPUCALL_MIGRATION_FORCE_SYNC", "").lower() in {"1", "true", "yes"}:
                     return False
                 if task == "vision":
+                    return True
+                if intent in _async_intents():
                     return True
                 if intent in _sync_preferred_intents():
                     return False

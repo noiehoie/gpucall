@@ -309,6 +309,60 @@ def test_migrate_patch_routes_hosted_anthropic_wrappers_through_gateway(tmp_path
     assert "gpucall_migration.py" in report["changed_files"]
 
 
+def test_migrate_patch_bypasses_anthropic_key_gate_when_gateway_is_configured(tmp_path) -> None:
+    project = tmp_path / "project"
+    project.mkdir()
+    source = project / "overseas_vision.py"
+    source.write_text(
+        "import os\n\n"
+        "def fallback():\n"
+        "    backend = os.environ.get(\"LLM_BACKEND\", \"anthropic\").lower()\n"
+        "    if backend == \"anthropic\" and not os.environ.get(\"NEWS_ANTHROPIC_API_KEY\", \"\"):\n"
+        "        return None\n"
+        "    return call_llm_vision('x')\n",
+        encoding="utf-8",
+    )
+
+    report = patch_suggestions(project, source="vision-gated-app", apply=True)
+
+    assert "overseas_vision.py" in report["changed_files"]
+    text = source.read_text(encoding="utf-8")
+    assert "and not gpucall_should_use_gateway()" in text
+    assert "from gpucall_migration import" in text
+
+
+def test_migrate_helper_async_intents_wait_for_migration_timeout(tmp_path, monkeypatch) -> None:
+    project = tmp_path / "project"
+    project.mkdir()
+    source = project / "client.py"
+    source.write_text("from openai import OpenAI\nclient = OpenAI()\n", encoding="utf-8")
+    monkeypatch.setenv("GPUCALL_BASE_URL", "http://127.0.0.1:9")
+    monkeypatch.setenv("GPUCALL_API_KEY", "x")
+    monkeypatch.setenv("GPUCALL_MIGRATION_POLL_INTERVAL_SECONDS", "0")
+    monkeypatch.setenv("GPUCALL_MIGRATION_POLL_TIMEOUT_SECONDS", "600")
+
+    patch_suggestions(project, source="async-default-app", apply=True)
+    namespace: dict[str, object] = {}
+    exec((project / "gpucall_migration.py").read_text(encoding="utf-8"), namespace)
+
+    captured: list[tuple[str, str, dict, dict]] = []
+
+    def fake_json_request(method, url, payload, **kwargs):
+        captured.append((method, url, dict(payload), dict(kwargs)))
+        if url.endswith("/v2/tasks/async"):
+            return {"job_id": "j1", "state": "QUEUED", "status_url": "/v2/jobs/j1"}
+        if url.endswith("/v2/jobs/j1"):
+            return {"job_id": "j1", "state": "COMPLETED", "result": {"kind": "inline", "value": "ok"}}
+        raise AssertionError(url)
+
+    namespace["_json_request"] = fake_json_request
+    namespace["time"].sleep = lambda _seconds: None
+
+    assert namespace["gpucall_infer_text"]("short summary", intent="summarize_text", timeout=60) == "ok"
+    assert any(url.endswith("/v2/tasks/async") and payload["mode"] == "async" for _method, url, payload, _kwargs in captured)
+    assert namespace["_sync_wait_seconds"]("infer", intent="summarize_text", prompt_bytes=13, timeout=60) == 600
+
+
 def test_migrate_patch_apply_rewrites_openai_client_constructor(tmp_path) -> None:
     project = tmp_path / "project"
     project.mkdir()
@@ -732,7 +786,7 @@ def test_migrate_helper_retries_gateway_rate_limit_without_fallback(tmp_path, mo
     namespace["urllib"].request.urlopen = fake_urlopen
     namespace["time"].sleep = lambda seconds: sleeps.append(seconds)
 
-    assert namespace["gpucall_infer_text"]("small prompt", timeout=1) == "ok"
+    assert namespace["gpucall_infer_text"]("small prompt", intent="rss_semantic_match", timeout=1) == "ok"
     assert len(calls) == 2
     assert sleeps == [0.0]
 
@@ -782,7 +836,7 @@ def test_migrate_helper_retries_temporary_no_eligible_without_fallback(tmp_path,
     namespace["urllib"].request.urlopen = fake_urlopen
     namespace["time"].sleep = lambda seconds: sleeps.append(seconds)
 
-    assert namespace["gpucall_infer_text"]("small prompt", timeout=1) == "ok"
+    assert namespace["gpucall_infer_text"]("small prompt", intent="rss_semantic_match", timeout=1) == "ok"
     assert len(calls) == 2
     assert sleeps == [0.0]
 
