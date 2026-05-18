@@ -9,7 +9,7 @@ import pytest
 from gpucall.audit import AuditTrail
 from gpucall.admission import AdmissionController
 from gpucall.artifacts import SQLiteArtifactRegistry
-from gpucall.dispatcher import Dispatcher, JobStore, _storage_safe_plan
+from gpucall.dispatcher import Dispatcher, JobStore, _storage_safe_plan, _validate_tuple_output
 from gpucall.domain import (
     ArtifactManifest,
     ArtifactExportSpec,
@@ -83,6 +83,27 @@ class SequenceTuple(EchoTuple):
         value = self.values[min(self.calls, len(self.values) - 1)]
         self.calls += 1
         return TupleResult(kind="inline", value=value)
+
+
+class LengthFinishTuple(EchoTuple):
+    def __init__(self, name: str) -> None:
+        super().__init__(name=name)
+        self.calls = 0
+
+    async def wait(self, handle: RemoteHandle, plan: CompiledPlan) -> TupleResult:
+        self.calls += 1
+        return TupleResult(
+            kind="inline",
+            value='{"items": [',
+            finish_reason="length",
+            openai_choices=[
+                {
+                    "index": 0,
+                    "finish_reason": "length",
+                    "message": {"role": "assistant", "content": '{"items": ['},
+                }
+            ],
+        )
 
 
 class BadStreamTuple(EchoTuple):
@@ -168,6 +189,28 @@ def strict_json_schema_plan(chain: list[str]) -> CompiledPlan:
             "output_validation_attempts": 3,
         }
     )
+
+
+def test_structured_openai_length_finish_reason_is_output_truncated() -> None:
+    result = TupleResult(
+        kind="inline",
+        value='{"items": [',
+        finish_reason="length",
+        openai_choices=[
+            {
+                "index": 0,
+                "finish_reason": "length",
+                "message": {"role": "assistant", "content": '{"items": ['},
+            }
+        ],
+    )
+
+    with pytest.raises(TupleError) as caught:
+        _validate_tuple_output(json_plan(["p1"]), result)
+
+    assert caught.value.code == "OUTPUT_TRUNCATED"
+    assert caught.value.status_code == 422
+    assert caught.value.raw_output == '{"items": ['
 
 
 def checked_plan(chain: list[str]) -> CompiledPlan:
@@ -971,6 +1014,39 @@ async def test_structured_output_retries_same_provider_without_breaker_penalty(t
     assert tuple.calls == 2
     assert dispatcher.registry.score("json").samples == 1
     assert dispatcher.registry.score("other").samples == 0
+
+
+@pytest.mark.asyncio
+async def test_output_truncated_stops_same_tuple_retry_and_fallback(tmp_path) -> None:
+    truncated = LengthFinishTuple("truncated")
+    fallback = PlanRecordingTuple("fallback")
+    attempts = []
+    dispatcher = Dispatcher(
+        adapters={"truncated": truncated, "fallback": fallback},
+        registry=ObservedRegistry(),
+        audit=AuditTrail(tmp_path / "audit.jsonl"),
+        jobs=JobStore(),
+    )
+
+    async def record(attempt):
+        attempts.append(attempt)
+
+    with pytest.raises(TupleError) as caught:
+        await dispatcher.execute_sync(json_plan(["truncated", "fallback"]), attempt_recorder=record)
+
+    assert caught.value.code == "OUTPUT_TRUNCATED"
+    assert caught.value.status_code == 422
+    assert truncated.calls == 1
+    assert fallback.plan_types == []
+    assert len(attempts) == 1
+    assert attempts[0].outcome == "output_rejected"
+    assert attempts[0].provider_error_code == "OUTPUT_TRUNCATED"
+    assert attempts[0].retryable is False
+    assert "raw_sha256=" in (attempts[0].reason or "")
+    assert '{"items"' not in (attempts[0].reason or "")
+    raw = (tmp_path / "audit.jsonl").read_text(encoding="utf-8")
+    assert '"event_type":"tuple.output_rejected"' in raw
+    assert '"event_type":"plan.completed"' not in raw
 
 
 @pytest.mark.asyncio

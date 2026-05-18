@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from datetime import datetime, timezone
 from pathlib import Path
 import yaml
@@ -22,7 +23,8 @@ from gpucall.audit import AuditTrail
 from gpucall.compiler import GovernanceError
 from gpucall.credentials import save_credentials
 from gpucall.dispatcher import Dispatcher, JobStore
-from gpucall.domain import CompiledPlan, DataRef, ExecutionMode, JobState, PresignGetResponse, TupleResult, TaskRequest
+from gpucall.domain import CompiledPlan, DataRef, ExecutionMode, JobState, PresignGetResponse, TupleError, TupleResult, TaskRequest
+from gpucall.execution.base import ResourceLease
 from gpucall.registry import ObservedRegistry
 from gpucall.sqlite_store import SQLiteIdempotencyStore, SQLiteJobStore
 
@@ -348,6 +350,79 @@ async def test_sqlite_job_store_persists_inline_result(tmp_path) -> None:
     assert loaded.result.value == "ok"
 
 
+async def test_async_job_status_records_provider_attempt_failures(tmp_path) -> None:
+    class FailingAdapter:
+        name = "p1"
+
+        async def start(self, plan):
+            return ResourceLease(
+                tuple="p1",
+                remote_id="remote-1",
+                expires_at=datetime.now(timezone.utc),
+                account_ref="test",
+                execution_surface="managed_endpoint",
+            )
+
+        async def wait(self, handle, plan):
+            raise TupleError(
+                "provider exhausted",
+                retryable=True,
+                status_code=503,
+                code="PROVIDER_RESOURCE_EXHAUSTED",
+            )
+
+        async def cancel_remote(self, handle) -> None:
+            return None
+
+    jobs = JobStore()
+    dispatcher = Dispatcher(
+        adapters={"p1": FailingAdapter()},
+        registry=ObservedRegistry(),
+        audit=AuditTrail(tmp_path / "audit.jsonl"),
+        jobs=jobs,
+    )
+    plan = CompiledPlan(
+        policy_version="test",
+        recipe_name="r1",
+        task="infer",
+        mode=ExecutionMode.ASYNC,
+        tuple_chain=["p1"],
+        timeout_seconds=2,
+        lease_ttl_seconds=10,
+        token_estimation_profile="qwen",
+        token_budget=None,
+        input_refs=[],
+        inline_inputs={},
+    )
+
+    job = await dispatcher.submit_async(plan)
+    loaded = job
+    for _ in range(20):
+        loaded = await jobs.get(job.job_id)
+        if loaded is not None and loaded.state is JobState.FAILED:
+            break
+        await asyncio.sleep(0.05)
+
+    assert loaded is not None
+    assert loaded.state is JobState.FAILED
+    assert loaded.provider_error_code == "PROVIDER_RESOURCE_EXHAUSTED"
+    assert [attempt.model_dump(mode="json") for attempt in loaded.attempts] == [
+        {
+            "tuple": "p1",
+            "provider_family": "p1",
+            "workload_scope": "infer:r1:async",
+            "mode": "async",
+            "attempt": 1,
+            "outcome": "provider_error",
+            "reason": "provider exhausted",
+            "provider_error_code": "PROVIDER_RESOURCE_EXHAUSTED",
+            "status_code": 503,
+            "retryable": True,
+            "elapsed_ms": pytest.approx(loaded.attempts[0].elapsed_ms),
+        }
+    ]
+
+
 def test_async_job_status_does_not_persist_inline_inputs(tmp_path) -> None:
     with TestClient(create_app(copy_config(tmp_path))) as client:
         created = client.post(
@@ -543,7 +618,7 @@ def test_tenant_budget_rejects_before_provider_execution(tmp_path, monkeypatch) 
 
 
 def test_tenant_budget_reservation_is_refunded_on_tuple_error(tmp_path, monkeypatch) -> None:
-    async def fake_execute_sync(_plan):
+    async def fake_execute_sync(_plan, **_kwargs):
         from gpucall.domain import TupleError
 
         raise TupleError("provider failed", retryable=True, status_code=503, code="PROVIDER_ERROR")
@@ -1712,7 +1787,7 @@ def test_openai_validation_error_response_does_not_expose_message_content(tmp_pa
 
 
 def test_async_failed_job_does_not_expose_raw_output(tmp_path, monkeypatch) -> None:
-    async def fake_execute_sync(_plan):
+    async def fake_execute_sync(_plan, **_kwargs):
         from gpucall.domain import TupleError
 
         raise TupleError(

@@ -8,7 +8,7 @@ import os
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from time import monotonic
-from typing import Callable
+from typing import Awaitable, Callable
 from uuid import uuid4
 
 from gpucall.admission import AdmissionController, AdmissionLease
@@ -20,6 +20,7 @@ from gpucall.domain import (
     JobRecord,
     JobState,
     ProviderErrorCode,
+    ProviderAttemptRecord,
     TupleError,
     TupleObservation,
     TupleResult,
@@ -102,7 +103,12 @@ class Dispatcher:
         self._job_tasks: dict[str, asyncio.Task[None]] = {}
         self._job_plans: dict[str, CompiledPlan] = {}
 
-    async def execute_sync(self, plan: CompiledPlan) -> TupleResult:
+    async def execute_sync(
+        self,
+        plan: CompiledPlan,
+        *,
+        attempt_recorder: Callable[[ProviderAttemptRecord], Awaitable[None]] | None = None,
+    ) -> TupleResult:
         self.audit.append("plan.accepted", redacted_plan_for_audit(plan))
         last_error: TupleError | None = None
         workload_scope = _admission_workload_scope(plan)
@@ -141,6 +147,16 @@ class Dispatcher:
                         status_code=503,
                         code=ProviderErrorCode.PROVIDER_CAPACITY_UNAVAILABLE,
                     )
+                    await _record_provider_attempt(
+                        attempt_recorder,
+                        egress_attempt,
+                        outcome="admission_rejected",
+                        reason="provider_family_attempt_limit",
+                        provider_error_code=last_error.code,
+                        status_code=last_error.status_code,
+                        retryable=last_error.retryable,
+                        elapsed_ms=0.0,
+                    )
                     break
                 started = monotonic()
                 handle: RemoteHandle | None = None
@@ -163,6 +179,16 @@ class Dispatcher:
                             status_code=503,
                             code=ProviderErrorCode.PROVIDER_CAPACITY_UNAVAILABLE,
                         )
+                        await _record_provider_attempt(
+                            attempt_recorder,
+                            egress_attempt,
+                            outcome="admission_rejected",
+                            reason=decision.reason,
+                            provider_error_code=last_error.code,
+                            status_code=last_error.status_code,
+                            retryable=last_error.retryable,
+                            elapsed_ms=_elapsed_ms(started),
+                        )
                         break
                     admission_lease = decision.lease
                     started_attempts += 1
@@ -180,11 +206,18 @@ class Dispatcher:
                         self._observation(tuple, started, success=True)
                     )
                     self.audit.append("plan.completed", {"plan_id": plan.plan_id, "tuple": tuple, "attempt": attempt})
+                    await _record_provider_attempt(
+                        attempt_recorder,
+                        egress_attempt,
+                        outcome="success",
+                        elapsed_ms=_elapsed_ms(started),
+                    )
                     return result
                 except TupleError as exc:
                     last_error = exc
-                    if exc.code in {"EMPTY_OUTPUT", "MALFORMED_OUTPUT"}:
-                        final_attempt = attempt >= attempts
+                    if exc.code in {"EMPTY_OUTPUT", "MALFORMED_OUTPUT", "OUTPUT_TRUNCATED"}:
+                        final_attempt = exc.code == "OUTPUT_TRUNCATED" or attempt >= attempts
+                        rejection_reason = _output_rejection_reason(exc)
                         self.audit.append(
                             "tuple.output_rejected",
                             {
@@ -193,6 +226,7 @@ class Dispatcher:
                                 "attempt": attempt,
                                 "code": exc.code,
                                 "retryable": not final_attempt,
+                                "reason": rejection_reason,
                             },
                         )
                         if _structured_failure_should_switch_tuple(plan, exc):
@@ -210,6 +244,16 @@ class Dispatcher:
                                 code=exc.code,
                                 raw_output=exc.raw_output,
                             )
+                            await _record_provider_attempt(
+                                attempt_recorder,
+                                egress_attempt,
+                                outcome="output_rejected",
+                                reason=rejection_reason,
+                                provider_error_code=last_error.code,
+                                status_code=last_error.status_code,
+                                retryable=last_error.retryable,
+                                elapsed_ms=_elapsed_ms(started),
+                            )
                             break
                         if not final_attempt:
                             continue
@@ -220,6 +264,18 @@ class Dispatcher:
                             code=exc.code,
                             raw_output=exc.raw_output,
                         )
+                        await _record_provider_attempt(
+                            attempt_recorder,
+                            egress_attempt,
+                            outcome="output_rejected",
+                            reason=rejection_reason,
+                            provider_error_code=last_error.code,
+                            status_code=last_error.status_code,
+                            retryable=last_error.retryable,
+                            elapsed_ms=_elapsed_ms(started),
+                        )
+                        if _terminal_output_contract_failure(last_error):
+                            raise last_error
                         break
                     self.registry.record(
                         self._observation(tuple, started, success=False)
@@ -233,6 +289,16 @@ class Dispatcher:
                         )
 
                     self._audit_egress_failure(egress_attempt, exc, provider_temporary=is_provider_error)
+                    await _record_provider_attempt(
+                        attempt_recorder,
+                        egress_attempt,
+                        outcome="provider_error",
+                        reason=_provider_attempt_reason(exc),
+                        provider_error_code=exc.code,
+                        status_code=exc.status_code,
+                        retryable=exc.retryable,
+                        elapsed_ms=_elapsed_ms(started),
+                    )
 
                     if not _provider_error_fallback_eligible(exc):
                         raise
@@ -256,6 +322,15 @@ class Dispatcher:
                         "tuple.timeout",
                         {**egress_attempt.audit_payload(), "error": _tuple_error_audit(last_error)},
                     )
+                    await _record_provider_attempt(
+                        attempt_recorder,
+                        egress_attempt,
+                        outcome="timeout",
+                        provider_error_code=last_error.code,
+                        status_code=last_error.status_code,
+                        retryable=last_error.retryable,
+                        elapsed_ms=_elapsed_ms(started),
+                    )
                     break
                 except Exception as exc:
                     last_error = TupleError(
@@ -270,6 +345,15 @@ class Dispatcher:
                     self.audit.append(
                         "tuple.failed",
                         {**egress_attempt.audit_payload(), "error": _exception_audit(exc, retryable=True)},
+                    )
+                    await _record_provider_attempt(
+                        attempt_recorder,
+                        egress_attempt,
+                        outcome="unexpected_error",
+                        provider_error_code=last_error.code,
+                        status_code=last_error.status_code,
+                        retryable=last_error.retryable,
+                        elapsed_ms=_elapsed_ms(started),
                     )
                     break
                 finally:
@@ -425,7 +509,7 @@ class Dispatcher:
         raise TupleError("no tuple adapter available", retryable=False, status_code=503)
 
     def _observation(self, tuple: str, started: float, *, success: bool) -> TupleObservation:
-        latency_ms = (monotonic() - started) * 1000
+        latency_ms = _elapsed_ms(started)
         cost = max(latency_ms / 1000.0 * float(self.tuple_costs.get(tuple, 0.0)), 0.0)
         return TupleObservation(tuple=tuple, latency_ms=latency_ms, success=success, cost=cost)
 
@@ -493,7 +577,7 @@ class Dispatcher:
             self.audit.append("job.expired", {"job_id": job_id, "reason": "gateway restarted before job dispatch"})
             return
         try:
-            result = await self.execute_sync(plan)
+            result = await self.execute_sync(plan, attempt_recorder=self._async_attempt_recorder(job_id))
             result_ref = result.ref
             await self.jobs.update(job_id, state=JobState.COMPLETED, result_ref=result_ref, result=result)
             self.audit.append("job.completed", {"job_id": job_id, "result_kind": result.kind})
@@ -524,6 +608,15 @@ class Dispatcher:
         finally:
             self._job_tasks.pop(job_id, None)
             self._job_plans.pop(job_id, None)
+
+    def _async_attempt_recorder(self, job_id: str) -> Callable[[ProviderAttemptRecord], Awaitable[None]]:
+        async def record(attempt: ProviderAttemptRecord) -> None:
+            current = await self.jobs.get(job_id)
+            if current is None:
+                return
+            await self.jobs.update(job_id, attempts=[*current.attempts, attempt])
+
+        return record
 
     def _release_async_budget(self, plan: CompiledPlan) -> None:
         if self.on_async_terminal_failure is None:
@@ -561,6 +654,40 @@ def is_terminal_job_state(state: JobState) -> bool:
     }
 
 
+def _elapsed_ms(started: float) -> float:
+    return max((monotonic() - started) * 1000, 0.0)
+
+
+async def _record_provider_attempt(
+    recorder: Callable[[ProviderAttemptRecord], Awaitable[None]] | None,
+    attempt: ProviderEgressAttempt,
+    *,
+    outcome: str,
+    reason: str | None = None,
+    provider_error_code: str | None = None,
+    status_code: int | None = None,
+    retryable: bool | None = None,
+    elapsed_ms: float | None = None,
+) -> None:
+    if recorder is None:
+        return
+    await recorder(
+        ProviderAttemptRecord(
+            tuple=attempt.tuple,
+            provider_family=attempt.provider_family,
+            workload_scope=attempt.workload_scope,
+            mode=attempt.mode,
+            attempt=attempt.attempt,
+            outcome=outcome,  # type: ignore[arg-type]
+            reason=reason,
+            provider_error_code=provider_error_code,
+            status_code=status_code,
+            retryable=retryable,
+            elapsed_ms=elapsed_ms,
+        )
+    )
+
+
 def _lease_audit(handle: RemoteHandle) -> dict[str, object]:
     return {
         "remote_id": handle.remote_id,
@@ -574,6 +701,31 @@ def _lease_audit(handle: RemoteHandle) -> dict[str, object]:
 
 def _job_error_message(exc: TupleError) -> str:
     return f"tuple execution failed ({exc.code or 'PROVIDER_ERROR'})"
+
+
+def _provider_attempt_reason(exc: TupleError) -> str:
+    return _bounded_reason(str(exc), limit=240)
+
+
+def _output_rejection_reason(exc: TupleError) -> str:
+    parts = [_bounded_reason(str(exc), limit=160)]
+    if exc.__cause__ is not None:
+        parts.append(f"cause={_bounded_reason(str(exc.__cause__), limit=200)}")
+    if exc.raw_output is not None:
+        encoded = exc.raw_output.encode("utf-8")
+        parts.append(f"raw_bytes={len(encoded)}")
+        parts.append(f"raw_sha256={hashlib.sha256(encoded).hexdigest()}")
+        stripped = exc.raw_output.strip()
+        parts.append(f"raw_first={stripped[:1]!r}")
+        parts.append(f"raw_last={stripped[-1:]!r}")
+    return "; ".join(part for part in parts if part)
+
+
+def _bounded_reason(value: str, *, limit: int) -> str:
+    normalized = " ".join(value.split())
+    if len(normalized) <= limit:
+        return normalized
+    return normalized[: max(limit - 3, 0)] + "..."
 
 
 def _provider_error_fallback_eligible(exc: TupleError) -> bool:
@@ -619,6 +771,10 @@ def _structured_failure_should_switch_tuple(plan: CompiledPlan, exc: TupleError)
         and plan.response_format.type is ResponseFormatType.JSON_SCHEMA
         and plan.response_format.strict
     )
+
+
+def _terminal_output_contract_failure(exc: TupleError) -> bool:
+    return exc.code == "OUTPUT_TRUNCATED"
 
 
 def _admission_workload_scope(plan: CompiledPlan) -> str:
@@ -710,8 +866,24 @@ def _validate_tuple_output(plan: CompiledPlan, result: TupleResult) -> TupleResu
     if result.openai_choices:
         for choice in result.openai_choices:
             content = _openai_choice_content(choice)
+            if choice.get("finish_reason") == "length":
+                raise TupleError(
+                    "structured output truncated by provider finish_reason=length",
+                    retryable=False,
+                    code="OUTPUT_TRUNCATED",
+                    status_code=422,
+                    raw_output=content,
+                )
             _validate_structured_text(plan, content)
         return result.model_copy(update={"output_validated": True})
+    if result.finish_reason == "length":
+        raise TupleError(
+            "structured output truncated by provider finish_reason=length",
+            retryable=False,
+            code="OUTPUT_TRUNCATED",
+            status_code=422,
+            raw_output=result.value or "",
+        )
     if result.kind != "inline" or result.value is None:
         raise TupleError("structured output must be inline text", retryable=True, code="MALFORMED_OUTPUT")
     _validate_structured_text(plan, result.value)
