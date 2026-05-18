@@ -38,6 +38,7 @@ from gpucall.routing import (
     token_budget,
 )
 from gpucall.targeting import is_configured_target
+from gpucall.validation_evidence import RouteValidationKey, route_validation_key, route_validation_required_for_tuple
 
 
 class GovernanceError(ValueError):
@@ -143,6 +144,8 @@ class GovernanceCompiler:
         registry: ObservedRegistry,
         models: dict[str, ModelSpec] | None = None,
         engines: dict[str, EngineSpec] | None = None,
+        require_route_validation: bool = False,
+        validated_routes: set[RouteValidationKey] | None = None,
     ) -> None:
         self.policy = policy
         self.recipes = recipes
@@ -150,6 +153,8 @@ class GovernanceCompiler:
         self.models = models or {}
         self.engines = engines or {}
         self.registry = registry
+        self.require_route_validation = require_route_validation
+        self.validated_routes = set(validated_routes or set())
 
     def compile(self, request: TaskRequest) -> CompiledPlan:
         recipe = self._recipe_for(request)
@@ -535,6 +540,14 @@ class GovernanceCompiler:
             )
             if reason is not None:
                 continue
+            validation_reason = self._tuple_route_validation_rejection_reason(
+                tuple=spec,
+                request=request,
+                recipe=recipe,
+                auto_selected=auto_selected,
+            )
+            if validation_reason is not None:
+                continue
             cost_reason = self._tuple_cost_rejection_reason(
                 tuple=spec,
                 request=request,
@@ -566,6 +579,13 @@ class GovernanceCompiler:
             if reason is None and not self.registry.is_available(name):
                 reason = "tuple is unavailable due to circuit breaker"
             if reason is None:
+                reason = self._tuple_route_validation_rejection_reason(
+                    tuple=spec,
+                    request=request,
+                    recipe=recipe,
+                    auto_selected=auto_selected,
+                )
+            if reason is None:
                 reason = self._tuple_cost_rejection_reason(
                     tuple=spec,
                     request=request,
@@ -578,6 +598,25 @@ class GovernanceCompiler:
 
     def _is_production_route_candidate(self, spec: ExecutionTupleSpec) -> bool:
         return is_production_route_candidate(spec)
+
+    def _tuple_route_validation_rejection_reason(
+        self,
+        *,
+        tuple: ExecutionTupleSpec,
+        request: TaskRequest,
+        recipe: Recipe,
+        auto_selected: bool,
+    ) -> str | None:
+        if not auto_selected or not self.require_route_validation:
+            return None
+        if request.bypass_circuit_for_validation:
+            return None
+        if not route_validation_required_for_tuple(tuple):
+            return None
+        key = route_validation_key(tuple.name, recipe.name, request.mode.value)
+        if key in self.validated_routes:
+            return None
+        return "missing route validation evidence for recipe and mode"
 
     def _token_budget(self, request: TaskRequest) -> int | None:
         return token_budget(request, self.policy)

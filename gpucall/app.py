@@ -92,6 +92,7 @@ from gpucall.tenant import (
     tenant_identity,
     tenant_key_map,
 )
+from gpucall.validation_evidence import route_validation_required_from_env, validated_route_keys
 
 
 class Runtime(BaseModel):
@@ -247,7 +248,11 @@ def build_runtime(config_dir: Path) -> Runtime:
     tuples = config.tuples
     registry = ObservedRegistry(path=state_dir / "registry.db")
     if os.getenv("GPUCALL_LIVE_CATALOG_ON_STARTUP", "").strip().lower() in {"1", "true", "yes", "on"}:
-        for tuple_name, evidence in live_tuple_catalog_evidence(tuples, load_credentials()).items():
+        try:
+            live_catalog = live_tuple_catalog_evidence(tuples, load_credentials())
+        except Exception:
+            live_catalog = {}
+        for tuple_name, evidence in live_catalog.items():
             if evidence.get("status") == "blocked":
                 registry.mark_unavailable(tuple_name)
     audit = AuditTrail(state_dir / "audit" / "trail.jsonl")
@@ -264,6 +269,8 @@ def build_runtime(config_dir: Path) -> Runtime:
         models=config.models,
         engines=config.engines,
         registry=registry,
+        require_route_validation=route_validation_required_from_env(),
+        validated_routes=validated_route_keys(config_dir=config_dir),
     )
     dispatcher = Dispatcher(
         adapters=adapters,

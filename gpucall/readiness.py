@@ -11,6 +11,12 @@ from gpucall.domain import ExecutionMode, Recipe, recipe_requirements
 from gpucall.price_freshness import tuple_configured_price_freshness
 from gpucall.routing import tuple_route_rejection_reason
 from gpucall.tuple_catalog import live_tuple_catalog_evidence
+from gpucall.validation_evidence import (
+    RouteValidationEvidence,
+    load_route_validation_evidence,
+    route_validation_key,
+    route_validation_required_for_tuple,
+)
 
 
 def build_readiness_report(
@@ -43,6 +49,7 @@ def build_readiness_report(
             }
             for name in live_scope
         }
+    route_validation_evidence = load_route_validation_evidence(config_dir=root, validation_dir=validation_dir)
     report = {
         "schema_version": 1,
         "phase": "readiness",
@@ -68,7 +75,16 @@ def build_readiness_report(
         )
         return report
     for item in recipes:
-        report["recipes"].append(_recipe_readiness(item, config=config, validation_dir=validation_dir, live_evidence=live_evidence))
+        report["recipes"].append(
+            _recipe_readiness(
+                item,
+                config=config,
+                config_dir=root,
+                validation_dir=validation_dir,
+                live_evidence=live_evidence,
+                route_validation_evidence=route_validation_evidence,
+            )
+        )
     return report
 
 
@@ -115,8 +131,10 @@ def _recipe_readiness(
     recipe: Recipe,
     *,
     config: Any,
+    config_dir: Path,
     validation_dir: str | Path | None,
     live_evidence: Mapping[str, Mapping[str, Any]] | None = None,
+    route_validation_evidence: Mapping[tuple[str, str, str], RouteValidationEvidence] | None = None,
 ) -> dict[str, Any]:
     requirements = recipe_requirements(recipe)
     mode = recipe.allowed_modes[0] if recipe.allowed_modes else ExecutionMode.SYNC
@@ -135,13 +153,15 @@ def _recipe_readiness(
             required_input_contracts=required_inputs,
             auto_selected=True,
         )
+        validation = (route_validation_evidence or {}).get(route_validation_key(tuple.name, recipe.name, mode.value))
         row = {
             "tuple": tuple.name,
             "mode": mode.value,
             "vram_gb": tuple.vram_gb,
             "max_model_len": tuple.max_model_len,
             "price_freshness": tuple_configured_price_freshness(tuple).value,
-            "live_validation_artifact": _validation_artifact_path(tuple.name, recipe.name, validation_dir),
+            "live_validation_artifact": validation.path if validation else None,
+            "route_validation_required": route_validation_required_for_tuple(tuple),
         }
         live = (live_evidence or {}).get(tuple.name)
         if isinstance(live, Mapping):
@@ -153,6 +173,9 @@ def _recipe_readiness(
                 row["live_blocked"] = True
                 row["live_reason"] = _live_block_reason(row["live_catalog_findings"])
         if reason is None:
+            if row["route_validation_required"] and validation is None and row.get("live_blocked") is not True:
+                row["live_blocked"] = True
+                row["live_reason"] = "missing_route_validation_evidence"
             eligible.append(row)
         else:
             row["reason"] = reason
@@ -173,9 +196,9 @@ def _recipe_readiness(
         "live_ready_tuple_count": len(live_ready),
         "live_ready_tuples": live_ready,
         "live_blocked_tuples": live_blocked,
-        "production_activated": bool(eligible and recipe.auto_select),
+        "production_activated": bool(live_ready and recipe.auto_select),
         "sync_eligible": sync_eligible,
-        "async_only_recommended": bool(eligible and not sync_eligible),
+        "async_only_recommended": bool(live_ready and not sync_eligible),
         "current_caller_action": "send_request" if live_ready else "retry_later_or_contact_gpucall_admin",
         "next_actions": _next_actions(recipe, eligible),
     }
@@ -196,20 +219,6 @@ def _live_block_reason(findings: object) -> str:
             if finding.get("reason"):
                 return str(finding["reason"])
     return "live_catalog_blocked"
-
-
-def _validation_artifact_path(tuple_name: str, recipe_name: str, validation_dir: str | Path | None) -> str | None:
-    root = Path(validation_dir) if validation_dir else default_state_dir() / "tuple-validation"
-    if not root.exists():
-        return None
-    for path in sorted(root.glob("*.json"), key=lambda item: item.stat().st_mtime, reverse=True):
-        try:
-            data = json.loads(path.read_text(encoding="utf-8"))
-        except Exception:
-            continue
-        if data.get("tuple") == tuple_name and data.get("recipe") == recipe_name and data.get("passed") is True:
-            return str(path)
-    return None
 
 
 def _next_actions(recipe: Recipe, eligible: list[Mapping[str, Any]]) -> list[str]:

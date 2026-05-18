@@ -67,6 +67,30 @@ def test_compiler_applies_tokenizer_safety_margin() -> None:
     assert plan.token_budget == 100
 
 
+def test_compiler_rejects_auto_route_without_exact_validation_evidence() -> None:
+    compiler = build_compiler()
+    compiler.require_route_validation = True
+
+    with pytest.raises(GovernanceError) as exc_info:
+        compiler.compile(TaskRequest(task="infer", mode="sync"))
+
+    assert exc_info.value.code == "NO_ELIGIBLE_TUPLE"
+    assert all(
+        reason == "missing route validation evidence for recipe and mode"
+        for reason in exc_info.value.context["tuple_rejections"].values()
+    )
+
+
+def test_compiler_accepts_auto_route_with_exact_validation_evidence() -> None:
+    compiler = build_compiler()
+    compiler.require_route_validation = True
+    compiler.validated_routes = {("p2", "r1", "sync")}
+
+    plan = compiler.compile(TaskRequest(task="infer", mode="sync"))
+
+    assert plan.tuple_chain == ["p2"]
+
+
 def test_compiler_applies_recipe_max_output_tokens_when_request_omits_cap() -> None:
     compiler = build_compiler()
     compiler.recipes["r1"] = compiler.recipes["r1"].model_copy(update={"max_output_tokens": 16})

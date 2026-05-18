@@ -16,10 +16,13 @@ import yaml
 
 from gpucall.config import ConfigError, load_config
 from gpucall.cli import (
+    _cap_provider_smoke_admission_lease_ttl,
     _iaas_vm_live_cost_audit,
     _bounded_live_tuple_catalog_findings,
     _managed_endpoint_live_cost_audit,
     _provider_smoke_request,
+    _provider_smoke_process_wall_seconds,
+    _provider_smoke_wait_seconds,
     _runpod_endpoint_inventory,
     _runpod_endpoint_inventory_by_id,
 )
@@ -619,7 +622,7 @@ def test_standard_config_transport_matrix_is_explicit(tmp_path) -> None:
                 input_refs=[DataRef(uri="s3://bucket/image.png", sha256="c" * 64, bytes=2_000_000, content_type="image/png")],
             ),
             "vision-image-standard",
-            {"modal-vision-catalog-l4-microsoft-florence-2-large-ft", "modal-vision-catalog-a100-qwen2-5-vl-7b-instruct"},
+            {"modal-vision-catalog-l4-microsoft-florence-2-large-ft", "modal-vision-catalog-h200-qwen2-5-vl-7b-instruct"},
         ),
     ]
 
@@ -647,11 +650,10 @@ def test_standard_config_routes_structured_vision_to_json_capable_model(tmp_path
     )
     plan = compiler.compile(request)
 
-    assert plan.tuple_chain[0] == "modal-vision-catalog-l40s-qwen2-5-vl-3b-instruct"
-    assert "runpod-vllm-ampere48-qwen2-5-vl-7b-instruct" not in plan.tuple_chain
-    assert "modal-vision-catalog-l40s-qwen2-5-vl-3b-instruct" in plan.tuple_chain
-    assert "modal-vision-catalog-a100-qwen2-5-vl-3b-instruct" in plan.tuple_chain
-    assert "modal-vision-catalog-a100-qwen2-5-vl-7b-instruct" in plan.tuple_chain
+    assert plan.tuple_chain[0] == "runpod-vllm-ampere48-qwen2-5-vl-7b-instruct"
+    assert "modal-vision-catalog-rtx-pro-6000-qwen2-5-vl-3b-instruct" in plan.tuple_chain
+    assert "modal-vision-catalog-h200-qwen2-5-vl-7b-instruct" in plan.tuple_chain
+    assert "modal-vision-catalog-b200-qwen2-5-vl-32b-instruct" in plan.tuple_chain
     assert "modal-h100-florence-2-large-ft" not in plan.tuple_chain
 
     request = TaskRequest(
@@ -664,11 +666,10 @@ def test_standard_config_routes_structured_vision_to_json_capable_model(tmp_path
 
     plan = compiler.compile(request)
 
-    assert plan.tuple_chain[0] == "modal-vision-catalog-l40s-qwen2-5-vl-7b-instruct"
-    assert "modal-vision-catalog-l40s-qwen2-5-vl-7b-instruct" in plan.tuple_chain
-    assert "modal-vision-catalog-a100-qwen2-5-vl-7b-instruct" in plan.tuple_chain
-    assert "modal-vision-catalog-a100-qwen2-5-vl-32b-instruct" in plan.tuple_chain
-    assert "runpod-vllm-ampere48-qwen2-5-vl-7b-instruct" not in plan.tuple_chain
+    assert plan.tuple_chain[0] == "runpod-vllm-ampere48-qwen2-5-vl-7b-instruct"
+    assert "modal-vision-catalog-rtx-pro-6000-qwen2-5-vl-7b-instruct" in plan.tuple_chain
+    assert "modal-vision-catalog-rtx-pro-6000-qwen2-5-vl-32b-instruct" in plan.tuple_chain
+    assert "modal-vision-catalog-b200-qwen2-5-vl-7b-instruct" in plan.tuple_chain
     assert "modal-vision-catalog-h200-qwen2-5-vl-7b-instruct" in plan.tuple_chain
     assert "modal-vision-catalog-h200-qwen2-5-vl-32b-instruct" in plan.tuple_chain
     assert "modal-vision-catalog-h200-qwen2-5-vl-3b-instruct" not in plan.tuple_chain
@@ -689,9 +690,10 @@ def test_template_config_routes_structured_vision_to_json_capable_model() -> Non
 
     plan = compiler.compile(request)
 
-    assert plan.tuple_chain[0] == "modal-vision-catalog-l40s-qwen2-5-vl-7b-instruct"
-    assert "modal-vision-catalog-a100-qwen2-5-vl-7b-instruct" in plan.tuple_chain
-    assert "modal-vision-catalog-a100-qwen2-5-vl-32b-instruct" in plan.tuple_chain
+    assert plan.tuple_chain[0] == "modal-vision-catalog-rtx-pro-6000-qwen2-5-vl-7b-instruct"
+    assert "modal-vision-catalog-rtx-pro-6000-qwen2-5-vl-32b-instruct" in plan.tuple_chain
+    assert "modal-vision-catalog-b200-qwen2-5-vl-7b-instruct" in plan.tuple_chain
+    assert "modal-vision-catalog-b200-qwen2-5-vl-32b-instruct" in plan.tuple_chain
     assert "modal-vision-catalog-h200-qwen2-5-vl-7b-instruct" in plan.tuple_chain
     assert "modal-vision-catalog-h200-qwen2-5-vl-32b-instruct" in plan.tuple_chain
     assert "modal-vision-catalog-h200-qwen2-5-vl-3b-instruct" not in plan.tuple_chain
@@ -885,6 +887,69 @@ def test_readiness_reports_live_catalog_blocked_tuple(tmp_path, monkeypatch) -> 
     assert any(item["live_reason"] == "active_workers_present" for item in blocked)
 
 
+def test_readiness_requires_exact_recipe_mode_validation_evidence(tmp_path, monkeypatch) -> None:
+    from gpucall.execution.contracts import official_contract, official_contract_hash
+    from gpucall.readiness import build_readiness_report
+    from gpucall.validation_evidence import config_hash, git_commit
+
+    root = copy_config(tmp_path)
+    state = tmp_path / "state"
+    artifact_dir = state / "tuple-validation"
+    artifact_dir.mkdir(parents=True)
+    monkeypatch.setenv("GPUCALL_STATE_DIR", str(state))
+    monkeypatch.setattr("gpucall.readiness.load_credentials", lambda: {})
+
+    report = build_readiness_report(config_dir=root, intent="summarize_text", validation_dir=artifact_dir)
+    recipe_report = next(item for item in report["recipes"] if item["eligible_tuple_count"] > 0)
+    blocked = [
+        item
+        for item in recipe_report["live_blocked_tuples"]
+        if item.get("live_reason") == "missing_route_validation_evidence"
+    ]
+    assert blocked
+    tuple_name = blocked[0]["tuple"]
+    recipe_name = recipe_report["recipe"]
+    mode = blocked[0]["mode"]
+    config = load_config(root)
+    tuple_spec = config.tuples[tuple_name]
+    contract = official_contract(tuple_spec)
+    base = {
+        "tuple": tuple_name,
+        "mode": mode,
+        "started_at": "2026-01-01T00:00:00+00:00",
+        "ended_at": "2026-01-01T00:00:01+00:00",
+        "commit": git_commit(),
+        "config_hash": config_hash(root),
+        "governance_hash": "c" * 64,
+        "validation_schema_version": 1,
+        "passed": True,
+        "cleanup": {"required": False, "completed": None},
+        "cost": {"observed": None, "estimated": None},
+        "audit": {"event_ids": []},
+        "official_contract": contract,
+        "official_contract_hash": official_contract_hash(contract),
+    }
+    wrong = dict(base, recipe="wrong-recipe")
+    (artifact_dir / "wrong.json").write_text(json.dumps(wrong), encoding="utf-8")
+
+    wrong_report = build_readiness_report(config_dir=root, recipe=recipe_name, validation_dir=artifact_dir)
+    wrong_recipe_report = wrong_report["recipes"][0]
+    assert any(
+        item["tuple"] == tuple_name and item.get("live_reason") == "missing_route_validation_evidence"
+        for item in wrong_recipe_report["live_blocked_tuples"]
+    )
+
+    exact = dict(base, recipe=recipe_name)
+    (artifact_dir / "exact.json").write_text(json.dumps(exact), encoding="utf-8")
+
+    exact_report = build_readiness_report(config_dir=root, recipe=recipe_name, validation_dir=artifact_dir)
+    exact_recipe_report = exact_report["recipes"][0]
+    assert any(
+        item["tuple"] == tuple_name and str(item.get("live_validation_artifact") or "").endswith("exact.json")
+        for item in exact_recipe_report["live_ready_tuples"]
+    )
+
+
 def test_provider_smoke_writes_live_validation_artifact(tmp_path, monkeypatch) -> None:
     root = copy_config(tmp_path)
     monkeypatch.setenv("GPUCALL_ALLOW_FAKE_AUTO_TUPLES", "1")
@@ -948,6 +1013,22 @@ def test_tuple_smoke_requires_explicit_budget(tmp_path, monkeypatch) -> None:
 
     assert result.returncode == 2
     assert "--budget-usd" in result.stderr
+
+
+def test_tuple_smoke_poll_timeout_is_bounded() -> None:
+    assert _provider_smoke_wait_seconds(3600, 300.0) == pytest.approx(300.0)
+    assert _provider_smoke_wait_seconds(120, 300.0) == pytest.approx(120.0)
+    assert _provider_smoke_wait_seconds(3600, None) == pytest.approx(3600.0)
+    assert _provider_smoke_process_wall_seconds("sync", 15.0) == pytest.approx(20.0)
+    assert _provider_smoke_process_wall_seconds("async", 15.0) == pytest.approx(40.0)
+
+
+def test_tuple_smoke_caps_admission_lease_ttl(monkeypatch) -> None:
+    monkeypatch.setenv("GPUCALL_ADMISSION_LEASE_TTL_SECONDS", "3600")
+
+    _cap_provider_smoke_admission_lease_ttl(15.0)
+
+    assert float(os.environ["GPUCALL_ADMISSION_LEASE_TTL_SECONDS"]) == pytest.approx(45.0)
 
 
 def test_live_validation_artifact_must_match_current_commit_and_config(tmp_path, monkeypatch) -> None:
