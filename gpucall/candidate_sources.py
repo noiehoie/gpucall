@@ -7,6 +7,15 @@ from typing import Any, Mapping
 import yaml
 
 
+_RUNTIME_ESTIMATE_KEYS = (
+    "expected_runtime_seconds",
+    "estimated_prefill_tokens_per_second",
+    "estimated_decode_tokens_per_second",
+    "estimated_runtime_overhead_seconds",
+    "runtime_estimate_safety_multiplier",
+)
+
+
 def load_tuple_candidate_payloads(config_dir: Path) -> list[dict[str, Any]]:
     """Return explicit and generated candidate tuples in the legacy payload shape."""
     payloads = _load_explicit_candidates(config_dir / "tuple_candidates")
@@ -97,10 +106,64 @@ def _runpod_family_candidates(
             "_source": str(source_path),
             "_path": f"{source_path}#{prefix}-{gpu['slug']}-{model['slug']}",
         }
+        row.update(_runtime_estimate_fields(family=family, model=model, gpu=gpu, common=common))
         row.update(dict(family.get("candidate_defaults") or {}))
         row.update(_worker_fields(family, model, gpu=gpu))
         generated.append(row)
     return generated
+
+
+def _runtime_estimate_fields(
+    *,
+    family: Mapping[str, Any],
+    model: Mapping[str, Any],
+    gpu: Mapping[str, Any],
+    common: Mapping[str, Any],
+) -> dict[str, Any]:
+    fields: dict[str, Any] = {}
+    for source in (common, family, gpu, model):
+        for key in _RUNTIME_ESTIMATE_KEYS:
+            if source.get(key) is not None:
+                fields[key] = source[key]
+    if (
+        str(family.get("adapter") or "").startswith("runpod-")
+        and family.get("execution_surface", "managed_endpoint") == "managed_endpoint"
+    ):
+        defaults = _runpod_vllm_runtime_estimate_defaults(gpu=gpu, model=model)
+        for key, value in defaults.items():
+            fields.setdefault(key, value)
+    return fields
+
+
+def _runpod_vllm_runtime_estimate_defaults(*, gpu: Mapping[str, Any], model: Mapping[str, Any]) -> dict[str, Any]:
+    gpu_ref = str(gpu.get("ref") or "").upper()
+    vram_gb = _positive_float(gpu.get("vram_gb"))
+    if "H200" in gpu_ref or "HOPPER_14" in gpu_ref:
+        prefill_tps, decode_tps = 1200, 45
+    elif "H100" in gpu_ref or "HOPPER" in gpu_ref:
+        prefill_tps, decode_tps = 1000, 40
+    elif "A100" in gpu_ref or "AMPERE_80" in gpu_ref or "ADA_80" in gpu_ref:
+        prefill_tps, decode_tps = 700, 32
+    elif vram_gb >= 48:
+        prefill_tps, decode_tps = 350, 20
+    elif vram_gb >= 24:
+        prefill_tps, decode_tps = 250, 20
+    else:
+        prefill_tps, decode_tps = 180, 12
+
+    model_ref = str(model.get("ref") or "")
+    input_contracts = {str(item) for item in model.get("input_contracts") or []}
+    if "image" in input_contracts or "-vl-" in model_ref or "vision" in model_ref:
+        if vram_gb < 80:
+            prefill_tps = min(prefill_tps, 250)
+            decode_tps = min(decode_tps, 12)
+
+    return {
+        "estimated_prefill_tokens_per_second": prefill_tps,
+        "estimated_decode_tokens_per_second": decode_tps,
+        "estimated_runtime_overhead_seconds": 45,
+        "runtime_estimate_safety_multiplier": 1.5 if vram_gb >= 80 else 1.75,
+    }
 
 
 def _worker_fields(family: Mapping[str, Any], model: Mapping[str, Any], *, gpu: Mapping[str, Any]) -> dict[str, Any]:
@@ -181,6 +244,14 @@ def _gpu_count(ref: object) -> int:
     if match:
         return max(1, int(match.group(1)))
     return 1
+
+
+def _positive_float(value: object) -> float:
+    try:
+        parsed = float(value or 0)
+    except (TypeError, ValueError):
+        return 0.0
+    return max(parsed, 0.0)
 
 
 def _load_mapping(path: Path) -> dict[str, Any]:

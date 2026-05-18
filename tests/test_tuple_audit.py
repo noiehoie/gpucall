@@ -77,6 +77,19 @@ def test_runpod_candidates_are_generated_from_catalog_source() -> None:
         and row["model_ref"] == "qwen2.5-vl-7b-instruct"
     )
     assert qwen_vl["input_contracts"] == ["text", "chat_messages", "image", "data_refs"]
+    h100_qwen = next(
+        row
+        for row in runpod
+        if row["adapter"] == "runpod-vllm-serverless"
+        and row["gpu"] == "RUNPOD_H100_80GB"
+        and row["model_ref"] == "qwen2.5-7b-instruct"
+    )
+    assert h100_qwen["estimated_prefill_tokens_per_second"] == 1000
+    assert h100_qwen["estimated_decode_tokens_per_second"] == 40
+    assert h100_qwen["estimated_runtime_overhead_seconds"] == 45
+    assert h100_qwen["runtime_estimate_safety_multiplier"] == 1.5
+    assert all(row.get("estimated_prefill_tokens_per_second", 0) > 0 for row in runpod if row["adapter"] == "runpod-vllm-serverless")
+    assert all(row.get("estimated_decode_tokens_per_second", 0) > 0 for row in runpod if row["adapter"] == "runpod-vllm-serverless")
 
 
 def test_hyperstack_multi_gpu_candidates_set_worker_parallelism() -> None:

@@ -30,9 +30,10 @@ from gpucall.recipe_admin import (
 )
 from gpucall.recipe_materialize import write_recipe_yaml
 from gpucall.registry import ObservedRegistry
-from gpucall.tuple_promotion import _validation_mode
+from gpucall.tuple_promotion import _tuple_from_candidate, _validation_mode, _write_split_tuple
 from gpucall.recipe_request_index import RecipeRequestIndex
 from gpucall.quality_feedback_index import QualityFeedbackIndex
+from gpucall.candidate_sources import load_tuple_candidate_payloads
 
 
 def test_admin_materializes_intake_to_canonical_recipe() -> None:
@@ -915,6 +916,29 @@ def test_admin_process_inbox_can_auto_promote_long_text_candidate_without_valida
     assert "modal-h200x4-qwen25-14b-1m" in report["admin_review"]["eligible_tuples"]
     assert report["promotion"]["decision"] == "SKIPPED_NO_TUPLE_CANDIDATE"
     assert not (inbox / "reports" / "rr-rank.promotion.json").exists()
+
+
+def test_tuple_candidate_promotion_preserves_runtime_cost_estimates(tmp_path) -> None:
+    config_dir = tmp_path / "config"
+    shutil.copytree("gpucall/config_templates", config_dir)
+    config = load_config(config_dir)
+    candidate = next(
+        row
+        for row in load_tuple_candidate_payloads(config_dir)
+        if row["adapter"] == "runpod-vllm-serverless"
+        and row["gpu"] == "RUNPOD_H100_80GB"
+        and row["model_ref"] == "qwen2.5-7b-instruct"
+    )
+
+    tuple_payload = _tuple_from_candidate(candidate, active_config=config)
+    surface_path, _worker_path = _write_split_tuple(tmp_path / "out", tuple_payload, force=False)
+    surface = yaml.safe_load(surface_path.read_text(encoding="utf-8"))
+
+    assert tuple_payload["estimated_prefill_tokens_per_second"] == 1000
+    assert surface["estimated_prefill_tokens_per_second"] == 1000
+    assert surface["estimated_decode_tokens_per_second"] == 40
+    assert surface["estimated_runtime_overhead_seconds"] == 45
+    assert surface["runtime_estimate_safety_multiplier"] == 1.5
 
 
 def test_admin_quality_feedback_report_is_not_production_materialization() -> None:
