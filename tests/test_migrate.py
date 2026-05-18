@@ -1728,6 +1728,45 @@ def test_migrate_compare_rejects_provider_temporary_failures(tmp_path) -> None:
     assert comparison["violations"][0]["observed"] == 2
 
 
+def test_migrate_trace_extracts_aggregate_vision_and_model_api_failures(tmp_path) -> None:
+    project = tmp_path / "project"
+    project.mkdir()
+    log = "\n".join(
+        [
+            "src.analyze.vision INFO [Vision] nikkei p1: 1記事抽出 (hybrid layout)",
+            "src.analyze.vision INFO [Vision] 集約完了: 6紙, 6記事",
+            "src.analyze.topic_engine ERROR Analysis API call failed (attempt 1): timeout",
+            "src.analyze.topic_engine INFO [リトライ圧縮] 38192→30334トークン (推定)",
+        ]
+    )
+
+    trace = trace_project(project, log_file=_write_log(tmp_path, "baseline.log", log), source="fixture", backend="baseline")
+    contract = {
+        "phase": "workload-contract",
+        "workloads": [
+            {
+                "id": "vision.understand_document_image",
+                "task": "vision",
+                "intent": "understand_document_image",
+                "quality_contract": {
+                    "metrics": {
+                        "min_articles": 6,
+                        "max_model_api_failures": 0,
+                    }
+                },
+            }
+        ],
+    }
+
+    comparison = compare_trace_to_contract(contract, trace)
+
+    assert trace["metrics"]["articles_count"] == 6
+    assert trace["metrics"]["estimated_input_tokens"] == 38192
+    assert trace["metrics"]["model_api_failure_count"] == 1
+    assert comparison["ok"] is False
+    assert comparison["violations"][0]["metric"] == "model_api_failure_count"
+
+
 def test_migrate_compare_scopes_provider_temporary_failures_by_workload(tmp_path) -> None:
     project = tmp_path / "project"
     project.mkdir()

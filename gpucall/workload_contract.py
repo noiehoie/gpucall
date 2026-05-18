@@ -28,6 +28,7 @@ BASELINE_GUARD_METRICS = {
     "max_http_422",
     "max_json_extract_failures",
     "max_provider_temporary_failures",
+    "max_model_api_failures",
 }
 
 INTENT_ORDER = (
@@ -319,6 +320,7 @@ def _empty_metrics() -> dict[str, Any]:
         "http_422_count": 0,
         "json_extract_failures": 0,
         "provider_temporary_failure_count": 0,
+        "model_api_failure_count": 0,
         "rss_match_total": None,
         "rss_match_matched": None,
         "commentary_count": None,
@@ -346,6 +348,9 @@ def _regex_metrics(text: str) -> dict[str, Any]:
             r"\barticles\s*[=:]\s*(\d+)\b",
             r"\barticles_count\s*[=:]\s*(\d+)\b",
             r"(\d+)\s*記事抽出",
+            r"\[Vision\]\s+集約完了:\s*\d+紙,\s*(\d+)記事",
+            r"\[OverseasVision\]\s+完了:\s*\d+紙,\s*(\d+)記事",
+            r"\[B/海外Vision\]\s+完了:\s*(\d+)記事",
         ],
         "elapsed_seconds": [
             r"\belapsed\s*[=:]\s*([0-9]+(?:\.[0-9]+)?)s?\b",
@@ -369,6 +374,15 @@ def _regex_metrics(text: str) -> dict[str, Any]:
         metrics["selection_cap"] = int(compression.group(3))
         metrics["input_chars"] = int(compression.group(4))
         metrics["estimated_input_tokens"] = int(compression.group(5))
+    retry_compressions = [
+        (int(match.group(1)), int(match.group(2)))
+        for match in re.finditer(r"\[リトライ圧縮\]\s*(\d+)→(\d+)トークン", text)
+    ]
+    if retry_compressions:
+        metrics["estimated_input_tokens"] = max(
+            _optional_int(metrics.get("estimated_input_tokens")) or 0,
+            max(before for before, _after in retry_compressions),
+        )
     schema = re.findall(r"\bschema_(?:parse|success)\s*[=:]\s*(true|false|yes|no|0|1)\b", text, flags=re.IGNORECASE)
     if schema:
         metrics["schema_success"] = _parse_bool(schema[-1])
@@ -384,6 +398,7 @@ def _regex_metrics(text: str) -> dict[str, Any]:
             text,
         )
     )
+    metrics["model_api_failure_count"] = len(re.findall(r"\b(?:Analysis API call failed|API call failed)\b", text))
     match = re.search(r"\[OverseasVision/RSSマッチ\]\s+全体:\s*(\d+)/(\d+)", text)
     if match:
         metrics["rss_match_matched"] = int(match.group(1))
@@ -719,6 +734,7 @@ def _quality_contract(intent: str, metrics: Mapping[str, Any], output_profile: M
     metric_contract["max_http_422"] = 0
     metric_contract["max_json_extract_failures"] = 0
     metric_contract["max_provider_temporary_failures"] = 0
+    metric_contract["max_model_api_failures"] = 0
     response_chars = _optional_int(metrics.get("response_chars"))
     if response_chars is not None and response_chars > 0:
         metric_contract["min_response_chars"] = max(1, math.floor(response_chars * QUALITY_RESPONSE_CHAR_RATIO))
@@ -781,6 +797,7 @@ def _compare_workload(workload: Mapping[str, Any], metrics: Mapping[str, Any]) -
         "max_http_422": ("http_422_count", "HTTP 422 routing/admission failures are not allowed in a successful canary"),
         "max_json_extract_failures": ("json_extract_failures", "JSON extraction failures are not allowed in a successful canary"),
         "max_provider_temporary_failures": ("provider_temporary_failure_count", "provider temporary failures are not allowed in a successful onboarding canary"),
+        "max_model_api_failures": ("model_api_failure_count", "baseline or candidate model API failures are not allowed in a successful onboarding canary"),
     }
     for requirement, (metric_name, reason) in maximum_checks.items():
         if requirement not in required:
