@@ -481,6 +481,7 @@ def _apply_migration_patch(project: Path, rows: list[dict[str, Any]], *, source:
         )
         updated = updated.replace("anthropic.Anthropic(", "AnthropicCompat(")
         updated = updated.replace("anthropic.AsyncAnthropic(", "AsyncAnthropicCompat(")
+        updated = _rewrite_news_style_local_gateway_calls(updated)
         updated = _rewrite_openai_compatible_httpx_calls(updated)
         updated = _disable_hosted_fallback(updated)
         if "from openai import OpenAI" in updated:
@@ -554,6 +555,9 @@ def _rewrite_openai_compatible_httpx_calls(text: str) -> str:
         block = "".join(lines[start:end])
         if "chat/completions" not in block or "headers=" in block:
             continue
+        for pos in range(start, end):
+            if "json=payload" in lines[pos]:
+                lines[pos] = lines[pos].replace("json=payload", "json=gpucall_openai_payload(payload)")
         insert_at = end - 1
         for pos in range(start, end):
             if "timeout=" in lines[pos]:
@@ -566,9 +570,58 @@ def _rewrite_openai_compatible_httpx_calls(text: str) -> str:
     if not changed:
         return text
     updated = "".join(lines)
-    import_line = "from gpucall_migration import gpucall_disable_hosted_fallback, gpucall_openai_headers\n"
+    import_line = _gpucall_migration_import_line()
     if "gpucall_openai_headers" in updated and import_line not in updated:
         updated = _insert_after_future_imports(updated, import_line)
+    return updated
+
+
+def _rewrite_news_style_local_gateway_calls(text: str) -> str:
+    updated = text
+    text_hook = (
+        "    payload = {\n"
+        "        \"model\": effective_model,\n"
+    )
+    text_replacement = (
+        "    if gpucall_should_use_gateway(_LOCAL_ENDPOINT):\n"
+        "        return gpucall_infer_text(\n"
+        "            user_message,\n"
+        "            system_prompt=system_prompt,\n"
+        "            intent=gpucall_guess_intent(user_message, system_prompt),\n"
+        "            model=effective_model,\n"
+        "            max_tokens=max_tokens,\n"
+        "            temperature=0.3,\n"
+        "            timeout=timeout,\n"
+        "        )\n"
+        "\n"
+        "    payload = {\n"
+        "        \"model\": effective_model,\n"
+    )
+    if text_hook in updated and "def _call_local(" in updated and "gpucall_infer_text(" not in updated:
+        updated = updated.replace(text_hook, text_replacement, 1)
+    vision_hook = (
+        "    effective_model = _LOCAL_MODEL or model or \"local-model\"\n"
+        "    messages: list[dict] = []\n"
+    )
+    vision_replacement = (
+        "    effective_model = _LOCAL_MODEL or model or \"local-model\"\n"
+        "    if gpucall_should_use_gateway(_LOCAL_ENDPOINT):\n"
+        "        return gpucall_vision_file(\n"
+        "            path,\n"
+        "            prompt=user_message,\n"
+        "            system_prompt=system_prompt,\n"
+        "            intent=\"understand_document_image\",\n"
+        "            model=effective_model,\n"
+        "            max_tokens=max_tokens,\n"
+        "            timeout=timeout,\n"
+        "        )\n"
+        "\n"
+        "    messages: list[dict] = []\n"
+    )
+    if vision_hook in updated and "def _call_local_vision(" in updated and "gpucall_vision_file(" not in updated:
+        updated = updated.replace(vision_hook, vision_replacement, 1)
+    if updated != text and "gpucall_infer_text" in updated and _gpucall_migration_import_line() not in updated:
+        updated = _insert_after_future_imports(updated, _gpucall_migration_import_line())
     return updated
 
 
@@ -586,10 +639,18 @@ def _disable_hosted_fallback(text: str) -> str:
         r'\1logger.warning("Local LLM vision failed, falling back to Anthropic: %s", e)\n\2gpucall_disable_hosted_fallback(e)\n\2return _call_anthropic_vision',
         updated,
     )
-    import_line = "from gpucall_migration import gpucall_disable_hosted_fallback, gpucall_openai_headers\n"
+    import_line = _gpucall_migration_import_line()
     if updated != text and "gpucall_disable_hosted_fallback" in updated and import_line not in updated:
         updated = _insert_after_future_imports(updated, import_line)
     return updated
+
+
+def _gpucall_migration_import_line() -> str:
+    return (
+        "from gpucall_migration import gpucall_disable_hosted_fallback, gpucall_guess_intent, "
+        "gpucall_infer_text, gpucall_openai_headers, gpucall_openai_payload, gpucall_should_use_gateway, "
+        "gpucall_vision_file\n"
+    )
 
 
 def _migration_helper_text(*, source: str | None) -> str:
@@ -600,9 +661,12 @@ def _migration_helper_text(*, source: str | None) -> str:
             from __future__ import annotations
 
             import json
+            import mimetypes
             import os
+            import hashlib
             import urllib.error
             import urllib.request
+            from pathlib import Path
             from dataclasses import dataclass
             from typing import Any
 
@@ -649,10 +713,165 @@ def _migration_helper_text(*, source: str | None) -> str:
                 }
 
 
+            def gpucall_openai_payload(payload: dict[str, Any]) -> dict[str, Any]:
+                cleaned = dict(payload)
+                cleaned.pop("options", None)
+                cleaned.pop("keep_alive", None)
+                return cleaned
+
+
+            def gpucall_should_use_gateway(endpoint: str | None = None) -> bool:
+                endpoint = (endpoint or "").rstrip("/")
+                base = os.environ.get("GPUCALL_BASE_URL", "").rstrip("/")
+                return bool(base and (not endpoint or endpoint == base or endpoint == base + "/v1" or "gpucall" in endpoint))
+
+
             def gpucall_disable_hosted_fallback(exc: BaseException | None = None) -> None:
                 allowed = os.environ.get("GPUCALL_ALLOW_HOSTED_FALLBACK", "").lower() in {"1", "true", "yes"}
                 if not allowed:
                     raise RuntimeError("gpucall migration helper disabled direct hosted-AI fallback") from exc
+
+
+            def gpucall_guess_intent(prompt: str, system_prompt: str | None = None) -> str:
+                text = f"{system_prompt or ''}\\n{prompt}".lower()
+                if "rss" in text or "semantic" in text or "match" in text or "突合" in text:
+                    return "rss_semantic_match"
+                if "rank" in text or "ranking" in text or "importance" in text or "重要度" in text or "トピック" in text:
+                    return "rank_text_items"
+                if "translate" in text or "translation" in text or "翻訳" in text:
+                    return "translate_text"
+                if "json" in text or "extract" in text or "抽出" in text:
+                    return "extract_json"
+                return "summarize_text"
+
+
+            def _json_request(method: str, url: str, payload: dict[str, Any], *, timeout: float | None = None, auth: bool = True) -> dict[str, Any]:
+                headers = {"Content-Type": "application/json"}
+                if auth:
+                    headers.update(gpucall_openai_headers())
+                request = urllib.request.Request(
+                    url,
+                    data=json.dumps(payload).encode("utf-8"),
+                    headers=headers,
+                    method=method,
+                )
+                request_timeout = timeout if timeout is not None else float(os.environ.get("GPUCALL_MIGRATION_TIMEOUT_SECONDS", "900"))
+                try:
+                    with urllib.request.urlopen(request, timeout=request_timeout) as response:
+                        body = response.read().decode("utf-8")
+                except urllib.error.HTTPError as exc:
+                    body = exc.read().decode("utf-8", errors="replace")[:2000]
+                    raise RuntimeError(f"gpucall request failed status={exc.code} body={body}") from exc
+                return json.loads(body) if body else {}
+
+
+            def _base_url() -> str:
+                return _required_env("GPUCALL_BASE_URL").rstrip("/")
+
+
+            def _upload_file(path: Path, *, timeout: float | None = None) -> dict[str, Any]:
+                body = path.read_bytes()
+                mime = mimetypes.guess_type(path.name)[0] or "application/octet-stream"
+                presign = _json_request(
+                    "POST",
+                    _base_url() + "/v2/objects/presign-put",
+                    {"name": path.name, "bytes": len(body), "sha256": hashlib.sha256(body).hexdigest(), "content_type": mime},
+                    timeout=timeout,
+                )
+                upload_url = presign.get("upload_url")
+                data_ref = presign.get("data_ref")
+                if not isinstance(upload_url, str) or not isinstance(data_ref, dict):
+                    raise RuntimeError("gpucall presign response is missing upload_url or data_ref")
+                request = urllib.request.Request(upload_url, data=body, headers={"Content-Type": mime}, method="PUT")
+                request_timeout = timeout if timeout is not None else float(os.environ.get("GPUCALL_MIGRATION_TIMEOUT_SECONDS", "900"))
+                with urllib.request.urlopen(request, timeout=request_timeout) as response:
+                    if response.status >= 400:
+                        raise RuntimeError(f"gpucall object upload failed status={response.status}")
+                return data_ref
+
+
+            def _extract_task_text(response: dict[str, Any]) -> str:
+                result = response.get("result")
+                if isinstance(result, dict):
+                    value = result.get("value")
+                    if isinstance(value, str):
+                        return value
+                return _extract_text(response)
+
+
+            def gpucall_infer_text(
+                prompt: str,
+                *,
+                system_prompt: str | None = None,
+                intent: str | None = None,
+                model: str | None = None,
+                max_tokens: int | None = None,
+                temperature: float | None = None,
+                timeout: float | None = None,
+            ) -> str:
+                full_prompt = f"{system_prompt}\\n\\n{prompt}" if system_prompt else prompt
+                payload: dict[str, Any] = {
+                    "task": "infer",
+                    "mode": "sync",
+                    "intent": intent or gpucall_guess_intent(prompt, system_prompt),
+                    "inline_inputs": {"prompt": {"value": full_prompt, "content_type": "text/plain"}},
+                    "metadata": {"openai.model": model or os.environ.get("GPUCALL_MODEL") or "gpucall"},
+                }
+                if max_tokens is not None:
+                    payload["max_tokens"] = max_tokens
+                if temperature is not None:
+                    payload["temperature"] = temperature
+                body = full_prompt.encode("utf-8")
+                if len(body) > int(os.environ.get("GPUCALL_MIGRATION_INLINE_TEXT_LIMIT", "8192")):
+                    data_ref = _upload_bytes(body, name="prompt.txt", content_type="text/plain", timeout=timeout)
+                    payload["inline_inputs"] = {}
+                    payload["input_refs"] = [data_ref]
+                response = _json_request("POST", _base_url() + "/v2/tasks/sync", payload, timeout=timeout)
+                return _extract_task_text(response)
+
+
+            def _upload_bytes(body: bytes, *, name: str, content_type: str, timeout: float | None = None) -> dict[str, Any]:
+                presign = _json_request(
+                    "POST",
+                    _base_url() + "/v2/objects/presign-put",
+                    {"name": name, "bytes": len(body), "sha256": hashlib.sha256(body).hexdigest(), "content_type": content_type},
+                    timeout=timeout,
+                )
+                upload_url = presign.get("upload_url")
+                data_ref = presign.get("data_ref")
+                if not isinstance(upload_url, str) or not isinstance(data_ref, dict):
+                    raise RuntimeError("gpucall presign response is missing upload_url or data_ref")
+                request = urllib.request.Request(upload_url, data=body, headers={"Content-Type": content_type}, method="PUT")
+                request_timeout = timeout if timeout is not None else float(os.environ.get("GPUCALL_MIGRATION_TIMEOUT_SECONDS", "900"))
+                with urllib.request.urlopen(request, timeout=request_timeout):
+                    pass
+                return data_ref
+
+
+            def gpucall_vision_file(
+                image_path: str | Path,
+                *,
+                prompt: str,
+                system_prompt: str | None = None,
+                intent: str | None = "understand_document_image",
+                model: str | None = None,
+                max_tokens: int | None = None,
+                timeout: float | None = None,
+            ) -> str:
+                data_ref = _upload_file(Path(image_path), timeout=timeout)
+                full_prompt = f"{system_prompt}\\n\\n{prompt}" if system_prompt else prompt
+                payload: dict[str, Any] = {
+                    "task": "vision",
+                    "mode": "sync",
+                    "intent": intent or "understand_document_image",
+                    "input_refs": [data_ref],
+                    "inline_inputs": {"prompt": {"value": full_prompt, "content_type": "text/plain"}},
+                    "metadata": {"openai.model": model or os.environ.get("GPUCALL_MODEL") or "gpucall"},
+                }
+                if max_tokens is not None:
+                    payload["max_tokens"] = max_tokens
+                response = _json_request("POST", _base_url() + "/v2/tasks/sync", payload, timeout=timeout)
+                return _extract_task_text(response)
 
 
             def _chat_completion(
