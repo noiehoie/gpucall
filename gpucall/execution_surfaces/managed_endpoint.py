@@ -793,7 +793,7 @@ def _runpod_vllm_native_poll_timeout_seconds(plan: CompiledPlan) -> float:
     cold_start_seconds = _plan_expected_cold_start_seconds(plan)
     multiplier = _float_env("GPUCALL_RUNPOD_VLLM_NATIVE_RUNTIME_MULTIPLIER", 2.0, minimum=1.0)
     floor = _float_env("GPUCALL_RUNPOD_VLLM_NATIVE_POLL_MIN_SECONDS", 60.0, minimum=1.0)
-    ceiling = _float_env("GPUCALL_RUNPOD_VLLM_NATIVE_POLL_MAX_SECONDS", 300.0, minimum=floor)
+    ceiling = _float_env("GPUCALL_RUNPOD_VLLM_NATIVE_POLL_MAX_SECONDS", plan_timeout, minimum=floor)
     if runtime_seconds is None:
         target = max(plan_timeout * 0.1, floor)
     else:

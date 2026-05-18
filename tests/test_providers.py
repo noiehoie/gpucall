@@ -1336,7 +1336,7 @@ def test_runpod_vllm_native_poll_timeout_uses_runtime_estimate(monkeypatch) -> N
         }
     )
 
-    assert _runpod_vllm_native_poll_timeout_seconds(plan) == 300
+    assert _runpod_vllm_native_poll_timeout_seconds(plan) == 360
     monkeypatch.setenv("GPUCALL_RUNPOD_VLLM_NATIVE_POLL_MAX_SECONDS", "600")
     assert _runpod_vllm_native_poll_timeout_seconds(plan) == 360
     monkeypatch.setenv("GPUCALL_RUNPOD_VLLM_NATIVE_POLL_TIMEOUT_SECONDS", "45")
