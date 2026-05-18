@@ -2,6 +2,7 @@ from __future__ import annotations
 
 
 from datetime import datetime, timezone
+import json
 import os
 import time
 from typing import Any
@@ -398,6 +399,19 @@ class RunpodVllmServerlessAdapter(TupleAdapter):
             raise TupleError("RunPod worker-vLLM requires endpoint_contract=openai-chat-completions", retryable=False, status_code=400)
         if plan.mode.value == "stream":
             raise TupleError("RunPod worker-vLLM streaming is not supported in v2.0", retryable=False, status_code=400)
+        if plan.mode.value == "async" and not _runpod_vllm_requires_openai_route(plan):
+            job_id = await asyncio.to_thread(self._start_native_sync, plan)
+            return RemoteHandle(
+                tuple=self.name,
+                remote_id=job_id,
+                expires_at=plan.expires_at(),
+                account_ref="runpod",
+                execution_surface="managed_endpoint",
+                resource_kind="endpoint_job",
+                cleanup_required=False,
+                reaper_eligible=False,
+                meta={"official_vllm": True, "runpod_native_queue": True},
+            )
         return RemoteHandle(
             tuple=self.name,
             remote_id=f"openai-{plan.plan_id}",
@@ -407,17 +421,151 @@ class RunpodVllmServerlessAdapter(TupleAdapter):
             resource_kind="endpoint_request",
             cleanup_required=False,
             reaper_eligible=False,
-            meta={"official_vllm": True},
+            meta={"official_vllm": True, "runpod_openai_route": True},
         )
 
     async def wait(self, handle: RemoteHandle, plan: CompiledPlan) -> TupleResult:
         try:
+            if handle.meta.get("runpod_native_queue"):
+                return await asyncio.to_thread(self._wait_native_sync, handle, plan)
             return await asyncio.to_thread(self._call_sync, plan)
         except asyncio.TimeoutError as exc:
             raise TupleError("RunPod worker-vLLM timed out", retryable=True, status_code=504) from exc
 
     async def cancel_remote(self, handle: RemoteHandle) -> None:
         return None
+
+    def _start_native_sync(self, plan: CompiledPlan) -> str:
+        health = self._health_sync()
+        rejection_reason = runpod_vllm_health_preflight_rejection_reason(health, mode=plan.mode.value)
+        if rejection_reason:
+            raise TupleError(
+                "RunPod worker-vLLM endpoint is not ready: " + rejection_reason,
+                retryable=True,
+                status_code=503,
+                code=runpod_vllm_health_rejection_code(rejection_reason),
+            )
+        response = _request_post(
+            f"{self.base_url}/{self.endpoint_id}/run",
+            error_message="RunPod worker-vLLM native run failed",
+            headers=self._headers(),
+            json={
+                "input": self._native_vllm_input(plan),
+                "policy": {
+                    "executionTimeout": max(int(plan.timeout_seconds * 1000), 5000),
+                    "ttl": max(int(plan.lease_ttl_seconds * 1000), 10000),
+                },
+            },
+            timeout=30,
+        )
+        data = json_or_error(response, "RunPod worker-vLLM native run failed")
+        job_id = data.get("id") or data.get("job_id")
+        if not job_id:
+            raise TupleError("RunPod worker-vLLM native run response did not include job id", retryable=True, status_code=502)
+        return str(job_id)
+
+    def _wait_native_sync(self, handle: RemoteHandle, plan: CompiledPlan) -> TupleResult:
+        started_at = time.monotonic()
+        deadline = started_at + max(float(plan.timeout_seconds), 1.0)
+        queue_seen_at: float | None = None
+        queue_blocked_seen_at: float | None = None
+        last_health_probe_at = started_at
+        queue_limit = _runpod_vllm_queue_saturation_seconds(plan.timeout_seconds, mode=plan.mode.value)
+        health_probe_interval = _runpod_vllm_queue_health_probe_interval_seconds()
+        queue_blocked_limit = _runpod_vllm_queue_blocked_seconds()
+        while True:
+            now = time.monotonic()
+            if now >= deadline:
+                break
+            response = _request_get(
+                f"{self.base_url}/{self.endpoint_id}/status/{handle.remote_id}",
+                error_message="RunPod worker-vLLM native status failed",
+                headers=self._headers(),
+                timeout=30,
+            )
+            data = json_or_error(response, "RunPod worker-vLLM native status failed")
+            status = data.get("status")
+            if status == "COMPLETED":
+                return _runpod_vllm_runsync_result(data)
+            if status in {"FAILED", "CANCELLED", "TIMED_OUT"}:
+                message = f"RunPod worker-vLLM native status: {status}"
+                detail = _runpod_terminal_status_detail(data)
+                if detail:
+                    message = f"{message}: {detail}"
+                raise TupleError(
+                    message,
+                    retryable=True,
+                    status_code=502,
+                    code=_runpod_terminal_status_code(status),
+                )
+            if status == "IN_QUEUE":
+                if queue_seen_at is None:
+                    queue_seen_at = now
+                if now - last_health_probe_at >= health_probe_interval:
+                    last_health_probe_at = now
+                    queue_blocked_reason = runpod_vllm_async_queue_blocked_reason(self._health_sync())
+                    if queue_blocked_reason:
+                        if queue_blocked_seen_at is None:
+                            queue_blocked_seen_at = now
+                        if now - queue_blocked_seen_at >= queue_blocked_limit:
+                            self._cancel_native_best_effort(handle.remote_id)
+                            raise TupleError(
+                                "RunPod worker-vLLM native queue blocked: " + queue_blocked_reason,
+                                retryable=True,
+                                status_code=503,
+                                code=runpod_vllm_health_rejection_code(queue_blocked_reason),
+                            )
+                    else:
+                        queue_blocked_seen_at = None
+                if now - queue_seen_at >= queue_limit:
+                    self._cancel_native_best_effort(handle.remote_id)
+                    raise TupleError(
+                        "RunPod worker-vLLM native queue saturated",
+                        retryable=True,
+                        status_code=503,
+                        code="PROVIDER_QUEUE_SATURATED",
+                    )
+            else:
+                queue_seen_at = None
+                queue_blocked_seen_at = None
+            time.sleep(_runpod_vllm_poll_interval_seconds())
+        self._cancel_native_best_effort(handle.remote_id)
+        raise TupleError("RunPod worker-vLLM native polling timed out", retryable=True, status_code=504, code="PROVIDER_POLL_TIMEOUT")
+
+    def _cancel_native_best_effort(self, job_id: str) -> None:
+        try:
+            response = _request_post(
+                f"{self.base_url}/{self.endpoint_id}/cancel/{job_id}",
+                error_message="RunPod worker-vLLM native cancel failed",
+                headers=self._headers(),
+                timeout=30,
+            )
+            json_or_error(response, "RunPod worker-vLLM native cancel failed")
+        except Exception:
+            return
+
+    def _native_vllm_input(self, plan: CompiledPlan) -> dict[str, Any]:
+        payload = self._payload(plan)
+        native: dict[str, Any] = {}
+        if isinstance(payload.get("messages"), list):
+            native["messages"] = payload["messages"]
+        sampling_params: dict[str, Any] = {}
+        for key in (
+            "temperature",
+            "max_tokens",
+            "top_p",
+            "seed",
+            "presence_penalty",
+            "frequency_penalty",
+            "stop",
+            "n",
+        ):
+            value = payload.get(key)
+            if value is not None:
+                sampling_params[key] = value
+        if sampling_params:
+            native["sampling_params"] = sampling_params
+        return native
 
     async def stream(self, handle: RemoteHandle, plan: CompiledPlan):
         raise TupleError("RunPod worker-vLLM streaming is not supported in v2.0", retryable=False, status_code=400)
@@ -441,7 +589,7 @@ class RunpodVllmServerlessAdapter(TupleAdapter):
             error_message="RunPod worker-vLLM OpenAI chat completions failed",
             headers=self._headers(),
             json=self._payload(plan),
-            timeout=max(float(plan.timeout_seconds), 1.0),
+            timeout=_runpod_vllm_openai_request_timeout_seconds(plan.timeout_seconds),
         )
         return openai_chat_completion_result(json_or_error(response, "RunPod worker-vLLM OpenAI chat completions failed"))
 
@@ -588,6 +736,25 @@ def runpod_vllm_health_preflight_rejection_reason(health: dict[str, Any], *, mod
     return runpod_vllm_health_rejection_reason(health)
 
 
+def runpod_vllm_async_queue_blocked_reason(health: dict[str, Any]) -> str | None:
+    workers = health.get("workers") if isinstance(health, dict) else None
+    if not isinstance(workers, dict):
+        return None
+    ready = _positive_int_from_mapping(workers, "ready")
+    running = _positive_int_from_mapping(workers, "running")
+    idle = _positive_int_from_mapping(workers, "idle")
+    initializing = _positive_int_from_mapping(workers, "initializing")
+    throttled = _positive_int_from_mapping(workers, "throttled")
+    unhealthy = _positive_int_from_mapping(workers, "unhealthy")
+    if ready + running + idle + initializing > 0:
+        return None
+    if unhealthy > 0:
+        return "workers.unhealthy is non-zero"
+    if throttled > 0:
+        return "workers are throttled and no ready worker is available"
+    return None
+
+
 def runpod_vllm_health_rejection_code(reason: str | None) -> str:
     if reason is None:
         return "PROVIDER_CAPACITY_UNAVAILABLE"
@@ -601,11 +768,28 @@ def runpod_vllm_health_rejection_code(reason: str | None) -> str:
     return "PROVIDER_CAPACITY_UNAVAILABLE"
 
 
+def _runpod_vllm_requires_openai_route(plan: CompiledPlan) -> bool:
+    return plan.response_format is not None
+
+
+def _runpod_vllm_openai_request_timeout_seconds(timeout_seconds: int | float) -> float:
+    raw = os.getenv("GPUCALL_RUNPOD_VLLM_OPENAI_REQUEST_TIMEOUT_SECONDS", "300")
+    try:
+        cap = max(float(raw), 1.0)
+    except ValueError:
+        cap = 300.0
+    return min(max(float(timeout_seconds), 1.0), cap)
+
+
 def _runpod_vllm_runsync_result(data: dict[str, Any]) -> TupleResult:
     status = data.get("status")
     if status in {"FAILED", "CANCELLED", "TIMED_OUT"}:
+        message = f"RunPod worker-vLLM status: {status}"
+        detail = _runpod_terminal_status_detail(data)
+        if detail:
+            message = f"{message}: {detail}"
         raise TupleError(
-            f"RunPod worker-vLLM status: {status}",
+            message,
             retryable=True,
             status_code=502,
             code=_runpod_terminal_status_code(status),
@@ -658,6 +842,10 @@ def _positive_int_from_mapping(mapping: dict[str, Any], *keys: str) -> int:
     return 0
 
 
+def _has_any_mapping_key(mapping: dict[str, Any], *keys: str) -> bool:
+    return any(key in mapping for key in keys)
+
+
 def runpod_serverless_billing_guard_summary(
     tuple: Any | None = None,
     *,
@@ -701,6 +889,15 @@ def runpod_serverless_billing_guard_findings(
         "active_pods": summary["active_pods"],
     }
     findings: list[dict[str, object]] = []
+    if _has_any_mapping_key(endpoint, "workersMax", "workers_max", "maxWorkers", "max_workers") and int(summary["workers_max"]) <= 0:
+        findings.append(
+            {
+                **base,
+                "live_reason": "workers_max_zero",
+                "reason": "live RunPod Serverless endpoint has workersMax=0 and cannot start workers for queued jobs",
+                "severity": "error",
+            }
+        )
     approval_findings = _standing_worker_approval_findings(tuple, workers_min=int(summary["workers_min"]))
     if int(summary["workers_min"]) > 0 and approval_findings:
         findings.append(
@@ -823,6 +1020,32 @@ def _runpod_terminal_status_code(status: str | None) -> str:
     return "PROVIDER_JOB_FAILED"
 
 
+def _runpod_terminal_status_detail(data: dict[str, Any]) -> str | None:
+    for key in ("error", "message", "statusMessage", "status_message"):
+        value = data.get(key)
+        if value is None:
+            continue
+        if isinstance(value, str):
+            text = value.strip()
+        else:
+            try:
+                text = json.dumps(value, ensure_ascii=True, sort_keys=True)
+            except TypeError:
+                text = str(value)
+            text = text.strip()
+        if not text:
+            continue
+        return _bounded_provider_detail(text)
+    return None
+
+
+def _bounded_provider_detail(text: str, *, limit: int = 500) -> str:
+    collapsed = " ".join(text.split())
+    if len(collapsed) <= limit:
+        return collapsed
+    return collapsed[: limit - 3].rstrip() + "..."
+
+
 def _queue_saturation_seconds(timeout_seconds: int | float) -> float:
     raw = os.getenv("GPUCALL_PROVIDER_QUEUE_SATURATION_SECONDS")
     if raw:
@@ -831,6 +1054,52 @@ def _queue_saturation_seconds(timeout_seconds: int | float) -> float:
         except ValueError:
             pass
     return min(max(float(timeout_seconds) * 0.1, 10.0), 60.0)
+
+
+def _runpod_vllm_queue_saturation_seconds(timeout_seconds: int | float, *, mode: str = "sync") -> float:
+    raw = os.getenv("GPUCALL_RUNPOD_VLLM_QUEUE_SATURATION_SECONDS") or os.getenv("GPUCALL_PROVIDER_QUEUE_SATURATION_SECONDS")
+    if raw:
+        try:
+            return max(float(raw), 1.0)
+        except ValueError:
+            pass
+    # The official vLLM worker can spend meaningful time in queue/cold-start
+    # before model execution. Async gateway jobs should use the native queue API
+    # and tolerate that state instead of relying on the blocking OpenAI path.
+    timeout = max(float(timeout_seconds), 1.0)
+    if mode == "async":
+        return timeout
+    return min(max(timeout * 0.1, 180.0), 600.0)
+
+
+def _runpod_vllm_queue_health_probe_interval_seconds() -> float:
+    raw = os.getenv("GPUCALL_RUNPOD_VLLM_QUEUE_HEALTH_PROBE_SECONDS")
+    if raw:
+        try:
+            return min(max(float(raw), 1.0), 120.0)
+        except ValueError:
+            pass
+    return 15.0
+
+
+def _runpod_vllm_queue_blocked_seconds() -> float:
+    raw = os.getenv("GPUCALL_RUNPOD_VLLM_QUEUE_BLOCKED_SECONDS")
+    if raw:
+        try:
+            return min(max(float(raw), 1.0), 600.0)
+        except ValueError:
+            pass
+    return 60.0
+
+
+def _runpod_vllm_poll_interval_seconds() -> float:
+    raw = os.getenv("GPUCALL_RUNPOD_VLLM_POLL_INTERVAL_SECONDS")
+    if raw:
+        try:
+            return min(max(float(raw), 0.2), 30.0)
+        except ValueError:
+            pass
+    return 2.0
 
 
 def runpod_vllm_config_findings(tuple: Any) -> list[str]:

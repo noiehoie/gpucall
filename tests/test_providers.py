@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+from datetime import UTC, datetime
 import hashlib
 import json
 from pathlib import Path
@@ -33,6 +34,7 @@ from gpucall.execution_surfaces.function_runtime import RunpodVllmFlashBootAdapt
 from gpucall.execution_surfaces.managed_endpoint import RunpodServerlessAdapter
 from gpucall.execution_surfaces.managed_endpoint import (
     RunpodVllmServerlessAdapter,
+    _runpod_vllm_queue_saturation_seconds,
     runpod_vllm_health_preflight_rejection_reason,
     runpod_vllm_health_rejection_code,
     runpod_vllm_health_rejection_reason,
@@ -1047,6 +1049,32 @@ def test_runpod_vllm_serverless_uses_generic_endpoint_env(monkeypatch) -> None:
     assert handle.cleanup_required is False
 
 
+def test_runpod_vllm_async_structured_output_uses_openai_route(monkeypatch) -> None:
+    def unexpected_native_start(*_args, **_kwargs):
+        raise AssertionError("structured async requests must not use RunPod native queue")
+
+    monkeypatch.setattr("gpucall.execution_surfaces.managed_endpoint._request_post", unexpected_native_start)
+    adapter = RunpodVllmServerlessAdapter(
+        api_key="rk_test",
+        endpoint_id="endpoint-1",
+        endpoint_contract="openai-chat-completions",
+        model="Qwen/Qwen2.5-1.5B-Instruct",
+    )
+    plan = plan_payload_plan().model_copy(
+        update={
+            "mode": ExecutionMode.ASYNC,
+            "response_format": ResponseFormat(type=ResponseFormatType.JSON_OBJECT),
+        }
+    )
+
+    handle = asyncio.run(adapter.start(plan))
+
+    assert handle.remote_id == f"openai-{plan.plan_id}"
+    assert handle.resource_kind == "endpoint_request"
+    assert handle.meta["runpod_openai_route"] is True
+    assert "runpod_native_queue" not in handle.meta
+
+
 def test_runpod_vllm_payload_preserves_inline_prompt_with_recipe_system_message() -> None:
     adapter = RunpodVllmServerlessAdapter(
         api_key="rk_test",
@@ -1132,6 +1160,281 @@ def test_runpod_vllm_uses_openai_chat_completions_route(monkeypatch) -> None:
     assert calls[0][1]["model"] == "Qwen/Qwen2.5-1.5B-Instruct"
     assert result.kind == "inline"
     assert result.value == "worker-vllm ok"
+
+
+def test_runpod_vllm_openai_route_request_timeout_is_bounded(monkeypatch) -> None:
+    calls: list[tuple[str, float | None]] = []
+
+    class FakeResponse:
+        status_code = 200
+        text = "{}"
+
+        def json(self) -> dict[str, object]:
+            return {"choices": [{"message": {"content": "worker-vllm ok"}}]}
+
+    def fake_post(url: str, **kwargs):
+        calls.append((url, kwargs.get("timeout")))
+        return FakeResponse()
+
+    monkeypatch.setattr("gpucall.execution_surfaces.managed_endpoint._request_post", fake_post)
+    monkeypatch.setattr(
+        "gpucall.execution_surfaces.managed_endpoint.runpod_vllm_health_preflight_rejection_reason",
+        lambda _health, *, mode: None,
+    )
+    monkeypatch.setenv("GPUCALL_RUNPOD_VLLM_OPENAI_REQUEST_TIMEOUT_SECONDS", "45")
+    adapter = RunpodVllmServerlessAdapter(
+        api_key="rk_test",
+        endpoint_id="endpoint-1",
+        endpoint_contract="openai-chat-completions",
+        model="Qwen/Qwen2.5-1.5B-Instruct",
+    )
+    monkeypatch.setattr(adapter, "_health_sync", lambda: {"workers": {"ready": 1}})
+
+    plan = plan_payload_plan().model_copy(
+        update={
+            "messages": [ChatMessage(role="user", content="hello")],
+            "timeout_seconds": 1800,
+        }
+    )
+    result = adapter._call_sync(plan)
+
+    assert result.value == "worker-vllm ok"
+    assert calls == [("https://api.runpod.ai/v2/endpoint-1/openai/v1/chat/completions", 45.0)]
+
+
+def test_runpod_vllm_async_uses_native_run_and_status(monkeypatch) -> None:
+    calls: list[tuple[str, str, dict[str, object] | None]] = []
+
+    class FakeResponse:
+        def __init__(self, status_code: int, data: dict[str, object]) -> None:
+            self.status_code = status_code
+            self._data = data
+            self.text = str(data)
+
+        def json(self) -> dict[str, object]:
+            return self._data
+
+    def fake_get(url: str, **_kwargs):
+        calls.append(("GET", url, None))
+        if url.endswith("/health"):
+            return FakeResponse(200, {"workers": {"ready": 0, "running": 0, "initializing": 1, "throttled": 0, "unhealthy": 0}})
+        if url.endswith("/status/job-1"):
+            return FakeResponse(200, {"status": "COMPLETED", "output": {"choices": [{"message": {"content": "async ok"}}]}})
+        return FakeResponse(404, {"error": "unexpected"})
+
+    def fake_post(url: str, **kwargs):
+        calls.append(("POST", url, kwargs.get("json")))
+        return FakeResponse(200, {"id": "job-1"})
+
+    monkeypatch.setattr("gpucall.execution_surfaces.managed_endpoint._request_get", fake_get)
+    monkeypatch.setattr("gpucall.execution_surfaces.managed_endpoint._request_post", fake_post)
+    adapter = RunpodVllmServerlessAdapter(
+        api_key="rk_test",
+        endpoint_id="endpoint-1",
+        endpoint_contract="openai-chat-completions",
+        model="Qwen/Qwen2.5-1.5B-Instruct",
+    )
+    plan = plan_payload_plan().model_copy(
+        update={"mode": ExecutionMode.ASYNC, "messages": [ChatMessage(role="user", content="hello")], "max_tokens": 512}
+    )
+
+    handle = asyncio.run(adapter.start(plan))
+    result = asyncio.run(adapter.wait(handle, plan))
+
+    assert handle.remote_id == "job-1"
+    assert handle.meta["runpod_native_queue"] is True
+    assert calls[1][0] == "POST"
+    assert calls[1][1] == "https://api.runpod.ai/v2/endpoint-1/run"
+    assert calls[1][2] is not None
+    assert calls[1][2]["input"]["messages"] == [{"role": "user", "content": "hello"}]
+    assert calls[1][2]["input"]["sampling_params"]["max_tokens"] == 512
+    assert calls[1][2]["policy"] == {"executionTimeout": 5000, "ttl": 10000}
+    assert calls[2][1] == "https://api.runpod.ai/v2/endpoint-1/status/job-1"
+    assert result.kind == "inline"
+    assert result.value == "async ok"
+
+
+def test_runpod_vllm_async_queue_tolerance_matches_batch_jobs(monkeypatch) -> None:
+    monkeypatch.delenv("GPUCALL_RUNPOD_VLLM_QUEUE_SATURATION_SECONDS", raising=False)
+    monkeypatch.delenv("GPUCALL_PROVIDER_QUEUE_SATURATION_SECONDS", raising=False)
+
+    assert _runpod_vllm_queue_saturation_seconds(3600, mode="async") == 3600
+    assert _runpod_vllm_queue_saturation_seconds(7200, mode="async") == 7200
+    assert _runpod_vllm_queue_saturation_seconds(300, mode="async") == 300
+    assert _runpod_vllm_queue_saturation_seconds(3600, mode="sync") == 360
+
+
+def test_runpod_vllm_async_queue_saturation_cancels_remote(monkeypatch) -> None:
+    calls: list[tuple[str, str, dict[str, object] | None]] = []
+
+    class FakeResponse:
+        def __init__(self, status_code: int, data: dict[str, object]) -> None:
+            self.status_code = status_code
+            self._data = data
+            self.text = str(data)
+
+        def json(self) -> dict[str, object]:
+            return self._data
+
+    def fake_get(url: str, **_kwargs):
+        calls.append(("GET", url, None))
+        if url.endswith("/health"):
+            return FakeResponse(200, {"workers": {"ready": 0, "running": 0, "initializing": 1, "throttled": 0, "unhealthy": 0}})
+        if url.endswith("/status/job-1"):
+            return FakeResponse(200, {"status": "IN_QUEUE"})
+        return FakeResponse(404, {"error": "unexpected"})
+
+    def fake_post(url: str, **kwargs):
+        calls.append(("POST", url, kwargs.get("json")))
+        if url.endswith("/cancel/job-1"):
+            return FakeResponse(200, {"id": "job-1", "status": "CANCELLED"})
+        return FakeResponse(200, {"id": "job-1"})
+
+    times = iter([0.0, 0.0, 0.0, 2.0])
+    monkeypatch.setattr("gpucall.execution_surfaces.managed_endpoint._request_get", fake_get)
+    monkeypatch.setattr("gpucall.execution_surfaces.managed_endpoint._request_post", fake_post)
+    monkeypatch.setattr("gpucall.execution_surfaces.managed_endpoint.time.monotonic", lambda: next(times))
+    monkeypatch.setattr("gpucall.execution_surfaces.managed_endpoint.time.sleep", lambda _seconds: None)
+    monkeypatch.setenv("GPUCALL_RUNPOD_VLLM_QUEUE_SATURATION_SECONDS", "1")
+
+    adapter = RunpodVllmServerlessAdapter(
+        api_key="rk_test",
+        endpoint_id="endpoint-1",
+        endpoint_contract="openai-chat-completions",
+        model="Qwen/Qwen2.5-1.5B-Instruct",
+    )
+    plan = plan_payload_plan().model_copy(
+        update={"mode": ExecutionMode.ASYNC, "messages": [ChatMessage(role="user", content="hello")], "timeout_seconds": 60}
+    )
+
+    job_id = adapter._start_native_sync(plan)
+    handle = RemoteHandle(
+        tuple=adapter.name,
+        remote_id=job_id,
+        expires_at=datetime.now(UTC),
+        meta={"official_vllm": True, "runpod_native_queue": True},
+    )
+    with pytest.raises(TupleError) as exc_info:
+        adapter._wait_native_sync(handle, plan)
+
+    assert exc_info.value.code == "PROVIDER_QUEUE_SATURATED"
+    assert ("POST", "https://api.runpod.ai/v2/endpoint-1/cancel/job-1", None) in calls
+
+
+def test_runpod_vllm_async_queue_unhealthy_worker_fails_fast(monkeypatch) -> None:
+    calls: list[tuple[str, str, dict[str, object] | None]] = []
+
+    class FakeResponse:
+        def __init__(self, status_code: int, data: dict[str, object]) -> None:
+            self.status_code = status_code
+            self._data = data
+            self.text = str(data)
+
+        def json(self) -> dict[str, object]:
+            return self._data
+
+    def fake_get(url: str, **_kwargs):
+        calls.append(("GET", url, None))
+        if url.endswith("/status/job-1"):
+            return FakeResponse(200, {"status": "IN_QUEUE"})
+        if url.endswith("/health"):
+            return FakeResponse(
+                200,
+                {
+                    "jobs": {"inQueue": 1},
+                    "workers": {"ready": 0, "running": 0, "idle": 0, "initializing": 0, "throttled": 0, "unhealthy": 1},
+                },
+            )
+        return FakeResponse(404, {"error": "unexpected"})
+
+    def fake_post(url: str, **kwargs):
+        calls.append(("POST", url, kwargs.get("json")))
+        if url.endswith("/cancel/job-1"):
+            return FakeResponse(200, {"id": "job-1", "status": "CANCELLED"})
+        return FakeResponse(200, {"id": "job-1"})
+
+    times = iter([0.0, 2.0, 4.0])
+    monkeypatch.setattr("gpucall.execution_surfaces.managed_endpoint._request_get", fake_get)
+    monkeypatch.setattr("gpucall.execution_surfaces.managed_endpoint._request_post", fake_post)
+    monkeypatch.setattr("gpucall.execution_surfaces.managed_endpoint.time.monotonic", lambda: next(times))
+    monkeypatch.setattr("gpucall.execution_surfaces.managed_endpoint.time.sleep", lambda _seconds: None)
+    monkeypatch.setenv("GPUCALL_RUNPOD_VLLM_QUEUE_SATURATION_SECONDS", "3600")
+    monkeypatch.setenv("GPUCALL_RUNPOD_VLLM_QUEUE_HEALTH_PROBE_SECONDS", "1")
+    monkeypatch.setenv("GPUCALL_RUNPOD_VLLM_QUEUE_BLOCKED_SECONDS", "1")
+
+    adapter = RunpodVllmServerlessAdapter(
+        api_key="rk_test",
+        endpoint_id="endpoint-1",
+        endpoint_contract="openai-chat-completions",
+        model="Qwen/Qwen2.5-1.5B-Instruct",
+    )
+    plan = plan_payload_plan().model_copy(
+        update={"mode": ExecutionMode.ASYNC, "messages": [ChatMessage(role="user", content="hello")], "timeout_seconds": 60}
+    )
+    handle = RemoteHandle(
+        tuple=adapter.name,
+        remote_id="job-1",
+        expires_at=datetime.now(UTC),
+        meta={"official_vllm": True, "runpod_native_queue": True},
+    )
+
+    with pytest.raises(TupleError) as exc_info:
+        adapter._wait_native_sync(handle, plan)
+
+    assert exc_info.value.code == "PROVIDER_UNHEALTHY"
+    assert ("POST", "https://api.runpod.ai/v2/endpoint-1/cancel/job-1", None) in calls
+
+
+def test_runpod_vllm_native_failure_preserves_bounded_provider_detail(monkeypatch) -> None:
+    class FakeResponse:
+        def __init__(self, status_code: int, data: dict[str, object]) -> None:
+            self.status_code = status_code
+            self._data = data
+            self.text = str(data)
+
+        def json(self) -> dict[str, object]:
+            return self._data
+
+    def fake_get(url: str, **_kwargs):
+        assert url.endswith("/status/job-1")
+        return FakeResponse(
+            200,
+            {
+                "status": "FAILED",
+                "error": {
+                    "error": {
+                        "message": "EngineCore encountered an issue. See stack trace for root cause.",
+                        "type": "BadRequestError",
+                        "code": 400,
+                    }
+                },
+            },
+        )
+
+    monkeypatch.setattr("gpucall.execution_surfaces.managed_endpoint._request_get", fake_get)
+
+    adapter = RunpodVllmServerlessAdapter(
+        api_key="rk_test",
+        endpoint_id="endpoint-1",
+        endpoint_contract="openai-chat-completions",
+        model="Qwen/Qwen2.5-1.5B-Instruct",
+    )
+    plan = plan_payload_plan().model_copy(
+        update={"mode": ExecutionMode.ASYNC, "messages": [ChatMessage(role="user", content="hello")], "timeout_seconds": 60}
+    )
+    handle = RemoteHandle(
+        tuple=adapter.name,
+        remote_id="job-1",
+        expires_at=datetime.now(UTC),
+        meta={"official_vllm": True, "runpod_native_queue": True},
+    )
+
+    with pytest.raises(TupleError) as exc_info:
+        adapter._wait_native_sync(handle, plan)
+
+    assert exc_info.value.code == "PROVIDER_JOB_FAILED"
+    assert "EngineCore encountered an issue" in str(exc_info.value)
+    assert "BadRequestError" in str(exc_info.value)
 
 
 async def test_runpod_flash_uses_deployed_runsync_rest_endpoint(monkeypatch) -> None:
@@ -1963,6 +2266,103 @@ def test_local_ollama_rejects_data_refs_without_leaking_uri() -> None:
 
     assert "does not support data_refs" in str(exc_info.value)
     assert "X-Amz-Signature" not in str(exc_info.value)
+
+
+@pytest.mark.asyncio
+async def test_local_ollama_sets_context_window_from_compiled_plan() -> None:
+    captured: dict[str, object] = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured["path"] = request.url.path
+        captured["body"] = json.loads(request.content)
+        return httpx.Response(200, json={"response": '{"ok": true}'})
+
+    adapter = LocalOllamaAdapter(
+        base_url="http://ollama.local",
+        model="gemma4:31b",
+        transport=httpx.MockTransport(handler),
+    )
+    plan = plan_payload_plan().model_copy(
+        update={
+            "inline_inputs": {"prompt": InlineValue(value="rank these items", content_type="text/plain")},
+            "max_tokens": 42,
+            "temperature": 0.0,
+            "top_p": 0.9,
+            "seed": 123,
+            "stop_tokens": ["<|endoftext|>"],
+            "response_format": ResponseFormat(type=ResponseFormatType.JSON_OBJECT),
+            "attestations": {"context_estimate": {"required_model_len": 96031}},
+        }
+    )
+
+    handle = await adapter.start(plan)
+    result = await adapter.wait(handle, plan)
+
+    assert result.value == '{"ok": true}'
+    assert captured["path"] == "/api/generate"
+    body = captured["body"]
+    assert isinstance(body, dict)
+    assert body["model"] == "gemma4:31b"
+    assert body["prompt"] == "rank these items"
+    assert body["format"] == "json"
+    assert body["options"] == {
+        "num_ctx": 96031,
+        "top_p": 0.9,
+        "seed": 123,
+        "stop": ["<|endoftext|>"],
+        "num_predict": 42,
+        "temperature": 0.0,
+    }
+
+
+@pytest.mark.asyncio
+async def test_local_ollama_cancel_remote_unloads_model() -> None:
+    captured: list[dict[str, object]] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured.append(json.loads(request.content))
+        return httpx.Response(200, json={"done": True, "done_reason": "unload"})
+
+    adapter = LocalOllamaAdapter(
+        base_url="http://ollama.local",
+        model="gemma4:31b",
+        transport=httpx.MockTransport(handler),
+    )
+    handle = await adapter.start(plan_payload_plan())
+
+    await adapter.cancel_remote(handle)
+
+    assert captured == [{"model": "gemma4:31b", "keep_alive": 0}]
+
+
+@pytest.mark.asyncio
+async def test_local_ollama_timeout_unloads_model() -> None:
+    captured: list[dict[str, object]] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        body = json.loads(request.content)
+        captured.append(body)
+        if "prompt" in body:
+            raise httpx.ReadTimeout("timed out", request=request)
+        return httpx.Response(200, json={"done": True, "done_reason": "unload"})
+
+    adapter = LocalOllamaAdapter(
+        base_url="http://ollama.local",
+        model="gemma4:31b",
+        transport=httpx.MockTransport(handler),
+    )
+    plan = plan_payload_plan().model_copy(
+        update={"inline_inputs": {"prompt": InlineValue(value="slow prompt", content_type="text/plain")}}
+    )
+    handle = await adapter.start(plan)
+
+    with pytest.raises(TupleError, match="local Ollama timed out"):
+        await adapter.wait(handle, plan)
+
+    assert captured == [
+        {"model": "gemma4:31b", "prompt": "slow prompt", "stream": False},
+        {"model": "gemma4:31b", "keep_alive": 0},
+    ]
 
 
 def plan_payload_plan() -> CompiledPlan:
