@@ -9,9 +9,12 @@ import os
 import queue
 import re
 import secrets
+import signal
 import shutil
 import subprocess
 import sys
+import threading
+from contextlib import contextmanager
 from pathlib import Path
 from datetime import datetime, timezone
 from importlib.resources import files
@@ -129,6 +132,12 @@ def main() -> None:
     tuple_smoke.add_argument("--mode", choices=["sync", "async", "stream"], default="sync")
     tuple_smoke.add_argument("--budget-usd", type=float, required=True, help="hard cost ceiling for this forced tuple smoke")
     tuple_smoke.add_argument("--allow-zero-estimate", action="store_true", help="allow forced smoke when the compiled tuple cost estimate is zero")
+    tuple_smoke.add_argument(
+        "--poll-timeout-seconds",
+        type=float,
+        default=300.0,
+        help="max seconds to wait for tuple-smoke execution before returning PROVIDER_POLL_TIMEOUT",
+    )
     tuple_smoke.add_argument("--write-artifact", action="store_true")
     jobs = sub.add_parser("jobs")
     jobs.add_argument("job_id", nargs="?")
@@ -322,14 +331,15 @@ def main() -> None:
     elif args.command == "smoke":
         smoke_gateway(args.url, api_key=args.api_key, recipe=args.recipe)
     elif args.command == "tuple-smoke":
-        asyncio.run(
-            provider_smoke_command(
+        raise SystemExit(
+            _run_provider_smoke_command_bounded(
                 args.config_dir,
                 args.tuple,
                 args.recipe,
-                ExecutionMode(args.mode),
+                args.mode,
                 budget_usd=args.budget_usd,
                 allow_zero_estimate=args.allow_zero_estimate,
+                poll_timeout_seconds=args.poll_timeout_seconds,
                 write_artifact=args.write_artifact,
             )
         )
@@ -513,7 +523,15 @@ def _credentials_empty(credentials: dict[str, dict[str, str]]) -> bool:
 def _bounded_live_tuple_catalog_findings(tuples, credentials: dict[str, dict[str, str]]) -> list[dict[str, object]]:
     timeout_seconds = _live_tuple_catalog_timeout_seconds()
     if timeout_seconds <= 0:
-        return live_tuple_catalog_findings(tuples, credentials)
+        return _live_tuple_catalog_findings_callable()(tuples, credentials)
+    if timeout_seconds < 0.1:
+        return [
+            {
+                "severity": "error",
+                "dimension": "live_tuple_catalog",
+                "reason": f"live tuple catalog check timed out after {timeout_seconds:g}s; skipped bounded live lookup",
+            }
+        ]
 
     methods = mp.get_all_start_methods()
     start_method = "spawn" if sys.platform == "darwin" and "spawn" in methods else ("fork" if "fork" in methods else methods[0])
@@ -548,11 +566,51 @@ def _bounded_live_tuple_catalog_findings(tuples, credentials: dict[str, dict[str
     ]
 
 
+def _thread_bounded_live_tuple_catalog_findings(tuples, credentials: dict[str, dict[str, str]], timeout_seconds: float) -> list[dict[str, object]]:
+    result: dict[str, object] = {}
+
+    def run_lookup() -> None:
+        try:
+            result["findings"] = _live_tuple_catalog_findings_callable()(tuples, credentials)
+            result["ok"] = True
+        except Exception as exc:
+            result["ok"] = False
+            result["error"] = f"{type(exc).__name__}: {exc}"
+
+    thread = threading.Thread(target=run_lookup, daemon=True)
+    thread.start()
+    thread.join(timeout_seconds)
+    if thread.is_alive():
+        return [
+            {
+                "severity": "error",
+                "dimension": "live_tuple_catalog",
+                "reason": f"live tuple catalog check timed out after {timeout_seconds:g}s; skipped bounded live lookup",
+            }
+        ]
+    if result.get("ok") is True:
+        findings = result.get("findings")
+        return findings if isinstance(findings, list) else []
+    return [
+        {
+            "severity": "error",
+            "dimension": "live_tuple_catalog",
+            "reason": str(result.get("error") or "live tuple catalog worker failed"),
+        }
+    ]
+
+
 def _live_tuple_catalog_findings_worker(tuples, credentials: dict[str, dict[str, str]], result_queue) -> None:
     try:
-        result_queue.put({"ok": True, "findings": live_tuple_catalog_findings(tuples, credentials)})
+        result_queue.put({"ok": True, "findings": _live_tuple_catalog_findings_callable()(tuples, credentials)})
     except Exception as exc:
         result_queue.put({"ok": False, "error": f"{type(exc).__name__}: {exc}"})
+
+
+def _live_tuple_catalog_findings_callable():
+    module = sys.modules.get("gpucall.cli")
+    candidate = getattr(module, "live_tuple_catalog_findings", None) if module is not None else None
+    return candidate if callable(candidate) else live_tuple_catalog_findings
 
 
 def _live_tuple_catalog_timeout_seconds() -> float:
@@ -1819,10 +1877,14 @@ async def provider_smoke_command(
     *,
     budget_usd: float,
     allow_zero_estimate: bool = False,
+    poll_timeout_seconds: float | None = 300.0,
     write_artifact: bool = False,
 ) -> None:
     if budget_usd < 0:
         raise SystemExit("--budget-usd must be non-negative")
+    if poll_timeout_seconds is not None and poll_timeout_seconds <= 0:
+        raise SystemExit("--poll-timeout-seconds must be positive")
+    _cap_provider_smoke_admission_lease_ttl(poll_timeout_seconds)
     runtime = build_runtime(config_dir)
     recipe = runtime.compiler.recipes.get(recipe_name)
     if recipe is None:
@@ -1840,32 +1902,14 @@ async def provider_smoke_command(
         raise SystemExit(f"tuple-smoke budget exceeded before execution: estimated={estimated:.6f}, budget={budget_usd:.6f}")
     try:
         summary: dict[str, object]
-        if mode is ExecutionMode.STREAM:
-            chunks = []
-            stream = runtime.dispatcher.execute_stream(plan)
-            try:
-                while len(chunks) < 2:
-                    try:
-                        chunks.append(await asyncio.wait_for(stream.__anext__(), timeout=10.0))
-                    except StopAsyncIteration:
-                        break
-            finally:
-                await stream.aclose()
-            summary = _provider_smoke_base_summary(runtime, tuple, recipe_name, mode)
-            summary.update({"chunks": len(chunks), "sample": chunks[:2]})
-            _finish_provider_smoke_summary(summary, started_at=started_at, config_dir=config_dir, plan=plan, write_artifact=write_artifact)
-            return
+        wait_seconds = _provider_smoke_wait_seconds(plan.timeout_seconds, poll_timeout_seconds)
         if mode is ExecutionMode.ASYNC:
-            job = await runtime.dispatcher.submit_async(plan)
-            deadline = asyncio.get_running_loop().time() + plan.timeout_seconds
-            current = job
-            while asyncio.get_running_loop().time() < deadline:
-                loaded = await runtime.jobs.get(job.job_id)
-                if loaded is not None:
-                    current = loaded
-                    if is_terminal_job_state(loaded.state):
-                        break
-                await asyncio.sleep(1.0)
+            job = await asyncio.wait_for(runtime.dispatcher.submit_async(plan), timeout=min(wait_seconds, 10.0))
+            current = await _wait_provider_smoke_job(runtime, job.job_id, wait_seconds=wait_seconds)
+            timed_out = not is_terminal_job_state(current.state)
+            if timed_out:
+                runtime.dispatcher.cancel_job(job.job_id)
+                current = await _wait_provider_smoke_job(runtime, job.job_id, wait_seconds=5.0, current=current)
             summary = {
                 **_provider_smoke_base_summary(runtime, tuple, recipe_name, mode),
                 "tuple": tuple,
@@ -1874,27 +1918,238 @@ async def provider_smoke_command(
                 "job_id": job.job_id,
                 "state": current.state.value,
                 "completed": current.state is JobState.COMPLETED,
+                "cancel_requested": timed_out,
+                "poll_timeout_seconds": wait_seconds,
             }
             if current.result is not None:
                 summary["result"] = current.result.model_dump(mode="json")
-            if current.error:
+            if current.attempts:
+                summary["attempts"] = [attempt.model_dump(mode="json") for attempt in current.attempts]
+            if timed_out:
+                summary["error"] = {
+                    "message": f"tuple-smoke poll timed out after {wait_seconds:.1f}s; cancellation requested",
+                    "code": "PROVIDER_POLL_TIMEOUT",
+                    "status_code": 504,
+                    "retryable": True,
+                }
+            elif current.error:
+                code = current.provider_error_code.value if current.provider_error_code is not None else None
                 summary["error"] = {
                     "message": current.error,
-                    "code": "PROVIDER_ERROR" if current.state is JobState.FAILED else current.state.value,
+                    "code": code or ("PROVIDER_ERROR" if current.state is JobState.FAILED else current.state.value),
                     "status_code": 502 if current.state is JobState.FAILED else None,
                     "retryable": current.state in {JobState.FAILED, JobState.EXPIRED},
                 }
             _finish_provider_smoke_summary(summary, started_at=started_at, config_dir=config_dir, plan=plan, write_artifact=write_artifact)
+            if not _provider_smoke_passed(summary):
+                raise SystemExit(1)
             return
-        result = await runtime.dispatcher.execute_sync(plan)
+        with _provider_smoke_wall_timeout(wait_seconds):
+            if mode is ExecutionMode.STREAM:
+                chunks = []
+                stream = runtime.dispatcher.execute_stream(plan)
+                try:
+                    while len(chunks) < 2:
+                        try:
+                            chunks.append(await asyncio.wait_for(stream.__anext__(), timeout=min(10.0, wait_seconds)))
+                        except StopAsyncIteration:
+                            break
+                finally:
+                    await stream.aclose()
+                summary = _provider_smoke_base_summary(runtime, tuple, recipe_name, mode)
+                summary.update({"chunks": len(chunks), "sample": chunks[:2], "poll_timeout_seconds": wait_seconds})
+                _finish_provider_smoke_summary(summary, started_at=started_at, config_dir=config_dir, plan=plan, write_artifact=write_artifact)
+                return
+            result = await asyncio.wait_for(runtime.dispatcher.execute_sync(plan), timeout=wait_seconds)
+            summary = _provider_smoke_base_summary(runtime, tuple, recipe_name, mode)
+            summary["poll_timeout_seconds"] = wait_seconds
+            summary["result"] = result.model_dump(mode="json")
+            _finish_provider_smoke_summary(summary, started_at=started_at, config_dir=config_dir, plan=plan, write_artifact=write_artifact)
+    except (asyncio.TimeoutError, TimeoutError):
         summary = _provider_smoke_base_summary(runtime, tuple, recipe_name, mode)
-        summary["result"] = result.model_dump(mode="json")
+        wait_seconds = _provider_smoke_wait_seconds(plan.timeout_seconds, poll_timeout_seconds)
+        summary["poll_timeout_seconds"] = wait_seconds
+        summary["error"] = {
+            "message": f"tuple-smoke poll timed out after {wait_seconds:.1f}s",
+            "code": "PROVIDER_POLL_TIMEOUT",
+            "status_code": 504,
+            "retryable": True,
+        }
         _finish_provider_smoke_summary(summary, started_at=started_at, config_dir=config_dir, plan=plan, write_artifact=write_artifact)
+        raise SystemExit(1)
     except TupleError as exc:
         summary = _provider_smoke_base_summary(runtime, tuple, recipe_name, mode)
         summary["error"] = _provider_smoke_error(exc)
         _finish_provider_smoke_summary(summary, started_at=started_at, config_dir=config_dir, plan=plan, write_artifact=write_artifact)
         raise SystemExit(1) from exc
+
+
+def _run_provider_smoke_command_bounded(
+    config_dir: Path,
+    tuple: str,
+    recipe_name: str,
+    mode: str,
+    *,
+    budget_usd: float,
+    allow_zero_estimate: bool,
+    poll_timeout_seconds: float | None,
+    write_artifact: bool,
+) -> int:
+    if poll_timeout_seconds is None:
+        return _run_provider_smoke_command_child(
+            config_dir,
+            tuple,
+            recipe_name,
+            mode,
+            budget_usd=budget_usd,
+            allow_zero_estimate=allow_zero_estimate,
+            poll_timeout_seconds=poll_timeout_seconds,
+            write_artifact=write_artifact,
+        )
+    if poll_timeout_seconds <= 0:
+        raise SystemExit("--poll-timeout-seconds must be positive")
+    process = mp.Process(
+        target=_provider_smoke_process_target,
+        args=(config_dir, tuple, recipe_name, mode, budget_usd, allow_zero_estimate, poll_timeout_seconds, write_artifact),
+    )
+    process.start()
+    process.join(_provider_smoke_process_wall_seconds(mode, poll_timeout_seconds))
+    if process.is_alive():
+        process.terminate()
+        process.join(5.0)
+        if process.is_alive():
+            process.kill()
+            process.join(5.0)
+        summary = {
+            "tuple": tuple,
+            "recipe": recipe_name,
+            "mode": mode,
+            "passed": False,
+            "completed": False,
+            "poll_timeout_seconds": float(poll_timeout_seconds),
+            "error": {
+                "message": f"tuple-smoke wall-clock timed out after {float(poll_timeout_seconds):.1f}s",
+                "code": "PROVIDER_POLL_TIMEOUT",
+                "status_code": 504,
+                "retryable": True,
+            },
+        }
+        print(json.dumps(summary, ensure_ascii=False, indent=2, sort_keys=True))
+        return 1
+    return int(process.exitcode or 0)
+
+
+def _provider_smoke_process_target(
+    config_dir: Path,
+    tuple: str,
+    recipe_name: str,
+    mode: str,
+    budget_usd: float,
+    allow_zero_estimate: bool,
+    poll_timeout_seconds: float | None,
+    write_artifact: bool,
+) -> None:
+    raise SystemExit(
+        _run_provider_smoke_command_child(
+            config_dir,
+            tuple,
+            recipe_name,
+            mode,
+            budget_usd=budget_usd,
+            allow_zero_estimate=allow_zero_estimate,
+            poll_timeout_seconds=poll_timeout_seconds,
+            write_artifact=write_artifact,
+        )
+    )
+
+
+def _run_provider_smoke_command_child(
+    config_dir: Path,
+    tuple: str,
+    recipe_name: str,
+    mode: str,
+    *,
+    budget_usd: float,
+    allow_zero_estimate: bool,
+    poll_timeout_seconds: float | None,
+    write_artifact: bool,
+) -> int:
+    try:
+        asyncio.run(
+            provider_smoke_command(
+                config_dir,
+                tuple,
+                recipe_name,
+                ExecutionMode(mode),
+                budget_usd=budget_usd,
+                allow_zero_estimate=allow_zero_estimate,
+                poll_timeout_seconds=poll_timeout_seconds,
+                write_artifact=write_artifact,
+            )
+        )
+    except SystemExit as exc:
+        return int(exc.code or 0)
+    return 0
+
+
+def _provider_smoke_wait_seconds(plan_timeout_seconds: int | float, poll_timeout_seconds: float | None) -> float:
+    if poll_timeout_seconds is None:
+        return float(plan_timeout_seconds)
+    return max(0.001, min(float(plan_timeout_seconds), float(poll_timeout_seconds)))
+
+
+def _provider_smoke_process_wall_seconds(mode: str, poll_timeout_seconds: float) -> float:
+    if mode == ExecutionMode.ASYNC.value:
+        return float(poll_timeout_seconds) + min(float(poll_timeout_seconds), 10.0) + 15.0
+    return float(poll_timeout_seconds) + 5.0
+
+
+def _cap_provider_smoke_admission_lease_ttl(poll_timeout_seconds: float | None) -> None:
+    if poll_timeout_seconds is None:
+        return
+    smoke_ttl = max(float(poll_timeout_seconds) + 30.0, 30.0)
+    raw = os.getenv("GPUCALL_ADMISSION_LEASE_TTL_SECONDS")
+    try:
+        current = float(raw) if raw is not None and raw.strip() else None
+    except ValueError:
+        current = None
+    if current is None or current > smoke_ttl:
+        os.environ["GPUCALL_ADMISSION_LEASE_TTL_SECONDS"] = f"{smoke_ttl:.3f}"
+
+
+async def _wait_provider_smoke_job(runtime, job_id: str, *, wait_seconds: float, current=None):
+    deadline = asyncio.get_running_loop().time() + max(wait_seconds, 0.0)
+    while asyncio.get_running_loop().time() < deadline:
+        loaded = await runtime.jobs.get(job_id)
+        if loaded is not None:
+            current = loaded
+            if is_terminal_job_state(loaded.state):
+                return loaded
+        await asyncio.sleep(min(1.0, max(deadline - asyncio.get_running_loop().time(), 0.0)))
+    loaded = await runtime.jobs.get(job_id)
+    return loaded or current
+
+
+@contextmanager
+def _provider_smoke_wall_timeout(seconds: float):
+    if not hasattr(signal, "setitimer"):
+        yield
+        return
+    previous_handler = signal.getsignal(signal.SIGALRM)
+    previous_timer = signal.setitimer(signal.ITIMER_REAL, 0)
+
+    def _raise_timeout(signum, frame):
+        raise TimeoutError(f"tuple-smoke wall-clock timeout after {seconds:.1f}s")
+
+    signal.signal(signal.SIGALRM, _raise_timeout)
+    signal.setitimer(signal.ITIMER_REAL, max(seconds, 0.001))
+    try:
+        yield
+    finally:
+        signal.setitimer(signal.ITIMER_REAL, 0)
+        signal.signal(signal.SIGALRM, previous_handler)
+        if previous_timer[0] > 0:
+            signal.setitimer(signal.ITIMER_REAL, previous_timer[0], previous_timer[1])
 
 
 def _provider_smoke_base_summary(runtime, tuple: str, recipe_name: str, mode: ExecutionMode) -> dict[str, object]:
@@ -1962,6 +2217,7 @@ def _provider_smoke_request(runtime, recipe, mode: ExecutionMode, tuple: str) ->
         messages=messages,
         inline_inputs=inline_inputs,
         input_refs=input_refs,
+        max_tokens=16,
     )
 
 

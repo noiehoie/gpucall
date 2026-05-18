@@ -729,6 +729,7 @@ def test_provider_smoke_uses_chat_messages_for_chat_only_provider(tmp_path) -> N
     assert request.messages[0].role == "user"
     assert request.messages[0].content == "gpucall tuple smoke"
     assert request.inline_inputs == {}
+    assert request.max_tokens == 16
 
 
 def test_validate_config_cli(tmp_path) -> None:
