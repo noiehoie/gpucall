@@ -124,6 +124,61 @@ def test_migrate_patch_apply_writes_helper_and_annotations(tmp_path) -> None:
     helper = (project / "gpucall_migration.py").read_text(encoding="utf-8")
     assert "class _AsyncAnthropicMessagesCompat" in helper
     assert "async def create" in helper
+    assert "\nfrom openai import OpenAI" not in helper
+    assert "\nfrom gpucall_sdk import GPUCallClient" not in helper
+    exec(helper, {})
+
+
+def test_migrate_patch_rewrites_local_anthropic_import_without_global_dependency(tmp_path) -> None:
+    project = tmp_path / "project"
+    project.mkdir()
+    source = project / "vision.py"
+    source.write_text(
+        "def run():\n"
+        "    import anthropic\n"
+        "    client = anthropic.Anthropic(api_key='x')\n"
+        "    return client\n",
+        encoding="utf-8",
+    )
+
+    report = patch_suggestions(project, source="vision-app", apply=True)
+
+    assert "vision.py" in report["changed_files"]
+    text = source.read_text(encoding="utf-8")
+    assert "from gpucall_migration import AnthropicCompat, AsyncAnthropicCompat" in text
+    assert "client = AnthropicCompat(api_key='x')" in text
+
+
+def test_migrate_patch_rewrites_combined_anthropic_import(tmp_path) -> None:
+    project = tmp_path / "project"
+    project.mkdir()
+    source = project / "client.py"
+    source.write_text(
+        "from anthropic import Anthropic, AsyncAnthropic\n"
+        "a = Anthropic()\n"
+        "b = AsyncAnthropic()\n",
+        encoding="utf-8",
+    )
+
+    report = patch_suggestions(project, source="combined-app", apply=True)
+
+    assert "client.py" in report["changed_files"]
+    text = source.read_text(encoding="utf-8")
+    assert "from gpucall_migration import AnthropicCompat as Anthropic, AsyncAnthropicCompat as AsyncAnthropic" in text
+    assert "from anthropic import" not in text
+
+
+def test_migrate_patch_does_not_touch_model_literal_only_files(tmp_path) -> None:
+    project = tmp_path / "project"
+    project.mkdir()
+    source = project / "settings.py"
+    source.write_text("MODEL = 'claude-haiku-4-5-20251001'\n", encoding="utf-8")
+
+    report = patch_suggestions(project, source="literal-app", apply=True)
+
+    assert "settings.py" not in report["changed_files"]
+    assert "gpucall_migration.py" not in report["changed_files"]
+    assert source.read_text(encoding="utf-8") == "MODEL = 'claude-haiku-4-5-20251001'\n"
 
 
 def test_migrate_patch_apply_rewrites_openai_client_constructor(tmp_path) -> None:
@@ -153,6 +208,35 @@ def test_migrate_helper_fails_closed_without_gpucall_env(tmp_path) -> None:
     assert '_required_env("GPUCALL_API_KEY")' in helper
     assert 'os.environ.get("GPUCALL_API_KEY", "gpucall")' not in helper
     assert 'os.environ.get("GPUCALL_BASE_URL", "http://127.0.0.1:18088")' not in helper
+    assert "\nfrom openai import OpenAI" not in helper
+    assert "\nfrom gpucall_sdk import GPUCallClient" not in helper
+
+
+def test_migrate_helper_fallback_rejects_stream_and_omits_none_anthropic_text(tmp_path, monkeypatch) -> None:
+    project = tmp_path / "project"
+    project.mkdir()
+    source = project / "client.py"
+    source.write_text("from openai import OpenAI\nclient = OpenAI()\n", encoding="utf-8")
+    monkeypatch.setenv("GPUCALL_BASE_URL", "http://127.0.0.1:9")
+    monkeypatch.setenv("GPUCALL_API_KEY", "x")
+
+    patch_suggestions(project, source="openai-app", apply=True)
+    namespace: dict[str, object] = {}
+    helper = (project / "gpucall_migration.py").read_text(encoding="utf-8").replace(
+        "from openai import OpenAI  # type: ignore",
+        "raise ModuleNotFoundError('openai')",
+    )
+    exec(helper, namespace)
+
+    client = namespace["gpucall_openai_client"]()
+    try:
+        client.chat.completions.create(messages=[{"role": "user", "content": "x"}], stream=True)
+    except RuntimeError as exc:
+        assert "stream=True" in str(exc)
+    else:  # pragma: no cover
+        raise AssertionError("stream=True should fail closed in stdlib fallback")
+    prompt = namespace["_anthropic_prompt"]([{"content": [{"type": "text", "text": None}, {"type": "text", "text": "ok"}]}])
+    assert prompt == "ok"
 
 
 def test_migrate_trace_parses_news_class_metrics_without_raw_log(tmp_path) -> None:

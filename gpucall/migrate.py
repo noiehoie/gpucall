@@ -9,6 +9,7 @@ import sys
 import time
 from dataclasses import dataclass
 from pathlib import Path
+from textwrap import dedent
 from typing import Any
 
 from gpucall.workload_contract import (
@@ -462,10 +463,7 @@ def patch_suggestions(project: Path, *, source: str | None = None, apply: bool =
 def _apply_migration_patch(project: Path, rows: list[dict[str, Any]], *, source: str | None = None) -> list[str]:
     changed: set[str] = set()
     helper = project / "gpucall_migration.py"
-    helper_text = _migration_helper_text(source=source)
-    if not helper.exists() or helper.read_text(encoding="utf-8") != helper_text:
-        helper.write_text(helper_text, encoding="utf-8")
-        changed.add(str(helper.relative_to(project)))
+    helper_needed = False
     paths = sorted({str(row["path"]) for row in rows if str(row.get("path", "")).endswith(".py")})
     for rel in paths:
         path = project / rel
@@ -474,30 +472,34 @@ def _apply_migration_patch(project: Path, rows: list[dict[str, Any]], *, source:
         except OSError:
             continue
         marker = "# gpucall-migrate: direct provider path migrated to gpucall compatibility helpers."
-        import_line = "from gpucall_migration import gpucall_client  # gpucall-migrate\n"
         updated = text
-        updated = updated.replace("from anthropic import Anthropic", "from gpucall_migration import AnthropicCompat as Anthropic")
-        updated = updated.replace("from anthropic import AsyncAnthropic", "from gpucall_migration import AsyncAnthropicCompat as AsyncAnthropic")
+        updated = _rewrite_anthropic_imports(updated)
+        updated = re.sub(
+            r"(?m)^(\s*)import anthropic\s*(?:#.*)?$",
+            r"\1from gpucall_migration import AnthropicCompat, AsyncAnthropicCompat",
+            updated,
+        )
+        updated = updated.replace("anthropic.Anthropic(", "AnthropicCompat(")
+        updated = updated.replace("anthropic.AsyncAnthropic(", "AsyncAnthropicCompat(")
         if "from openai import OpenAI" in updated:
             updated = updated.replace("from openai import OpenAI", "from gpucall_migration import gpucall_openai_client")
             updated = re.sub(r"\bOpenAI\s*\(", "gpucall_openai_client(", updated)
-        if import_line not in updated and "gpucall_migration" not in updated:
-            updated = _insert_after_future_imports(updated, import_line)
-        if marker not in updated:
-            lines = updated.splitlines(keepends=True)
-            line_numbers = sorted({int(row["line"]) for row in rows if row["path"] == rel}, reverse=True)
-            for line_number in line_numbers:
-                index = max(0, min(line_number - 1, len(lines)))
-                lines.insert(index, marker + "\n")
-            updated = "".join(lines)
         if updated != text:
+            helper_needed = "gpucall_migration" in updated
+            if marker not in updated:
+                updated = _insert_after_future_imports(updated, marker + "\n")
             path.write_text(updated, encoding="utf-8")
             changed.add(rel)
+    if helper_needed:
+        helper_text = _migration_helper_text(source=source)
+        if not helper.exists() or helper.read_text(encoding="utf-8") != helper_text:
+            helper.write_text(helper_text, encoding="utf-8")
+            changed.add(str(helper.relative_to(project)))
     manifest = {
         "schema_version": 1,
         "source": source,
         "changed_files": sorted(changed),
-        "note": "The patch adds deterministic gpucall compatibility helpers and rewrites common Anthropic/OpenAI client constructors to route through gpucall.",
+        "note": "The patch adds deterministic stdlib gpucall compatibility helpers only when provider constructors are actually rewritten.",
     }
     manifest_dir = project / ".gpucall-migration"
     manifest_dir.mkdir(parents=True, exist_ok=True)
@@ -507,69 +509,268 @@ def _apply_migration_patch(project: Path, rows: list[dict[str, Any]], *, source:
     return sorted(changed)
 
 
+def _rewrite_anthropic_imports(text: str) -> str:
+    def replace(match: re.Match[str]) -> str:
+        indent = match.group("indent")
+        symbols = [item.strip() for item in match.group("symbols").split(",")]
+        rewritten: list[str] = []
+        passthrough: list[str] = []
+        for symbol in symbols:
+            if symbol == "Anthropic":
+                rewritten.append("AnthropicCompat as Anthropic")
+            elif symbol == "AsyncAnthropic":
+                rewritten.append("AsyncAnthropicCompat as AsyncAnthropic")
+            else:
+                passthrough.append(symbol)
+        lines: list[str] = []
+        if rewritten:
+            lines.append(f"{indent}from gpucall_migration import {', '.join(rewritten)}")
+        if passthrough:
+            lines.append(f"{indent}from anthropic import {', '.join(passthrough)}")
+        return "\n".join(lines)
+
+    return re.sub(r"(?m)^(?P<indent>\s*)from anthropic import (?P<symbols>[A-Za-z0-9_, ]+)\s*$", replace, text)
+
+
 def _migration_helper_text(*, source: str | None) -> str:
-    source_line = f'SOURCE = "{source}"\n' if source else 'SOURCE = None\n'
+    source_repr = repr(source) if source is not None else "None"
     return (
-        "from __future__ import annotations\n\n"
-        "import os\n\n"
-        "from dataclasses import dataclass\n"
-        "from typing import Any\n\n"
-        "from openai import OpenAI\n"
-        "from gpucall_sdk import GPUCallClient\n\n"
-        f"{source_line}\n"
-        "def _required_env(name: str) -> str:\n"
-        "    value = os.environ.get(name)\n"
-        "    if not value:\n"
-        "        raise RuntimeError(f\"{name} is required for gpucall migration helper\")\n"
-        "    return value\n"
-        "\n\n"
-        "def gpucall_client(base_url: str | None = None, api_key: str | None = None) -> GPUCallClient:\n"
-        "    return GPUCallClient(\n"
-        "        base_url or _required_env(\"GPUCALL_BASE_URL\"),\n"
-        "        api_key=api_key or _required_env(\"GPUCALL_API_KEY\"),\n"
-        "    )\n"
-        "\n\n"
-        "def gpucall_openai_client(*args: Any, **kwargs: Any) -> OpenAI:\n"
-        "    base = os.environ.get(\"GPUCALL_OPENAI_BASE_URL\") or _required_env(\"GPUCALL_BASE_URL\")\n"
-        "    kwargs.setdefault(\"base_url\", base.rstrip(\"/\") + \"/v1\")\n"
-        "    kwargs.setdefault(\"api_key\", _required_env(\"GPUCALL_API_KEY\"))\n"
-        "    return OpenAI(*args, **kwargs)\n"
-        "\n\n"
-        "@dataclass\n"
-        "class _AnthropicContent:\n"
-        "    text: str\n"
-        "\n\n"
-        "@dataclass\n"
-        "class _AnthropicMessage:\n"
-        "    content: list[_AnthropicContent]\n"
-        "\n\n"
-        "def _anthropic_prompt(messages: list[dict[str, Any]] | None) -> str:\n"
-        "    parts: list[str] = []\n"
-        "    for item in messages or []:\n"
-        "        content = item.get(\"content\") if isinstance(item, dict) else None\n"
-        "        if isinstance(content, str):\n"
-        "            parts.append(content)\n"
-        "        elif isinstance(content, list):\n"
-        "            parts.extend(str(part.get(\"text\")) for part in content if isinstance(part, dict) and part.get(\"type\") == \"text\")\n"
-        "    return \"\\n\".join(parts)\n"
-        "\n\n"
-        "class _AnthropicMessagesCompat:\n"
-        "    def create(self, *, messages: list[dict[str, Any]] | None = None, max_tokens: int | None = None, temperature: float | None = None, **_: Any) -> _AnthropicMessage:\n"
-        "        result = gpucall_client().infer(prompt=_anthropic_prompt(messages), max_tokens=max_tokens, temperature=temperature)\n"
-        "        text = str(((result.get(\"result\") or {}).get(\"value\")) or result.get(\"value\") or \"\")\n"
-        "        return _AnthropicMessage(content=[_AnthropicContent(text=text)])\n"
-        "\n\n"
-        "class _AsyncAnthropicMessagesCompat:\n"
-        "    async def create(self, *, messages: list[dict[str, Any]] | None = None, max_tokens: int | None = None, temperature: float | None = None, **kwargs: Any) -> _AnthropicMessage:\n"
-        "        return _AnthropicMessagesCompat().create(messages=messages, max_tokens=max_tokens, temperature=temperature, **kwargs)\n"
-        "\n\n"
-        "class AnthropicCompat:\n"
-        "    def __init__(self, *_: Any, **__: Any) -> None:\n"
-        "        self.messages = _AnthropicMessagesCompat()\n"
-        "\n\n"
-        "class AsyncAnthropicCompat:\n"
-        "    def __init__(self, *_: Any, **__: Any) -> None:\n"
-        "        self.messages = _AsyncAnthropicMessagesCompat()\n"
+        dedent(
+            """
+            from __future__ import annotations
+
+            import json
+            import os
+            import urllib.error
+            import urllib.request
+            from dataclasses import dataclass
+            from typing import Any
+
+            SOURCE = __SOURCE_REPR__
+
+
+            class _AttrDict(dict):
+                def __getattr__(self, name: str) -> Any:
+                    try:
+                        return self[name]
+                    except KeyError as exc:
+                        raise AttributeError(name) from exc
+
+
+            def _objectify(value: Any) -> Any:
+                if isinstance(value, dict):
+                    return _AttrDict({key: _objectify(item) for key, item in value.items()})
+                if isinstance(value, list):
+                    return [_objectify(item) for item in value]
+                return value
+
+
+            def _required_env(name: str) -> str:
+                value = os.environ.get(name)
+                if not value:
+                    raise RuntimeError(f"{name} is required for gpucall migration helper")
+                return value
+
+
+            def _openai_base_url(base_url: str | None = None) -> str:
+                base = base_url or os.environ.get("GPUCALL_OPENAI_BASE_URL") or _required_env("GPUCALL_BASE_URL")
+                base = base.rstrip("/")
+                return base if base.endswith("/v1") else base + "/v1"
+
+
+            def _api_key(api_key: str | None = None) -> str:
+                return api_key or _required_env("GPUCALL_API_KEY")
+
+
+            def _chat_completion(
+                *,
+                messages: list[dict[str, Any]],
+                model: str | None = None,
+                max_tokens: int | None = None,
+                temperature: float | None = None,
+                base_url: str | None = None,
+                api_key: str | None = None,
+                timeout: float | None = None,
+                **extra: Any,
+            ) -> dict[str, Any]:
+                if extra.get("stream") is True:
+                    raise RuntimeError("gpucall migration helper fallback does not support stream=True")
+                payload: dict[str, Any] = {
+                    "model": model or os.environ.get("GPUCALL_MODEL") or "gpucall",
+                    "messages": messages,
+                }
+                if max_tokens is not None:
+                    payload["max_tokens"] = max_tokens
+                if temperature is not None:
+                    payload["temperature"] = temperature
+                payload.update({key: value for key, value in extra.items() if value is not None})
+                request = urllib.request.Request(
+                    _openai_base_url(base_url) + "/chat/completions",
+                    data=json.dumps(payload).encode("utf-8"),
+                    headers={
+                        "Authorization": f"Bearer {_api_key(api_key)}",
+                        "Content-Type": "application/json",
+                    },
+                    method="POST",
+                )
+                request_timeout = timeout if timeout is not None else float(os.environ.get("GPUCALL_MIGRATION_TIMEOUT_SECONDS", "900"))
+                try:
+                    with urllib.request.urlopen(request, timeout=request_timeout) as response:
+                        return json.loads(response.read().decode("utf-8"))
+                except urllib.error.HTTPError as exc:
+                    body = exc.read().decode("utf-8", errors="replace")[:2000]
+                    raise RuntimeError(f"gpucall request failed status={exc.code} body={body}") from exc
+
+
+            def _extract_text(response: dict[str, Any]) -> str:
+                choices = response.get("choices")
+                if isinstance(choices, list) and choices:
+                    first = choices[0]
+                    if isinstance(first, dict):
+                        message = first.get("message")
+                        if isinstance(message, dict) and message.get("content") is not None:
+                            return str(message["content"])
+                        if first.get("text") is not None:
+                            return str(first["text"])
+                return ""
+
+
+            class _GPUCallClientCompat:
+                def __init__(self, base_url: str | None = None, api_key: str | None = None) -> None:
+                    self.base_url = base_url
+                    self.api_key = api_key
+
+                def infer(self, *, prompt: str, max_tokens: int | None = None, temperature: float | None = None, model: str | None = None, **kwargs: Any) -> dict[str, Any]:
+                    response = _chat_completion(
+                        messages=[{"role": "user", "content": prompt}],
+                        model=model,
+                        max_tokens=max_tokens,
+                        temperature=temperature,
+                        base_url=self.base_url,
+                        api_key=self.api_key,
+                        **kwargs,
+                    )
+                    text = _extract_text(response)
+                    return {"result": {"value": text}, "value": text, "raw": response}
+
+
+            def gpucall_client(base_url: str | None = None, api_key: str | None = None) -> Any:
+                try:
+                    from gpucall_sdk import GPUCallClient  # type: ignore
+                except ModuleNotFoundError:
+                    return _GPUCallClientCompat(base_url=base_url, api_key=api_key)
+                return GPUCallClient(
+                    base_url or _required_env("GPUCALL_BASE_URL"),
+                    api_key=api_key or _required_env("GPUCALL_API_KEY"),
+                )
+
+
+            class _OpenAIChatCompletionsCompat:
+                def __init__(self, *, base_url: str | None = None, api_key: str | None = None) -> None:
+                    self.base_url = base_url
+                    self.api_key = api_key
+
+                def create(self, *, messages: list[dict[str, Any]], model: str | None = None, max_tokens: int | None = None, temperature: float | None = None, **kwargs: Any) -> Any:
+                    return _objectify(
+                        _chat_completion(
+                            messages=messages,
+                            model=model,
+                            max_tokens=max_tokens,
+                            temperature=temperature,
+                            base_url=self.base_url,
+                            api_key=self.api_key,
+                            **kwargs,
+                        )
+                    )
+
+
+            class _OpenAIChatCompat:
+                def __init__(self, *, base_url: str | None = None, api_key: str | None = None) -> None:
+                    self.completions = _OpenAIChatCompletionsCompat(base_url=base_url, api_key=api_key)
+
+
+            class _OpenAICompat:
+                def __init__(self, *, base_url: str | None = None, api_key: str | None = None, **_: Any) -> None:
+                    self.chat = _OpenAIChatCompat(base_url=base_url, api_key=api_key)
+
+                def __getattr__(self, name: str) -> Any:
+                    raise RuntimeError(f"gpucall migration helper fallback only supports chat.completions, not OpenAI.{name}")
+
+
+            def gpucall_openai_client(*args: Any, **kwargs: Any) -> Any:
+                base = kwargs.setdefault("base_url", _openai_base_url())
+                kwargs.setdefault("api_key", _api_key())
+                try:
+                    from openai import OpenAI  # type: ignore
+                except ModuleNotFoundError:
+                    return _OpenAICompat(base_url=str(base), api_key=str(kwargs["api_key"]))
+                return OpenAI(*args, **kwargs)
+
+
+            @dataclass
+            class _AnthropicContent:
+                text: str
+
+
+            @dataclass
+            class _AnthropicMessage:
+                content: list[_AnthropicContent]
+
+
+            def _anthropic_prompt(messages: list[dict[str, Any]] | None) -> str:
+                parts: list[str] = []
+                for item in messages or []:
+                    content = item.get("content") if isinstance(item, dict) else None
+                    if isinstance(content, str):
+                        parts.append(content)
+                    elif isinstance(content, list):
+                        parts.extend(str(part["text"]) for part in content if isinstance(part, dict) and part.get("type") == "text" and part.get("text") is not None)
+                return "\\n".join(parts)
+
+
+            class _AnthropicMessagesCompat:
+                def create(
+                    self,
+                    *,
+                    messages: list[dict[str, Any]] | None = None,
+                    system: str | None = None,
+                    model: str | None = None,
+                    max_tokens: int | None = None,
+                    temperature: float | None = None,
+                    **kwargs: Any,
+                ) -> _AnthropicMessage:
+                    prompt = _anthropic_prompt(messages)
+                    openai_messages = []
+                    if system:
+                        openai_messages.append({"role": "system", "content": system})
+                    openai_messages.append({"role": "user", "content": prompt})
+                    response = _chat_completion(
+                        messages=openai_messages,
+                        model=model,
+                        max_tokens=max_tokens,
+                        temperature=temperature,
+                        **kwargs,
+                    )
+                    return _AnthropicMessage(content=[_AnthropicContent(text=_extract_text(response))])
+
+
+            class _AsyncAnthropicMessagesCompat:
+                async def create(self, *, messages: list[dict[str, Any]] | None = None, max_tokens: int | None = None, temperature: float | None = None, **kwargs: Any) -> _AnthropicMessage:
+                    return _AnthropicMessagesCompat().create(messages=messages, max_tokens=max_tokens, temperature=temperature, **kwargs)
+
+
+            class AnthropicCompat:
+                def __init__(self, *_: Any, **__: Any) -> None:
+                    self.messages = _AnthropicMessagesCompat()
+
+
+            class AsyncAnthropicCompat:
+                def __init__(self, *_: Any, **__: Any) -> None:
+                    self.messages = _AsyncAnthropicMessagesCompat()
+            """
+        )
+        .lstrip()
+        .replace("__SOURCE_REPR__", source_repr)
     )
 
 
