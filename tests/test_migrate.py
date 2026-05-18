@@ -99,7 +99,7 @@ def test_migrate_cli_writes_reports(tmp_path) -> None:
 
     data = json.loads((out / "migration-report.json").read_text(encoding="utf-8"))
     assert data["phase"] == "migration-assessment"
-    assert data["preflight_requests"][0]["intent"] == "rank_text_items"
+    assert data["preflight_requests"][0]["intent"] == "summarize_text"
     assert (out / "migration-report.md").exists()
 
 
@@ -420,6 +420,41 @@ def test_migrate_helper_routes_integrated_news_analysis_to_rank_not_rss_match(tm
         "You are the integrated daily news analysis engine.",
     )
     assert intent == "rank_text_items"
+
+
+def test_migrate_helper_routes_editorial_summary_to_summarize_not_rank(tmp_path, monkeypatch) -> None:
+    project = tmp_path / "project"
+    project.mkdir()
+    source = project / "client.py"
+    source.write_text("from openai import OpenAI\nclient = OpenAI()\n", encoding="utf-8")
+    monkeypatch.setenv("GPUCALL_BASE_URL", "http://127.0.0.1:9")
+    monkeypatch.setenv("GPUCALL_API_KEY", "x")
+
+    patch_suggestions(project, source="openai-app", apply=True)
+    namespace: dict[str, object] = {}
+    exec((project / "gpucall_migration.py").read_text(encoding="utf-8"), namespace)
+
+    intent = namespace["gpucall_guess_intent"](
+        "社説本文を読み、テーマ、立場、重要な論点を200字で要約してください。JSONにsummary_jaを返す。",
+        "You summarize newspaper editorials. Do not rank topics.",
+    )
+    assert intent == "summarize_text"
+
+
+def test_migrate_preflight_routes_editorial_summary_to_summarize(tmp_path) -> None:
+    project = tmp_path / "project"
+    project.mkdir()
+    (project / "editorial.py").write_text(
+        "def run():\n"
+        "    call_llm('社説本文を読み、テーマ、立場、重要な論点を200字で要約してください')\n",
+        encoding="utf-8",
+    )
+
+    report = assess_project(project, source="news-system")
+    requests = build_preflight_requests(report, source="news-system")
+
+    assert requests[0]["task"] == "infer"
+    assert requests[0]["intent"] == "summarize_text"
 
 
 def test_migrate_helper_routes_vision_and_large_text_through_async(tmp_path, monkeypatch) -> None:

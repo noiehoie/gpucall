@@ -700,6 +700,7 @@ def _migration_helper_text(*, source: str | None) -> str:
             import mimetypes
             import os
             import hashlib
+            import re
             import threading
             import time
             import urllib.error
@@ -835,31 +836,45 @@ def _migration_helper_text(*, source: str | None) -> str:
 
             def gpucall_guess_intent(prompt: str, system_prompt: str | None = None) -> str:
                 text = f"{system_prompt or ''}\\n{prompt}".lower()
+                routing_text = re.sub(r"do not rank topics?\\.?|do not rank\\.?|not rank topics?\\.?", "", text)
                 has_rss_source = "rss" in text or "feed" in text or "フィード" in text
-                has_news_ranking_contract = (
-                    "rank" in text
-                    or "ranking" in text
-                    or "rankings" in text
-                    or "importance" in text
-                    or "important" in text
-                    or "score" in text
-                    or "top topics" in text
-                    or "topic list" in text
-                    or "source_articles" in text
-                    or "east-west" in text
-                    or "western_tone" in text
-                    or "non_western_tone" in text
-                    or "gap_description" in text
-                    or "japan-suru" in text
-                    or "重要" in text
-                    or "重要度" in text
-                    or "順位" in text
-                    or "ランキング" in text
-                    or "トピック" in text
-                    or "統合分析" in text
-                    or "報道ギャップ" in text
-                    or "東西" in text
+                has_summary_contract = (
+                    "summary" in text
+                    or "summarize" in text
+                    or "要約" in text
+                    or "要旨" in text
+                    or "要点" in text
                 )
+                strong_news_ranking_contract = (
+                    "top topics" in routing_text
+                    or "topic list" in routing_text
+                    or "source_articles" in routing_text
+                    or "east-west" in routing_text
+                    or "western_tone" in routing_text
+                    or "non_western_tone" in routing_text
+                    or "gap_description" in routing_text
+                    or "japan-suru" in routing_text
+                    or "統合分析" in routing_text
+                    or "重要度ランキング" in routing_text
+                    or "報道ギャップ" in routing_text
+                    or "東西" in routing_text
+                )
+                ranking_action_contract = (
+                    "rank" in routing_text
+                    or "ranking" in routing_text
+                    or "rankings" in routing_text
+                    or "順位" in routing_text
+                    or "ランキング" in routing_text
+                ) and (
+                    "topic" in routing_text
+                    or "topics" in routing_text
+                    or "トピック" in routing_text
+                    or "news" in routing_text
+                    or "source_articles" in routing_text
+                    or "importance" in routing_text
+                    or "重要度" in routing_text
+                )
+                has_news_ranking_contract = strong_news_ranking_contract or ranking_action_contract
                 has_match_contract = (
                     "semantic" in text
                     or "match" in text
@@ -886,6 +901,8 @@ def _migration_helper_text(*, source: str | None) -> str:
                     return "rss_semantic_match"
                 if has_news_ranking_contract:
                     return "rank_text_items"
+                if has_summary_contract:
+                    return "summarize_text"
                 if has_rss_source and has_match_contract:
                     return "rss_semantic_match"
                 if explicit_match_contract:
@@ -1374,23 +1391,46 @@ def _preflight_required(rows: list[dict[str, Any]]) -> list[dict[str, str]]:
 
 def _workload_guess(path: str, symbol: str, detail: str) -> tuple[str, str | None, int]:
     text = " ".join([path, symbol, detail]).lower()
+    routing_text = re.sub(r"do not rank topics?\.?|do not rank\.?|not rank topics?\.?", "", text)
     if "translate" in text or "translation" in text:
         return "infer", "translate_text", 32768
-    has_news_ranking_contract = (
-        "rank" in text
-        or "ranking" in text
-        or "score" in text
-        or "topic" in text
-        or "importance" in text
-        or "source_articles" in text
-        or "east-west" in text
-        or "重要" in text
-        or "順位" in text
-        or "ランキング" in text
-        or "トピック" in text
-        or "統合分析" in text
-        or "報道ギャップ" in text
+    has_summary_contract = (
+        "summary" in text
+        or "summarize" in text
+        or "要約" in text
+        or "要旨" in text
+        or "要点" in text
     )
+    strong_news_ranking_contract = (
+        "top topics" in routing_text
+        or "topic list" in routing_text
+        or "source_articles" in routing_text
+        or "east-west" in routing_text
+        or "western_tone" in routing_text
+        or "non_western_tone" in routing_text
+        or "gap_description" in routing_text
+        or "japan-suru" in routing_text
+        or "統合分析" in routing_text
+        or "重要度ランキング" in routing_text
+        or "報道ギャップ" in routing_text
+        or "東西" in routing_text
+    )
+    ranking_action_contract = (
+        "rank" in routing_text
+        or "ranking" in routing_text
+        or "rankings" in routing_text
+        or "順位" in routing_text
+        or "ランキング" in routing_text
+    ) and (
+        "topic" in routing_text
+        or "topics" in routing_text
+        or "トピック" in routing_text
+        or "news" in routing_text
+        or "source_articles" in routing_text
+        or "importance" in routing_text
+        or "重要度" in routing_text
+    )
+    has_news_ranking_contract = strong_news_ranking_contract or ranking_action_contract
     has_rss_source = "rss" in text or "feed" in text or "フィード" in text
     has_match_contract = (
         "semantic" in text
@@ -1407,6 +1447,8 @@ def _workload_guess(path: str, symbol: str, detail: str) -> tuple[str, str | Non
         return "infer", "pairwise_match", 131072
     if has_news_ranking_contract:
         return "infer", "rank_text_items", 131072
+    if has_summary_contract:
+        return "infer", "summarize_text", 65536
     if "vision" in text or "image" in text or "ocr" in text:
         return "vision", "understand_document_image", 8192
     if has_rss_source and has_match_contract:
@@ -1415,8 +1457,6 @@ def _workload_guess(path: str, symbol: str, detail: str) -> tuple[str, str | Non
         return "infer", "rss_semantic_match", 131072
     if "pair" in text or "match" in text:
         return "infer", "pairwise_match", 131072
-    if "summary" in text or "summarize" in text:
-        return "infer", "summarize_text", 65536
     return "infer", None, 32768
 
 
