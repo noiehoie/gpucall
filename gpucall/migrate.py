@@ -1051,7 +1051,8 @@ def _migration_helper_text(*, source: str | None) -> str:
                         payload["max_tokens"] = max_tokens
                     if temperature is not None:
                         payload["temperature"] = temperature
-                    if len(body) > int(os.environ.get("GPUCALL_MIGRATION_INLINE_TEXT_LIMIT", "8192")):
+                    inline_limit = int(os.environ.get("GPUCALL_MIGRATION_INLINE_TEXT_LIMIT", "524288"))
+                    if len(body) > inline_limit:
                         data_ref = _upload_bytes(body, name="prompt.txt", content_type="text/plain", timeout=timeout)
                         payload["inline_inputs"] = {}
                         payload["input_refs"] = [data_ref]

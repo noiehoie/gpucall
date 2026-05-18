@@ -468,6 +468,41 @@ def test_migrate_helper_routes_vision_and_large_text_through_async(tmp_path, mon
     assert any(url.endswith("/v2/tasks/async") and payload["mode"] == "async" for _method, url, payload in captured)
 
 
+def test_migrate_helper_keeps_medium_text_inline_for_text_tuple_compatibility(tmp_path, monkeypatch) -> None:
+    project = tmp_path / "project"
+    project.mkdir()
+    source = project / "client.py"
+    source.write_text("from openai import OpenAI\nclient = OpenAI()\n", encoding="utf-8")
+    monkeypatch.setenv("GPUCALL_BASE_URL", "http://127.0.0.1:9")
+    monkeypatch.setenv("GPUCALL_API_KEY", "x")
+    monkeypatch.setenv("GPUCALL_MIGRATION_MIN_REQUEST_INTERVAL_SECONDS", "0")
+
+    patch_suggestions(project, source="openai-app", apply=True)
+    namespace: dict[str, object] = {}
+    exec((project / "gpucall_migration.py").read_text(encoding="utf-8"), namespace)
+
+    captured: list[tuple[str, str, dict]] = []
+
+    def fake_json_request(method, url, payload, **_kwargs):
+        captured.append((method, url, dict(payload)))
+        if url.endswith("/v2/tasks/sync"):
+            return {"result": {"kind": "inline", "value": "ok"}}
+        if url.endswith("/v2/tasks/async"):
+            return {"job_id": "j1", "state": "QUEUED", "status_url": "/v2/jobs/j1"}
+        if url.endswith("/v2/jobs/j1"):
+            return {"job_id": "j1", "state": "COMPLETED", "result": {"kind": "inline", "value": "ok"}}
+        raise AssertionError(url)
+
+    namespace["_json_request"] = fake_json_request
+    namespace["time"].sleep = lambda _seconds: None
+
+    assert namespace["gpucall_infer_text"]("x" * 70000, intent="rss_semantic_match", timeout=1) == "ok"
+    task_payload = next(payload for _method, url, payload in captured if url.endswith(("/v2/tasks/sync", "/v2/tasks/async")))
+    assert "prompt" in task_payload["inline_inputs"]
+    assert "input_refs" not in task_payload
+    assert not any(url.endswith("/v2/objects/presign-put") for _method, url, _payload in captured)
+
+
 def test_migrate_helper_retries_gateway_rate_limit_without_fallback(tmp_path, monkeypatch) -> None:
     project = tmp_path / "project"
     project.mkdir()
