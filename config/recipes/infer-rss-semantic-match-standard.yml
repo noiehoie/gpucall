@@ -7,7 +7,7 @@ data_classification: confidential
 allowed_modes:
 - sync
 - async
-context_budget_tokens: 131072
+context_budget_tokens: 262144
 resource_class: standard
 latency_class: batch
 quality_floor: standard
@@ -39,4 +39,4 @@ required_model_capabilities:
 output_contract: plain-text
 expected_cold_start_seconds: 180
 cost_policy:
-  max_estimated_cost_usd: 2.0
+  max_estimated_cost_usd: 4.0

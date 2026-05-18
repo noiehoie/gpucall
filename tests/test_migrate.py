@@ -367,6 +367,25 @@ def test_migrate_helper_prefers_rss_match_contract_over_rank_terms(tmp_path, mon
     assert intent == "rss_semantic_match"
 
 
+def test_migrate_helper_does_not_treat_rank_prompt_with_pairs_as_pairwise(tmp_path, monkeypatch) -> None:
+    project = tmp_path / "project"
+    project.mkdir()
+    source = project / "client.py"
+    source.write_text("from openai import OpenAI\nclient = OpenAI()\n", encoding="utf-8")
+    monkeypatch.setenv("GPUCALL_BASE_URL", "http://127.0.0.1:9")
+    monkeypatch.setenv("GPUCALL_API_KEY", "x")
+
+    patch_suggestions(project, source="openai-app", apply=True)
+    namespace: dict[str, object] = {}
+    exec((project / "gpucall_migration.py").read_text(encoding="utf-8"), namespace)
+
+    intent = namespace["gpucall_guess_intent"](
+        "Rank global news topics by importance. Compare source pairs and matching coverage as evidence.",
+        "Return a ranked topic list with east-west gap analysis.",
+    )
+    assert intent == "rank_text_items"
+
+
 def test_migrate_helper_routes_vision_and_large_text_through_async(tmp_path, monkeypatch) -> None:
     project = tmp_path / "project"
     project.mkdir()

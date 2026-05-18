@@ -712,7 +712,9 @@ def _migration_helper_text(*, source: str | None) -> str:
             _GATEWAY_RATE_LOCK = threading.Lock()
             _GATEWAY_NEXT_REQUEST_AT = 0.0
             _GATEWAY_ASYNC_SEMAPHORE = threading.BoundedSemaphore(max(1, int(os.environ.get("GPUCALL_MIGRATION_ASYNC_CONCURRENCY", "2"))))
-            _GATEWAY_REQUEST_SEMAPHORE = threading.BoundedSemaphore(max(1, int(os.environ.get("GPUCALL_MIGRATION_REQUEST_CONCURRENCY", "1"))))
+            _GATEWAY_INFLIGHT_SEMAPHORE = threading.BoundedSemaphore(
+                max(1, int(os.environ.get("GPUCALL_MIGRATION_INFLIGHT_CONCURRENCY", os.environ.get("GPUCALL_MIGRATION_REQUEST_CONCURRENCY", "2"))))
+            )
 
 
             class _AttrDict(dict):
@@ -845,7 +847,7 @@ def _migration_helper_text(*, source: str | None) -> str:
                     or "照合" in text
                     or "マッチ" in text
                 )
-                if ("pairwise" in text or "pair-wise" in text or ("pair" in text and has_match_contract)) and has_match_contract:
+                if ("pairwise" in text or "pair-wise" in text or "pairwise_similarity" in text) and has_match_contract:
                     return "pairwise_match"
                 if has_rss_source and has_match_contract:
                     return "rss_semantic_match"
@@ -860,7 +862,15 @@ def _migration_helper_text(*, source: str | None) -> str:
                 return "summarize_text"
 
 
-            def _json_request(method: str, url: str, payload: dict[str, Any], *, timeout: float | None = None, auth: bool = True) -> dict[str, Any]:
+            def _gateway_timeout(timeout: float | None, *, floor: bool = True) -> float:
+                env_timeout = float(os.environ.get("GPUCALL_MIGRATION_TIMEOUT_SECONDS", "900"))
+                if timeout is None:
+                    return env_timeout
+                caller_timeout = float(timeout)
+                return max(caller_timeout, env_timeout) if floor else caller_timeout
+
+
+            def _json_request(method: str, url: str, payload: dict[str, Any], *, timeout: float | None = None, auth: bool = True, floor_timeout: bool = True) -> dict[str, Any]:
                 headers = {"Content-Type": "application/json"}
                 if auth:
                     headers.update(gpucall_openai_headers())
@@ -870,7 +880,7 @@ def _migration_helper_text(*, source: str | None) -> str:
                     headers=headers,
                     method=method,
                 )
-                request_timeout = timeout if timeout is not None else float(os.environ.get("GPUCALL_MIGRATION_TIMEOUT_SECONDS", "900"))
+                request_timeout = _gateway_timeout(timeout, floor=floor_timeout)
                 rate_limit_retries = _int_env("GPUCALL_MIGRATION_HTTP_RETRIES", "8")
                 no_eligible_retries = _int_env("GPUCALL_MIGRATION_NO_ELIGIBLE_RETRIES", "12")
                 max_retries = max(rate_limit_retries, no_eligible_retries)
@@ -912,7 +922,7 @@ def _migration_helper_text(*, source: str | None) -> str:
                 if not isinstance(upload_url, str) or not isinstance(data_ref, dict):
                     raise RuntimeError("gpucall presign response is missing upload_url or data_ref")
                 request = urllib.request.Request(upload_url, data=body, headers={"Content-Type": mime}, method="PUT")
-                request_timeout = timeout if timeout is not None else float(os.environ.get("GPUCALL_MIGRATION_TIMEOUT_SECONDS", "900"))
+                request_timeout = _gateway_timeout(timeout)
                 with urllib.request.urlopen(request, timeout=request_timeout) as response:
                     if response.status >= 400:
                         raise RuntimeError(f"gpucall object upload failed status={response.status}")
@@ -946,11 +956,10 @@ def _migration_helper_text(*, source: str | None) -> str:
 
             def _submit_task_and_wait(payload: dict[str, Any], *, timeout: float | None = None, prompt_bytes: int = 0) -> dict[str, Any]:
                 task = str(payload.get("task") or "infer")
-                with _GATEWAY_REQUEST_SEMAPHORE:
-                    if not _should_submit_async(task, prompt_bytes=prompt_bytes):
-                        return _json_request("POST", _base_url() + "/v2/tasks/sync", payload, timeout=timeout)
-                    with _GATEWAY_ASYNC_SEMAPHORE:
-                        return _submit_async_task_and_wait(payload, timeout=timeout, prompt_bytes=prompt_bytes)
+                if not _should_submit_async(task, prompt_bytes=prompt_bytes):
+                    return _json_request("POST", _base_url() + "/v2/tasks/sync", payload, timeout=timeout)
+                with _GATEWAY_ASYNC_SEMAPHORE:
+                    return _submit_async_task_and_wait(payload, timeout=timeout, prompt_bytes=prompt_bytes)
 
 
             def _submit_async_task_and_wait(payload: dict[str, Any], *, timeout: float | None = None, prompt_bytes: int = 0) -> dict[str, Any]:
@@ -966,7 +975,7 @@ def _migration_helper_text(*, source: str | None) -> str:
                 deadline = time.monotonic() + wait_seconds
                 interval = float(os.environ.get("GPUCALL_MIGRATION_POLL_INTERVAL_SECONDS", "10"))
                 while True:
-                    job = _json_request("GET", _base_url() + status_url, {}, timeout=min(max(deadline - time.monotonic(), 1.0), 30.0))
+                    job = _json_request("GET", _base_url() + status_url, {}, timeout=min(max(deadline - time.monotonic(), 1.0), 30.0), floor_timeout=False)
                     state = str(job.get("state") or "")
                     if state in {"COMPLETED", "SUCCEEDED", "COMPLETED_AFTER_CALLER_TIMEOUT"}:
                         result = job.get("result")
@@ -994,23 +1003,24 @@ def _migration_helper_text(*, source: str | None) -> str:
                 timeout: float | None = None,
             ) -> str:
                 full_prompt = f"{system_prompt}\\n\\n{prompt}" if system_prompt else prompt
-                payload: dict[str, Any] = {
-                    "task": "infer",
-                    "mode": "sync",
-                    "intent": intent or gpucall_guess_intent(prompt, system_prompt),
-                    "inline_inputs": {"prompt": {"value": full_prompt, "content_type": "text/plain"}},
-                    "metadata": {"openai.model": model or os.environ.get("GPUCALL_MODEL") or "gpucall"},
-                }
-                if max_tokens is not None:
-                    payload["max_tokens"] = max_tokens
-                if temperature is not None:
-                    payload["temperature"] = temperature
                 body = full_prompt.encode("utf-8")
-                if len(body) > int(os.environ.get("GPUCALL_MIGRATION_INLINE_TEXT_LIMIT", "8192")):
-                    data_ref = _upload_bytes(body, name="prompt.txt", content_type="text/plain", timeout=timeout)
-                    payload["inline_inputs"] = {}
-                    payload["input_refs"] = [data_ref]
-                response = _submit_task_and_wait(payload, timeout=timeout, prompt_bytes=len(body))
+                with _GATEWAY_INFLIGHT_SEMAPHORE:
+                    payload: dict[str, Any] = {
+                        "task": "infer",
+                        "mode": "sync",
+                        "intent": intent or gpucall_guess_intent(prompt, system_prompt),
+                        "inline_inputs": {"prompt": {"value": full_prompt, "content_type": "text/plain"}},
+                        "metadata": {"openai.model": model or os.environ.get("GPUCALL_MODEL") or "gpucall"},
+                    }
+                    if max_tokens is not None:
+                        payload["max_tokens"] = max_tokens
+                    if temperature is not None:
+                        payload["temperature"] = temperature
+                    if len(body) > int(os.environ.get("GPUCALL_MIGRATION_INLINE_TEXT_LIMIT", "8192")):
+                        data_ref = _upload_bytes(body, name="prompt.txt", content_type="text/plain", timeout=timeout)
+                        payload["inline_inputs"] = {}
+                        payload["input_refs"] = [data_ref]
+                    response = _submit_task_and_wait(payload, timeout=timeout, prompt_bytes=len(body))
                 return _extract_task_text(response)
 
 
@@ -1026,7 +1036,7 @@ def _migration_helper_text(*, source: str | None) -> str:
                 if not isinstance(upload_url, str) or not isinstance(data_ref, dict):
                     raise RuntimeError("gpucall presign response is missing upload_url or data_ref")
                 request = urllib.request.Request(upload_url, data=body, headers={"Content-Type": content_type}, method="PUT")
-                request_timeout = timeout if timeout is not None else float(os.environ.get("GPUCALL_MIGRATION_TIMEOUT_SECONDS", "900"))
+                request_timeout = _gateway_timeout(timeout)
                 with urllib.request.urlopen(request, timeout=request_timeout):
                     pass
                 return data_ref
@@ -1042,19 +1052,20 @@ def _migration_helper_text(*, source: str | None) -> str:
                 max_tokens: int | None = None,
                 timeout: float | None = None,
             ) -> str:
-                data_ref = _upload_file(Path(image_path), timeout=timeout)
                 full_prompt = f"{system_prompt}\\n\\n{prompt}" if system_prompt else prompt
-                payload: dict[str, Any] = {
-                    "task": "vision",
-                    "mode": "sync",
-                    "intent": intent or "understand_document_image",
-                    "input_refs": [data_ref],
-                    "inline_inputs": {"prompt": {"value": full_prompt, "content_type": "text/plain"}},
-                    "metadata": {"openai.model": model or os.environ.get("GPUCALL_MODEL") or "gpucall"},
-                }
-                if max_tokens is not None:
-                    payload["max_tokens"] = max_tokens
-                response = _submit_task_and_wait(payload, timeout=timeout, prompt_bytes=len(full_prompt.encode("utf-8")))
+                with _GATEWAY_INFLIGHT_SEMAPHORE:
+                    data_ref = _upload_file(Path(image_path), timeout=timeout)
+                    payload: dict[str, Any] = {
+                        "task": "vision",
+                        "mode": "sync",
+                        "intent": intent or "understand_document_image",
+                        "input_refs": [data_ref],
+                        "inline_inputs": {"prompt": {"value": full_prompt, "content_type": "text/plain"}},
+                        "metadata": {"openai.model": model or os.environ.get("GPUCALL_MODEL") or "gpucall"},
+                    }
+                    if max_tokens is not None:
+                        payload["max_tokens"] = max_tokens
+                    response = _submit_task_and_wait(payload, timeout=timeout, prompt_bytes=len(full_prompt.encode("utf-8")))
                 return _extract_task_text(response)
 
 
