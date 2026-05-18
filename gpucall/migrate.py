@@ -791,6 +791,10 @@ def _migration_helper_text(*, source: str | None) -> str:
                 return min(ceiling, base * float(attempt + 1))
 
 
+            def _no_eligible_max_wait_seconds() -> float:
+                return max(0.0, _float_env("GPUCALL_MIGRATION_NO_ELIGIBLE_MAX_WAIT_SECONDS", "120"))
+
+
             def _is_retryable_no_eligible(exc: urllib.error.HTTPError, body: str) -> bool:
                 if exc.code != 503:
                     return False
@@ -935,6 +939,7 @@ def _migration_helper_text(*, source: str | None) -> str:
                 request_timeout = _gateway_timeout(timeout, floor=floor_timeout)
                 rate_limit_retries = _int_env("GPUCALL_MIGRATION_HTTP_RETRIES", "8")
                 no_eligible_retries = _int_env("GPUCALL_MIGRATION_NO_ELIGIBLE_RETRIES", "12")
+                no_eligible_wait_started: float | None = None
                 max_retries = max(rate_limit_retries, no_eligible_retries)
                 for attempt in range(max_retries + 1):
                     _pace_gateway_request()
@@ -949,8 +954,15 @@ def _migration_helper_text(*, source: str | None) -> str:
                             time.sleep(_retry_after_seconds(exc, attempt))
                             continue
                         if _is_retryable_no_eligible(exc, body) and attempt < no_eligible_retries:
+                            now = time.monotonic()
+                            if no_eligible_wait_started is None:
+                                no_eligible_wait_started = now
+                            delay = _no_eligible_backoff_seconds(attempt)
+                            max_wait = _no_eligible_max_wait_seconds()
+                            if max_wait and (now - no_eligible_wait_started + delay) > max_wait:
+                                raise RuntimeError(f"gpucall request failed status={exc.code} body={body}") from exc
                             request.data = json.dumps(payload).encode("utf-8")
-                            time.sleep(_no_eligible_backoff_seconds(attempt))
+                            time.sleep(delay)
                             continue
                         raise RuntimeError(f"gpucall request failed status={exc.code} body={body}") from exc
                 return json.loads(body) if body else {}
@@ -990,28 +1002,60 @@ def _migration_helper_text(*, source: str | None) -> str:
                 return _extract_text(response)
 
 
-            def _sync_wait_seconds(task: str, *, prompt_bytes: int, timeout: float | None = None) -> float:
-                env_timeout = float(os.environ.get("GPUCALL_MIGRATION_POLL_TIMEOUT_SECONDS", "1800"))
+            def _sync_wait_seconds(task: str, *, intent: str, prompt_bytes: int, timeout: float | None = None) -> float:
+                if task == "vision":
+                    env_timeout = float(os.environ.get(
+                        "GPUCALL_MIGRATION_VISION_POLL_TIMEOUT_SECONDS",
+                        os.environ.get("GPUCALL_MIGRATION_POLL_TIMEOUT_SECONDS", "1800"),
+                    ))
+                elif prompt_bytes > int(os.environ.get("GPUCALL_MIGRATION_ASYNC_TEXT_BYTES", "65536")):
+                    env_timeout = float(os.environ.get("GPUCALL_MIGRATION_TEXT_POLL_TIMEOUT_SECONDS", "600"))
+                else:
+                    env_timeout = float(os.environ.get("GPUCALL_MIGRATION_POLL_TIMEOUT_SECONDS", "1800"))
                 caller_timeout = float(timeout) if timeout is not None else env_timeout
                 if task == "vision" or prompt_bytes > int(os.environ.get("GPUCALL_MIGRATION_ASYNC_TEXT_BYTES", "65536")):
                     return max(caller_timeout, env_timeout)
                 return caller_timeout
 
 
-            def _should_submit_async(task: str, *, prompt_bytes: int) -> bool:
+            def _sync_preferred_intents() -> set[str]:
+                raw = os.environ.get(
+                    "GPUCALL_MIGRATION_SYNC_PREFERRED_INTENTS",
+                    "rss_semantic_match,pairwise_match,extract_json,translate_text",
+                )
+                return {item.strip() for item in raw.split(",") if item.strip()}
+
+
+            def _should_submit_async(task: str, *, intent: str, prompt_bytes: int) -> bool:
                 if os.environ.get("GPUCALL_MIGRATION_FORCE_SYNC", "").lower() in {"1", "true", "yes"}:
                     return False
                 if task == "vision":
                     return True
+                if intent in _sync_preferred_intents():
+                    return False
                 return prompt_bytes > int(os.environ.get("GPUCALL_MIGRATION_ASYNC_TEXT_BYTES", "65536"))
 
 
             def _submit_task_and_wait(payload: dict[str, Any], *, timeout: float | None = None, prompt_bytes: int = 0) -> dict[str, Any]:
                 task = str(payload.get("task") or "infer")
-                if not _should_submit_async(task, prompt_bytes=prompt_bytes):
-                    return _json_request("POST", _base_url() + "/v2/tasks/sync", payload, timeout=timeout)
+                intent = str(payload.get("intent") or "")
+                if not _should_submit_async(task, intent=intent, prompt_bytes=prompt_bytes):
+                    return _json_request("POST", _base_url() + "/v2/tasks/sync", payload, timeout=timeout, floor_timeout=False)
                 with _GATEWAY_ASYNC_SEMAPHORE:
                     return _submit_async_task_and_wait(payload, timeout=timeout, prompt_bytes=prompt_bytes)
+
+
+            def _cancel_async_job(job_id: str) -> None:
+                try:
+                    _json_request(
+                        "POST",
+                        _base_url() + f"/v2/jobs/{job_id}/cancel",
+                        {},
+                        timeout=10,
+                        floor_timeout=False,
+                    )
+                except Exception:
+                    pass
 
 
             def _submit_async_task_and_wait(payload: dict[str, Any], *, timeout: float | None = None, prompt_bytes: int = 0) -> dict[str, Any]:
@@ -1023,25 +1067,35 @@ def _migration_helper_text(*, source: str | None) -> str:
                 status_url = submitted.get("status_url")
                 if not isinstance(job_id, str) or not isinstance(status_url, str):
                     raise RuntimeError("gpucall async task response is missing job_id or status_url")
-                wait_seconds = _sync_wait_seconds(task, prompt_bytes=prompt_bytes, timeout=timeout)
+                wait_seconds = _sync_wait_seconds(task, intent=str(payload.get("intent") or ""), prompt_bytes=prompt_bytes, timeout=timeout)
                 deadline = time.monotonic() + wait_seconds
                 interval = float(os.environ.get("GPUCALL_MIGRATION_POLL_INTERVAL_SECONDS", "10"))
-                while True:
-                    job = _json_request("GET", _base_url() + status_url, {}, timeout=min(max(deadline - time.monotonic(), 1.0), 30.0), floor_timeout=False)
-                    state = str(job.get("state") or "")
-                    if state in {"COMPLETED", "SUCCEEDED", "COMPLETED_AFTER_CALLER_TIMEOUT"}:
-                        result = job.get("result")
-                        if isinstance(result, dict):
-                            return {"result": result}
-                        result_ref = job.get("result_ref")
-                        if isinstance(result_ref, dict):
-                            return {"result": {"kind": "ref", "ref": result_ref}}
-                        raise RuntimeError("gpucall async task completed without inline result")
-                    if state in {"FAILED", "CANCELLED", "EXPIRED"}:
-                        raise RuntimeError(f"gpucall async task failed state={state} error={job.get('error')} provider_error_code={job.get('provider_error_code')}")
-                    if time.monotonic() >= deadline:
-                        raise TimeoutError(f"gpucall async task timed out after {wait_seconds:.1f}s job_id={job_id}")
-                    time.sleep(interval)
+                cancel_on_exit = True
+                try:
+                    while True:
+                        job = _json_request("GET", _base_url() + status_url, {}, timeout=min(max(deadline - time.monotonic(), 1.0), 30.0), floor_timeout=False)
+                        state = str(job.get("state") or "")
+                        if state in {"COMPLETED", "SUCCEEDED", "COMPLETED_AFTER_CALLER_TIMEOUT"}:
+                            result = job.get("result")
+                            if isinstance(result, dict):
+                                cancel_on_exit = False
+                                return {"result": result}
+                            result_ref = job.get("result_ref")
+                            if isinstance(result_ref, dict):
+                                cancel_on_exit = False
+                                return {"result": {"kind": "ref", "ref": result_ref}}
+                            cancel_on_exit = False
+                            raise RuntimeError("gpucall async task completed without inline result")
+                        if state in {"FAILED", "CANCELLED", "EXPIRED"}:
+                            cancel_on_exit = False
+                            raise RuntimeError(f"gpucall async task failed state={state} error={job.get('error')} provider_error_code={job.get('provider_error_code')}")
+                        if time.monotonic() >= deadline:
+                            raise TimeoutError(f"gpucall async task timed out after {wait_seconds:.1f}s job_id={job_id}")
+                        time.sleep(interval)
+                except BaseException:
+                    if cancel_on_exit:
+                        _cancel_async_job(job_id)
+                    raise
 
 
             def gpucall_infer_text(

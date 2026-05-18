@@ -3,6 +3,8 @@ from __future__ import annotations
 from io import BytesIO
 import json
 
+import pytest
+
 from gpucall.migrate import (
     assess_project,
     build_preflight_requests,
@@ -533,6 +535,8 @@ def test_migrate_helper_keeps_medium_text_inline_for_text_tuple_compatibility(tm
 
     assert namespace["gpucall_infer_text"]("x" * 70000, intent="rss_semantic_match", timeout=1) == "ok"
     task_payload = next(payload for _method, url, payload in captured if url.endswith(("/v2/tasks/sync", "/v2/tasks/async")))
+    assert any(url.endswith("/v2/tasks/sync") for _method, url, _payload in captured)
+    assert not any(url.endswith("/v2/tasks/async") for _method, url, _payload in captured)
     assert "prompt" in task_payload["inline_inputs"]
     assert "input_refs" not in task_payload
     assert not any(url.endswith("/v2/objects/presign-put") for _method, url, _payload in captured)
@@ -636,6 +640,130 @@ def test_migrate_helper_retries_temporary_no_eligible_without_fallback(tmp_path,
     assert namespace["gpucall_infer_text"]("small prompt", timeout=1) == "ok"
     assert len(calls) == 2
     assert sleeps == [0.0]
+
+
+def test_migrate_helper_bounds_temporary_no_eligible_retry_wait(tmp_path, monkeypatch) -> None:
+    project = tmp_path / "project"
+    project.mkdir()
+    source = project / "client.py"
+    source.write_text("from openai import OpenAI\nclient = OpenAI()\n", encoding="utf-8")
+    monkeypatch.setenv("GPUCALL_BASE_URL", "http://127.0.0.1:9")
+    monkeypatch.setenv("GPUCALL_API_KEY", "x")
+    monkeypatch.setenv("GPUCALL_MIGRATION_MIN_REQUEST_INTERVAL_SECONDS", "0")
+    monkeypatch.setenv("GPUCALL_MIGRATION_NO_ELIGIBLE_BACKOFF_SECONDS", "4")
+    monkeypatch.setenv("GPUCALL_MIGRATION_NO_ELIGIBLE_MAX_BACKOFF_SECONDS", "30")
+    monkeypatch.setenv("GPUCALL_MIGRATION_NO_ELIGIBLE_MAX_WAIT_SECONDS", "5")
+    monkeypatch.setenv("GPUCALL_MIGRATION_NO_ELIGIBLE_RETRIES", "10")
+
+    patch_suggestions(project, source="openai-app", apply=True)
+    namespace: dict[str, object] = {}
+    exec((project / "gpucall_migration.py").read_text(encoding="utf-8"), namespace)
+
+    calls: list[str] = []
+    sleeps: list[float] = []
+    clock = {"now": 0.0}
+
+    def fake_urlopen(request, **_kwargs):
+        calls.append(request.full_url)
+        raise namespace["urllib"].error.HTTPError(
+            request.full_url,
+            503,
+            "Service Unavailable",
+            {},
+            BytesIO(b'{"code":"NO_ELIGIBLE_TUPLE","detail":"no eligible tuple after policy"}'),
+        )
+
+    namespace["urllib"].request.urlopen = fake_urlopen
+    namespace["time"].monotonic = lambda: clock["now"]
+
+    def fake_sleep(seconds: float) -> None:
+        sleeps.append(seconds)
+        clock["now"] += seconds
+
+    namespace["time"].sleep = fake_sleep
+
+    with pytest.raises(RuntimeError, match="NO_ELIGIBLE_TUPLE"):
+        namespace["gpucall_infer_text"]("small prompt", timeout=1)
+
+    assert len(calls) == 2
+    assert sleeps == [4.0]
+
+
+def test_migrate_helper_cancels_async_job_on_poll_timeout(tmp_path, monkeypatch) -> None:
+    project = tmp_path / "project"
+    project.mkdir()
+    source = project / "client.py"
+    source.write_text("from openai import OpenAI\nclient = OpenAI()\n", encoding="utf-8")
+    monkeypatch.setenv("GPUCALL_BASE_URL", "http://127.0.0.1:9")
+    monkeypatch.setenv("GPUCALL_API_KEY", "x")
+    monkeypatch.setenv("GPUCALL_MIGRATION_MIN_REQUEST_INTERVAL_SECONDS", "0")
+    monkeypatch.setenv("GPUCALL_MIGRATION_POLL_TIMEOUT_SECONDS", "2")
+    monkeypatch.setenv("GPUCALL_MIGRATION_POLL_INTERVAL_SECONDS", "1")
+
+    patch_suggestions(project, source="openai-app", apply=True)
+    namespace: dict[str, object] = {}
+    exec((project / "gpucall_migration.py").read_text(encoding="utf-8"), namespace)
+
+    calls: list[tuple[str, str]] = []
+    clock = {"now": 0.0}
+
+    def fake_json_request(method, url, payload, **_kwargs):
+        calls.append((method, url))
+        if url.endswith("/v2/tasks/async"):
+            return {"job_id": "j1", "state": "QUEUED", "status_url": "/v2/jobs/j1"}
+        if url.endswith("/v2/jobs/j1"):
+            return {"job_id": "j1", "state": "RUNNING"}
+        if url.endswith("/v2/jobs/j1/cancel"):
+            return {"job_id": "j1", "state": "CANCELLED", "cancelled": True}
+        raise AssertionError(url)
+
+    namespace["_json_request"] = fake_json_request
+    namespace["time"].monotonic = lambda: clock["now"]
+    namespace["time"].sleep = lambda seconds: clock.__setitem__("now", clock["now"] + seconds)
+
+    with pytest.raises(TimeoutError, match="j1"):
+        namespace["gpucall_infer_text"]("x" * 70000, intent="rank_text_items", timeout=1)
+
+    assert ("POST", "http://127.0.0.1:9/v2/jobs/j1/cancel") in calls
+
+
+def test_migrate_helper_text_async_uses_text_poll_timeout(tmp_path, monkeypatch) -> None:
+    project = tmp_path / "project"
+    project.mkdir()
+    source = project / "client.py"
+    source.write_text("from openai import OpenAI\nclient = OpenAI()\n", encoding="utf-8")
+    monkeypatch.setenv("GPUCALL_BASE_URL", "http://127.0.0.1:9")
+    monkeypatch.setenv("GPUCALL_API_KEY", "x")
+    monkeypatch.setenv("GPUCALL_MIGRATION_MIN_REQUEST_INTERVAL_SECONDS", "0")
+    monkeypatch.setenv("GPUCALL_MIGRATION_POLL_TIMEOUT_SECONDS", "1800")
+    monkeypatch.setenv("GPUCALL_MIGRATION_TEXT_POLL_TIMEOUT_SECONDS", "3")
+    monkeypatch.setenv("GPUCALL_MIGRATION_POLL_INTERVAL_SECONDS", "1")
+
+    patch_suggestions(project, source="openai-app", apply=True)
+    namespace: dict[str, object] = {}
+    exec((project / "gpucall_migration.py").read_text(encoding="utf-8"), namespace)
+
+    calls: list[tuple[str, str]] = []
+    clock = {"now": 0.0}
+
+    def fake_json_request(method, url, payload, **_kwargs):
+        calls.append((method, url))
+        if url.endswith("/v2/tasks/async"):
+            return {"job_id": "j2", "state": "QUEUED", "status_url": "/v2/jobs/j2"}
+        if url.endswith("/v2/jobs/j2"):
+            return {"job_id": "j2", "state": "RUNNING"}
+        if url.endswith("/v2/jobs/j2/cancel"):
+            return {"job_id": "j2", "state": "CANCELLED", "cancelled": True}
+        raise AssertionError(url)
+
+    namespace["_json_request"] = fake_json_request
+    namespace["time"].monotonic = lambda: clock["now"]
+    namespace["time"].sleep = lambda seconds: clock.__setitem__("now", clock["now"] + seconds)
+
+    with pytest.raises(TimeoutError, match="3.0s"):
+        namespace["gpucall_infer_text"]("x" * 70000, intent="rank_text_items", timeout=1)
+
+    assert ("POST", "http://127.0.0.1:9/v2/jobs/j2/cancel") in calls
 
 
 def test_migrate_trace_parses_news_class_metrics_without_raw_log(tmp_path) -> None:
