@@ -62,6 +62,81 @@ def test_admin_tenant_key_create_writes_credentials_and_lists_fingerprint(tmp_pa
     }
 
 
+def test_admin_tenant_key_create_can_emit_complete_manual_handoff(tmp_path, monkeypatch, capsys) -> None:
+    credentials = tmp_path / "credentials.yml"
+    config_dir = tmp_path / "config"
+    monkeypatch.setenv("GPUCALL_CREDENTIALS", str(credentials))
+
+    init_config(config_dir)
+    capsys.readouterr()
+    admin_command(
+        "tenant-create",
+        config_dir,
+        name="external-system",
+        requests_per_minute=None,
+        daily_budget_usd=None,
+        monthly_budget_usd=None,
+        max_request_estimated_cost_usd=None,
+        object_prefix=None,
+    )
+    capsys.readouterr()
+
+    admin_command(
+        "tenant-key-create",
+        config_dir,
+        name="external-system",
+        gateway_url="https://gpucall.example.internal",
+        recipe_inbox="admin@gpucall.example.internal:/opt/gpucall/state/recipe_requests/inbox",
+        requests_per_minute=None,
+        daily_budget_usd=None,
+        monthly_budget_usd=None,
+        max_request_estimated_cost_usd=None,
+        object_prefix=None,
+    )
+    created = json.loads(capsys.readouterr().out)
+
+    assert created["handoff"]["GPUCALL_TENANT"] == "external-system"
+    assert created["handoff"]["GPUCALL_BASE_URL"] == "https://gpucall.example.internal"
+    assert created["handoff"]["GPUCALL_API_KEY"] == created["api_key"]
+    assert created["handoff"]["GPUCALL_RECIPE_INBOX"] == "admin@gpucall.example.internal:/opt/gpucall/state/recipe_requests/inbox"
+    assert created["handoff"]["GPUCALL_QUALITY_FEEDBACK_INBOX"] == "admin@gpucall.example.internal:/opt/gpucall/state/quality_feedback/inbox"
+
+
+def test_admin_tenant_key_create_rejects_partial_manual_handoff(tmp_path, monkeypatch) -> None:
+    credentials = tmp_path / "credentials.yml"
+    config_dir = tmp_path / "config"
+    monkeypatch.setenv("GPUCALL_CREDENTIALS", str(credentials))
+
+    init_config(config_dir)
+    admin_command(
+        "tenant-create",
+        config_dir,
+        name="external-system",
+        requests_per_minute=None,
+        daily_budget_usd=None,
+        monthly_budget_usd=None,
+        max_request_estimated_cost_usd=None,
+        object_prefix=None,
+    )
+
+    try:
+        admin_command(
+            "tenant-key-create",
+            config_dir,
+            name="external-system",
+            gateway_url="https://gpucall.example.internal",
+            requests_per_minute=None,
+            daily_budget_usd=None,
+            monthly_budget_usd=None,
+            max_request_estimated_cost_usd=None,
+            object_prefix=None,
+        )
+    except SystemExit as exc:
+        assert "requires both --gateway-url and --recipe-inbox" in str(exc)
+    else:
+        raise AssertionError("tenant-key-create should reject partial handoff metadata")
+
+
 def test_admin_tenant_key_create_requires_existing_tenant(tmp_path, monkeypatch) -> None:
     credentials = tmp_path / "credentials.yml"
     config_dir = tmp_path / "config"

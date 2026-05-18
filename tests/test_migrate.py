@@ -1603,6 +1603,27 @@ def test_migrate_cli_onboard_fails_closed_when_gateway_readiness_blocks_canary(t
     assert report["gateway_readiness"]["checks"][0]["reason"] == "no_production_ready_route"
 
 
+def test_migrate_cli_onboard_fails_closed_when_readiness_gate_lacks_gateway_url(tmp_path, monkeypatch) -> None:
+    project = tmp_path / "project"
+    output = tmp_path / "out"
+    project.mkdir()
+    (project / "topic_engine.py").write_text("call_llm('rank topics')\n", encoding="utf-8")
+    baseline = _write_log(tmp_path, "baseline.log", "response_len=40461\nsource_count=14\nAnalysis complete: 15 topics ranked\n")
+    monkeypatch.setenv("GPUCALL_MIGRATION_READINESS_GATE", "1")
+    monkeypatch.delenv("GPUCALL_BASE_URL", raising=False)
+    monkeypatch.setenv("GPUCALL_API_KEY", "x")
+
+    assert main(["onboard", str(project), "--source", "fixture", "--output-dir", str(output), "--log-file", str(baseline), "--yes"]) == 2
+
+    report = json.loads((output / "onboard-report.json").read_text(encoding="utf-8"))
+    assert report["ready_for_canary"] is False
+    assert report["gateway_readiness"]["ok"] is False
+    assert report["gateway_readiness"]["checked"] is False
+    assert report["gateway_readiness"]["reason"] == "GPUCALL_BASE_URL not set"
+    assert any("export GPUCALL_BASE_URL" in item for item in report["next_actions"])
+    assert not any(item.startswith("materialize recipe-intake") for item in report["next_actions"])
+
+
 def test_migrate_cli_onboard_rejects_weak_draft_before_gateway_readiness(tmp_path, monkeypatch) -> None:
     project = tmp_path / "project"
     output = tmp_path / "out"
@@ -1624,6 +1645,9 @@ def test_migrate_cli_onboard_rejects_weak_draft_before_gateway_readiness(tmp_pat
     assert report["gateway_readiness"]["ok"] is False
     assert report["gateway_readiness"]["checks"][0]["reason"] == "recipe_draft_not_materializable"
     assert any("baseline metrics" in item for item in report["gateway_readiness"]["checks"][0]["blockers"])
+    assert any("do not materialize" in item for item in report["next_actions"])
+    assert any("successful caller baseline log" in item for item in report["next_actions"])
+    assert not any(item.startswith("materialize recipe-intake") for item in report["next_actions"])
 
 
 def test_contract_to_recipe_intake_preserves_contract_metadata() -> None:
@@ -1795,6 +1819,22 @@ def test_migrate_contract_rejects_failed_baseline_trace(tmp_path) -> None:
     assert workload["baseline_trace_failures"]["model_api_failure_count"] == 1
     assert intake["sanitized_request"]["draft_grammar"]["materialization_allowed"] is False
     assert any("baseline trace contains model/API failures" in item for item in intake["sanitized_request"]["draft_grammar"]["blockers"])
+    actions = migrate_module._onboard_next_actions(
+        contract,
+        trace,
+        {
+            "ok": False,
+            "checks": [
+                {
+                    "reason": "recipe_draft_not_materializable",
+                    "blockers": intake["sanitized_request"]["draft_grammar"]["blockers"],
+                }
+            ],
+        },
+    )
+    assert any("zero model/API and JSON extraction failures" in item for item in actions)
+    assert any("do not materialize" in item for item in actions)
+    assert not any(item.startswith("materialize recipe-intake") for item in actions)
 
 
 def test_migrate_compare_scopes_provider_temporary_failures_by_workload(tmp_path) -> None:

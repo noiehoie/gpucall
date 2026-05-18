@@ -446,7 +446,7 @@ def gateway_readiness_for_contract(contract: dict[str, Any]) -> dict[str, Any]:
     base_url = os.environ.get("GPUCALL_BASE_URL", "").rstrip("/")
     api_key = os.environ.get("GPUCALL_API_KEY", "")
     if not base_url:
-        return {"schema_version": 1, "phase": "gateway-readiness", "checked": False, "ok": True, "reason": "GPUCALL_BASE_URL not set"}
+        return {"schema_version": 1, "phase": "gateway-readiness", "checked": False, "ok": False, "reason": "GPUCALL_BASE_URL not set"}
     if not api_key:
         return {"schema_version": 1, "phase": "gateway-readiness", "checked": False, "ok": False, "reason": "GPUCALL_API_KEY not set"}
     for workload in contract.get("workloads", []) or []:
@@ -633,7 +633,7 @@ def onboard_project(
         "recipe_intake": recipe_intake,
         "recipe_intakes": recipe_intakes,
         "gateway_readiness": gateway_readiness,
-        "ready_for_canary": bool(gateway_readiness.get("ok") is True),
+        "ready_for_canary": _readiness_checked_ok(gateway_readiness),
         "next_actions": _onboard_next_actions(contract, trace_report, gateway_readiness),
     }
 
@@ -2280,6 +2280,33 @@ def _process_output_text(value: Any) -> str:
 
 
 def _onboard_next_actions(contract: dict[str, Any], trace: dict[str, Any] | None, gateway_readiness: dict[str, Any] | None = None) -> list[str]:
+    readiness_reason = str(gateway_readiness.get("reason") or "") if isinstance(gateway_readiness, dict) else ""
+    if readiness_reason == "GPUCALL_BASE_URL not set":
+        return [
+            "export GPUCALL_BASE_URL before onboarding; readiness-gated onboarding fails closed without a gateway URL",
+            "rerun gpucall-migrate onboard after the gateway URL is present",
+        ]
+    if readiness_reason == "GPUCALL_API_KEY not set":
+        return [
+            "export GPUCALL_API_KEY before onboarding; readiness-gated onboarding fails closed without a tenant key",
+            "rerun gpucall-migrate onboard after the tenant key is present",
+        ]
+
+    draft_blockers = _non_materializable_draft_blockers(gateway_readiness)
+    if draft_blockers:
+        actions = [
+            "do not materialize recipe-intake.json or run live caller canary; one or more caller drafts are not materializable",
+            "review workload-contract.json and gateway_readiness.checks[].blockers to fix the caller-side contract first",
+        ]
+        if _has_failed_baseline_blocker(draft_blockers):
+            actions.append(
+                "rerun the caller baseline command or supply a successful baseline trace with zero model/API and JSON extraction failures"
+            )
+        if trace is None or _has_missing_baseline_blocker(draft_blockers):
+            actions.append("run gpucall-migrate onboard with --log-file pointing at a successful caller baseline log")
+        actions.append("rerun gpucall-migrate onboard after the draft grammar blockers are cleared")
+        return actions
+
     actions = [
         "review workload-contract.json; it contains deterministic caller success metrics only",
         "materialize recipe-intake.json with gpucall-recipe-admin materialize --accept-all in a staging config",
@@ -2292,6 +2319,29 @@ def _onboard_next_actions(contract: dict[str, Any], trace: dict[str, Any] | None
     if contract.get("workloads"):
         actions.append("run gpucall-migrate compare against a gpucall canary trace before declaring onboarding Go")
     return actions
+
+
+def _readiness_checked_ok(gateway_readiness: dict[str, Any]) -> bool:
+    return bool(gateway_readiness.get("ok") is True and gateway_readiness.get("checked") is True)
+
+
+def _non_materializable_draft_blockers(gateway_readiness: dict[str, Any] | None) -> list[str]:
+    if not isinstance(gateway_readiness, dict):
+        return []
+    blockers: list[str] = []
+    for check in gateway_readiness.get("checks", []) or []:
+        if not isinstance(check, dict) or check.get("reason") != "recipe_draft_not_materializable":
+            continue
+        blockers.extend(str(item) for item in check.get("blockers", []) or [] if item)
+    return blockers
+
+
+def _has_failed_baseline_blocker(blockers: list[str]) -> bool:
+    return any("baseline trace contains" in item for item in blockers)
+
+
+def _has_missing_baseline_blocker(blockers: list[str]) -> bool:
+    return any("baseline metrics" in item or "metrics must not be empty" in item for item in blockers)
 
 
 def _write_outputs(report: dict[str, Any], output_dir: Path, stem: str) -> None:

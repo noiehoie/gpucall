@@ -1169,7 +1169,17 @@ def admin_command(
             raise SystemExit("admin tenant-key-create requires --name")
         if name not in config.tenants:
             raise SystemExit(f"unknown tenant: {name}; run admin tenant-create first")
+        if bool(gateway_url) != bool(recipe_inbox):
+            raise SystemExit("admin tenant-key-create handoff requires both --gateway-url and --recipe-inbox")
         token = _create_tenant_key(name)
+        handoff = (
+            _handoff_payload(tenant=name, token=token, gateway_url=gateway_url, recipe_inbox=recipe_inbox)
+            if gateway_url and recipe_inbox
+            else {
+                "GPUCALL_API_KEY": token,
+                "secret_handling": "show this value only once; store it in the caller system secret manager or process environment",
+            }
+        )
         print(
             json.dumps(
                 {
@@ -1177,10 +1187,7 @@ def admin_command(
                     "api_key": token,
                     "api_key_fingerprint": _fingerprint_secret(token),
                     "credentials_path": str(credentials_path()),
-                    "handoff": {
-                        "GPUCALL_API_KEY": token,
-                        "secret_handling": "show this value only once; store it in the caller system secret manager or process environment",
-                    },
+                    "handoff": handoff,
                 },
                 indent=2,
                 sort_keys=True,

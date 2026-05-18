@@ -75,6 +75,22 @@ The command:
 The output includes `api_key`. Treat that value as a secret. Do not paste it in
 tickets, READMEs, completion reports, or logs.
 
+When using manual handoff for an external-system migration, include the gateway
+URL and recipe inbox in the one-time output so the caller receives a complete
+environment contract:
+
+```bash
+gpucall admin tenant-key-create \
+  --name example-system \
+  --gateway-url https://gpucall-gateway.example.internal \
+  --recipe-inbox admin@gateway.example.internal:/opt/gpucall/state/recipe_requests/inbox
+```
+
+If either `--gateway-url` or `--recipe-inbox` is supplied, both are required.
+The returned `handoff` object then includes `GPUCALL_BASE_URL`,
+`GPUCALL_API_KEY`, `GPUCALL_RECIPE_INBOX`, quality-feedback inbox, onboarding
+docs, and SDK wheel URL.
+
 Verify without exposing the key:
 
 ```bash

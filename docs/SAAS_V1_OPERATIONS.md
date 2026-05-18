@@ -58,6 +58,10 @@ gpucall admin status
 gpucall admin tenant-list
 gpucall admin tenant-create --name tenant-a --daily-budget-usd 25 --monthly-budget-usd 500
 gpucall admin tenant-key-create --name tenant-a
+gpucall admin tenant-key-create \
+  --name tenant-a \
+  --gateway-url https://gpucall-gateway.example.internal \
+  --recipe-inbox admin@gateway.example.internal:/opt/gpucall/state/recipe_requests/inbox
 gpucall admin tenant-key-list
 gpucall admin automation-status
 gpucall admin automation-configure --handoff-mode handoff_file
@@ -78,7 +82,9 @@ gpucall admin tenant-usage
 
 `tenant-create` writes quota metadata only. `tenant-key-create` generates a
 caller-facing gateway API key, stores it in credentials, and prints the secret
-once for handoff. `tenant-onboard` creates tenant metadata when needed,
+once for handoff. When `--gateway-url` and `--recipe-inbox` are provided, its
+one-time handoff also contains the complete caller environment contract.
+`tenant-onboard` creates tenant metadata when needed,
 generates the key, and writes a `0600` handoff file for internal automation
 only when `admin.yml` sets `api_key_handoff_mode: handoff_file`.
 Use `automation-configure` rather than editing `admin.yml` directly; it keeps
