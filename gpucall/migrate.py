@@ -121,6 +121,7 @@ def main(argv: list[str] | None = None) -> int:
     onboard.add_argument("--backend")
     onboard.add_argument("--timeout-seconds", type=float, default=1800.0)
     onboard.add_argument("--apply", action="store_true", help="write a local gpucall migration helper and annotate direct provider call sites")
+    onboard.add_argument("--yes", action="store_true", help="non-interactive alias for --apply")
     args = parser.parse_args(argv)
     output_dir = args.output_dir or (args.project / ".gpucall-migration")
     if args.command == "assess":
@@ -190,7 +191,7 @@ def main(argv: list[str] | None = None) -> int:
             log_files=args.log_files,
             source=args.source,
             backend=args.backend,
-            apply=args.apply,
+            apply=args.apply or args.yes,
             timeout_seconds=args.timeout_seconds,
         )
         _write_outputs(report, output_dir, "onboard-report")
@@ -482,6 +483,7 @@ def _apply_migration_patch(project: Path, rows: list[dict[str, Any]], *, source:
         updated = updated.replace("anthropic.Anthropic(", "AnthropicCompat(")
         updated = updated.replace("anthropic.AsyncAnthropic(", "AsyncAnthropicCompat(")
         updated = _rewrite_news_style_local_gateway_calls(updated)
+        updated = _rewrite_hosted_anthropic_gateway_calls(updated)
         updated = _rewrite_openai_compatible_httpx_calls(updated)
         updated = _disable_hosted_fallback(updated)
         if "from openai import OpenAI" in updated:
@@ -630,6 +632,83 @@ def _rewrite_news_style_local_gateway_calls(text: str) -> str:
     )
     if updated != text and ("gpucall_infer_text" in updated or "gpucall_vision_file" in updated) and _gpucall_migration_import_line() not in updated:
         updated = _insert_after_future_imports(updated, _gpucall_migration_import_line())
+    return updated
+
+
+def _rewrite_hosted_anthropic_gateway_calls(text: str) -> str:
+    updated = text
+    text_hook = "    from src.util.claude_cli import call_claude_p\n"
+    text_replacement = (
+        "    if gpucall_should_use_gateway():\n"
+        "        return gpucall_infer_text(\n"
+        "            user_message,\n"
+        "            system_prompt=system_prompt,\n"
+        "            intent=gpucall_guess_intent(user_message, system_prompt),\n"
+        "            model=model,\n"
+        "            max_tokens=max_tokens,\n"
+        "            temperature=0.3,\n"
+        "            timeout=timeout,\n"
+        "        )\n"
+        "\n"
+        "    from src.util.claude_cli import call_claude_p\n"
+    )
+    updated = _replace_in_named_function(
+        updated,
+        "_call_anthropic",
+        text_hook,
+        text_replacement,
+        skip_if_contains="gpucall_infer_text(",
+    )
+
+    vision_hook = '    api_key = os.environ.get("NEWS_ANTHROPIC_API_KEY", "")\n'
+    vision_replacement = (
+        "    if gpucall_should_use_gateway():\n"
+        "        return gpucall_vision_file(\n"
+        "            image_path,\n"
+        "            prompt=user_message,\n"
+        "            system_prompt=system_prompt,\n"
+        "            intent=\"understand_document_image\",\n"
+        "            model=model,\n"
+        "            max_tokens=max_tokens,\n"
+        "            timeout=timeout,\n"
+        "        )\n"
+        "\n"
+        '    api_key = os.environ.get("NEWS_ANTHROPIC_API_KEY", "")\n'
+    )
+    updated = _replace_in_named_function(
+        updated,
+        "_call_anthropic_vision",
+        vision_hook,
+        vision_replacement,
+        skip_if_contains="gpucall_vision_file(",
+    )
+
+    cli_hook = "    if _API_KEY:\n"
+    cli_replacement = (
+        "    if gpucall_should_use_gateway():\n"
+        "        return gpucall_infer_text(\n"
+        "            user_message,\n"
+        "            system_prompt=system_prompt,\n"
+        "            intent=gpucall_guess_intent(user_message, system_prompt),\n"
+        "            model=model,\n"
+        "            max_tokens=max_tokens,\n"
+        "            temperature=0.3,\n"
+        "            timeout=timeout,\n"
+        "        )\n"
+        "\n"
+        "    if _API_KEY:\n"
+    )
+    updated = _replace_in_named_function(
+        updated,
+        "call_claude_p",
+        cli_hook,
+        cli_replacement,
+        skip_if_contains="gpucall_infer_text(",
+    )
+
+    import_line = _gpucall_migration_import_line()
+    if updated != text and ("gpucall_infer_text(" in updated or "gpucall_vision_file(" in updated) and import_line not in updated:
+        updated = _insert_after_future_imports(updated, import_line)
     return updated
 
 

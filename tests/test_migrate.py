@@ -273,6 +273,42 @@ def test_migrate_patch_routes_text_and_vision_through_correct_helpers(tmp_path) 
     assert "            path,\n" not in vision_function
 
 
+def test_migrate_patch_routes_hosted_anthropic_wrappers_through_gateway(tmp_path) -> None:
+    project = tmp_path / "project"
+    project.mkdir()
+    llm_client = project / "llm_client.py"
+    llm_client.write_text(
+        "import os\n\n"
+        "def _call_anthropic(user_message, system_prompt, model, timeout, max_tokens):\n"
+        "    from src.util.claude_cli import call_claude_p\n"
+        "    return call_claude_p(user_message, system_prompt=system_prompt, model=model, timeout=timeout, max_tokens=max_tokens)\n\n"
+        "def _call_anthropic_vision(user_message, image_path, system_prompt, model, timeout, max_tokens):\n"
+        "    api_key = os.environ.get(\"NEWS_ANTHROPIC_API_KEY\", \"\")\n"
+        "    return api_key\n",
+        encoding="utf-8",
+    )
+    claude_cli = project / "claude_cli.py"
+    claude_cli.write_text(
+        "def call_claude_p(user_message, system_prompt=None, model=None, timeout=90, max_tokens=8192):\n"
+        "    if _API_KEY:\n"
+        "        return _call_sdk(user_message, system_prompt, model, timeout, max_tokens)\n"
+        "    return _call_cli(user_message, system_prompt, model, timeout)\n",
+        encoding="utf-8",
+    )
+
+    report = patch_suggestions(project, source="hosted-wrapper-app", apply=True)
+
+    assert "llm_client.py" in report["changed_files"]
+    assert "claude_cli.py" in report["changed_files"]
+    llm_text = llm_client.read_text(encoding="utf-8")
+    cli_text = claude_cli.read_text(encoding="utf-8")
+    assert "def _call_anthropic" in llm_text
+    assert "gpucall_infer_text(" in llm_text
+    assert "gpucall_vision_file(" in llm_text
+    assert "gpucall_infer_text(" in cli_text
+    assert "gpucall_migration.py" in report["changed_files"]
+
+
 def test_migrate_patch_apply_rewrites_openai_client_constructor(tmp_path) -> None:
     project = tmp_path / "project"
     project.mkdir()
@@ -1105,6 +1141,19 @@ def test_migrate_cli_onboard_writes_contract_and_recipe_intake(tmp_path) -> None
     assert contract["phase"] == "workload-contract"
     assert intake["phase"] == "deterministic-contract-intake"
     assert intake["sanitized_request"]["intent"] == "rank_text_items"
+
+
+def test_migrate_cli_onboard_yes_applies_patch(tmp_path) -> None:
+    project = tmp_path / "project"
+    output = tmp_path / "out"
+    project.mkdir()
+    source = project / "client.py"
+    source.write_text("from anthropic import Anthropic\nclient = Anthropic()\n", encoding="utf-8")
+
+    assert main(["onboard", str(project), "--source", "fixture", "--output-dir", str(output), "--yes"]) == 0
+
+    assert "from gpucall_migration import AnthropicCompat as Anthropic" in source.read_text(encoding="utf-8")
+    assert (project / "gpucall_migration.py").exists()
 
 
 def test_migrate_cli_onboard_accepts_existing_log_files(tmp_path) -> None:
