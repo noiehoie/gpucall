@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from io import BytesIO
 import json
+import os
+import sys
 
 import pytest
 
@@ -1536,8 +1538,11 @@ def test_migrate_cli_onboard_yes_applies_patch(tmp_path) -> None:
 
     assert main(["onboard", str(project), "--source", "fixture", "--output-dir", str(output), "--yes"]) == 0
 
-    assert "from gpucall_migration import AnthropicCompat as Anthropic" in source.read_text(encoding="utf-8")
-    assert (project / "gpucall_migration.py").exists()
+    report = json.loads((output / "onboard-report.json").read_text(encoding="utf-8"))
+    assert report["patch_deferred"] is True
+    assert report["patch_defer_reason"] == "no_workloads"
+    assert source.read_text(encoding="utf-8") == "from anthropic import Anthropic\nclient = Anthropic()\n"
+    assert not (project / "gpucall_migration.py").exists()
 
 
 def test_migrate_cli_onboard_accepts_existing_log_files(tmp_path) -> None:
@@ -1650,6 +1655,216 @@ def test_migrate_cli_onboard_rejects_weak_draft_before_gateway_readiness(tmp_pat
     assert not any(item.startswith("materialize recipe-intake") for item in report["next_actions"])
 
 
+def test_migrate_cli_onboard_yes_defers_patch_when_contract_is_not_materializable(tmp_path, monkeypatch) -> None:
+    project = tmp_path / "project"
+    output = tmp_path / "out"
+    project.mkdir()
+    source = project / "topic_engine.py"
+    original = "from anthropic import Anthropic\nclient = Anthropic()\ndef run():\n    return call_llm('rank topics')\n"
+    source.write_text(original, encoding="utf-8")
+    monkeypatch.setenv("GPUCALL_MIGRATION_READINESS_GATE", "1")
+    monkeypatch.setenv("GPUCALL_BASE_URL", "http://127.0.0.1:9")
+    monkeypatch.setenv("GPUCALL_API_KEY", "x")
+
+    def fail_if_called(**_kwargs):
+        raise AssertionError("gateway readiness must not run for a non-materializable caller draft")
+
+    monkeypatch.setattr(migrate_module, "_gateway_readiness_check", fail_if_called)
+
+    assert main(["onboard", str(project), "--source", "fixture", "--output-dir", str(output), "--yes"]) == 2
+
+    report = json.loads((output / "onboard-report.json").read_text(encoding="utf-8"))
+    assert report["patch_apply_requested"] is True
+    assert report["patch_applied"] is False
+    assert report["patch_deferred"] is True
+    assert report["patch_defer_reason"] == "recipe_draft_not_materializable"
+    assert source.read_text(encoding="utf-8") == original
+    assert not (project / "gpucall_migration.py").exists()
+    assert not (project / ".gpucall-migration" / "applied-patch.json").exists()
+
+
+def test_migrate_cli_onboard_yes_defers_patch_when_gateway_readiness_is_not_ok(tmp_path, monkeypatch) -> None:
+    project = tmp_path / "project"
+    output = tmp_path / "out"
+    project.mkdir()
+    source = project / "topic_engine.py"
+    original = "from anthropic import Anthropic\nclient = Anthropic()\ndef run():\n    return call_llm('rank topics')\n"
+    source.write_text(original, encoding="utf-8")
+    baseline = _write_log(tmp_path, "baseline.log", "response_len=40461\nsource_count=14\nAnalysis complete: 15 topics ranked\n")
+    monkeypatch.setenv("GPUCALL_MIGRATION_READINESS_GATE", "1")
+    monkeypatch.setenv("GPUCALL_BASE_URL", "http://127.0.0.1:9")
+    monkeypatch.setenv("GPUCALL_API_KEY", "x")
+
+    def fake_readiness_check(**_kwargs):
+        return {
+            "task": "infer",
+            "intent": "rank_text_items",
+            "ok": False,
+            "reason": "no_production_ready_route",
+            "recipes": [{"recipe": "infer-rank-text-items", "blocked_reasons": ["missing_route_validation_evidence"]}],
+        }
+
+    monkeypatch.setattr(migrate_module, "_gateway_readiness_check", fake_readiness_check)
+
+    assert main(["onboard", str(project), "--source", "fixture", "--output-dir", str(output), "--log-file", str(baseline), "--yes"]) == 2
+
+    report = json.loads((output / "onboard-report.json").read_text(encoding="utf-8"))
+    assert report["patch_apply_requested"] is True
+    assert report["patch_applied"] is False
+    assert report["patch_deferred"] is True
+    assert report["patch_defer_reason"] == "gateway_readiness_not_ok"
+    assert source.read_text(encoding="utf-8") == original
+    assert not (project / "gpucall_migration.py").exists()
+    assert not (project / ".gpucall-migration" / "applied-patch.json").exists()
+
+
+def test_migrate_onboard_command_loads_env_file_before_running_trace(tmp_path, monkeypatch) -> None:
+    project = tmp_path / "project"
+    output = tmp_path / "out"
+    project.mkdir()
+    (project / "topic_engine.py").write_text("call_llm('rank topics')\n", encoding="utf-8")
+    runner = project / "runner.py"
+    runner.write_text(
+        "import os\n"
+        "print('LLM_BACKEND=' + os.environ.get('LLM_BACKEND', ''))\n"
+        "print('response_len=40461')\n"
+        "print('source_count=14')\n"
+        "print('Analysis complete: 15 topics ranked')\n",
+        encoding="utf-8",
+    )
+    env_file = tmp_path / "caller.env"
+    env_file.write_text("LLM_BACKEND='anthropic'\n", encoding="utf-8")
+    monkeypatch.setenv("GPUCALL_MIGRATION_READINESS_GATE", "1")
+    monkeypatch.setenv("GPUCALL_BASE_URL", "http://127.0.0.1:9")
+    monkeypatch.setenv("GPUCALL_API_KEY", "x")
+
+    def fake_readiness_check(**_kwargs):
+        return {"task": "infer", "intent": "rank_text_items", "ok": False, "reason": "no_production_ready_route"}
+
+    monkeypatch.setattr(migrate_module, "_gateway_readiness_check", fake_readiness_check)
+
+    assert (
+        main(
+            [
+                "onboard",
+                str(project),
+                "--source",
+                "fixture",
+                "--output-dir",
+                str(output),
+                "--env-file",
+                str(env_file),
+                "--command",
+                f"{sys.executable} {runner}",
+                "--yes",
+            ]
+        )
+        == 2
+    )
+
+    report = json.loads((output / "onboard-report.json").read_text(encoding="utf-8"))
+    assert report["workload_trace"]["metrics"]["topics_count"] == 15
+    assert report["workload_trace"]["metrics"]["source_count"] == 14
+    assert report["workload_trace"]["log_fingerprint"]["raw_forwarded"] is False
+
+
+def test_migrate_trace_command_loads_env_file(tmp_path) -> None:
+    project = tmp_path / "project"
+    output = tmp_path / "out"
+    project.mkdir()
+    runner = project / "runner.py"
+    runner.write_text(
+        "import os\n"
+        "if os.environ.get('TRACE_BACKEND') == 'anthropic':\n"
+        "    print('response_len=2048')\n"
+        "    print('source_count=3')\n",
+        encoding="utf-8",
+    )
+    env_file = tmp_path / "caller.env"
+    env_file.write_text("TRACE_BACKEND=anthropic\n", encoding="utf-8")
+
+    assert (
+        main(
+            [
+                "trace",
+                str(project),
+                "--output-dir",
+                str(output),
+                "--env-file",
+                str(env_file),
+                "--command",
+                f"{sys.executable} {runner}",
+            ]
+        )
+        == 0
+    )
+
+    report = json.loads((output / "workload-trace.json").read_text(encoding="utf-8"))
+    assert report["metrics"]["response_chars"] == 2048
+    assert report["metrics"]["source_count"] == 3
+    assert os.environ.get("TRACE_BACKEND") is None
+
+
+def test_migrate_onboard_gateway_env_file_is_separate_from_caller_env(tmp_path, monkeypatch) -> None:
+    project = tmp_path / "project"
+    output = tmp_path / "out"
+    project.mkdir()
+    (project / "topic_engine.py").write_text(
+        "from anthropic import Anthropic\nclient = Anthropic()\ndef run():\n    return call_llm('rank topics')\n",
+        encoding="utf-8",
+    )
+    baseline = _write_log(tmp_path, "baseline.log", "response_len=40461\nsource_count=14\nAnalysis complete: 15 topics ranked\n")
+    gateway_env = tmp_path / "gateway.env"
+    gateway_env.write_text(
+        "GPUCALL_MIGRATION_READINESS_GATE=1\n"
+        "GPUCALL_BASE_URL=http://127.0.0.1:9\n"
+        "GPUCALL_API_KEY=x\n",
+        encoding="utf-8",
+    )
+    monkeypatch.delenv("GPUCALL_BASE_URL", raising=False)
+    monkeypatch.delenv("GPUCALL_API_KEY", raising=False)
+
+    def fake_readiness_check(*, base_url, api_key, task, intent):
+        assert base_url == "http://127.0.0.1:9"
+        assert api_key == "x"
+        return {
+            "task": task,
+            "intent": intent,
+            "ok": True,
+            "reason": "production_route_ready",
+            "recipes": [{"recipe": "infer-rank-text-items", "live_ready_tuple_count": 1}],
+        }
+
+    monkeypatch.setattr(migrate_module, "_gateway_readiness_check", fake_readiness_check)
+
+    assert (
+        main(
+            [
+                "onboard",
+                str(project),
+                "--source",
+                "fixture",
+                "--output-dir",
+                str(output),
+                "--log-file",
+                str(baseline),
+                "--gateway-env-file",
+                str(gateway_env),
+                "--yes",
+            ]
+        )
+        == 0
+    )
+
+    report = json.loads((output / "onboard-report.json").read_text(encoding="utf-8"))
+    assert report["gateway_readiness"]["ok"] is True
+    assert report["gateway_readiness"]["checked"] is True
+    assert report["patch_deferred"] is False
+    assert report["patch_defer_reason"] is None
+    assert os.environ.get("GPUCALL_BASE_URL") is None
+    assert os.environ.get("GPUCALL_API_KEY") is None
+
+
 def test_contract_to_recipe_intake_preserves_contract_metadata() -> None:
     contract = {
         "phase": "workload-contract",
@@ -1759,6 +1974,7 @@ def test_migrate_trace_extracts_aggregate_vision_and_model_api_failures(tmp_path
         [
             "src.analyze.vision INFO [Vision] nikkei p1: 1記事抽出 (hybrid layout)",
             "src.analyze.vision INFO [Vision] 集約完了: 6紙, 6記事",
+            "src.analyze.overseas_vision INFO [OverseasVision] 完了: 0紙, 0記事 (エラー: 22紙)",
             "src.analyze.topic_engine ERROR Analysis API call failed (attempt 1): timeout",
             "src.analyze.topic_engine INFO [リトライ圧縮] 38192→30334トークン (推定)",
         ]
@@ -1776,6 +1992,7 @@ def test_migrate_trace_extracts_aggregate_vision_and_model_api_failures(tmp_path
                     "metrics": {
                         "min_articles": 6,
                         "max_model_api_failures": 0,
+                        "max_vision_failures": 0,
                     }
                 },
             }
@@ -1785,10 +2002,44 @@ def test_migrate_trace_extracts_aggregate_vision_and_model_api_failures(tmp_path
     comparison = compare_trace_to_contract(contract, trace)
 
     assert trace["metrics"]["articles_count"] == 6
+    assert trace["metrics"]["domestic_vision_paper_count"] == 6
+    assert trace["metrics"]["overseas_vision_paper_count"] == 0
+    assert trace["metrics"]["vision_error_count"] == 22
     assert trace["metrics"]["estimated_input_tokens"] == 38192
     assert trace["metrics"]["model_api_failure_count"] == 1
     assert comparison["ok"] is False
     assert comparison["violations"][0]["metric"] == "model_api_failure_count"
+    assert any(item["metric"] == "vision_error_count" for item in comparison["violations"])
+
+
+def test_migrate_contract_rejects_failed_vision_baseline_trace(tmp_path) -> None:
+    project = tmp_path / "project"
+    project.mkdir()
+    (project / "overseas_vision.py").write_text("def run():\n    generate('vision image ocr')\n", encoding="utf-8")
+    trace = trace_project(
+        project,
+        log_file=_write_log(
+            tmp_path,
+            "failed-vision-baseline.log",
+            "\n".join(
+                [
+                    "src.analyze.vision INFO [Vision] 集約完了: 6紙, 6記事",
+                    "src.analyze.overseas_vision INFO [OverseasVision] 完了: 0紙, 0記事 (エラー: 22紙)",
+                ]
+            ),
+        ),
+        source="fixture",
+        backend="baseline",
+    )
+    profile = profile_project(project, trace_paths=[_write_json(tmp_path, "trace.json", trace)], source="fixture")
+    contract = draft_contract_project(project, profile_path=_write_json(tmp_path, "profile.json", profile), source="fixture")
+    workload = next(item for item in contract["workloads"] if item["intent"] == "understand_document_image")
+
+    intake = contract_to_recipe_intake(contract, workload_id=workload["id"])
+
+    assert workload["baseline_trace_failures"]["vision_error_count"] == 22
+    assert intake["sanitized_request"]["draft_grammar"]["materialization_allowed"] is False
+    assert any("baseline trace contains vision failures" in item for item in intake["sanitized_request"]["draft_grammar"]["blockers"])
 
 
 def test_migrate_contract_rejects_failed_baseline_trace(tmp_path) -> None:
@@ -1832,7 +2083,7 @@ def test_migrate_contract_rejects_failed_baseline_trace(tmp_path) -> None:
             ],
         },
     )
-    assert any("zero model/API and JSON extraction failures" in item for item in actions)
+    assert any("zero model/API, vision, and JSON extraction failures" in item for item in actions)
     assert any("do not materialize" in item for item in actions)
     assert not any(item.startswith("materialize recipe-intake") for item in actions)
 

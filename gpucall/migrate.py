@@ -11,6 +11,7 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
+from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 from textwrap import dedent
@@ -121,6 +122,7 @@ def main(argv: list[str] | None = None) -> int:
     trace.add_argument("--command", dest="run_command")
     trace.add_argument("--log-file", type=Path)
     trace.add_argument("--timeout-seconds", type=float, default=1800.0)
+    trace.add_argument("--env-file", type=Path, default=None, help="load KEY=VALUE lines before running --command")
 
     profile = sub.add_parser("profile", help="combine assessment and sanitized traces into a workload profile")
     profile.add_argument("project", type=Path)
@@ -164,6 +166,8 @@ def main(argv: list[str] | None = None) -> int:
     onboard.add_argument("--timeout-seconds", type=float, default=1800.0)
     onboard.add_argument("--apply", action="store_true", help="write a local gpucall migration helper and annotate direct provider call sites")
     onboard.add_argument("--yes", action="store_true", help="non-interactive alias for --apply")
+    onboard.add_argument("--env-file", type=Path, default=None, help="load KEY=VALUE lines before running the caller baseline --command")
+    onboard.add_argument("--gateway-env-file", type=Path, default=None, help="load KEY=VALUE lines only for gpucall gateway readiness checks")
     args = parser.parse_args(argv)
     output_dir = args.output_dir or (args.project / ".gpucall-migration")
     if args.command == "assess":
@@ -189,6 +193,7 @@ def main(argv: list[str] | None = None) -> int:
         _write_outputs(report, output_dir, "migration-patch")
         return 0
     if args.command == "trace":
+        env_overlay = _read_env_file(args.env_file) if args.env_file else None
         report = trace_project(
             args.project,
             command=args.run_command,
@@ -196,6 +201,7 @@ def main(argv: list[str] | None = None) -> int:
             source=args.source,
             backend=args.backend,
             timeout_seconds=args.timeout_seconds,
+            env_overlay=env_overlay,
         )
         _write_outputs(report, output_dir, "workload-trace")
         return 0
@@ -228,6 +234,8 @@ def main(argv: list[str] | None = None) -> int:
         _write_outputs(report, output_dir, "contract-comparison")
         return 0
     if args.command == "onboard":
+        env_overlay = _read_env_file(args.env_file) if args.env_file else None
+        gateway_env_overlay = _read_env_file(args.gateway_env_file) if args.gateway_env_file else None
         report = onboard_project(
             args.project,
             command=args.run_command,
@@ -236,6 +244,8 @@ def main(argv: list[str] | None = None) -> int:
             backend=args.backend,
             apply=args.apply or args.yes,
             timeout_seconds=args.timeout_seconds,
+            env_overlay=env_overlay,
+            gateway_env_overlay=gateway_env_overlay,
         )
         _write_outputs(report, output_dir, "onboard-report")
         profile_report = report.get("workload_profile")
@@ -347,6 +357,7 @@ def trace_project(
     source: str | None = None,
     backend: str | None = None,
     timeout_seconds: float = 1800.0,
+    env_overlay: dict[str, str] | None = None,
 ) -> dict[str, Any]:
     root = project.resolve()
     if command and log_file:
@@ -376,6 +387,7 @@ def trace_project(
             capture_output=True,
             text=True,
             timeout=timeout_seconds,
+            env=_merged_env(env_overlay),
         )
         stdout = result.stdout
         stderr = result.stderr
@@ -397,6 +409,55 @@ def trace_project(
     trace["ran"] = True
     trace["timed_out"] = timed_out
     return trace
+
+
+def _merged_env(env_overlay: dict[str, str] | None) -> dict[str, str] | None:
+    if not env_overlay:
+        return None
+    env = dict(os.environ)
+    env.update(env_overlay)
+    return env
+
+
+def _read_env_file(path: Path) -> dict[str, str]:
+    values: dict[str, str] = {}
+    for raw_line in path.read_text(encoding="utf-8").splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("#"):
+            continue
+        if line.startswith("export "):
+            line = line[len("export ") :].strip()
+        if "=" not in line:
+            continue
+        key, raw_value = line.split("=", 1)
+        key = key.strip()
+        if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", key):
+            continue
+        values[key] = _parse_env_value(raw_value.strip())
+    return values
+
+
+@contextmanager
+def _temporary_env(env_overlay: dict[str, str] | None):
+    if not env_overlay:
+        yield
+        return
+    original: dict[str, str | None] = {key: os.environ.get(key) for key in env_overlay}
+    try:
+        os.environ.update(env_overlay)
+        yield
+    finally:
+        for key, value in original.items():
+            if value is None:
+                os.environ.pop(key, None)
+            else:
+                os.environ[key] = value
+
+
+def _parse_env_value(raw: str) -> str:
+    if len(raw) >= 2 and raw[0] == raw[-1] and raw[0] in {"'", '"'}:
+        return raw[1:-1]
+    return raw
 
 
 def profile_project(project: Path, *, trace_paths: list[Path], source: str | None = None) -> dict[str, Any]:
@@ -439,7 +500,12 @@ def compare_project(
     return compare_trace_to_contract(contract, trace)
 
 
-def gateway_readiness_for_contract(contract: dict[str, Any]) -> dict[str, Any]:
+def gateway_readiness_for_contract(contract: dict[str, Any], *, env_overlay: dict[str, str] | None = None) -> dict[str, Any]:
+    with _temporary_env(env_overlay):
+        return _gateway_readiness_for_contract(contract)
+
+
+def _gateway_readiness_for_contract(contract: dict[str, Any]) -> dict[str, Any]:
     checks: list[dict[str, Any]] = []
     if not migration_readiness_gate_enabled():
         return {"schema_version": 1, "phase": "gateway-readiness", "checked": False, "ok": True, "reason": "readiness_gate_disabled"}
@@ -591,6 +657,8 @@ def onboard_project(
     backend: str | None = None,
     apply: bool = False,
     timeout_seconds: float = 1800.0,
+    env_overlay: dict[str, str] | None = None,
+    gateway_env_overlay: dict[str, str] | None = None,
 ) -> dict[str, Any]:
     assessment = assess_project(project, source=source)
     traces = []
@@ -602,6 +670,7 @@ def onboard_project(
             source=source,
             backend=backend,
             timeout_seconds=timeout_seconds,
+            env_overlay=env_overlay,
         )
         traces.append(trace_report)
     for path in log_files or []:
@@ -612,13 +681,15 @@ def onboard_project(
     contract = draft_workload_contract(profile, source=source)
     recipe_intake = contract_to_recipe_intake(contract) if contract.get("workloads") else None
     recipe_intakes = recipe_intakes_from_contract(contract) if contract.get("workloads") else None
-    gateway_readiness = gateway_readiness_for_contract(contract) if contract.get("workloads") else {
+    gateway_readiness = gateway_readiness_for_contract(contract, env_overlay=gateway_env_overlay) if contract.get("workloads") else {
         "schema_version": 1,
         "phase": "gateway-readiness",
         "checked": False,
         "ok": True,
         "reason": "no_workloads",
     }
+    patch_defer_reason = _onboard_patch_defer_reason(contract, gateway_readiness) if apply else None
+    patch_report = patch_suggestions(project, source=source, apply=apply and patch_defer_reason is None)
     return {
         "schema_version": 1,
         "phase": "migration-onboard",
@@ -626,7 +697,12 @@ def onboard_project(
         "project": str(project.resolve()),
         "assessment": assessment,
         "preflight_requests": build_preflight_requests(assessment, source=source),
-        "patch_suggestions": patch_suggestions(project, source=source, apply=apply)["patches"],
+        "patch_suggestions": patch_report["patches"],
+        "patch_apply_requested": apply,
+        "patch_applied": patch_report["applied"] and bool(patch_report["changed_files"]),
+        "patch_deferred": bool(apply and patch_defer_reason is not None),
+        "patch_defer_reason": patch_defer_reason,
+        "changed_files": patch_report["changed_files"],
         "workload_trace": trace_report,
         "workload_profile": profile,
         "workload_contract": contract,
@@ -2300,7 +2376,7 @@ def _onboard_next_actions(contract: dict[str, Any], trace: dict[str, Any] | None
         ]
         if _has_failed_baseline_blocker(draft_blockers):
             actions.append(
-                "rerun the caller baseline command or supply a successful baseline trace with zero model/API and JSON extraction failures"
+                "rerun the caller baseline command or supply a successful baseline trace with zero model/API, vision, and JSON extraction failures"
             )
         if trace is None or _has_missing_baseline_blocker(draft_blockers):
             actions.append("run gpucall-migrate onboard with --log-file pointing at a successful caller baseline log")
@@ -2319,6 +2395,20 @@ def _onboard_next_actions(contract: dict[str, Any], trace: dict[str, Any] | None
     if contract.get("workloads"):
         actions.append("run gpucall-migrate compare against a gpucall canary trace before declaring onboarding Go")
     return actions
+
+
+def _onboard_patch_defer_reason(contract: dict[str, Any], gateway_readiness: dict[str, Any] | None) -> str | None:
+    if not contract.get("workloads"):
+        return "no_workloads"
+    if not isinstance(gateway_readiness, dict):
+        return "gateway_readiness_missing"
+    if _non_materializable_draft_blockers(gateway_readiness):
+        return "recipe_draft_not_materializable"
+    if gateway_readiness.get("reason") == "readiness_gate_disabled":
+        return None
+    if not _readiness_checked_ok(gateway_readiness):
+        return "gateway_readiness_not_ok"
+    return None
 
 
 def _readiness_checked_ok(gateway_readiness: dict[str, Any]) -> bool:

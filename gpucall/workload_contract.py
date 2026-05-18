@@ -29,6 +29,7 @@ BASELINE_GUARD_METRICS = {
     "max_json_extract_failures",
     "max_provider_temporary_failures",
     "max_model_api_failures",
+    "max_vision_failures",
 }
 
 INTENT_ORDER = (
@@ -306,6 +307,8 @@ def _intake_grammar_blockers(*, workload: Mapping[str, Any], intent: str, output
         blockers.append("baseline trace contains model/API failures; rerun baseline or supply a successful trace")
     if _positive_int(trace_failures.get("json_extract_failures"), default=0) > 0:
         blockers.append("baseline trace contains JSON extraction failures; rerun baseline or supply a successful trace")
+    if _positive_int(trace_failures.get("vision_error_count"), default=0) > 0:
+        blockers.append("baseline trace contains vision failures; rerun baseline or supply a successful trace")
     context_budget = _positive_int(_mapping(workload.get("input_profile")).get("context_budget_tokens"), default=0)
     if context_budget <= 0:
         blockers.append("input_profile.context_budget_tokens is required")
@@ -330,6 +333,10 @@ def _empty_metrics() -> dict[str, Any]:
         "json_extract_failures": 0,
         "provider_temporary_failure_count": 0,
         "model_api_failure_count": 0,
+        "vision_error_count": 0,
+        "domestic_vision_paper_count": None,
+        "overseas_vision_paper_count": None,
+        "overseas_vision_articles_count": None,
         "rss_match_total": None,
         "rss_match_matched": None,
         "commentary_count": None,
@@ -395,6 +402,17 @@ def _regex_metrics(text: str) -> dict[str, Any]:
     schema = re.findall(r"\bschema_(?:parse|success)\s*[=:]\s*(true|false|yes|no|0|1)\b", text, flags=re.IGNORECASE)
     if schema:
         metrics["schema_success"] = _parse_bool(schema[-1])
+    domestic_vision = re.search(r"\[Vision\]\s+集約完了:\s*(\d+)紙,\s*(\d+)記事", text)
+    if domestic_vision:
+        metrics["domestic_vision_paper_count"] = int(domestic_vision.group(1))
+    overseas_vision = re.search(r"\[OverseasVision\]\s+完了:\s*(\d+)紙,\s*(\d+)記事\s*\(エラー:\s*(\d+)紙\)", text)
+    if overseas_vision:
+        metrics["overseas_vision_paper_count"] = int(overseas_vision.group(1))
+        metrics["overseas_vision_articles_count"] = int(overseas_vision.group(2))
+        metrics["vision_error_count"] = max(int(metrics.get("vision_error_count") or 0), int(overseas_vision.group(3)))
+    explicit_vision_failures = len(re.findall(r"(?:Vision LLM失敗|全Tier失敗)", text))
+    if explicit_vision_failures:
+        metrics["vision_error_count"] = max(int(metrics.get("vision_error_count") or 0), explicit_vision_failures)
     metrics["no_auto_selectable_recipe_count"] = text.count("NO_AUTO_SELECTABLE_RECIPE")
     metrics["http_422_count"] = len(re.findall(r"/v2/tasks/[^ ]+\s+\"HTTP/1\.1 422", text))
     metrics["json_extract_failures"] = text.count("Could not extract JSON")
@@ -745,6 +763,7 @@ def _quality_contract(intent: str, metrics: Mapping[str, Any], output_profile: M
     metric_contract["max_json_extract_failures"] = 0
     metric_contract["max_provider_temporary_failures"] = 0
     metric_contract["max_model_api_failures"] = 0
+    metric_contract["max_vision_failures"] = 0
     response_chars = _optional_int(metrics.get("response_chars"))
     if response_chars is not None and response_chars > 0:
         metric_contract["min_response_chars"] = max(1, math.floor(response_chars * QUALITY_RESPONSE_CHAR_RATIO))
@@ -766,6 +785,12 @@ def _quality_contract(intent: str, metrics: Mapping[str, Any], output_profile: M
         articles = _optional_int(metrics.get("articles_count"))
         if articles is not None and articles > 0:
             metric_contract["min_articles"] = max(1, math.floor(articles * QUALITY_TOPIC_RATIO))
+        domestic_papers = _optional_int(metrics.get("domestic_vision_paper_count"))
+        if domestic_papers is not None and domestic_papers > 0:
+            metric_contract["min_domestic_vision_papers"] = max(1, math.floor(domestic_papers * QUALITY_TOPIC_RATIO))
+        overseas_papers = _optional_int(metrics.get("overseas_vision_paper_count"))
+        if overseas_papers is not None and overseas_papers > 0:
+            metric_contract["min_overseas_vision_papers"] = max(1, math.floor(overseas_papers * QUALITY_TOPIC_RATIO))
         if metrics.get("schema_success") is True:
             metric_contract["require_schema_success"] = True
     elif metrics.get("schema_success") is True:
@@ -784,6 +809,8 @@ def _compare_workload(workload: Mapping[str, Any], metrics: Mapping[str, Any]) -
         "min_topics": ("topics_count", "topic count below caller contract"),
         "min_sources": ("source_count", "source count below caller contract"),
         "min_articles": ("articles_count", "article count below caller contract"),
+        "min_domestic_vision_papers": ("domestic_vision_paper_count", "domestic vision paper count below caller contract"),
+        "min_overseas_vision_papers": ("overseas_vision_paper_count", "overseas vision paper count below caller contract"),
         "min_rss_matches": ("rss_match_matched", "RSS semantic match count below caller contract"),
         "min_rss_match_total": ("rss_match_total", "RSS semantic match total below caller contract"),
     }
@@ -808,6 +835,7 @@ def _compare_workload(workload: Mapping[str, Any], metrics: Mapping[str, Any]) -
         "max_json_extract_failures": ("json_extract_failures", "JSON extraction failures are not allowed in a successful canary"),
         "max_provider_temporary_failures": ("provider_temporary_failure_count", "provider temporary failures are not allowed in a successful onboarding canary"),
         "max_model_api_failures": ("model_api_failure_count", "baseline or candidate model API failures are not allowed in a successful onboarding canary"),
+        "max_vision_failures": ("vision_error_count", "vision failures are not allowed in a successful onboarding canary"),
     }
     for requirement, (metric_name, reason) in maximum_checks.items():
         if requirement not in required:
@@ -903,6 +931,7 @@ def _trace_failure_summary(traces: Iterable[Mapping[str, Any]]) -> dict[str, int
             "no_auto_selectable_recipe_count",
             "http_422_count",
             "provider_temporary_failure_count",
+            "vision_error_count",
         ):
             value = _optional_int(metrics.get(key)) or 0
             if value > 0:
