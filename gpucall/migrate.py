@@ -597,32 +597,68 @@ def _rewrite_news_style_local_gateway_calls(text: str) -> str:
         "    payload = {\n"
         "        \"model\": effective_model,\n"
     )
-    if text_hook in updated and "def _call_local(" in updated and "gpucall_infer_text(" not in updated:
-        updated = updated.replace(text_hook, text_replacement, 1)
+    updated = _replace_in_named_function(
+        updated,
+        "_call_local",
+        text_hook,
+        text_replacement,
+        skip_if_contains="gpucall_infer_text(",
+    )
     vision_hook = (
-        "    effective_model = _LOCAL_MODEL or model or \"local-model\"\n"
-        "    messages: list[dict] = []\n"
+        "    path = Path(image_path)\n"
     )
     vision_replacement = (
-        "    effective_model = _LOCAL_MODEL or model or \"local-model\"\n"
         "    if gpucall_should_use_gateway(_LOCAL_ENDPOINT):\n"
         "        return gpucall_vision_file(\n"
-        "            path,\n"
+        "            image_path,\n"
         "            prompt=user_message,\n"
         "            system_prompt=system_prompt,\n"
         "            intent=\"understand_document_image\",\n"
-        "            model=effective_model,\n"
+        "            model=_LOCAL_MODEL or model or \"local-model\",\n"
         "            max_tokens=max_tokens,\n"
         "            timeout=timeout,\n"
         "        )\n"
         "\n"
-        "    messages: list[dict] = []\n"
+        "    path = Path(image_path)\n"
     )
-    if vision_hook in updated and "def _call_local_vision(" in updated and "gpucall_vision_file(" not in updated:
-        updated = updated.replace(vision_hook, vision_replacement, 1)
-    if updated != text and "gpucall_infer_text" in updated and _gpucall_migration_import_line() not in updated:
+    updated = _replace_in_named_function(
+        updated,
+        "_call_local_vision",
+        vision_hook,
+        vision_replacement,
+        skip_if_contains="gpucall_vision_file(",
+    )
+    if updated != text and ("gpucall_infer_text" in updated or "gpucall_vision_file" in updated) and _gpucall_migration_import_line() not in updated:
         updated = _insert_after_future_imports(updated, _gpucall_migration_import_line())
     return updated
+
+
+def _replace_in_named_function(
+    text: str,
+    function_name: str,
+    hook: str,
+    replacement: str,
+    *,
+    skip_if_contains: str,
+) -> str:
+    lines = text.splitlines(keepends=True)
+    start: int | None = None
+    for index, line in enumerate(lines):
+        if line.startswith(f"def {function_name}("):
+            start = index
+            break
+    if start is None:
+        return text
+    end = len(lines)
+    for index in range(start + 1, len(lines)):
+        if lines[index].startswith("def ") or lines[index].startswith("class "):
+            end = index
+            break
+    block = "".join(lines[start:end])
+    if skip_if_contains in block or hook not in block:
+        return text
+    lines[start:end] = block.replace(hook, replacement, 1).splitlines(keepends=True)
+    return "".join(lines)
 
 
 def _disable_hosted_fallback(text: str) -> str:
@@ -1112,6 +1148,8 @@ def _line_findings(path: str, line_number: int, line: str) -> list[Finding]:
         findings.append(Finding(path, line_number, "anthropic_direct", "anthropic_or_claude", line.strip()[:240]))
     if "openai" in lower and "gpucall" not in lower:
         findings.append(Finding(path, line_number, "openai_direct", "openai", line.strip()[:240]))
+    if "chat/completions" in lower and "gpucall" not in lower:
+        findings.append(Finding(path, line_number, "openai_direct", "openai_compatible", line.strip()[:240]))
     if "gpucall" in lower:
         findings.append(Finding(path, line_number, "gpucall_path", "gpucall", line.strip()[:240]))
     if re.search(r"\b(recipe|requested_tuple|requested_gpu|provider|requested_provider)\s*=", line):

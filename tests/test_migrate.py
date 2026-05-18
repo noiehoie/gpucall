@@ -209,6 +209,50 @@ def test_migrate_patch_adds_auth_headers_to_openai_compatible_httpx(tmp_path) ->
     assert "gpucall_disable_hosted_fallback(e)" in text
 
 
+def test_migrate_patch_routes_text_and_vision_through_correct_helpers(tmp_path) -> None:
+    project = tmp_path / "project"
+    project.mkdir()
+    source = project / "llm_client.py"
+    source.write_text(
+        "from pathlib import Path\n"
+        "import base64\n\n"
+        "_LOCAL_ENDPOINT = 'http://gateway/v1'\n"
+        "_LOCAL_MODEL = None\n\n"
+        "def _call_local(user_message, system_prompt, model, timeout, max_tokens):\n"
+        "    import httpx\n"
+        "    effective_model = _LOCAL_MODEL or model or 'local-model'\n"
+        "    messages: list[dict] = []\n"
+        "    payload = {\n"
+        "        \"model\": effective_model,\n"
+        "        \"messages\": messages,\n"
+        "    }\n"
+        "    return httpx.post(f'{_LOCAL_ENDPOINT}/v1/chat/completions', json=payload, timeout=timeout)\n\n"
+        "def _call_local_vision(user_message, image_path, system_prompt, model, timeout, max_tokens):\n"
+        "    import httpx\n"
+        "    path = Path(image_path)\n"
+        "    img_b64 = base64.b64encode(path.read_bytes()).decode()\n"
+        "    effective_model = _LOCAL_MODEL or model or 'local-model'\n"
+        "    messages: list[dict] = []\n"
+        "    payload = {\n"
+        "        \"model\": effective_model,\n"
+        "        \"messages\": messages,\n"
+        "    }\n"
+        "    return httpx.post(f'{_LOCAL_ENDPOINT}/v1/chat/completions', json=payload, timeout=timeout)\n",
+        encoding="utf-8",
+    )
+
+    patch_suggestions(project, source="news-system", apply=True)
+
+    text = source.read_text(encoding="utf-8")
+    text_function = text.split("def _call_local_vision", 1)[0]
+    vision_function = "def _call_local_vision" + text.split("def _call_local_vision", 1)[1]
+    assert "gpucall_infer_text(" in text_function
+    assert "gpucall_vision_file(" not in text_function
+    assert "gpucall_vision_file(" in vision_function
+    assert "            image_path,\n" in vision_function
+    assert "            path,\n" not in vision_function
+
+
 def test_migrate_patch_apply_rewrites_openai_client_constructor(tmp_path) -> None:
     project = tmp_path / "project"
     project.mkdir()
