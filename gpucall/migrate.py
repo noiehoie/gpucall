@@ -363,6 +363,15 @@ def trace_project(
     if command and log_file:
         raise ValueError("use either --command or --log-file, not both")
     if log_file:
+        existing_trace = _load_existing_trace_artifact(log_file)
+        if existing_trace is not None:
+            trace = dict(existing_trace)
+            if source is not None:
+                trace["source"] = source
+            if backend is not None:
+                trace["backend"] = backend
+            trace["log_path"] = str(log_file)
+            return trace
         text = read_trace_log(log_file)
         return parse_trace_text(text, source=source, backend=backend, command=None, log_path=str(log_file))
     if not command:
@@ -408,6 +417,24 @@ def trace_project(
     trace["project"] = str(root)
     trace["ran"] = True
     trace["timed_out"] = timed_out
+    return trace
+
+
+def _load_existing_trace_artifact(path: Path) -> dict[str, Any] | None:
+    try:
+        data = load_json_file(path)
+    except Exception:
+        return None
+    if not isinstance(data, dict):
+        return None
+    if data.get("phase") != "workload-trace":
+        return None
+    metrics = data.get("metrics")
+    if not isinstance(metrics, dict):
+        return None
+    trace = dict(data)
+    trace.setdefault("schema_version", 1)
+    trace.setdefault("redaction_report", {"raw_log_forwarded": False})
     return trace
 
 

@@ -1805,6 +1805,56 @@ def test_migrate_trace_command_loads_env_file(tmp_path) -> None:
     assert os.environ.get("TRACE_BACKEND") is None
 
 
+def test_migrate_onboard_log_file_accepts_existing_trace_artifact(tmp_path, monkeypatch) -> None:
+    project = tmp_path / "project"
+    output = tmp_path / "out"
+    project.mkdir()
+    (project / "topic_engine.py").write_text("def run():\n    call_llm('rank topics')\n", encoding="utf-8")
+    trace = {
+        "schema_version": 1,
+        "phase": "workload-trace",
+        "source": "fixture",
+        "backend": "baseline",
+        "returncode": 1,
+        "metrics": {"model_api_failure_count": 0, "json_extract_failures": 0, "vision_error_count": 0},
+        "workload_metrics": {},
+        "workload_hints": [],
+        "log_fingerprint": {"raw_forwarded": False, "sha256": "0" * 64},
+    }
+    trace_path = _write_json(tmp_path, "workload-trace.json", trace)
+    monkeypatch.setenv("GPUCALL_MIGRATION_READINESS_GATE", "1")
+    monkeypatch.setenv("GPUCALL_BASE_URL", "http://127.0.0.1:9")
+    monkeypatch.setenv("GPUCALL_API_KEY", "x")
+
+    def fail_if_called(**_kwargs):
+        raise AssertionError("gateway readiness must not run for a non-materializable baseline trace")
+
+    monkeypatch.setattr(migrate_module, "_gateway_readiness_check", fail_if_called)
+
+    assert (
+        main(
+            [
+                "onboard",
+                str(project),
+                "--source",
+                "fixture",
+                "--output-dir",
+                str(output),
+                "--log-file",
+                str(trace_path),
+                "--yes",
+            ]
+        )
+        == 2
+    )
+
+    report = json.loads((output / "onboard-report.json").read_text(encoding="utf-8"))
+    blockers = report["gateway_readiness"]["checks"][0]["blockers"]
+    assert report["patch_deferred"] is True
+    assert report["patch_defer_reason"] == "recipe_draft_not_materializable"
+    assert any("non-zero exit code" in item for item in blockers)
+
+
 def test_migrate_onboard_gateway_env_file_is_separate_from_caller_env(tmp_path, monkeypatch) -> None:
     project = tmp_path / "project"
     output = tmp_path / "out"
