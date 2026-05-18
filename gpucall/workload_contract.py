@@ -30,6 +30,7 @@ BASELINE_GUARD_METRICS = {
     "max_provider_temporary_failures",
     "max_model_api_failures",
     "max_vision_failures",
+    "max_nonzero_returncode",
 }
 
 INTENT_ORDER = (
@@ -161,6 +162,10 @@ def compare_trace_to_contract(contract: Mapping[str, Any], trace: Mapping[str, A
         if not isinstance(workload, Mapping):
             continue
         metrics = _metrics_for_workload(trace, workload)
+        returncode = trace.get("returncode")
+        if isinstance(returncode, int) and returncode != 0:
+            metrics = dict(metrics)
+            metrics["nonzero_returncode"] = returncode
         results.append(_compare_workload(workload, metrics))
     violations = [violation for result in results for violation in result["violations"]]
     return {
@@ -309,6 +314,8 @@ def _intake_grammar_blockers(*, workload: Mapping[str, Any], intent: str, output
         blockers.append("baseline trace contains JSON extraction failures; rerun baseline or supply a successful trace")
     if _positive_int(trace_failures.get("vision_error_count"), default=0) > 0:
         blockers.append("baseline trace contains vision failures; rerun baseline or supply a successful trace")
+    if _positive_int(trace_failures.get("nonzero_returncode"), default=0) > 0:
+        blockers.append("baseline command returned a non-zero exit code; rerun baseline or supply a successful trace")
     context_budget = _positive_int(_mapping(workload.get("input_profile")).get("context_budget_tokens"), default=0)
     if context_budget <= 0:
         blockers.append("input_profile.context_budget_tokens is required")
@@ -764,6 +771,7 @@ def _quality_contract(intent: str, metrics: Mapping[str, Any], output_profile: M
     metric_contract["max_provider_temporary_failures"] = 0
     metric_contract["max_model_api_failures"] = 0
     metric_contract["max_vision_failures"] = 0
+    metric_contract["max_nonzero_returncode"] = 0
     response_chars = _optional_int(metrics.get("response_chars"))
     if response_chars is not None and response_chars > 0:
         metric_contract["min_response_chars"] = max(1, math.floor(response_chars * QUALITY_RESPONSE_CHAR_RATIO))
@@ -836,6 +844,7 @@ def _compare_workload(workload: Mapping[str, Any], metrics: Mapping[str, Any]) -
         "max_provider_temporary_failures": ("provider_temporary_failure_count", "provider temporary failures are not allowed in a successful onboarding canary"),
         "max_model_api_failures": ("model_api_failure_count", "baseline or candidate model API failures are not allowed in a successful onboarding canary"),
         "max_vision_failures": ("vision_error_count", "vision failures are not allowed in a successful onboarding canary"),
+        "max_nonzero_returncode": ("nonzero_returncode", "non-zero command return codes are not allowed in a successful onboarding canary"),
     }
     for requirement, (metric_name, reason) in maximum_checks.items():
         if requirement not in required:

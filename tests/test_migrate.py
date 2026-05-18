@@ -2042,6 +2042,31 @@ def test_migrate_contract_rejects_failed_vision_baseline_trace(tmp_path) -> None
     assert any("baseline trace contains vision failures" in item for item in intake["sanitized_request"]["draft_grammar"]["blockers"])
 
 
+def test_migrate_contract_rejects_nonzero_baseline_trace(tmp_path) -> None:
+    project = tmp_path / "project"
+    project.mkdir()
+    (project / "topic_engine.py").write_text("def run():\n    call_llm('rank topics')\n", encoding="utf-8")
+    trace = trace_project(
+        project,
+        log_file=_write_log(tmp_path, "failed-baseline.log", "Traceback: ModuleNotFoundError\n"),
+        source="fixture",
+        backend="baseline",
+    )
+    trace["returncode"] = 1
+    profile = profile_project(project, trace_paths=[_write_json(tmp_path, "trace.json", trace)], source="fixture")
+    contract = draft_contract_project(project, profile_path=_write_json(tmp_path, "profile.json", profile), source="fixture")
+    workload = next(item for item in contract["workloads"] if item["intent"] == "rank_text_items")
+
+    intake = contract_to_recipe_intake(contract, workload_id=workload["id"])
+    comparison = compare_trace_to_contract(contract, trace)
+
+    assert workload["baseline_trace_failures"]["nonzero_returncode"] == 1
+    assert intake["sanitized_request"]["draft_grammar"]["materialization_allowed"] is False
+    assert any("non-zero exit code" in item for item in intake["sanitized_request"]["draft_grammar"]["blockers"])
+    assert comparison["ok"] is False
+    assert any(item["metric"] == "nonzero_returncode" for item in comparison["violations"])
+
+
 def test_migrate_contract_rejects_failed_baseline_trace(tmp_path) -> None:
     project = tmp_path / "project"
     project.mkdir()
