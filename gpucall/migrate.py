@@ -700,6 +700,7 @@ def _migration_helper_text(*, source: str | None) -> str:
             import mimetypes
             import os
             import hashlib
+            import time
             import urllib.error
             import urllib.request
             from pathlib import Path
@@ -770,10 +771,10 @@ def _migration_helper_text(*, source: str | None) -> str:
 
             def gpucall_guess_intent(prompt: str, system_prompt: str | None = None) -> str:
                 text = f"{system_prompt or ''}\\n{prompt}".lower()
-                if "rss" in text or "semantic" in text or "match" in text or "突合" in text:
-                    return "rss_semantic_match"
                 if "rank" in text or "ranking" in text or "importance" in text or "重要度" in text or "トピック" in text:
                     return "rank_text_items"
+                if "rss" in text or "semantic" in text or "match" in text or "突合" in text:
+                    return "rss_semantic_match"
                 if "translate" in text or "translation" in text or "翻訳" in text:
                     return "translate_text"
                 if "json" in text or "extract" in text or "抽出" in text:
@@ -835,6 +836,54 @@ def _migration_helper_text(*, source: str | None) -> str:
                 return _extract_text(response)
 
 
+            def _sync_wait_seconds(task: str, *, prompt_bytes: int, timeout: float | None = None) -> float:
+                env_timeout = float(os.environ.get("GPUCALL_MIGRATION_POLL_TIMEOUT_SECONDS", "1800"))
+                caller_timeout = float(timeout) if timeout is not None else env_timeout
+                if task == "vision" or prompt_bytes > int(os.environ.get("GPUCALL_MIGRATION_ASYNC_TEXT_BYTES", "262144")):
+                    return max(caller_timeout, env_timeout)
+                return caller_timeout
+
+
+            def _should_submit_async(task: str, *, prompt_bytes: int) -> bool:
+                if os.environ.get("GPUCALL_MIGRATION_FORCE_SYNC", "").lower() in {"1", "true", "yes"}:
+                    return False
+                if task == "vision":
+                    return True
+                return prompt_bytes > int(os.environ.get("GPUCALL_MIGRATION_ASYNC_TEXT_BYTES", "262144"))
+
+
+            def _submit_task_and_wait(payload: dict[str, Any], *, timeout: float | None = None, prompt_bytes: int = 0) -> dict[str, Any]:
+                task = str(payload.get("task") or "infer")
+                if not _should_submit_async(task, prompt_bytes=prompt_bytes):
+                    return _json_request("POST", _base_url() + "/v2/tasks/sync", payload, timeout=timeout)
+                async_payload = dict(payload)
+                async_payload["mode"] = "async"
+                submitted = _json_request("POST", _base_url() + "/v2/tasks/async", async_payload, timeout=timeout)
+                job_id = submitted.get("job_id")
+                status_url = submitted.get("status_url")
+                if not isinstance(job_id, str) or not isinstance(status_url, str):
+                    raise RuntimeError("gpucall async task response is missing job_id or status_url")
+                wait_seconds = _sync_wait_seconds(task, prompt_bytes=prompt_bytes, timeout=timeout)
+                deadline = time.monotonic() + wait_seconds
+                interval = float(os.environ.get("GPUCALL_MIGRATION_POLL_INTERVAL_SECONDS", "2"))
+                while True:
+                    job = _json_request("GET", _base_url() + status_url, {}, timeout=min(max(deadline - time.monotonic(), 1.0), 30.0))
+                    state = str(job.get("state") or "")
+                    if state in {"COMPLETED", "SUCCEEDED", "COMPLETED_AFTER_CALLER_TIMEOUT"}:
+                        result = job.get("result")
+                        if isinstance(result, dict):
+                            return {"result": result}
+                        result_ref = job.get("result_ref")
+                        if isinstance(result_ref, dict):
+                            return {"result": {"kind": "ref", "ref": result_ref}}
+                        raise RuntimeError("gpucall async task completed without inline result")
+                    if state in {"FAILED", "CANCELLED", "EXPIRED"}:
+                        raise RuntimeError(f"gpucall async task failed state={state} error={job.get('error')} provider_error_code={job.get('provider_error_code')}")
+                    if time.monotonic() >= deadline:
+                        raise TimeoutError(f"gpucall async task timed out after {wait_seconds:.1f}s job_id={job_id}")
+                    time.sleep(interval)
+
+
             def gpucall_infer_text(
                 prompt: str,
                 *,
@@ -862,7 +911,7 @@ def _migration_helper_text(*, source: str | None) -> str:
                     data_ref = _upload_bytes(body, name="prompt.txt", content_type="text/plain", timeout=timeout)
                     payload["inline_inputs"] = {}
                     payload["input_refs"] = [data_ref]
-                response = _json_request("POST", _base_url() + "/v2/tasks/sync", payload, timeout=timeout)
+                response = _submit_task_and_wait(payload, timeout=timeout, prompt_bytes=len(body))
                 return _extract_task_text(response)
 
 
@@ -906,7 +955,7 @@ def _migration_helper_text(*, source: str | None) -> str:
                 }
                 if max_tokens is not None:
                     payload["max_tokens"] = max_tokens
-                response = _json_request("POST", _base_url() + "/v2/tasks/sync", payload, timeout=timeout)
+                response = _submit_task_and_wait(payload, timeout=timeout, prompt_bytes=len(full_prompt.encode("utf-8")))
                 return _extract_task_text(response)
 
 

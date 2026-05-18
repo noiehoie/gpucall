@@ -328,6 +328,71 @@ def test_migrate_helper_stream_compat_returns_final_text(tmp_path, monkeypatch) 
         assert stream.get_final_text() == "ok"
 
 
+def test_migrate_helper_prefers_rank_over_rss_when_prompt_contains_both(tmp_path, monkeypatch) -> None:
+    project = tmp_path / "project"
+    project.mkdir()
+    source = project / "client.py"
+    source.write_text("from openai import OpenAI\nclient = OpenAI()\n", encoding="utf-8")
+    monkeypatch.setenv("GPUCALL_BASE_URL", "http://127.0.0.1:9")
+    monkeypatch.setenv("GPUCALL_API_KEY", "x")
+
+    patch_suggestions(project, source="openai-app", apply=True)
+    namespace: dict[str, object] = {}
+    exec((project / "gpucall_migration.py").read_text(encoding="utf-8"), namespace)
+
+    intent = namespace["gpucall_guess_intent"](
+        "Rank these topics by importance. RSS items are included as sources.",
+        "Return a global news ranking.",
+    )
+    assert intent == "rank_text_items"
+
+
+def test_migrate_helper_routes_vision_and_large_text_through_async(tmp_path, monkeypatch) -> None:
+    project = tmp_path / "project"
+    project.mkdir()
+    source = project / "client.py"
+    source.write_text("from openai import OpenAI\nclient = OpenAI()\n", encoding="utf-8")
+    monkeypatch.setenv("GPUCALL_BASE_URL", "http://127.0.0.1:9")
+    monkeypatch.setenv("GPUCALL_API_KEY", "x")
+
+    patch_suggestions(project, source="openai-app", apply=True)
+    namespace: dict[str, object] = {}
+    exec((project / "gpucall_migration.py").read_text(encoding="utf-8"), namespace)
+
+    captured: list[tuple[str, str, dict]] = []
+
+    def fake_json_request(method, url, payload, **_kwargs):
+        captured.append((method, url, dict(payload)))
+        if url.endswith("/v2/objects/presign-put"):
+            return {
+                "upload_url": "http://object-store.invalid/upload",
+                "data_ref": {"uri": "s3://bucket/prompt.txt", "sha256": "0" * 64, "bytes": payload["bytes"], "content_type": payload["content_type"]},
+            }
+        if url.endswith("/v2/tasks/async"):
+            return {"job_id": "j1", "state": "QUEUED", "status_url": "/v2/jobs/j1"}
+        if url.endswith("/v2/jobs/j1"):
+            return {"job_id": "j1", "state": "COMPLETED", "result": {"kind": "inline", "value": "ok"}}
+        raise AssertionError(url)
+
+    namespace["_json_request"] = fake_json_request
+    namespace["urllib"].request.urlopen = lambda *_args, **_kwargs: type("Response", (), {"__enter__": lambda self: self, "__exit__": lambda self, *_: None})()
+    namespace["time"].sleep = lambda _seconds: None
+    namespace["gpucall_infer_text"]("x" * 300000, intent="rank_text_items", timeout=1)
+    assert any(url.endswith("/v2/tasks/async") and payload["mode"] == "async" for _method, url, payload in captured)
+
+    captured.clear()
+    image = project / "front.jpg"
+    image.write_bytes(b"fake")
+    namespace["_upload_file"] = lambda *_args, **_kwargs: {
+        "uri": "s3://bucket/key",
+        "sha256": "0" * 64,
+        "bytes": 4,
+        "content_type": "image/jpeg",
+    }
+    namespace["gpucall_vision_file"](image, prompt="extract articles", timeout=1)
+    assert any(url.endswith("/v2/tasks/async") and payload["mode"] == "async" for _method, url, payload in captured)
+
+
 def test_migrate_trace_parses_news_class_metrics_without_raw_log(tmp_path) -> None:
     project = tmp_path / "project"
     project.mkdir()
