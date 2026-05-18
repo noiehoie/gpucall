@@ -1,0 +1,42 @@
+name: infer-pairwise-match-standard
+recipe_schema_version: 3
+task: infer
+intent: pairwise_match
+auto_select: true
+data_classification: confidential
+allowed_modes:
+- sync
+- async
+context_budget_tokens: 131072
+resource_class: standard
+latency_class: batch
+quality_floor: standard
+timeout_seconds: 600
+lease_ttl_seconds: 900
+token_estimation_profile: qwen
+max_input_bytes: 134217728
+allowed_mime_prefixes:
+- text/
+allowed_inline_mime_prefixes: []
+default_temperature: 0.0
+structured_temperature: 0.0
+structured_system_prompt: Return exactly one valid JSON object when response_format
+  requests JSON. The response must start with { and end with }. Do not include
+  markdown fences, prose, reasoning, comments, or trailing text. Preserve caller
+  item identifiers, pair identifiers, confidence fields, and thresholds exactly.
+system_prompt: Compare the supplied item pairs using only the caller's evidence and return the requested pairwise match or similarity structure directly.
+stop_tokens:
+- <|im_end|>
+- <|endoftext|>
+repetition_penalty: 1.05
+guided_decoding: true
+output_validation_attempts: 3
+artifact_export: false
+requires_key_release: false
+required_model_capabilities:
+- instruction_following
+- reasoning
+output_contract: plain-text
+expected_cold_start_seconds: 180
+cost_policy:
+  max_estimated_cost_usd: 2.0

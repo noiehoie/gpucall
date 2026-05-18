@@ -819,6 +819,22 @@ def _migration_helper_text(*, source: str | None) -> str:
 
             def gpucall_guess_intent(prompt: str, system_prompt: str | None = None) -> str:
                 text = f"{system_prompt or ''}\\n{prompt}".lower()
+                has_rss_source = "rss" in text or "feed" in text or "フィード" in text
+                has_match_contract = (
+                    "semantic" in text
+                    or "match" in text
+                    or "matches" in text
+                    or "matching" in text
+                    or "similarity" in text
+                    or "confidence" in text
+                    or "突合" in text
+                    or "照合" in text
+                    or "マッチ" in text
+                )
+                if ("pairwise" in text or "pair-wise" in text or ("pair" in text and has_match_contract)) and has_match_contract:
+                    return "pairwise_match"
+                if has_rss_source and has_match_contract:
+                    return "rss_semantic_match"
                 if "rank" in text or "ranking" in text or "importance" in text or "重要度" in text or "トピック" in text:
                     return "rank_text_items"
                 if "rss" in text or "semantic" in text or "match" in text or "突合" in text:
@@ -895,7 +911,7 @@ def _migration_helper_text(*, source: str | None) -> str:
             def _sync_wait_seconds(task: str, *, prompt_bytes: int, timeout: float | None = None) -> float:
                 env_timeout = float(os.environ.get("GPUCALL_MIGRATION_POLL_TIMEOUT_SECONDS", "1800"))
                 caller_timeout = float(timeout) if timeout is not None else env_timeout
-                if task == "vision" or prompt_bytes > int(os.environ.get("GPUCALL_MIGRATION_ASYNC_TEXT_BYTES", "262144")):
+                if task == "vision" or prompt_bytes > int(os.environ.get("GPUCALL_MIGRATION_ASYNC_TEXT_BYTES", "65536")):
                     return max(caller_timeout, env_timeout)
                 return caller_timeout
 
@@ -905,7 +921,7 @@ def _migration_helper_text(*, source: str | None) -> str:
                     return False
                 if task == "vision":
                     return True
-                return prompt_bytes > int(os.environ.get("GPUCALL_MIGRATION_ASYNC_TEXT_BYTES", "262144"))
+                return prompt_bytes > int(os.environ.get("GPUCALL_MIGRATION_ASYNC_TEXT_BYTES", "65536"))
 
 
             def _submit_task_and_wait(payload: dict[str, Any], *, timeout: float | None = None, prompt_bytes: int = 0) -> dict[str, Any]:

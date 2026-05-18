@@ -348,6 +348,25 @@ def test_migrate_helper_prefers_rank_over_rss_when_prompt_contains_both(tmp_path
     assert intent == "rank_text_items"
 
 
+def test_migrate_helper_prefers_rss_match_contract_over_rank_terms(tmp_path, monkeypatch) -> None:
+    project = tmp_path / "project"
+    project.mkdir()
+    source = project / "client.py"
+    source.write_text("from openai import OpenAI\nclient = OpenAI()\n", encoding="utf-8")
+    monkeypatch.setenv("GPUCALL_BASE_URL", "http://127.0.0.1:9")
+    monkeypatch.setenv("GPUCALL_API_KEY", "x")
+
+    patch_suggestions(project, source="openai-app", apply=True)
+    namespace: dict[str, object] = {}
+    exec((project / "gpucall_migration.py").read_text(encoding="utf-8"), namespace)
+
+    intent = namespace["gpucall_guess_intent"](
+        'RSS記事とVision抽出記事をsemantic matchし、{"matches":[{"rss_id":"r1","vision_rank":1,"confidence":0.9}]} だけ返す。',
+        "Rank fields may appear in source layout metadata; do not rank topics.",
+    )
+    assert intent == "rss_semantic_match"
+
+
 def test_migrate_helper_routes_vision_and_large_text_through_async(tmp_path, monkeypatch) -> None:
     project = tmp_path / "project"
     project.mkdir()
@@ -378,7 +397,7 @@ def test_migrate_helper_routes_vision_and_large_text_through_async(tmp_path, mon
     namespace["_json_request"] = fake_json_request
     namespace["urllib"].request.urlopen = lambda *_args, **_kwargs: type("Response", (), {"__enter__": lambda self: self, "__exit__": lambda self, *_: None})()
     namespace["time"].sleep = lambda _seconds: None
-    namespace["gpucall_infer_text"]("x" * 300000, intent="rank_text_items", timeout=1)
+    namespace["gpucall_infer_text"]("x" * 70000, intent="rank_text_items", timeout=1)
     assert any(url.endswith("/v2/tasks/async") and payload["mode"] == "async" for _method, url, payload in captured)
 
     captured.clear()
