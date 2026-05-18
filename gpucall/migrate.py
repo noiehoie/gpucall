@@ -568,7 +568,20 @@ def _gateway_readiness_for_contract(contract: dict[str, Any]) -> dict[str, Any]:
         intent = str(workload.get("intent") or "")
         if not task or not intent or intent.startswith("unknown_workload_"):
             continue
-        checks.append(_gateway_readiness_check(base_url=base_url, api_key=api_key, task=task, intent=intent))
+        checks.append(
+            _gateway_readiness_check(
+                base_url=base_url,
+                api_key=api_key,
+                task=task,
+                intent=intent,
+                context_budget_tokens=_safe_int(
+                    workload.get("input_profile", {}).get("context_budget_tokens")
+                    if isinstance(workload.get("input_profile"), dict)
+                    else 0
+                ),
+                modes=[str(item) for item in workload.get("modes") or [] if str(item)],
+            )
+        )
     active_checks = [item for item in checks if item.get("reason") != "inventory_only_unobserved_workload"]
     ok = bool(active_checks) and all(item.get("ok") is True for item in checks)
     return {
@@ -623,7 +636,15 @@ def _workload_draft_grammar_check(contract: dict[str, Any], workload: dict[str, 
     return {"task": task, "intent": intent, "workload_id": workload_id, "ok": True, "reason": "recipe_draft_materializable"}
 
 
-def _gateway_readiness_check(*, base_url: str, api_key: str, task: str, intent: str) -> dict[str, Any]:
+def _gateway_readiness_check(
+    *,
+    base_url: str,
+    api_key: str,
+    task: str,
+    intent: str,
+    context_budget_tokens: int = 0,
+    modes: list[str] | None = None,
+) -> dict[str, Any]:
     url = base_url + "/v2/readiness/intents/" + urllib.parse.quote(intent, safe="")
     timeout = _readiness_timeout_seconds()
     try:
@@ -635,7 +656,7 @@ def _gateway_readiness_check(*, base_url: str, api_key: str, task: str, intent: 
         return {"task": task, "intent": intent, "ok": False, "reason": "readiness_http_error", "status": exc.code, "detail": body}
     except Exception as exc:
         return {"task": task, "intent": intent, "ok": False, "reason": "readiness_check_failed", "detail": str(exc)[:500]}
-    return _summarize_readiness_report(report, task=task, intent=intent)
+    return _summarize_readiness_report(report, task=task, intent=intent, context_budget_tokens=context_budget_tokens, modes=modes)
 
 
 def _readiness_timeout_seconds() -> float:
@@ -646,18 +667,40 @@ def _readiness_timeout_seconds() -> float:
         return 10.0
 
 
-def _summarize_readiness_report(report: dict[str, Any], *, task: str, intent: str) -> dict[str, Any]:
+def _summarize_readiness_report(
+    report: dict[str, Any],
+    *,
+    task: str,
+    intent: str,
+    context_budget_tokens: int = 0,
+    modes: list[str] | None = None,
+) -> dict[str, Any]:
     recipes = report.get("recipes") if isinstance(report, dict) else None
     matching = [
         recipe
         for recipe in recipes or []
         if isinstance(recipe, dict) and recipe.get("intent") == intent and (not recipe.get("task") or recipe.get("task") == task)
     ]
-    if not matching:
-        return {"task": task, "intent": intent, "ok": False, "reason": "no_matching_readiness_recipe"}
-    ready = [
+    compatible = [
         recipe
         for recipe in matching
+        if _readiness_recipe_matches_contract(recipe, context_budget_tokens=context_budget_tokens, modes=modes)
+    ]
+    if not matching:
+        return {"task": task, "intent": intent, "ok": False, "reason": "no_matching_readiness_recipe"}
+    if not compatible:
+        return {
+            "task": task,
+            "intent": intent,
+            "ok": False,
+            "reason": "no_contract_compatible_readiness_recipe",
+            "context_budget_tokens": context_budget_tokens,
+            "modes": modes or [],
+            "recipes": [_bounded_readiness_recipe(recipe) for recipe in matching[:5]],
+        }
+    ready = [
+        recipe
+        for recipe in compatible
         if recipe.get("production_activated") is True and _safe_int(recipe.get("live_ready_tuple_count")) > 0
     ]
     if ready:
@@ -668,14 +711,31 @@ def _summarize_readiness_report(report: dict[str, Any], *, task: str, intent: st
             "recipe": ready[0].get("recipe"),
             "live_ready_tuple_count": _safe_int(ready[0].get("live_ready_tuple_count")),
             "recommended_mode": ready[0].get("recommended_mode"),
+            "context_budget_tokens": ready[0].get("context_budget_tokens"),
         }
     return {
         "task": task,
         "intent": intent,
         "ok": False,
         "reason": "no_production_ready_route",
-        "recipes": [_bounded_readiness_recipe(recipe) for recipe in matching[:5]],
+        "context_budget_tokens": context_budget_tokens,
+        "modes": modes or [],
+        "recipes": [_bounded_readiness_recipe(recipe) for recipe in compatible[:5]],
     }
+
+
+def _readiness_recipe_matches_contract(recipe: dict[str, Any], *, context_budget_tokens: int, modes: list[str] | None) -> bool:
+    recipe_budget = _safe_int(recipe.get("context_budget_tokens"))
+    if context_budget_tokens > 0 and recipe_budget > 0 and recipe_budget < context_budget_tokens:
+        return False
+    requested_modes = {str(item) for item in modes or [] if str(item)}
+    selected_mode = str(recipe.get("selected_mode") or recipe.get("recommended_mode") or "")
+    if requested_modes and selected_mode and selected_mode not in requested_modes:
+        return False
+    allowed_modes = {str(item) for item in recipe.get("allowed_modes") or [] if str(item)}
+    if requested_modes and allowed_modes and not (requested_modes & allowed_modes):
+        return False
+    return True
 
 
 def _safe_int(value: Any) -> int:
@@ -694,6 +754,9 @@ def _bounded_readiness_recipe(recipe: dict[str, Any]) -> dict[str, Any]:
     return {
         "recipe": recipe.get("recipe"),
         "production_activated": bool(recipe.get("production_activated")),
+        "allowed_modes": list(recipe.get("allowed_modes") or []),
+        "selected_mode": recipe.get("selected_mode") or recipe.get("recommended_mode"),
+        "context_budget_tokens": _safe_int(recipe.get("context_budget_tokens")),
         "eligible_tuple_count": _safe_int(recipe.get("eligible_tuple_count")),
         "live_ready_tuple_count": _safe_int(recipe.get("live_ready_tuple_count")),
         "current_caller_action": recipe.get("current_caller_action"),

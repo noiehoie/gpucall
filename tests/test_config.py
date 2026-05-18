@@ -852,6 +852,10 @@ def test_readiness_cli(tmp_path) -> None:
 
     assert '"phase": "readiness"' in result.stdout
     assert "infer-summarize-text-draft" in result.stdout
+    payload = json.loads(result.stdout)
+    recipe = next(item for item in payload["recipes"] if item["recipe"] == "infer-summarize-text-draft")
+    assert recipe["context_budget_tokens"] > 0
+    assert recipe["allowed_modes"]
 
 
 def test_readiness_reports_live_catalog_blocked_tuple(tmp_path, monkeypatch) -> None:

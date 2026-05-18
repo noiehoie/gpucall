@@ -1661,7 +1661,7 @@ def test_migrate_cli_onboard_fails_closed_when_gateway_readiness_blocks_canary(t
     monkeypatch.setenv("GPUCALL_BASE_URL", "http://127.0.0.1:9")
     monkeypatch.setenv("GPUCALL_API_KEY", "x")
 
-    def fake_readiness_check(*, base_url, api_key, task, intent):
+    def fake_readiness_check(*, base_url, api_key, task, intent, **_kwargs):
         assert base_url == "http://127.0.0.1:9"
         assert api_key == "x"
         return {
@@ -1804,7 +1804,7 @@ def test_migrate_onboard_skips_unobserved_inventory_workloads_in_readiness(tmp_p
     monkeypatch.setenv("GPUCALL_API_KEY", "x")
     called_intents: list[str] = []
 
-    def fake_readiness_check(*, base_url, api_key, task, intent):
+    def fake_readiness_check(*, base_url, api_key, task, intent, **_kwargs):
         called_intents.append(intent)
         return {
             "task": task,
@@ -1864,6 +1864,89 @@ def test_migrate_onboard_yes_defers_patch_when_unobserved_inventory_remains(tmp_
     assert report["patch_defer_reason"] == "unobserved_workloads_require_baseline"
     assert source.read_text(encoding="utf-8") == original
     assert not (project / "gpucall_migration.py").exists()
+
+
+def test_migrate_readiness_summary_rejects_under_context_live_recipe() -> None:
+    report = {
+        "recipes": [
+            {
+                "task": "infer",
+                "intent": "rank_text_items",
+                "recipe": "infer-rank-text-items-light",
+                "production_activated": True,
+                "live_ready_tuple_count": 1,
+                "allowed_modes": ["async"],
+                "context_budget_tokens": 32768,
+            }
+        ]
+    }
+
+    summary = migrate_module._summarize_readiness_report(
+        report,
+        task="infer",
+        intent="rank_text_items",
+        context_budget_tokens=131072,
+        modes=["async"],
+    )
+
+    assert summary["ok"] is False
+    assert summary["reason"] == "no_contract_compatible_readiness_recipe"
+
+
+def test_migrate_readiness_summary_accepts_context_compatible_live_recipe() -> None:
+    report = {
+        "recipes": [
+            {
+                "task": "infer",
+                "intent": "rank_text_items",
+                "recipe": "infer-rank-text-items-standard",
+                "production_activated": True,
+                "live_ready_tuple_count": 1,
+                "allowed_modes": ["async"],
+                "selected_mode": "async",
+                "context_budget_tokens": 131072,
+            }
+        ]
+    }
+
+    summary = migrate_module._summarize_readiness_report(
+        report,
+        task="infer",
+        intent="rank_text_items",
+        context_budget_tokens=131072,
+        modes=["async"],
+    )
+
+    assert summary["ok"] is True
+    assert summary["recipe"] == "infer-rank-text-items-standard"
+
+
+def test_migrate_readiness_summary_rejects_wrong_live_validation_mode() -> None:
+    report = {
+        "recipes": [
+            {
+                "task": "infer",
+                "intent": "rank_text_items",
+                "recipe": "infer-rank-text-items-standard",
+                "production_activated": True,
+                "live_ready_tuple_count": 1,
+                "allowed_modes": ["sync", "async"],
+                "selected_mode": "sync",
+                "context_budget_tokens": 131072,
+            }
+        ]
+    }
+
+    summary = migrate_module._summarize_readiness_report(
+        report,
+        task="infer",
+        intent="rank_text_items",
+        context_budget_tokens=131072,
+        modes=["async"],
+    )
+
+    assert summary["ok"] is False
+    assert summary["reason"] == "no_contract_compatible_readiness_recipe"
 
 
 def test_migrate_onboard_command_loads_env_file_before_running_trace(tmp_path, monkeypatch) -> None:
@@ -2022,7 +2105,7 @@ def test_migrate_onboard_gateway_env_file_is_separate_from_caller_env(tmp_path, 
     monkeypatch.delenv("GPUCALL_BASE_URL", raising=False)
     monkeypatch.delenv("GPUCALL_API_KEY", raising=False)
 
-    def fake_readiness_check(*, base_url, api_key, task, intent):
+    def fake_readiness_check(*, base_url, api_key, task, intent, **_kwargs):
         assert base_url == "http://127.0.0.1:9"
         assert api_key == "x"
         return {
