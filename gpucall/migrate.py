@@ -700,6 +700,7 @@ def _migration_helper_text(*, source: str | None) -> str:
             import mimetypes
             import os
             import hashlib
+            import threading
             import time
             import urllib.error
             import urllib.request
@@ -708,6 +709,9 @@ def _migration_helper_text(*, source: str | None) -> str:
             from typing import Any
 
             SOURCE = __SOURCE_REPR__
+            _GATEWAY_RATE_LOCK = threading.Lock()
+            _GATEWAY_NEXT_REQUEST_AT = 0.0
+            _GATEWAY_ASYNC_SEMAPHORE = threading.BoundedSemaphore(int(os.environ.get("GPUCALL_MIGRATION_ASYNC_CONCURRENCY", "2")))
 
 
             class _AttrDict(dict):
@@ -731,6 +735,50 @@ def _migration_helper_text(*, source: str | None) -> str:
                 if not value:
                     raise RuntimeError(f"{name} is required for gpucall migration helper")
                 return value
+
+
+            def _float_env(name: str, default: str) -> float:
+                value = os.environ.get(name, default)
+                try:
+                    return float(value)
+                except ValueError as exc:
+                    raise RuntimeError(f"{name} must be a number") from exc
+
+
+            def _int_env(name: str, default: str) -> int:
+                value = os.environ.get(name, default)
+                try:
+                    parsed = int(value)
+                except ValueError as exc:
+                    raise RuntimeError(f"{name} must be an integer") from exc
+                if parsed < 0:
+                    raise RuntimeError(f"{name} must be non-negative")
+                return parsed
+
+
+            def _pace_gateway_request() -> None:
+                interval = _float_env("GPUCALL_MIGRATION_MIN_REQUEST_INTERVAL_SECONDS", "0.55")
+                if interval <= 0:
+                    return
+                global _GATEWAY_NEXT_REQUEST_AT
+                with _GATEWAY_RATE_LOCK:
+                    now = time.monotonic()
+                    wait_seconds = _GATEWAY_NEXT_REQUEST_AT - now
+                    if wait_seconds > 0:
+                        time.sleep(wait_seconds)
+                    _GATEWAY_NEXT_REQUEST_AT = time.monotonic() + interval
+
+
+            def _retry_after_seconds(exc: urllib.error.HTTPError, attempt: int) -> float:
+                retry_after = exc.headers.get("Retry-After") if exc.headers else None
+                if retry_after:
+                    try:
+                        return max(0.0, float(retry_after))
+                    except ValueError:
+                        pass
+                base = _float_env("GPUCALL_MIGRATION_RATE_LIMIT_BACKOFF_SECONDS", "3")
+                ceiling = _float_env("GPUCALL_MIGRATION_RATE_LIMIT_MAX_BACKOFF_SECONDS", "30")
+                return min(ceiling, base * float(attempt + 1))
 
 
             def _openai_base_url(base_url: str | None = None) -> str:
@@ -793,12 +841,20 @@ def _migration_helper_text(*, source: str | None) -> str:
                     method=method,
                 )
                 request_timeout = timeout if timeout is not None else float(os.environ.get("GPUCALL_MIGRATION_TIMEOUT_SECONDS", "900"))
-                try:
-                    with urllib.request.urlopen(request, timeout=request_timeout) as response:
-                        body = response.read().decode("utf-8")
-                except urllib.error.HTTPError as exc:
-                    body = exc.read().decode("utf-8", errors="replace")[:2000]
-                    raise RuntimeError(f"gpucall request failed status={exc.code} body={body}") from exc
+                max_retries = _int_env("GPUCALL_MIGRATION_HTTP_RETRIES", "8")
+                for attempt in range(max_retries + 1):
+                    _pace_gateway_request()
+                    try:
+                        with urllib.request.urlopen(request, timeout=request_timeout) as response:
+                            body = response.read().decode("utf-8")
+                        break
+                    except urllib.error.HTTPError as exc:
+                        body = exc.read().decode("utf-8", errors="replace")[:2000]
+                        if exc.code == 429 and attempt < max_retries:
+                            request.data = json.dumps(payload).encode("utf-8")
+                            time.sleep(_retry_after_seconds(exc, attempt))
+                            continue
+                        raise RuntimeError(f"gpucall request failed status={exc.code} body={body}") from exc
                 return json.loads(body) if body else {}
 
 
@@ -856,6 +912,12 @@ def _migration_helper_text(*, source: str | None) -> str:
                 task = str(payload.get("task") or "infer")
                 if not _should_submit_async(task, prompt_bytes=prompt_bytes):
                     return _json_request("POST", _base_url() + "/v2/tasks/sync", payload, timeout=timeout)
+                with _GATEWAY_ASYNC_SEMAPHORE:
+                    return _submit_async_task_and_wait(payload, timeout=timeout, prompt_bytes=prompt_bytes)
+
+
+            def _submit_async_task_and_wait(payload: dict[str, Any], *, timeout: float | None = None, prompt_bytes: int = 0) -> dict[str, Any]:
+                task = str(payload.get("task") or "infer")
                 async_payload = dict(payload)
                 async_payload["mode"] = "async"
                 submitted = _json_request("POST", _base_url() + "/v2/tasks/async", async_payload, timeout=timeout)
@@ -865,7 +927,7 @@ def _migration_helper_text(*, source: str | None) -> str:
                     raise RuntimeError("gpucall async task response is missing job_id or status_url")
                 wait_seconds = _sync_wait_seconds(task, prompt_bytes=prompt_bytes, timeout=timeout)
                 deadline = time.monotonic() + wait_seconds
-                interval = float(os.environ.get("GPUCALL_MIGRATION_POLL_INTERVAL_SECONDS", "2"))
+                interval = float(os.environ.get("GPUCALL_MIGRATION_POLL_INTERVAL_SECONDS", "10"))
                 while True:
                     job = _json_request("GET", _base_url() + status_url, {}, timeout=min(max(deadline - time.monotonic(), 1.0), 30.0))
                     state = str(job.get("state") or "")

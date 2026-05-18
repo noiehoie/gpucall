@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from io import BytesIO
 import json
 
 from gpucall.migrate import (
@@ -391,6 +392,56 @@ def test_migrate_helper_routes_vision_and_large_text_through_async(tmp_path, mon
     }
     namespace["gpucall_vision_file"](image, prompt="extract articles", timeout=1)
     assert any(url.endswith("/v2/tasks/async") and payload["mode"] == "async" for _method, url, payload in captured)
+
+
+def test_migrate_helper_retries_gateway_rate_limit_without_fallback(tmp_path, monkeypatch) -> None:
+    project = tmp_path / "project"
+    project.mkdir()
+    source = project / "client.py"
+    source.write_text("from openai import OpenAI\nclient = OpenAI()\n", encoding="utf-8")
+    monkeypatch.setenv("GPUCALL_BASE_URL", "http://127.0.0.1:9")
+    monkeypatch.setenv("GPUCALL_API_KEY", "x")
+    monkeypatch.setenv("GPUCALL_MIGRATION_MIN_REQUEST_INTERVAL_SECONDS", "0")
+    monkeypatch.setenv("GPUCALL_MIGRATION_RATE_LIMIT_BACKOFF_SECONDS", "0")
+    monkeypatch.setenv("GPUCALL_MIGRATION_HTTP_RETRIES", "1")
+
+    patch_suggestions(project, source="openai-app", apply=True)
+    namespace: dict[str, object] = {}
+    exec((project / "gpucall_migration.py").read_text(encoding="utf-8"), namespace)
+
+    calls: list[str] = []
+    sleeps: list[float] = []
+
+    class Response:
+        status = 200
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return None
+
+        def read(self) -> bytes:
+            return b'{"result":{"kind":"inline","value":"ok"}}'
+
+    def fake_urlopen(request, **_kwargs):
+        calls.append(request.full_url)
+        if len(calls) == 1:
+            raise namespace["urllib"].error.HTTPError(
+                request.full_url,
+                429,
+                "Too Many Requests",
+                {},
+                BytesIO(b'{"error":{"code":"rate_limit_exceeded"}}'),
+            )
+        return Response()
+
+    namespace["urllib"].request.urlopen = fake_urlopen
+    namespace["time"].sleep = lambda seconds: sleeps.append(seconds)
+
+    assert namespace["gpucall_infer_text"]("small prompt", timeout=1) == "ok"
+    assert len(calls) == 2
+    assert sleeps == [0.0]
 
 
 def test_migrate_trace_parses_news_class_metrics_without_raw_log(tmp_path) -> None:
