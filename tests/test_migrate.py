@@ -181,6 +181,34 @@ def test_migrate_patch_does_not_touch_model_literal_only_files(tmp_path) -> None
     assert source.read_text(encoding="utf-8") == "MODEL = 'claude-haiku-4-5-20251001'\n"
 
 
+def test_migrate_patch_adds_auth_headers_to_openai_compatible_httpx(tmp_path) -> None:
+    project = tmp_path / "project"
+    project.mkdir()
+    source = project / "llm_client.py"
+    source.write_text(
+        "def call():\n"
+        "    import httpx\n"
+        "    try:\n"
+        "        resp = httpx.post(\n"
+        "            f'{endpoint}/v1/chat/completions',\n"
+        "            json={'messages': []},\n"
+        "            timeout=30,\n"
+        "        )\n"
+        "    except Exception as e:\n"
+        "        logger.warning(\"Local LLM failed, falling back to Anthropic: %s\", e)\n"
+        "        return _call_anthropic('x')\n",
+        encoding="utf-8",
+    )
+
+    report = patch_suggestions(project, source="httpx-app", apply=True)
+
+    assert "llm_client.py" in report["changed_files"]
+    text = source.read_text(encoding="utf-8")
+    assert "gpucall_openai_headers" in text
+    assert "headers=gpucall_openai_headers()," in text
+    assert "gpucall_disable_hosted_fallback(e)" in text
+
+
 def test_migrate_patch_apply_rewrites_openai_client_constructor(tmp_path) -> None:
     project = tmp_path / "project"
     project.mkdir()
@@ -237,6 +265,23 @@ def test_migrate_helper_fallback_rejects_stream_and_omits_none_anthropic_text(tm
         raise AssertionError("stream=True should fail closed in stdlib fallback")
     prompt = namespace["_anthropic_prompt"]([{"content": [{"type": "text", "text": None}, {"type": "text", "text": "ok"}]}])
     assert prompt == "ok"
+
+
+def test_migrate_helper_stream_compat_returns_final_text(tmp_path, monkeypatch) -> None:
+    project = tmp_path / "project"
+    project.mkdir()
+    source = project / "client.py"
+    source.write_text("from openai import OpenAI\nclient = OpenAI()\n", encoding="utf-8")
+    monkeypatch.setenv("GPUCALL_BASE_URL", "http://127.0.0.1:9")
+    monkeypatch.setenv("GPUCALL_API_KEY", "x")
+
+    patch_suggestions(project, source="openai-app", apply=True)
+    namespace: dict[str, object] = {}
+    exec((project / "gpucall_migration.py").read_text(encoding="utf-8"), namespace)
+    content = namespace["_AnthropicContent"]("ok")
+    message = namespace["_AnthropicMessage"]([content])
+    with namespace["_AnthropicStreamCompat"](message) as stream:
+        assert stream.get_final_text() == "ok"
 
 
 def test_migrate_trace_parses_news_class_metrics_without_raw_log(tmp_path) -> None:

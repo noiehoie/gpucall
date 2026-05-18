@@ -481,6 +481,8 @@ def _apply_migration_patch(project: Path, rows: list[dict[str, Any]], *, source:
         )
         updated = updated.replace("anthropic.Anthropic(", "AnthropicCompat(")
         updated = updated.replace("anthropic.AsyncAnthropic(", "AsyncAnthropicCompat(")
+        updated = _rewrite_openai_compatible_httpx_calls(updated)
+        updated = _disable_hosted_fallback(updated)
         if "from openai import OpenAI" in updated:
             updated = updated.replace("from openai import OpenAI", "from gpucall_migration import gpucall_openai_client")
             updated = re.sub(r"\bOpenAI\s*\(", "gpucall_openai_client(", updated)
@@ -530,6 +532,64 @@ def _rewrite_anthropic_imports(text: str) -> str:
         return "\n".join(lines)
 
     return re.sub(r"(?m)^(?P<indent>\s*)from anthropic import (?P<symbols>[A-Za-z0-9_, ]+)\s*$", replace, text)
+
+
+def _rewrite_openai_compatible_httpx_calls(text: str) -> str:
+    if "httpx.post(" not in text or "chat/completions" not in text:
+        return text
+    lines = text.splitlines(keepends=True)
+    changed = False
+    index = 0
+    while index < len(lines):
+        if "httpx.post(" not in lines[index]:
+            index += 1
+            continue
+        start = index
+        depth = lines[index].count("(") - lines[index].count(")")
+        index += 1
+        while index < len(lines) and depth > 0:
+            depth += lines[index].count("(") - lines[index].count(")")
+            index += 1
+        end = index
+        block = "".join(lines[start:end])
+        if "chat/completions" not in block or "headers=" in block:
+            continue
+        insert_at = end - 1
+        for pos in range(start, end):
+            if "timeout=" in lines[pos]:
+                insert_at = pos
+                break
+        indent = re.match(r"(\s*)", lines[insert_at]).group(1) if insert_at < len(lines) else " " * 12
+        lines.insert(insert_at, f"{indent}headers=gpucall_openai_headers(),\n")
+        index += 1
+        changed = True
+    if not changed:
+        return text
+    updated = "".join(lines)
+    import_line = "from gpucall_migration import gpucall_disable_hosted_fallback, gpucall_openai_headers\n"
+    if "gpucall_openai_headers" in updated and import_line not in updated:
+        updated = _insert_after_future_imports(updated, import_line)
+    return updated
+
+
+def _disable_hosted_fallback(text: str) -> str:
+    if "falling back to Anthropic" not in text:
+        return text
+    updated = text
+    updated = re.sub(
+        r'(?m)^(\s*)logger\.warning\("Local LLM failed, falling back to Anthropic: %s", e\)\n(\s*)return _call_anthropic',
+        r'\1logger.warning("Local LLM failed, falling back to Anthropic: %s", e)\n\2gpucall_disable_hosted_fallback(e)\n\2return _call_anthropic',
+        updated,
+    )
+    updated = re.sub(
+        r'(?m)^(\s*)logger\.warning\("Local LLM vision failed, falling back to Anthropic: %s", e\)\n(\s*)return _call_anthropic_vision',
+        r'\1logger.warning("Local LLM vision failed, falling back to Anthropic: %s", e)\n\2gpucall_disable_hosted_fallback(e)\n\2return _call_anthropic_vision',
+        updated,
+    )
+    import_line = "from gpucall_migration import gpucall_disable_hosted_fallback, gpucall_openai_headers\n"
+    if updated != text and "gpucall_disable_hosted_fallback" in updated and import_line not in updated:
+        updated = _insert_after_future_imports(updated, import_line)
+    return updated
 
 
 def _migration_helper_text(*, source: str | None) -> str:
@@ -582,6 +642,19 @@ def _migration_helper_text(*, source: str | None) -> str:
                 return api_key or _required_env("GPUCALL_API_KEY")
 
 
+            def gpucall_openai_headers(api_key: str | None = None) -> dict[str, str]:
+                return {
+                    "Authorization": f"Bearer {_api_key(api_key)}",
+                    "Content-Type": "application/json",
+                }
+
+
+            def gpucall_disable_hosted_fallback(exc: BaseException | None = None) -> None:
+                allowed = os.environ.get("GPUCALL_ALLOW_HOSTED_FALLBACK", "").lower() in {"1", "true", "yes"}
+                if not allowed:
+                    raise RuntimeError("gpucall migration helper disabled direct hosted-AI fallback") from exc
+
+
             def _chat_completion(
                 *,
                 messages: list[dict[str, Any]],
@@ -607,10 +680,7 @@ def _migration_helper_text(*, source: str | None) -> str:
                 request = urllib.request.Request(
                     _openai_base_url(base_url) + "/chat/completions",
                     data=json.dumps(payload).encode("utf-8"),
-                    headers={
-                        "Authorization": f"Bearer {_api_key(api_key)}",
-                        "Content-Type": "application/json",
-                    },
+                    headers=gpucall_openai_headers(api_key),
                     method="POST",
                 )
                 request_timeout = timeout if timeout is not None else float(os.environ.get("GPUCALL_MIGRATION_TIMEOUT_SECONDS", "900"))
@@ -752,6 +822,23 @@ def _migration_helper_text(*, source: str | None) -> str:
                         **kwargs,
                     )
                     return _AnthropicMessage(content=[_AnthropicContent(text=_extract_text(response))])
+
+                def stream(self, **kwargs: Any) -> Any:
+                    return _AnthropicStreamCompat(self.create(**kwargs))
+
+
+            class _AnthropicStreamCompat:
+                def __init__(self, message: _AnthropicMessage) -> None:
+                    self.message = message
+
+                def __enter__(self) -> "_AnthropicStreamCompat":
+                    return self
+
+                def __exit__(self, *_: Any) -> None:
+                    return None
+
+                def get_final_text(self) -> str:
+                    return "\\n".join(part.text for part in self.message.content)
 
 
             class _AsyncAnthropicMessagesCompat:
