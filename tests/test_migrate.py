@@ -14,6 +14,7 @@ from gpucall.migrate import (
     main,
     patch_suggestions,
     profile_project,
+    recipe_intakes_from_contract,
     trace_project,
 )
 from gpucall.workload_contract import compare_trace_to_contract, contract_to_recipe_intake
@@ -58,7 +59,9 @@ def test_migrate_preflight_overdeclares_rss_semantic_match(tmp_path) -> None:
 
     assert requests[0]["task"] == "infer"
     assert requests[0]["intent"] == "rss_semantic_match"
+    assert requests[0]["mode"] == "async"
     assert "--required-model-len 131072" in requests[0]["command"]
+    assert "--mode async" in requests[0]["command"]
 
 
 def test_migrate_preflight_overdeclares_pairwise_match(tmp_path) -> None:
@@ -71,6 +74,7 @@ def test_migrate_preflight_overdeclares_pairwise_match(tmp_path) -> None:
 
     assert requests[0]["task"] == "infer"
     assert requests[0]["intent"] == "pairwise_match"
+    assert requests[0]["mode"] == "async"
     assert "--required-model-len 131072" in requests[0]["command"]
 
 
@@ -88,7 +92,23 @@ def test_migrate_preflight_prefers_integrated_news_analysis_over_rss_word(tmp_pa
 
     assert requests[0]["task"] == "infer"
     assert requests[0]["intent"] == "rank_text_items"
+    assert requests[0]["mode"] == "async"
     assert "--required-model-len 131072" in requests[0]["command"]
+
+
+def test_migrate_preflight_overdeclares_document_vision_as_async(tmp_path) -> None:
+    project = tmp_path / "project"
+    project.mkdir()
+    (project / "overseas_vision.py").write_text("def run():\n    call_llm_vision(image_path, prompt='extract frontpage articles')\n", encoding="utf-8")
+
+    report = assess_project(project, source="news-system")
+    requests = build_preflight_requests(report, source="news-system")
+
+    assert requests[0]["task"] == "vision"
+    assert requests[0]["intent"] == "understand_document_image"
+    assert requests[0]["mode"] == "async"
+    assert requests[0]["bytes"] == 16 * 1024 * 1024
+    assert "--mode async" in requests[0]["command"]
 
 
 def test_migrate_cli_writes_reports(tmp_path) -> None:
@@ -1285,9 +1305,12 @@ def test_migrate_cli_onboard_writes_contract_and_recipe_intake(tmp_path) -> None
 
     contract = json.loads((output / "workload-contract.json").read_text(encoding="utf-8"))
     intake = json.loads((output / "recipe-intake.json").read_text(encoding="utf-8"))
+    intake_bundle = json.loads((output / "recipe-intakes.json").read_text(encoding="utf-8"))
     assert contract["phase"] == "workload-contract"
     assert intake["phase"] == "deterministic-contract-intake"
     assert intake["sanitized_request"]["intent"] == "rank_text_items"
+    assert intake_bundle["phase"] == "recipe-intake-bundle"
+    assert (output / "recipe-intakes" / "infer-rank-text-items.json").exists()
 
 
 def test_migrate_cli_onboard_yes_applies_patch(tmp_path) -> None:
@@ -1359,6 +1382,69 @@ def test_contract_to_recipe_intake_preserves_contract_metadata() -> None:
     assert intake["sanitized_request"]["mode"] == "async"
     assert intake["sanitized_request"]["intent"] == "rank_text_items"
     assert intake["sanitized_request"]["quality_contract"]["metrics"]["min_topics"] == 12
+
+
+def test_recipe_intakes_from_contract_preserves_all_workloads() -> None:
+    contract = {
+        "phase": "workload-contract",
+        "source": "fixture",
+        "primary_workload_id": "infer.rank_text_items",
+        "workloads": [
+            {
+                "id": "infer.rank_text_items",
+                "task": "infer",
+                "intent": "rank_text_items",
+                "classification": "confidential",
+                "modes": ["async"],
+                "input_profile": {"content_types": ["text/plain"], "context_budget_tokens": 131072},
+                "output_profile": {"output_contract": "json_object"},
+                "quality_contract": {"metrics": {"min_topics": 12}, "gateway_may_infer_quality": False},
+            },
+            {
+                "id": "vision.understand_document_image",
+                "task": "vision",
+                "intent": "understand_document_image",
+                "classification": "confidential",
+                "modes": ["async"],
+                "input_profile": {"content_types": ["image/"], "context_budget_tokens": 8192},
+                "output_profile": {"output_contract": "json_object"},
+                "quality_contract": {"metrics": {"min_articles": 1}, "gateway_may_infer_quality": False},
+            },
+        ],
+    }
+
+    bundle = recipe_intakes_from_contract(contract)
+
+    assert bundle["count"] == 2
+    assert [item["sanitized_request"]["intent"] for item in bundle["intakes"]] == ["rank_text_items", "understand_document_image"]
+
+
+def test_migrate_compare_rejects_provider_temporary_failures(tmp_path) -> None:
+    project = tmp_path / "project"
+    project.mkdir()
+    contract = {
+        "phase": "workload-contract",
+        "workloads": [
+            {
+                "id": "vision.understand_document_image",
+                "task": "vision",
+                "intent": "understand_document_image",
+                "quality_contract": {"metrics": {"max_provider_temporary_failures": 0}},
+            }
+        ],
+    }
+    trace = trace_project(
+        project,
+        log_file=_write_log(tmp_path, "candidate.log", "PROVIDER_RESOURCE_EXHAUSTED\nPROVIDER_CAPACITY_UNAVAILABLE\n"),
+        source="fixture",
+        backend="gpucall",
+    )
+
+    comparison = compare_trace_to_contract(contract, trace)
+
+    assert comparison["ok"] is False
+    assert comparison["violations"][0]["metric"] == "provider_temporary_failure_count"
+    assert comparison["violations"][0]["observed"] == 2
 
 
 def test_contract_to_recipe_intake_marks_unknown_workload_non_materializable() -> None:

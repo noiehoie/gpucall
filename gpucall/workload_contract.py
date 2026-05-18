@@ -25,11 +25,11 @@ QUALITY_SOURCE_RATIO = 0.8
 QUALITY_RESPONSE_CHAR_RATIO = 0.5
 
 INTENT_ORDER = (
+    "rank_text_items",
+    "understand_document_image",
+    "summarize_text",
     "rss_semantic_match",
     "pairwise_match",
-    "rank_text_items",
-    "summarize_text",
-    "understand_document_image",
     "translate_text",
     "extract_json",
 )
@@ -306,6 +306,7 @@ def _empty_metrics() -> dict[str, Any]:
         "no_auto_selectable_recipe_count": 0,
         "http_422_count": 0,
         "json_extract_failures": 0,
+        "provider_temporary_failure_count": 0,
         "rss_match_total": None,
         "rss_match_matched": None,
         "commentary_count": None,
@@ -332,6 +333,7 @@ def _regex_metrics(text: str) -> dict[str, Any]:
         "articles_count": [
             r"\barticles\s*[=:]\s*(\d+)\b",
             r"\barticles_count\s*[=:]\s*(\d+)\b",
+            r"(\d+)\s*記事抽出",
         ],
         "elapsed_seconds": [
             r"\belapsed\s*[=:]\s*([0-9]+(?:\.[0-9]+)?)s?\b",
@@ -361,6 +363,15 @@ def _regex_metrics(text: str) -> dict[str, Any]:
     metrics["no_auto_selectable_recipe_count"] = text.count("NO_AUTO_SELECTABLE_RECIPE")
     metrics["http_422_count"] = len(re.findall(r"/v2/tasks/[^ ]+\s+\"HTTP/1\.1 422", text))
     metrics["json_extract_failures"] = text.count("Could not extract JSON")
+    metrics["provider_temporary_failure_count"] = len(
+        re.findall(
+            r"\bPROVIDER_(?:RESOURCE_EXHAUSTED|CAPACITY_UNAVAILABLE|PROVISION_UNAVAILABLE|QUEUE_SATURATED|"
+            r"WORKER_INITIALIZING|WORKER_THROTTLED|TIMEOUT|POLL_TIMEOUT|JOB_FAILED|UNHEALTHY|BOOTING|"
+            r"PREEMPTED|MAINTENANCE|UPSTREAM_UNAVAILABLE|RATE_LIMITED|QUOTA_EXCEEDED|REGION_UNAVAILABLE|"
+            r"IMAGE_PULL_DELAY|MODEL_LOADING|CONCURRENCY_LIMIT|LEASE_EXPIRED|STALE_JOB|ERROR)\b",
+            text,
+        )
+    )
     match = re.search(r"\[OverseasVision/RSSマッチ\]\s+全体:\s*(\d+)/(\d+)", text)
     if match:
         metrics["rss_match_matched"] = int(match.group(1))
@@ -459,18 +470,48 @@ def _detected_workloads(rows: list[Mapping[str, Any]]) -> list[dict[str, Any]]:
 
 def _guess_from_finding(row: Mapping[str, Any]) -> tuple[str, str | None, int]:
     text = " ".join(str(row.get(key, "")) for key in ("path", "symbol", "detail")).lower()
+    routing_text = re.sub(r"do not rank topics?\.?|do not rank\.?|not rank topics?\.?", "", text)
     if "translate" in text or "translation" in text:
         return "infer", "translate_text", 32768
+    has_news_ranking_contract = (
+        "top topics" in routing_text
+        or "topic list" in routing_text
+        or "source_articles" in routing_text
+        or "east-west" in routing_text
+        or "western_tone" in routing_text
+        or "non_western_tone" in routing_text
+        or "gap_description" in routing_text
+        or "japan-suru" in routing_text
+        or "統合分析" in routing_text
+        or "重要度ランキング" in routing_text
+        or "報道ギャップ" in routing_text
+        or "東西" in routing_text
+        or (("rank" in routing_text or "ranking" in routing_text or "rankings" in routing_text or "順位" in routing_text or "ランキング" in routing_text)
+            and ("topic" in routing_text or "topics" in routing_text or "トピック" in routing_text or "news" in routing_text or "source_articles" in routing_text or "importance" in routing_text or "重要度" in routing_text))
+    )
+    has_match_contract = (
+        "semantic" in text
+        or "match" in text
+        or "matches" in text
+        or "matching" in text
+        or "similarity" in text
+        or "confidence" in text
+        or "突合" in text
+        or "照合" in text
+        or "マッチ" in text
+    )
+    if ("pairwise" in text or "pair-wise" in text or "pairwise_similarity" in text) and has_match_contract:
+        return "infer", "pairwise_match", 131072
+    if has_news_ranking_contract or "topic_engine" in text:
+        return "infer", "rank_text_items", 131072
     if "vision" in text or "image" in text or "ocr" in text or "frontpage" in text:
         return "vision", "understand_document_image", 8192
+    if ("rss" in text or "feed" in text or "semantic" in text) and has_match_contract:
+        return "infer", "rss_semantic_match", 131072
     if "rss" in text or "feed" in text or "semantic" in text:
         return "infer", "rss_semantic_match", 131072
     if "pair" in text or "match" in text:
-        if "topic" in text or "rank" in text:
-            return "infer", "rank_text_items", 131072
         return "infer", "pairwise_match", 131072
-    if "topic" in text or "rank" in text or "ranking" in text or "score" in text:
-        return "infer", "rank_text_items", 131072
     if "summary" in text or "summarize" in text:
         return "infer", "summarize_text", 65536
     if "json" in text or "schema" in text or "extract" in text:
@@ -535,7 +576,8 @@ def _contract_workload(workload: Mapping[str, Any]) -> dict[str, Any]:
     output_profile = dict(_mapping(workload.get("output_profile")))
     output_profile.update(_output_profile_from_metrics(intent, trace_metrics))
     quality = _quality_contract(intent, trace_metrics, output_profile)
-    modes = [str(item) for item in workload.get("modes") or ["sync"]]
+    context_budget = _positive_int(input_profile.get("context_budget_tokens"), default=0)
+    modes = _contract_modes(task=task, intent=intent, context_budget_tokens=context_budget, raw_modes=workload.get("modes"))
     return {
         "id": str(workload.get("id") or f"{task}.{intent}"),
         "task": task,
@@ -552,11 +594,22 @@ def _contract_workload(workload: Mapping[str, Any]) -> dict[str, Any]:
             "reservation_must_separate_standing_and_runtime": True,
         },
         "latency_contract": {
-            "recommended_mode": "async" if _positive_int(input_profile.get("context_budget_tokens"), default=0) > 32768 else modes[0],
-            "timeout_seconds": 1800 if task == "vision" else (900 if _positive_int(input_profile.get("context_budget_tokens"), default=0) > 32768 else 180),
+            "recommended_mode": modes[0],
+            "timeout_seconds": 1800 if task == "vision" else (900 if context_budget > 32768 else 180),
         },
         "evidence": list(workload.get("evidence") or [])[:20],
     }
+
+
+def _contract_modes(*, task: str, intent: str, context_budget_tokens: int, raw_modes: Any) -> list[str]:
+    raw = [str(item) for item in raw_modes or [] if str(item)]
+    if task == "vision":
+        return ["async"]
+    if intent in {"rank_text_items", "rss_semantic_match", "pairwise_match"}:
+        return ["async"]
+    if context_budget_tokens > 32768:
+        return ["async"]
+    return raw or ["sync"]
 
 
 def _output_profile_from_metrics(intent: str, metrics: Mapping[str, Any]) -> dict[str, Any]:
@@ -593,6 +646,7 @@ def _quality_contract(intent: str, metrics: Mapping[str, Any], output_profile: M
     metric_contract["max_no_auto_selectable_recipe"] = 0
     metric_contract["max_http_422"] = 0
     metric_contract["max_json_extract_failures"] = 0
+    metric_contract["max_provider_temporary_failures"] = 0
     response_chars = _optional_int(metrics.get("response_chars"))
     if response_chars is not None and response_chars > 0:
         metric_contract["min_response_chars"] = max(1, math.floor(response_chars * QUALITY_RESPONSE_CHAR_RATIO))
@@ -654,6 +708,7 @@ def _compare_workload(workload: Mapping[str, Any], metrics: Mapping[str, Any]) -
         "max_no_auto_selectable_recipe": ("no_auto_selectable_recipe_count", "recipe routing failures are not allowed in a successful canary"),
         "max_http_422": ("http_422_count", "HTTP 422 routing/admission failures are not allowed in a successful canary"),
         "max_json_extract_failures": ("json_extract_failures", "JSON extraction failures are not allowed in a successful canary"),
+        "max_provider_temporary_failures": ("provider_temporary_failure_count", "provider temporary failures are not allowed in a successful onboarding canary"),
     }
     for requirement, (metric_name, reason) in maximum_checks.items():
         if requirement not in required:

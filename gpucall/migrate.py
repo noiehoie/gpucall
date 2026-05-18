@@ -47,6 +47,22 @@ SOURCE_SUFFIXES = {".py", ".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs"}
 MAX_FILE_BYTES = 1_000_000
 
 
+def recipe_intakes_from_contract(contract: dict[str, Any]) -> dict[str, Any]:
+    intakes: list[dict[str, Any]] = []
+    for workload in contract.get("workloads", []) or []:
+        if not isinstance(workload, dict):
+            continue
+        intakes.append(contract_to_recipe_intake(contract, workload_id=str(workload.get("id") or "")))
+    return {
+        "schema_version": 1,
+        "phase": "recipe-intake-bundle",
+        "source": contract.get("source"),
+        "primary_workload_id": contract.get("primary_workload_id"),
+        "count": len(intakes),
+        "intakes": intakes,
+    }
+
+
 @dataclass(frozen=True)
 class Finding:
     path: str
@@ -172,6 +188,7 @@ def main(argv: list[str] | None = None) -> int:
         if args.write_intake:
             intake = contract_to_recipe_intake(report)
             _write_outputs(intake, output_dir, "recipe-intake")
+            _write_outputs(recipe_intakes_from_contract(report), output_dir, "recipe-intakes")
         return 0
     if args.command == "compare":
         report = compare_project(
@@ -198,12 +215,16 @@ def main(argv: list[str] | None = None) -> int:
         profile_report = report.get("workload_profile")
         contract_report = report.get("workload_contract")
         recipe_intake = report.get("recipe_intake")
+        recipe_intakes = report.get("recipe_intakes")
         if isinstance(profile_report, dict):
             _write_outputs(profile_report, output_dir, "workload-profile")
         if isinstance(contract_report, dict):
             _write_outputs(contract_report, output_dir, "workload-contract")
         if isinstance(recipe_intake, dict):
             _write_outputs(recipe_intake, output_dir, "recipe-intake")
+        if isinstance(recipe_intakes, dict):
+            _write_outputs(recipe_intakes, output_dir, "recipe-intakes")
+            _write_recipe_intake_files(recipe_intakes, output_dir / "recipe-intakes")
         return 0
     raise AssertionError(args.command)
 
@@ -244,11 +265,11 @@ def build_preflight_requests(report: dict[str, Any], *, source: str | None = Non
         requests[key] = {
             "task": task,
             "intent": intent,
-            "mode": "sync",
+            "mode": _recommended_preflight_mode(task, intent, required_len),
             "source": source or report.get("source"),
             "business_need": f"detected by gpucall-migrate at {item.get('path')}:{item.get('line')}",
             "content_type": "image/png" if task == "vision" else "text/plain",
-            "bytes": 2_000_000 if task == "vision" else 8_000,
+            "bytes": _preflight_bytes(task, required_len),
             "required_model_len": required_len,
             "command": _preflight_command(task, intent, required_len, source=source or report.get("source")),
         }
@@ -418,6 +439,7 @@ def onboard_project(
     profile = workload_profile_from_assessment(assessment, traces=traces, source=source)
     contract = draft_workload_contract(profile, source=source)
     recipe_intake = contract_to_recipe_intake(contract) if contract.get("workloads") else None
+    recipe_intakes = recipe_intakes_from_contract(contract) if contract.get("workloads") else None
     return {
         "schema_version": 1,
         "phase": "migration-onboard",
@@ -430,6 +452,7 @@ def onboard_project(
         "workload_profile": profile,
         "workload_contract": contract,
         "recipe_intake": recipe_intake,
+        "recipe_intakes": recipe_intakes,
         "next_actions": _onboard_next_actions(contract, trace_report),
     }
 
@@ -789,6 +812,7 @@ def _migration_helper_text(*, source: str | None) -> str:
             import os
             import hashlib
             import re
+            import sys
             import threading
             import time
             import urllib.error
@@ -800,9 +824,9 @@ def _migration_helper_text(*, source: str | None) -> str:
             SOURCE = __SOURCE_REPR__
             _GATEWAY_RATE_LOCK = threading.Lock()
             _GATEWAY_NEXT_REQUEST_AT = 0.0
-            _GATEWAY_ASYNC_SEMAPHORE = threading.BoundedSemaphore(max(1, int(os.environ.get("GPUCALL_MIGRATION_ASYNC_CONCURRENCY", "2"))))
+            _GATEWAY_ASYNC_SEMAPHORE = threading.BoundedSemaphore(max(1, int(os.environ.get("GPUCALL_MIGRATION_ASYNC_CONCURRENCY", "1"))))
             _GATEWAY_INFLIGHT_SEMAPHORE = threading.BoundedSemaphore(
-                max(1, int(os.environ.get("GPUCALL_MIGRATION_INFLIGHT_CONCURRENCY", os.environ.get("GPUCALL_MIGRATION_REQUEST_CONCURRENCY", "2"))))
+                max(1, int(os.environ.get("GPUCALL_MIGRATION_INFLIGHT_CONCURRENCY", os.environ.get("GPUCALL_MIGRATION_REQUEST_CONCURRENCY", "1"))))
             )
 
 
@@ -866,6 +890,17 @@ def _migration_helper_text(*, source: str | None) -> str:
                 return parsed
 
 
+            def _migration_log(event: str, **fields: Any) -> None:
+                if os.environ.get("GPUCALL_MIGRATION_LOG", "1").lower() not in {"1", "true", "yes"}:
+                    return
+                safe_fields = {key: value for key, value in fields.items() if key not in {"api_key", "authorization", "prompt", "body"}}
+                payload = {"event": event, **safe_fields}
+                try:
+                    print("[gpucall-migration] " + json.dumps(payload, ensure_ascii=False, sort_keys=True), file=sys.stderr, flush=True)
+                except Exception:
+                    pass
+
+
             def _pace_gateway_request() -> None:
                 interval = _float_env("GPUCALL_MIGRATION_MIN_REQUEST_INTERVAL_SECONDS", "0.55")
                 if interval <= 0:
@@ -902,13 +937,13 @@ def _migration_helper_text(*, source: str | None) -> str:
 
 
             def _provider_temporary_backoff_seconds(attempt: int) -> float:
-                base = _float_env("GPUCALL_MIGRATION_PROVIDER_TEMPORARY_BACKOFF_SECONDS", "20")
-                ceiling = _float_env("GPUCALL_MIGRATION_PROVIDER_TEMPORARY_MAX_BACKOFF_SECONDS", "120")
+                base = _float_env("GPUCALL_MIGRATION_PROVIDER_TEMPORARY_BACKOFF_SECONDS", "5")
+                ceiling = _float_env("GPUCALL_MIGRATION_PROVIDER_TEMPORARY_MAX_BACKOFF_SECONDS", "15")
                 return min(ceiling, base * float(attempt + 1))
 
 
             def _provider_temporary_max_wait_seconds() -> float:
-                return max(0.0, _float_env("GPUCALL_MIGRATION_PROVIDER_TEMPORARY_MAX_WAIT_SECONDS", "900"))
+                return max(0.0, _float_env("GPUCALL_MIGRATION_PROVIDER_TEMPORARY_MAX_WAIT_SECONDS", "45"))
 
 
             def _is_retryable_no_eligible(exc: urllib.error.HTTPError, body: str) -> bool:
@@ -1148,7 +1183,7 @@ def _migration_helper_text(*, source: str | None) -> str:
                 request_timeout = _gateway_timeout(timeout, floor=floor_timeout)
                 rate_limit_retries = _int_env("GPUCALL_MIGRATION_HTTP_RETRIES", "8")
                 no_eligible_retries = _int_env("GPUCALL_MIGRATION_NO_ELIGIBLE_RETRIES", "12")
-                provider_temporary_retries = _int_env("GPUCALL_MIGRATION_PROVIDER_TEMPORARY_RETRIES", "8")
+                provider_temporary_retries = _int_env("GPUCALL_MIGRATION_PROVIDER_TEMPORARY_RETRIES", "1")
                 no_eligible_wait_started: float | None = None
                 provider_temporary_wait_started: float | None = None
                 max_retries = max(rate_limit_retries, no_eligible_retries, provider_temporary_retries)
@@ -1172,6 +1207,7 @@ def _migration_helper_text(*, source: str | None) -> str:
                             max_wait = _provider_temporary_max_wait_seconds()
                             if max_wait and (now - provider_temporary_wait_started + delay) > max_wait:
                                 raise GPUCallGatewayError(status=exc.code, body=body) from exc
+                            _migration_log("provider-temporary-http-retry", status=exc.code, code=_gateway_error_code(body), attempt=attempt + 1, delay_seconds=delay)
                             request.data = json.dumps(payload).encode("utf-8")
                             time.sleep(delay)
                             continue
@@ -1228,7 +1264,7 @@ def _migration_helper_text(*, source: str | None) -> str:
                 if task == "vision":
                     env_timeout = float(os.environ.get(
                         "GPUCALL_MIGRATION_VISION_POLL_TIMEOUT_SECONDS",
-                        os.environ.get("GPUCALL_MIGRATION_POLL_TIMEOUT_SECONDS", "1800"),
+                        os.environ.get("GPUCALL_MIGRATION_POLL_TIMEOUT_SECONDS", "600"),
                     ))
                 elif prompt_bytes > int(os.environ.get("GPUCALL_MIGRATION_ASYNC_TEXT_BYTES", "65536")):
                     env_timeout = float(os.environ.get("GPUCALL_MIGRATION_TEXT_POLL_TIMEOUT_SECONDS", "600"))
@@ -1333,18 +1369,19 @@ def _migration_helper_text(*, source: str | None) -> str:
 
 
             def _submit_async_task_and_wait(payload: dict[str, Any], *, timeout: float | None = None, prompt_bytes: int = 0) -> dict[str, Any]:
-                provider_retries = _int_env("GPUCALL_MIGRATION_PROVIDER_TEMPORARY_RETRIES", "8")
+                provider_retries = _int_env("GPUCALL_MIGRATION_PROVIDER_TEMPORARY_RETRIES", "1")
                 wait_started = time.monotonic()
                 for attempt in range(provider_retries + 1):
                     try:
                         return _submit_async_task_once(payload, timeout=timeout, prompt_bytes=prompt_bytes)
-                    except GPUCallProviderTemporaryError:
+                    except GPUCallProviderTemporaryError as exc:
                         if attempt >= provider_retries:
                             raise
                         delay = _provider_temporary_backoff_seconds(attempt)
                         max_wait = _provider_temporary_max_wait_seconds()
                         if max_wait and (time.monotonic() - wait_started + delay) > max_wait:
                             raise
+                        _migration_log("provider-temporary-job-retry", task=payload.get("task"), intent=payload.get("intent"), code=exc.provider_error_code, attempt=attempt + 1, delay_seconds=delay)
                         time.sleep(delay)
                 raise RuntimeError("gpucall async task provider temporary retries exhausted")
 
@@ -1353,6 +1390,7 @@ def _migration_helper_text(*, source: str | None) -> str:
                 task = str(payload.get("task") or "infer")
                 async_payload = dict(payload)
                 async_payload["mode"] = "async"
+                _migration_log("async-submit", task=task, intent=payload.get("intent"), prompt_bytes=prompt_bytes)
                 submitted = _json_request("POST", _base_url() + "/v2/tasks/async", async_payload, timeout=timeout)
                 job_id = submitted.get("job_id")
                 status_url = submitted.get("status_url")
@@ -1380,6 +1418,7 @@ def _migration_helper_text(*, source: str | None) -> str:
                         if state in {"FAILED", "CANCELLED", "EXPIRED"}:
                             cancel_on_exit = False
                             if _is_retryable_provider_job_failure(job):
+                                _migration_log("async-provider-temporary-failure", task=task, intent=payload.get("intent"), state=state, code=_job_provider_error_code(job))
                                 raise GPUCallProviderTemporaryError(
                                     state=state,
                                     error=job.get("error"),
@@ -1408,6 +1447,7 @@ def _migration_helper_text(*, source: str | None) -> str:
                 full_prompt = f"{system_prompt}\\n\\n{prompt}" if system_prompt else prompt
                 body = full_prompt.encode("utf-8")
                 with _GATEWAY_INFLIGHT_SEMAPHORE:
+                    _migration_log("infer-start", intent=intent or gpucall_guess_intent(prompt, system_prompt), prompt_bytes=len(body))
                     payload: dict[str, Any] = {
                         "task": "infer",
                         "mode": "sync",
@@ -1458,6 +1498,7 @@ def _migration_helper_text(*, source: str | None) -> str:
             ) -> str:
                 full_prompt = f"{system_prompt}\\n\\n{prompt}" if system_prompt else prompt
                 with _GATEWAY_INFLIGHT_SEMAPHORE:
+                    _migration_log("vision-start", intent=intent or "understand_document_image", image_name=Path(image_path).name)
                     data_ref = _upload_file(Path(image_path), timeout=timeout)
                     payload: dict[str, Any] = {
                         "task": "vision",
@@ -1817,18 +1858,34 @@ def _preflight_command(task: str, intent: str, required_len: int, *, source: str
         "preflight",
         "--task",
         task,
+        "--mode",
+        _recommended_preflight_mode(task, intent, required_len),
         "--intent",
         intent,
         "--content-type",
         "image/png" if task == "vision" else "text/plain",
         "--bytes",
-        "2000000" if task == "vision" else "8000",
+        str(_preflight_bytes(task, required_len)),
         "--required-model-len",
         str(required_len),
     ]
     if source:
         parts.extend(["--source", source])
     return " ".join(shlex.quote(item) for item in parts)
+
+
+def _recommended_preflight_mode(task: str, intent: str, required_len: int) -> str:
+    if task == "vision":
+        return "async"
+    if intent in {"rank_text_items", "rss_semantic_match", "pairwise_match"}:
+        return "async"
+    return "async" if required_len > 32768 else "sync"
+
+
+def _preflight_bytes(task: str, required_len: int) -> int:
+    if task == "vision":
+        return 16 * 1024 * 1024
+    return max(16_384, min(16 * 1024 * 1024, max(required_len, 1) * 8))
 
 
 def _error_code_counts(text: str) -> dict[str, int]:
@@ -1864,6 +1921,18 @@ def _write_outputs(report: dict[str, Any], output_dir: Path, stem: str) -> None:
     json_path.write_text(json.dumps(report, ensure_ascii=False, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     md_path.write_text(_markdown(report), encoding="utf-8")
     sys.stdout.write(str(json_path) + "\n" + str(md_path) + "\n")
+
+
+def _write_recipe_intake_files(bundle: dict[str, Any], output_dir: Path) -> None:
+    output_dir.mkdir(parents=True, exist_ok=True)
+    for intake in bundle.get("intakes", []) or []:
+        if not isinstance(intake, dict):
+            continue
+        sanitized = intake.get("sanitized_request") if isinstance(intake.get("sanitized_request"), dict) else {}
+        task = re.sub(r"[^a-z0-9-]+", "-", str(sanitized.get("task") or "workload").lower()).strip("-")
+        intent = re.sub(r"[^a-z0-9-]+", "-", str(sanitized.get("intent") or "unknown").lower()).strip("-")
+        path = output_dir / f"{task}-{intent}.json"
+        path.write_text(json.dumps(intake, ensure_ascii=False, indent=2, sort_keys=True) + "\n", encoding="utf-8")
 
 
 def _markdown(report: dict[str, Any]) -> str:

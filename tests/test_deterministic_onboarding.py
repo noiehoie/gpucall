@@ -1,5 +1,5 @@
 import pytest
-from gpucall.workload_contract import workload_profile_from_assessment, contract_to_recipe_intake
+from gpucall.workload_contract import workload_profile_from_assessment, contract_to_recipe_intake, draft_workload_contract
 from gpucall.recipe_materialize import canonical_recipe_from_artifact
 from gpucall.recipe_intents import is_valid_production_intent
 
@@ -36,6 +36,42 @@ def test_pairwise_match_detection():
     
     assert workload["intent"] == "pairwise_match"
     assert workload["input_profile"]["context_budget_tokens"] == 131072
+
+def test_integrated_news_analysis_detection_wins_over_rss_words():
+    assessment = {
+        "findings": [
+            {
+                "path": "src/analyze/topic_engine.py",
+                "symbol": "build_rankings",
+                "detail": "RSS and Vision integrated analysis returns source_articles and east_west_gap importance ranking",
+                "kind": "function",
+            }
+        ]
+    }
+    profile = workload_profile_from_assessment(assessment)
+    workload = profile["workloads"][0]
+
+    assert workload["intent"] == "rank_text_items"
+    assert workload["input_profile"]["context_budget_tokens"] == 131072
+
+def test_document_vision_contract_is_async_and_overdeclared():
+    assessment = {
+        "findings": [
+            {
+                "path": "src/analyze/overseas_vision.py",
+                "symbol": "analyze_frontpage_image",
+                "detail": "vision frontpage OCR article extraction",
+                "kind": "function",
+            }
+        ]
+    }
+    profile = workload_profile_from_assessment(assessment)
+    contract = draft_workload_contract(profile)
+    workload = contract["workloads"][0]
+
+    assert workload["intent"] == "understand_document_image"
+    assert workload["modes"] == ["async"]
+    assert workload["quality_contract"]["metrics"]["max_provider_temporary_failures"] == 0
 
 def test_unknown_workload_fallback():
     # Assessment that doesn't match any deterministic rule

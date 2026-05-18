@@ -419,6 +419,8 @@ def _catalog_mode_policy(
     catalog: Any | None,
 ) -> dict[str, Any]:
     reasons: list[str] = []
+    if task == "vision" and resource_class == "document_vision":
+        reasons.append("document vision workloads are async-only during deterministic onboarding")
     if task == "infer" and context_budget_tokens > 32768:
         reasons.append("infer context_budget_tokens above sync-safe threshold")
     if resource_class in ASYNC_ONLY_RESOURCE_CLASSES:
