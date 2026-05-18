@@ -1102,6 +1102,30 @@ def test_tuple_smoke_caps_admission_lease_ttl(monkeypatch) -> None:
     assert float(os.environ["GPUCALL_ADMISSION_LEASE_TTL_SECONDS"]) == pytest.approx(45.0)
 
 
+def test_tuple_smoke_child_handles_string_system_exit(tmp_path, monkeypatch, capsys) -> None:
+    import gpucall.cli as cli_module
+
+    async def fake_provider_smoke_command(*_args, **_kwargs):
+        raise SystemExit("tuple-smoke budget exceeded before execution")
+
+    monkeypatch.setattr(cli_module, "provider_smoke_command", fake_provider_smoke_command)
+
+    code = cli_module._run_provider_smoke_command_child(
+        tmp_path,
+        "tuple",
+        "recipe",
+        "sync",
+        budget_usd=0.01,
+        allow_zero_estimate=False,
+        poll_timeout_seconds=1.0,
+        write_artifact=False,
+    )
+
+    captured = capsys.readouterr()
+    assert code == 1
+    assert "budget exceeded" in captured.err
+
+
 def test_live_validation_artifact_must_match_current_commit_and_config(tmp_path, monkeypatch) -> None:
     from gpucall.cli import _config_hash, _git_commit, _latest_live_validation_artifact
 

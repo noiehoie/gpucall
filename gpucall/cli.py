@@ -2088,7 +2088,12 @@ def _run_provider_smoke_command_child(
             )
         )
     except SystemExit as exc:
-        return int(exc.code or 0)
+        if exc.code is None:
+            return 0
+        if isinstance(exc.code, int):
+            return exc.code
+        print(str(exc.code), file=sys.stderr)
+        return 1
     return 0
 
 
@@ -2241,6 +2246,9 @@ def _finish_provider_smoke_summary(
     summary["commit"] = _git_commit()
     summary["config_hash"] = _config_hash(config_dir)
     summary["governance_hash"] = getattr(plan, "attestations", {}).get("governance_hash")
+    cost_estimate = getattr(plan, "attestations", {}).get("cost_estimate")
+    if cost_estimate is not None:
+        summary.setdefault("cost_estimate", cost_estimate)
     input_refs = list(getattr(plan, "input_refs", []) or [])
     summary["dataref_evidence"] = {
         "input_ref_count": len(input_refs),
