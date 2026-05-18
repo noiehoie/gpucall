@@ -37,6 +37,23 @@ def test_pairwise_match_detection():
     assert workload["intent"] == "pairwise_match"
     assert workload["input_profile"]["context_budget_tokens"] == 131072
 
+
+def test_generic_semantic_similarity_does_not_become_rss_contract():
+    assessment = {
+        "findings": [
+            {
+                "path": "src/matching.py",
+                "symbol": "semantic_similarity",
+                "detail": "semantic similarity for generic records",
+                "kind": "function",
+            }
+        ]
+    }
+    profile = workload_profile_from_assessment(assessment)
+
+    assert profile["workloads"] == []
+
+
 def test_integrated_news_analysis_detection_wins_over_rss_words():
     assessment = {
         "findings": [
@@ -86,10 +103,7 @@ def test_unknown_workload_fallback():
         ]
     }
     profile = workload_profile_from_assessment(assessment)
-    # _workload_seed should have defaulted to 'standard_text_inference' if it didn't match
-    # but wait, let's look at _detected_workloads in workload_contract.py
-    # if intent is None, it continues.
-    # if no findings result in an intent, it falls back to [_workload_seed("infer", "standard_text_inference", evidence=[])]
+    assert profile["workloads"] == []
     
     # Let's force an empty intent workload manually for the intake test
     contract = {

@@ -600,7 +600,10 @@ def test_migrate_helper_routes_vision_and_large_text_through_async(tmp_path, mon
     namespace["urllib"].request.urlopen = lambda *_args, **_kwargs: type("Response", (), {"__enter__": lambda self: self, "__exit__": lambda self, *_: None})()
     namespace["time"].sleep = lambda _seconds: None
     namespace["gpucall_infer_text"]("x" * 70000, intent="rank_text_items", timeout=1)
-    assert any(url.endswith("/v2/tasks/async") and payload["mode"] == "async" for _method, url, payload, _kwargs in captured)
+    async_payloads = [payload for _method, url, payload, _kwargs in captured if url.endswith("/v2/tasks/async")]
+    assert async_payloads
+    assert async_payloads[0]["mode"] == "async"
+    assert async_payloads[0]["response_format"] == {"type": "json_object"}
 
     captured.clear()
     image = project / "front.jpg"
@@ -612,7 +615,10 @@ def test_migrate_helper_routes_vision_and_large_text_through_async(tmp_path, mon
         "content_type": "image/jpeg",
     }
     namespace["gpucall_vision_file"](image, prompt="extract articles", timeout=1)
-    assert any(url.endswith("/v2/tasks/async") and payload["mode"] == "async" for _method, url, payload, _kwargs in captured)
+    async_payloads = [payload for _method, url, payload, _kwargs in captured if url.endswith("/v2/tasks/async")]
+    assert async_payloads
+    assert async_payloads[0]["mode"] == "async"
+    assert async_payloads[0]["response_format"] == {"type": "json_object"}
 
 
 def test_migrate_helper_keeps_medium_text_inline_for_text_tuple_compatibility(tmp_path, monkeypatch) -> None:
@@ -804,6 +810,47 @@ def test_migrate_helper_retries_async_provider_temporary_failure(tmp_path, monke
     assert sum(1 for _method, url, _payload, _kwargs in captured if url.endswith("/v2/tasks/async")) == 2
 
 
+def test_migrate_helper_opens_provider_temporary_scope_after_exhausted_failure(tmp_path, monkeypatch) -> None:
+    project = tmp_path / "project"
+    project.mkdir()
+    source = project / "client.py"
+    source.write_text("from openai import OpenAI\nclient = OpenAI()\n", encoding="utf-8")
+    monkeypatch.setenv("GPUCALL_BASE_URL", "http://127.0.0.1:9")
+    monkeypatch.setenv("GPUCALL_API_KEY", "x")
+    monkeypatch.setenv("GPUCALL_MIGRATION_MIN_REQUEST_INTERVAL_SECONDS", "0")
+    monkeypatch.setenv("GPUCALL_MIGRATION_POLL_INTERVAL_SECONDS", "0")
+    monkeypatch.setenv("GPUCALL_MIGRATION_PROVIDER_TEMPORARY_RETRIES", "0")
+    monkeypatch.setenv("GPUCALL_MIGRATION_MAX_PROVIDER_TEMPORARY_FAILURES_PER_INTENT", "1")
+
+    patch_suggestions(project, source="openai-app", apply=True)
+    namespace: dict[str, object] = {}
+    exec((project / "gpucall_migration.py").read_text(encoding="utf-8"), namespace)
+
+    submissions = 0
+
+    def fake_json_request(method, url, payload, **_kwargs):
+        nonlocal submissions
+        if url.endswith("/v2/tasks/async"):
+            submissions += 1
+            return {"job_id": "j1", "state": "QUEUED", "status_url": "/v2/jobs/j1"}
+        if url.endswith("/v2/jobs/j1"):
+            return {
+                "job_id": "j1",
+                "state": "FAILED",
+                "error": "tuple execution failed (PROVIDER_RESOURCE_EXHAUSTED)",
+                "provider_error_code": "PROVIDER_RESOURCE_EXHAUSTED",
+            }
+        raise AssertionError(url)
+
+    namespace["_json_request"] = fake_json_request
+
+    with pytest.raises(RuntimeError, match="PROVIDER_RESOURCE_EXHAUSTED"):
+        namespace["gpucall_infer_text"]("short summary", intent="summarize_text", timeout=60)
+    with pytest.raises(RuntimeError, match="PROVIDER_TEMPORARY_SCOPE_OPEN"):
+        namespace["gpucall_infer_text"]("short summary", intent="summarize_text", timeout=60)
+    assert submissions == 1
+
+
 def test_migrate_helper_retries_gateway_rate_limit_without_fallback(tmp_path, monkeypatch) -> None:
     project = tmp_path / "project"
     project.mkdir()
@@ -952,6 +999,42 @@ def test_migrate_helper_retries_provider_temporary_http_503(tmp_path, monkeypatc
     assert namespace["gpucall_infer_text"]("small prompt", intent="rss_semantic_match", timeout=1) == "ok"
     assert len(calls) == 2
     assert sleeps == [0.0]
+
+
+def test_migrate_helper_opens_provider_temporary_scope_after_sync_exhaustion(tmp_path, monkeypatch) -> None:
+    project = tmp_path / "project"
+    project.mkdir()
+    source = project / "client.py"
+    source.write_text("from openai import OpenAI\nclient = OpenAI()\n", encoding="utf-8")
+    monkeypatch.setenv("GPUCALL_BASE_URL", "http://127.0.0.1:9")
+    monkeypatch.setenv("GPUCALL_API_KEY", "x")
+    monkeypatch.setenv("GPUCALL_MIGRATION_MIN_REQUEST_INTERVAL_SECONDS", "0")
+    monkeypatch.setenv("GPUCALL_MIGRATION_PROVIDER_TEMPORARY_RETRIES", "0")
+    monkeypatch.setenv("GPUCALL_MIGRATION_MAX_PROVIDER_TEMPORARY_FAILURES_PER_INTENT", "1")
+
+    patch_suggestions(project, source="openai-app", apply=True)
+    namespace: dict[str, object] = {}
+    exec((project / "gpucall_migration.py").read_text(encoding="utf-8"), namespace)
+
+    calls: list[str] = []
+
+    def fake_urlopen(request, **_kwargs):
+        calls.append(request.full_url)
+        raise namespace["urllib"].error.HTTPError(
+            request.full_url,
+            503,
+            "Service Unavailable",
+            {},
+            BytesIO(b'{"code":"PROVIDER_WORKER_THROTTLED","failure_artifact":{"failure_kind":"provider_temporary_unavailable"}}'),
+        )
+
+    namespace["urllib"].request.urlopen = fake_urlopen
+
+    with pytest.raises(RuntimeError, match="PROVIDER_WORKER_THROTTLED"):
+        namespace["gpucall_infer_text"]("small prompt", intent="rss_semantic_match", timeout=1)
+    with pytest.raises(RuntimeError, match="PROVIDER_TEMPORARY_SCOPE_OPEN"):
+        namespace["gpucall_infer_text"]("small prompt", intent="rss_semantic_match", timeout=1)
+    assert calls == ["http://127.0.0.1:9/v2/tasks/sync"]
 
 
 def test_migrate_helper_bounds_temporary_no_eligible_retry_wait(tmp_path, monkeypatch) -> None:
@@ -1384,7 +1467,7 @@ def test_contract_to_recipe_intake_preserves_contract_metadata() -> None:
     assert intake["sanitized_request"]["quality_contract"]["metrics"]["min_topics"] == 12
 
 
-def test_recipe_intakes_from_contract_preserves_all_workloads() -> None:
+def test_recipe_intakes_from_contract_preserves_all_materializable_workloads() -> None:
     contract = {
         "phase": "workload-contract",
         "source": "fixture",
@@ -1410,13 +1493,26 @@ def test_recipe_intakes_from_contract_preserves_all_workloads() -> None:
                 "output_profile": {"output_contract": "json_object"},
                 "quality_contract": {"metrics": {"min_articles": 1}, "gateway_may_infer_quality": False},
             },
+            {
+                "id": "infer.unknown",
+                "task": "infer",
+                "intent": "unknown_workload_deadbeef",
+                "classification": "confidential",
+                "modes": ["async"],
+                "input_profile": {"content_types": ["text/plain"], "context_budget_tokens": 131072},
+                "output_profile": {"output_contract": "plain_text"},
+                "quality_contract": {"missing_baseline_metrics": True, "metrics": {}},
+            },
         ],
     }
 
     bundle = recipe_intakes_from_contract(contract)
 
     assert bundle["count"] == 2
+    assert bundle["rejected_count"] == 1
     assert [item["sanitized_request"]["intent"] for item in bundle["intakes"]] == ["rank_text_items", "understand_document_image"]
+    assert bundle["rejected"][0]["workload_id"] == "infer.unknown"
+    assert any("operator intent mapping" in item for item in bundle["rejected"][0]["blockers"])
 
 
 def test_migrate_compare_rejects_provider_temporary_failures(tmp_path) -> None:

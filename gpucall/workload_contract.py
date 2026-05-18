@@ -506,17 +506,18 @@ def _guess_from_finding(row: Mapping[str, Any]) -> tuple[str, str | None, int]:
         return "infer", "rank_text_items", 131072
     if "vision" in text or "image" in text or "ocr" in text or "frontpage" in text:
         return "vision", "understand_document_image", 8192
-    if ("rss" in text or "feed" in text or "semantic" in text) and has_match_contract:
+    has_rss_source = "rss" in text or "feed" in text or "フィード" in text
+    if has_rss_source and has_match_contract:
         return "infer", "rss_semantic_match", 131072
-    if "rss" in text or "feed" in text or "semantic" in text:
+    if has_rss_source:
         return "infer", "rss_semantic_match", 131072
-    if "pair" in text or "match" in text:
+    if "pairwise" in text or "pair-wise" in text or "compare two" in text or "two items" in text:
         return "infer", "pairwise_match", 131072
     if "summary" in text or "summarize" in text:
         return "infer", "summarize_text", 65536
     if "json" in text or "schema" in text or "extract" in text:
         return "infer", "extract_json", 32768
-    return "infer", _unknown_intent_for_text(text), 131072
+    return "infer", None, 0
 
 
 def _workload_seed(task: str, intent: str, *, evidence: list[dict[str, Any]]) -> dict[str, Any]:

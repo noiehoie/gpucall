@@ -49,17 +49,35 @@ MAX_FILE_BYTES = 1_000_000
 
 def recipe_intakes_from_contract(contract: dict[str, Any]) -> dict[str, Any]:
     intakes: list[dict[str, Any]] = []
+    rejected: list[dict[str, Any]] = []
     for workload in contract.get("workloads", []) or []:
         if not isinstance(workload, dict):
             continue
-        intakes.append(contract_to_recipe_intake(contract, workload_id=str(workload.get("id") or "")))
+        intake = contract_to_recipe_intake(contract, workload_id=str(workload.get("id") or ""))
+        draft_grammar = (
+            intake.get("sanitized_request", {}).get("draft_grammar", {})
+            if isinstance(intake.get("sanitized_request"), dict)
+            else {}
+        )
+        if draft_grammar.get("materialization_allowed") is False:
+            rejected.append(
+                {
+                    "workload_id": workload.get("id"),
+                    "intent": intake.get("sanitized_request", {}).get("intent"),
+                    "blockers": list(draft_grammar.get("blockers") or []),
+                }
+            )
+            continue
+        intakes.append(intake)
     return {
         "schema_version": 1,
         "phase": "recipe-intake-bundle",
         "source": contract.get("source"),
         "primary_workload_id": contract.get("primary_workload_id"),
         "count": len(intakes),
+        "rejected_count": len(rejected),
         "intakes": intakes,
+        "rejected": rejected,
     }
 
 
@@ -828,6 +846,8 @@ def _migration_helper_text(*, source: str | None) -> str:
             _GATEWAY_INFLIGHT_SEMAPHORE = threading.BoundedSemaphore(
                 max(1, int(os.environ.get("GPUCALL_MIGRATION_INFLIGHT_CONCURRENCY", os.environ.get("GPUCALL_MIGRATION_REQUEST_CONCURRENCY", "1"))))
             )
+            _PROVIDER_TEMPORARY_FAILURES_BY_SCOPE: dict[str, int] = {}
+            _PROVIDER_TEMPORARY_FAILURE_LOCK = threading.Lock()
 
 
             class _AttrDict(dict):
@@ -944,6 +964,42 @@ def _migration_helper_text(*, source: str | None) -> str:
 
             def _provider_temporary_max_wait_seconds() -> float:
                 return max(0.0, _float_env("GPUCALL_MIGRATION_PROVIDER_TEMPORARY_MAX_WAIT_SECONDS", "45"))
+
+
+            def _provider_temporary_failure_limit() -> int:
+                return _int_env("GPUCALL_MIGRATION_MAX_PROVIDER_TEMPORARY_FAILURES_PER_INTENT", "1")
+
+
+            def _provider_failure_scope(payload: dict[str, Any]) -> str:
+                task = str(payload.get("task") or "infer")
+                intent = str(payload.get("intent") or "")
+                return f"{task}:{intent}"
+
+
+            def _record_provider_temporary_failure(payload: dict[str, Any], code: str) -> None:
+                limit = _provider_temporary_failure_limit()
+                if limit <= 0:
+                    return
+                scope = _provider_failure_scope(payload)
+                with _PROVIDER_TEMPORARY_FAILURE_LOCK:
+                    count = _PROVIDER_TEMPORARY_FAILURES_BY_SCOPE.get(scope, 0) + 1
+                    _PROVIDER_TEMPORARY_FAILURES_BY_SCOPE[scope] = count
+                _migration_log("provider-temporary-scope-failure", scope=scope, code=code, count=count, limit=limit)
+
+
+            def _raise_if_provider_temporary_open(payload: dict[str, Any]) -> None:
+                limit = _provider_temporary_failure_limit()
+                if limit <= 0:
+                    return
+                scope = _provider_failure_scope(payload)
+                with _PROVIDER_TEMPORARY_FAILURE_LOCK:
+                    count = _PROVIDER_TEMPORARY_FAILURES_BY_SCOPE.get(scope, 0)
+                if count >= limit:
+                    raise GPUCallProviderTemporaryError(
+                        state="SKIPPED",
+                        error=f"provider temporary failure circuit open for {scope}",
+                        provider_error_code="PROVIDER_TEMPORARY_SCOPE_OPEN",
+                    )
 
 
             def _is_retryable_no_eligible(exc: urllib.error.HTTPError, body: str) -> bool:
@@ -1294,6 +1350,22 @@ def _migration_helper_text(*, source: str | None) -> str:
                 return {item.strip() for item in raw.split(",") if item.strip()}
 
 
+            def _structured_json_intents() -> set[str]:
+                raw = os.environ.get(
+                    "GPUCALL_MIGRATION_JSON_RESPONSE_INTENTS",
+                    "rank_text_items,rss_semantic_match,pairwise_match,extract_json,understand_document_image",
+                )
+                return {item.strip() for item in raw.split(",") if item.strip()}
+
+
+            def _response_format_for_intent(intent: str) -> dict[str, str] | None:
+                if os.environ.get("GPUCALL_MIGRATION_DISABLE_RESPONSE_FORMAT", "").lower() in {"1", "true", "yes"}:
+                    return None
+                if intent in _structured_json_intents():
+                    return {"type": "json_object"}
+                return None
+
+
             def _async_intents() -> set[str]:
                 raw = os.environ.get(
                     "GPUCALL_MIGRATION_ASYNC_INTENTS",
@@ -1338,6 +1410,7 @@ def _migration_helper_text(*, source: str | None) -> str:
             def _submit_task_and_wait(payload: dict[str, Any], *, timeout: float | None = None, prompt_bytes: int = 0) -> dict[str, Any]:
                 task = str(payload.get("task") or "infer")
                 intent = str(payload.get("intent") or "")
+                _raise_if_provider_temporary_open(payload)
                 if not _should_submit_async(task, intent=intent, prompt_bytes=prompt_bytes):
                     try:
                         return _json_request(
@@ -1349,6 +1422,8 @@ def _migration_helper_text(*, source: str | None) -> str:
                             retry_no_eligible=not _should_skip_sync_no_eligible_retries(task, intent=intent, prompt_bytes=prompt_bytes),
                         )
                     except GPUCallGatewayError as exc:
+                        if exc.code in _retryable_provider_codes():
+                            _record_provider_temporary_failure(payload, exc.code)
                         if not _should_retry_sync_as_async(task, intent=intent, prompt_bytes=prompt_bytes, error=exc):
                             raise
                 with _GATEWAY_ASYNC_SEMAPHORE:
@@ -1371,15 +1446,18 @@ def _migration_helper_text(*, source: str | None) -> str:
             def _submit_async_task_and_wait(payload: dict[str, Any], *, timeout: float | None = None, prompt_bytes: int = 0) -> dict[str, Any]:
                 provider_retries = _int_env("GPUCALL_MIGRATION_PROVIDER_TEMPORARY_RETRIES", "1")
                 wait_started = time.monotonic()
+                _raise_if_provider_temporary_open(payload)
                 for attempt in range(provider_retries + 1):
                     try:
                         return _submit_async_task_once(payload, timeout=timeout, prompt_bytes=prompt_bytes)
                     except GPUCallProviderTemporaryError as exc:
                         if attempt >= provider_retries:
+                            _record_provider_temporary_failure(payload, exc.provider_error_code)
                             raise
                         delay = _provider_temporary_backoff_seconds(attempt)
                         max_wait = _provider_temporary_max_wait_seconds()
                         if max_wait and (time.monotonic() - wait_started + delay) > max_wait:
+                            _record_provider_temporary_failure(payload, exc.provider_error_code)
                             raise
                         _migration_log("provider-temporary-job-retry", task=payload.get("task"), intent=payload.get("intent"), code=exc.provider_error_code, attempt=attempt + 1, delay_seconds=delay)
                         time.sleep(delay)
@@ -1447,14 +1525,18 @@ def _migration_helper_text(*, source: str | None) -> str:
                 full_prompt = f"{system_prompt}\\n\\n{prompt}" if system_prompt else prompt
                 body = full_prompt.encode("utf-8")
                 with _GATEWAY_INFLIGHT_SEMAPHORE:
-                    _migration_log("infer-start", intent=intent or gpucall_guess_intent(prompt, system_prompt), prompt_bytes=len(body))
+                    resolved_intent = intent or gpucall_guess_intent(prompt, system_prompt)
+                    _migration_log("infer-start", intent=resolved_intent, prompt_bytes=len(body))
                     payload: dict[str, Any] = {
                         "task": "infer",
                         "mode": "sync",
-                        "intent": intent or gpucall_guess_intent(prompt, system_prompt),
+                        "intent": resolved_intent,
                         "inline_inputs": {"prompt": {"value": full_prompt, "content_type": "text/plain"}},
                         "metadata": {"openai.model": model or os.environ.get("GPUCALL_MODEL") or "gpucall"},
                     }
+                    response_format = _response_format_for_intent(resolved_intent)
+                    if response_format is not None:
+                        payload["response_format"] = response_format
                     if max_tokens is not None:
                         payload["max_tokens"] = max_tokens
                     if temperature is not None:
@@ -1498,16 +1580,20 @@ def _migration_helper_text(*, source: str | None) -> str:
             ) -> str:
                 full_prompt = f"{system_prompt}\\n\\n{prompt}" if system_prompt else prompt
                 with _GATEWAY_INFLIGHT_SEMAPHORE:
-                    _migration_log("vision-start", intent=intent or "understand_document_image", image_name=Path(image_path).name)
+                    resolved_intent = intent or "understand_document_image"
+                    _migration_log("vision-start", intent=resolved_intent, image_name=Path(image_path).name)
                     data_ref = _upload_file(Path(image_path), timeout=timeout)
                     payload: dict[str, Any] = {
                         "task": "vision",
                         "mode": "sync",
-                        "intent": intent or "understand_document_image",
+                        "intent": resolved_intent,
                         "input_refs": [data_ref],
                         "inline_inputs": {"prompt": {"value": full_prompt, "content_type": "text/plain"}},
                         "metadata": {"openai.model": model or os.environ.get("GPUCALL_MODEL") or "gpucall"},
                     }
+                    response_format = _response_format_for_intent(resolved_intent)
+                    if response_format is not None:
+                        payload["response_format"] = response_format
                     if max_tokens is not None:
                         payload["max_tokens"] = max_tokens
                     response = _submit_task_and_wait(payload, timeout=timeout, prompt_bytes=len(full_prompt.encode("utf-8")))
