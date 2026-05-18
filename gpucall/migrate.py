@@ -726,6 +726,14 @@ def _migration_helper_text(*, source: str | None) -> str:
                         raise AttributeError(name) from exc
 
 
+            class GPUCallGatewayError(RuntimeError):
+                def __init__(self, *, status: int, body: str) -> None:
+                    super().__init__(f"gpucall request failed status={status} body={body}")
+                    self.status = status
+                    self.body = body
+                    self.code = _gateway_error_code(body)
+
+
             def _objectify(value: Any) -> Any:
                 if isinstance(value, dict):
                     return _AttrDict({key: _objectify(item) for key, item in value.items()})
@@ -800,6 +808,34 @@ def _migration_helper_text(*, source: str | None) -> str:
                     return False
                 lowered = body.lower()
                 return "no_eligible_tuple" in lowered or "no eligible tuple" in lowered
+
+
+            def _gateway_error_code(body: str) -> str:
+                try:
+                    parsed = json.loads(body)
+                    code = parsed.get("code")
+                    if isinstance(code, str):
+                        return code
+                except Exception:
+                    pass
+                match = re.search(r'"code"\\s*:\\s*"([^"]+)"', body)
+                return match.group(1) if match else ""
+
+
+            def _gateway_error_required_model_len(body: str) -> int:
+                try:
+                    parsed = json.loads(body)
+                    context = parsed.get("context")
+                    if isinstance(context, dict):
+                        value = context.get("required_model_len")
+                        if isinstance(value, int):
+                            return value
+                        if isinstance(value, str) and value.isdigit():
+                            return int(value)
+                except Exception:
+                    pass
+                match = re.search(r'"required_model_len"\\s*:\\s*([0-9]+)', body)
+                return int(match.group(1)) if match else 0
 
 
             def _openai_base_url(base_url: str | None = None) -> str:
@@ -926,7 +962,16 @@ def _migration_helper_text(*, source: str | None) -> str:
                 return max(caller_timeout, env_timeout) if floor else caller_timeout
 
 
-            def _json_request(method: str, url: str, payload: dict[str, Any], *, timeout: float | None = None, auth: bool = True, floor_timeout: bool = True) -> dict[str, Any]:
+            def _json_request(
+                method: str,
+                url: str,
+                payload: dict[str, Any],
+                *,
+                timeout: float | None = None,
+                auth: bool = True,
+                floor_timeout: bool = True,
+                retry_no_eligible: bool = True,
+            ) -> dict[str, Any]:
                 headers = {"Content-Type": "application/json"}
                 if auth:
                     headers.update(gpucall_openai_headers())
@@ -953,18 +998,18 @@ def _migration_helper_text(*, source: str | None) -> str:
                             request.data = json.dumps(payload).encode("utf-8")
                             time.sleep(_retry_after_seconds(exc, attempt))
                             continue
-                        if _is_retryable_no_eligible(exc, body) and attempt < no_eligible_retries:
+                        if retry_no_eligible and _is_retryable_no_eligible(exc, body) and attempt < no_eligible_retries:
                             now = time.monotonic()
                             if no_eligible_wait_started is None:
                                 no_eligible_wait_started = now
                             delay = _no_eligible_backoff_seconds(attempt)
                             max_wait = _no_eligible_max_wait_seconds()
                             if max_wait and (now - no_eligible_wait_started + delay) > max_wait:
-                                raise RuntimeError(f"gpucall request failed status={exc.code} body={body}") from exc
+                                raise GPUCallGatewayError(status=exc.code, body=body) from exc
                             request.data = json.dumps(payload).encode("utf-8")
                             time.sleep(delay)
                             continue
-                        raise RuntimeError(f"gpucall request failed status={exc.code} body={body}") from exc
+                        raise GPUCallGatewayError(status=exc.code, body=body) from exc
                 return json.loads(body) if body else {}
 
 
@@ -1036,11 +1081,43 @@ def _migration_helper_text(*, source: str | None) -> str:
                 return prompt_bytes > int(os.environ.get("GPUCALL_MIGRATION_ASYNC_TEXT_BYTES", "65536"))
 
 
+            def _should_retry_sync_as_async(task: str, *, intent: str, prompt_bytes: int, error: GPUCallGatewayError) -> bool:
+                if os.environ.get("GPUCALL_MIGRATION_FORCE_SYNC", "").lower() in {"1", "true", "yes"}:
+                    return False
+                if task == "vision" or intent not in _sync_preferred_intents():
+                    return False
+                if error.status != 503 or error.code != "NO_ELIGIBLE_TUPLE":
+                    return False
+                required_model_len = _gateway_error_required_model_len(error.body)
+                model_len_threshold = _int_env("GPUCALL_MIGRATION_SYNC_TO_ASYNC_REQUIRED_MODEL_LEN", "8192")
+                byte_threshold = _int_env("GPUCALL_MIGRATION_SYNC_TO_ASYNC_BYTES", "32768")
+                return required_model_len >= model_len_threshold or prompt_bytes >= byte_threshold
+
+
+            def _should_skip_sync_no_eligible_retries(task: str, *, intent: str, prompt_bytes: int) -> bool:
+                if os.environ.get("GPUCALL_MIGRATION_FORCE_SYNC", "").lower() in {"1", "true", "yes"}:
+                    return False
+                if task == "vision" or intent not in _sync_preferred_intents():
+                    return False
+                return prompt_bytes >= _int_env("GPUCALL_MIGRATION_SYNC_TO_ASYNC_BYTES", "32768")
+
+
             def _submit_task_and_wait(payload: dict[str, Any], *, timeout: float | None = None, prompt_bytes: int = 0) -> dict[str, Any]:
                 task = str(payload.get("task") or "infer")
                 intent = str(payload.get("intent") or "")
                 if not _should_submit_async(task, intent=intent, prompt_bytes=prompt_bytes):
-                    return _json_request("POST", _base_url() + "/v2/tasks/sync", payload, timeout=timeout, floor_timeout=False)
+                    try:
+                        return _json_request(
+                            "POST",
+                            _base_url() + "/v2/tasks/sync",
+                            payload,
+                            timeout=timeout,
+                            floor_timeout=False,
+                            retry_no_eligible=not _should_skip_sync_no_eligible_retries(task, intent=intent, prompt_bytes=prompt_bytes),
+                        )
+                    except GPUCallGatewayError as exc:
+                        if not _should_retry_sync_as_async(task, intent=intent, prompt_bytes=prompt_bytes, error=exc):
+                            raise
                 with _GATEWAY_ASYNC_SEMAPHORE:
                     return _submit_async_task_and_wait(payload, timeout=timeout, prompt_bytes=prompt_bytes)
 

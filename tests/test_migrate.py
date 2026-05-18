@@ -471,10 +471,10 @@ def test_migrate_helper_routes_vision_and_large_text_through_async(tmp_path, mon
     namespace: dict[str, object] = {}
     exec((project / "gpucall_migration.py").read_text(encoding="utf-8"), namespace)
 
-    captured: list[tuple[str, str, dict]] = []
+    captured: list[tuple[str, str, dict, dict]] = []
 
-    def fake_json_request(method, url, payload, **_kwargs):
-        captured.append((method, url, dict(payload)))
+    def fake_json_request(method, url, payload, **kwargs):
+        captured.append((method, url, dict(payload), dict(kwargs)))
         if url.endswith("/v2/objects/presign-put"):
             return {
                 "upload_url": "http://object-store.invalid/upload",
@@ -490,7 +490,7 @@ def test_migrate_helper_routes_vision_and_large_text_through_async(tmp_path, mon
     namespace["urllib"].request.urlopen = lambda *_args, **_kwargs: type("Response", (), {"__enter__": lambda self: self, "__exit__": lambda self, *_: None})()
     namespace["time"].sleep = lambda _seconds: None
     namespace["gpucall_infer_text"]("x" * 70000, intent="rank_text_items", timeout=1)
-    assert any(url.endswith("/v2/tasks/async") and payload["mode"] == "async" for _method, url, payload in captured)
+    assert any(url.endswith("/v2/tasks/async") and payload["mode"] == "async" for _method, url, payload, _kwargs in captured)
 
     captured.clear()
     image = project / "front.jpg"
@@ -502,7 +502,7 @@ def test_migrate_helper_routes_vision_and_large_text_through_async(tmp_path, mon
         "content_type": "image/jpeg",
     }
     namespace["gpucall_vision_file"](image, prompt="extract articles", timeout=1)
-    assert any(url.endswith("/v2/tasks/async") and payload["mode"] == "async" for _method, url, payload in captured)
+    assert any(url.endswith("/v2/tasks/async") and payload["mode"] == "async" for _method, url, payload, _kwargs in captured)
 
 
 def test_migrate_helper_keeps_medium_text_inline_for_text_tuple_compatibility(tmp_path, monkeypatch) -> None:
@@ -518,10 +518,10 @@ def test_migrate_helper_keeps_medium_text_inline_for_text_tuple_compatibility(tm
     namespace: dict[str, object] = {}
     exec((project / "gpucall_migration.py").read_text(encoding="utf-8"), namespace)
 
-    captured: list[tuple[str, str, dict]] = []
+    captured: list[tuple[str, str, dict, dict]] = []
 
-    def fake_json_request(method, url, payload, **_kwargs):
-        captured.append((method, url, dict(payload)))
+    def fake_json_request(method, url, payload, **kwargs):
+        captured.append((method, url, dict(payload), dict(kwargs)))
         if url.endswith("/v2/tasks/sync"):
             return {"result": {"kind": "inline", "value": "ok"}}
         if url.endswith("/v2/tasks/async"):
@@ -534,12 +534,121 @@ def test_migrate_helper_keeps_medium_text_inline_for_text_tuple_compatibility(tm
     namespace["time"].sleep = lambda _seconds: None
 
     assert namespace["gpucall_infer_text"]("x" * 70000, intent="rss_semantic_match", timeout=1) == "ok"
-    task_payload = next(payload for _method, url, payload in captured if url.endswith(("/v2/tasks/sync", "/v2/tasks/async")))
-    assert any(url.endswith("/v2/tasks/sync") for _method, url, _payload in captured)
-    assert not any(url.endswith("/v2/tasks/async") for _method, url, _payload in captured)
+    task_payload = next(payload for _method, url, payload, _kwargs in captured if url.endswith(("/v2/tasks/sync", "/v2/tasks/async")))
+    assert any(url.endswith("/v2/tasks/sync") for _method, url, _payload, _kwargs in captured)
+    assert not any(url.endswith("/v2/tasks/async") for _method, url, _payload, _kwargs in captured)
     assert "prompt" in task_payload["inline_inputs"]
     assert "input_refs" not in task_payload
-    assert not any(url.endswith("/v2/objects/presign-put") for _method, url, _payload in captured)
+    assert not any(url.endswith("/v2/objects/presign-put") for _method, url, _payload, _kwargs in captured)
+
+
+def test_migrate_helper_retries_sync_preferred_no_eligible_as_async_for_large_contract(tmp_path, monkeypatch) -> None:
+    project = tmp_path / "project"
+    project.mkdir()
+    source = project / "client.py"
+    source.write_text("from openai import OpenAI\nclient = OpenAI()\n", encoding="utf-8")
+    monkeypatch.setenv("GPUCALL_BASE_URL", "http://127.0.0.1:9")
+    monkeypatch.setenv("GPUCALL_API_KEY", "x")
+    monkeypatch.setenv("GPUCALL_MIGRATION_MIN_REQUEST_INTERVAL_SECONDS", "0")
+    monkeypatch.setenv("GPUCALL_MIGRATION_POLL_INTERVAL_SECONDS", "0")
+
+    patch_suggestions(project, source="openai-app", apply=True)
+    namespace: dict[str, object] = {}
+    exec((project / "gpucall_migration.py").read_text(encoding="utf-8"), namespace)
+
+    captured: list[tuple[str, str, dict, dict]] = []
+
+    def fake_json_request(method, url, payload, **kwargs):
+        captured.append((method, url, dict(payload), dict(kwargs)))
+        if url.endswith("/v2/tasks/sync"):
+            raise namespace["GPUCallGatewayError"](
+                status=503,
+                body='{"code":"NO_ELIGIBLE_TUPLE","context":{"required_model_len":136665}}',
+            )
+        if url.endswith("/v2/tasks/async"):
+            return {"job_id": "j1", "state": "QUEUED", "status_url": "/v2/jobs/j1"}
+        if url.endswith("/v2/jobs/j1"):
+            return {"job_id": "j1", "state": "COMPLETED", "result": {"kind": "inline", "value": "ok"}}
+        raise AssertionError(url)
+
+    namespace["_json_request"] = fake_json_request
+    namespace["time"].sleep = lambda _seconds: None
+
+    assert namespace["gpucall_infer_text"]("large ranking prompt", intent="rss_semantic_match", timeout=1) == "ok"
+    assert any(url.endswith("/v2/tasks/sync") for _method, url, _payload, _kwargs in captured)
+    sync_kwargs = [kwargs for _method, url, _payload, kwargs in captured if url.endswith("/v2/tasks/sync")]
+    assert sync_kwargs and sync_kwargs[0]["retry_no_eligible"] is True
+    assert any(url.endswith("/v2/tasks/async") and payload["mode"] == "async" for _method, url, payload, _kwargs in captured)
+
+
+def test_migrate_helper_large_sync_preferred_skips_no_eligible_wait_before_async(tmp_path, monkeypatch) -> None:
+    project = tmp_path / "project"
+    project.mkdir()
+    source = project / "client.py"
+    source.write_text("from openai import OpenAI\nclient = OpenAI()\n", encoding="utf-8")
+    monkeypatch.setenv("GPUCALL_BASE_URL", "http://127.0.0.1:9")
+    monkeypatch.setenv("GPUCALL_API_KEY", "x")
+    monkeypatch.setenv("GPUCALL_MIGRATION_MIN_REQUEST_INTERVAL_SECONDS", "0")
+    monkeypatch.setenv("GPUCALL_MIGRATION_POLL_INTERVAL_SECONDS", "0")
+
+    patch_suggestions(project, source="openai-app", apply=True)
+    namespace: dict[str, object] = {}
+    exec((project / "gpucall_migration.py").read_text(encoding="utf-8"), namespace)
+
+    captured: list[tuple[str, str, dict, dict]] = []
+
+    def fake_json_request(method, url, payload, **kwargs):
+        captured.append((method, url, dict(payload), dict(kwargs)))
+        if url.endswith("/v2/tasks/sync"):
+            raise namespace["GPUCallGatewayError"](
+                status=503,
+                body='{"code":"NO_ELIGIBLE_TUPLE","context":{"required_model_len":65536}}',
+            )
+        if url.endswith("/v2/tasks/async"):
+            return {"job_id": "j1", "state": "QUEUED", "status_url": "/v2/jobs/j1"}
+        if url.endswith("/v2/jobs/j1"):
+            return {"job_id": "j1", "state": "COMPLETED", "result": {"kind": "inline", "value": "ok"}}
+        raise AssertionError(url)
+
+    namespace["_json_request"] = fake_json_request
+    namespace["time"].sleep = lambda _seconds: None
+
+    assert namespace["gpucall_infer_text"]("x" * 40000, intent="rss_semantic_match", timeout=1) == "ok"
+    sync_kwargs = [kwargs for _method, url, _payload, kwargs in captured if url.endswith("/v2/tasks/sync")]
+    assert sync_kwargs and sync_kwargs[0]["retry_no_eligible"] is False
+    assert any(url.endswith("/v2/tasks/async") for _method, url, _payload, _kwargs in captured)
+
+
+def test_migrate_helper_does_not_retry_small_sync_preferred_no_eligible_as_async(tmp_path, monkeypatch) -> None:
+    project = tmp_path / "project"
+    project.mkdir()
+    source = project / "client.py"
+    source.write_text("from openai import OpenAI\nclient = OpenAI()\n", encoding="utf-8")
+    monkeypatch.setenv("GPUCALL_BASE_URL", "http://127.0.0.1:9")
+    monkeypatch.setenv("GPUCALL_API_KEY", "x")
+    monkeypatch.setenv("GPUCALL_MIGRATION_MIN_REQUEST_INTERVAL_SECONDS", "0")
+
+    patch_suggestions(project, source="openai-app", apply=True)
+    namespace: dict[str, object] = {}
+    exec((project / "gpucall_migration.py").read_text(encoding="utf-8"), namespace)
+
+    captured: list[tuple[str, str, dict]] = []
+
+    def fake_json_request(method, url, payload, **_kwargs):
+        captured.append((method, url, dict(_kwargs)))
+        if url.endswith("/v2/tasks/sync"):
+            raise namespace["GPUCallGatewayError"](
+                status=503,
+                body='{"code":"NO_ELIGIBLE_TUPLE","context":{"required_model_len":1024}}',
+            )
+        raise AssertionError(url)
+
+    namespace["_json_request"] = fake_json_request
+
+    with pytest.raises(RuntimeError, match="NO_ELIGIBLE_TUPLE"):
+        namespace["gpucall_infer_text"]("small prompt", intent="rss_semantic_match", timeout=1)
+
+    assert captured == [("POST", "http://127.0.0.1:9/v2/tasks/sync", {"timeout": 1, "floor_timeout": False, "retry_no_eligible": True})]
 
 
 def test_migrate_helper_retries_gateway_rate_limit_without_fallback(tmp_path, monkeypatch) -> None:
