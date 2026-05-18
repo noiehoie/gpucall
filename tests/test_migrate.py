@@ -1577,6 +1577,7 @@ def test_migrate_cli_onboard_fails_closed_when_gateway_readiness_blocks_canary(t
     output = tmp_path / "out"
     project.mkdir()
     (project / "topic_engine.py").write_text("call_llm('rank topics')\n", encoding="utf-8")
+    baseline = _write_log(tmp_path, "baseline.log", "response_len=40461\nsource_count=14\nAnalysis complete: 15 topics ranked\n")
     monkeypatch.setenv("GPUCALL_MIGRATION_READINESS_GATE", "1")
     monkeypatch.setenv("GPUCALL_BASE_URL", "http://127.0.0.1:9")
     monkeypatch.setenv("GPUCALL_API_KEY", "x")
@@ -1594,12 +1595,35 @@ def test_migrate_cli_onboard_fails_closed_when_gateway_readiness_blocks_canary(t
 
     monkeypatch.setattr(migrate_module, "_gateway_readiness_check", fake_readiness_check)
 
-    assert main(["onboard", str(project), "--source", "fixture", "--output-dir", str(output), "--yes"]) == 2
+    assert main(["onboard", str(project), "--source", "fixture", "--output-dir", str(output), "--log-file", str(baseline), "--yes"]) == 2
 
     report = json.loads((output / "onboard-report.json").read_text(encoding="utf-8"))
     assert report["ready_for_canary"] is False
     assert report["gateway_readiness"]["ok"] is False
     assert report["gateway_readiness"]["checks"][0]["reason"] == "no_production_ready_route"
+
+
+def test_migrate_cli_onboard_rejects_weak_draft_before_gateway_readiness(tmp_path, monkeypatch) -> None:
+    project = tmp_path / "project"
+    output = tmp_path / "out"
+    project.mkdir()
+    (project / "topic_engine.py").write_text("call_llm('rank topics')\n", encoding="utf-8")
+    monkeypatch.setenv("GPUCALL_MIGRATION_READINESS_GATE", "1")
+    monkeypatch.setenv("GPUCALL_BASE_URL", "http://127.0.0.1:9")
+    monkeypatch.setenv("GPUCALL_API_KEY", "x")
+
+    def fail_if_called(**_kwargs):
+        raise AssertionError("gateway readiness must not run for a non-materializable caller draft")
+
+    monkeypatch.setattr(migrate_module, "_gateway_readiness_check", fail_if_called)
+
+    assert main(["onboard", str(project), "--source", "fixture", "--output-dir", str(output), "--yes"]) == 2
+
+    report = json.loads((output / "onboard-report.json").read_text(encoding="utf-8"))
+    assert report["ready_for_canary"] is False
+    assert report["gateway_readiness"]["ok"] is False
+    assert report["gateway_readiness"]["checks"][0]["reason"] == "recipe_draft_not_materializable"
+    assert any("baseline metrics" in item for item in report["gateway_readiness"]["checks"][0]["blockers"])
 
 
 def test_contract_to_recipe_intake_preserves_contract_metadata() -> None:

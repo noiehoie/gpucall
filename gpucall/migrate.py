@@ -452,6 +452,10 @@ def gateway_readiness_for_contract(contract: dict[str, Any]) -> dict[str, Any]:
     for workload in contract.get("workloads", []) or []:
         if not isinstance(workload, dict):
             continue
+        draft_check = _workload_draft_grammar_check(contract, workload)
+        if draft_check.get("ok") is not True:
+            checks.append(draft_check)
+            continue
         task = str(workload.get("task") or "")
         intent = str(workload.get("intent") or "")
         if not task or not intent or intent.startswith("unknown_workload_"):
@@ -466,6 +470,38 @@ def gateway_readiness_for_contract(contract: dict[str, Any]) -> dict[str, Any]:
         "checks": checks,
         "failure_count": sum(1 for item in checks if item.get("ok") is not True),
     }
+
+
+def _workload_draft_grammar_check(contract: dict[str, Any], workload: dict[str, Any]) -> dict[str, Any]:
+    workload_id = str(workload.get("id") or "")
+    task = str(workload.get("task") or "")
+    intent = str(workload.get("intent") or "")
+    try:
+        intake = contract_to_recipe_intake(contract, workload_id=workload_id)
+    except Exception as exc:
+        return {
+            "task": task,
+            "intent": intent,
+            "workload_id": workload_id,
+            "ok": False,
+            "reason": "recipe_draft_grammar_error",
+            "detail": str(exc)[:300],
+        }
+    draft_grammar = (
+        intake.get("sanitized_request", {}).get("draft_grammar", {})
+        if isinstance(intake.get("sanitized_request"), dict)
+        else {}
+    )
+    if draft_grammar.get("materialization_allowed") is False:
+        return {
+            "task": task,
+            "intent": intent,
+            "workload_id": workload_id,
+            "ok": False,
+            "reason": "recipe_draft_not_materializable",
+            "blockers": list(draft_grammar.get("blockers") or [])[:8],
+        }
+    return {"task": task, "intent": intent, "workload_id": workload_id, "ok": True, "reason": "recipe_draft_materializable"}
 
 
 def _gateway_readiness_check(*, base_url: str, api_key: str, task: str, intent: str) -> dict[str, Any]:

@@ -23,6 +23,12 @@ PROFILE_SCHEMA_VERSION = 1
 QUALITY_TOPIC_RATIO = 0.8
 QUALITY_SOURCE_RATIO = 0.8
 QUALITY_RESPONSE_CHAR_RATIO = 0.5
+BASELINE_GUARD_METRICS = {
+    "max_no_auto_selectable_recipe",
+    "max_http_422",
+    "max_json_extract_failures",
+    "max_provider_temporary_failures",
+}
 
 INTENT_ORDER = (
     "rank_text_items",
@@ -738,7 +744,7 @@ def _quality_contract(intent: str, metrics: Mapping[str, Any], output_profile: M
             metric_contract["require_schema_success"] = True
     elif metrics.get("schema_success") is True:
         metric_contract["require_schema_success"] = True
-    if set(metric_contract) == {"max_no_auto_selectable_recipe", "max_http_422", "max_json_extract_failures"}:
+    if set(metric_contract) <= BASELINE_GUARD_METRICS:
         quality["missing_baseline_metrics"] = True
     return quality
 
