@@ -1921,7 +1921,39 @@ def test_migrate_readiness_summary_accepts_context_compatible_live_recipe() -> N
     assert summary["recipe"] == "infer-rank-text-items-standard"
 
 
-def test_migrate_readiness_summary_rejects_wrong_live_validation_mode() -> None:
+def test_migrate_readiness_summary_accepts_requested_mode_from_live_ready_tuples() -> None:
+    report = {
+        "recipes": [
+            {
+                "task": "infer",
+                "intent": "rank_text_items",
+                "recipe": "infer-rank-text-items-standard",
+                "production_activated": True,
+                "live_ready_tuple_count": 2,
+                "allowed_modes": ["sync", "async"],
+                "selected_mode": "sync",
+                "live_ready_tuples": [
+                    {"tuple": "fast-sync", "mode": "sync"},
+                    {"tuple": "batch-async", "mode": "async"},
+                ],
+                "context_budget_tokens": 131072,
+            }
+        ]
+    }
+
+    summary = migrate_module._summarize_readiness_report(
+        report,
+        task="infer",
+        intent="rank_text_items",
+        context_budget_tokens=131072,
+        modes=["async"],
+    )
+
+    assert summary["ok"] is True
+    assert summary["recommended_mode"] == "async"
+
+
+def test_migrate_readiness_summary_rejects_when_requested_mode_has_no_live_ready_tuple() -> None:
     report = {
         "recipes": [
             {
@@ -1932,6 +1964,7 @@ def test_migrate_readiness_summary_rejects_wrong_live_validation_mode() -> None:
                 "live_ready_tuple_count": 1,
                 "allowed_modes": ["sync", "async"],
                 "selected_mode": "sync",
+                "live_ready_tuples": [{"tuple": "fast-sync", "mode": "sync"}],
                 "context_budget_tokens": 131072,
             }
         ]
@@ -1946,7 +1979,7 @@ def test_migrate_readiness_summary_rejects_wrong_live_validation_mode() -> None:
     )
 
     assert summary["ok"] is False
-    assert summary["reason"] == "no_contract_compatible_readiness_recipe"
+    assert summary["reason"] == "no_production_ready_route"
 
 
 def test_migrate_onboard_command_loads_env_file_before_running_trace(tmp_path, monkeypatch) -> None:

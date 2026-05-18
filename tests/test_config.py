@@ -954,6 +954,72 @@ def test_readiness_requires_exact_recipe_mode_validation_evidence(tmp_path, monk
     )
 
 
+def test_readiness_evaluates_route_validation_for_each_allowed_mode(tmp_path, monkeypatch) -> None:
+    from gpucall.execution.contracts import official_contract, official_contract_hash
+    from gpucall.readiness import build_readiness_report
+    from gpucall.validation_evidence import config_hash, git_commit
+
+    root = copy_config(tmp_path)
+    state = tmp_path / "state"
+    artifact_dir = state / "tuple-validation"
+    artifact_dir.mkdir(parents=True)
+    monkeypatch.setenv("GPUCALL_STATE_DIR", str(state))
+    monkeypatch.setattr("gpucall.readiness.load_credentials", lambda: {})
+
+    report = build_readiness_report(config_dir=root, intent="summarize_text", validation_dir=artifact_dir)
+    candidates: dict[str, set[str]] = {}
+    for recipe_report in report["recipes"]:
+        if "sync" not in recipe_report["allowed_modes"] or "async" not in recipe_report["allowed_modes"]:
+            continue
+        for row in recipe_report["live_blocked_tuples"]:
+            if row.get("live_reason") == "missing_route_validation_evidence":
+                candidates.setdefault(f"{recipe_report['recipe']}::{row['tuple']}", set()).add(row["mode"])
+    key = next((item for item, modes in candidates.items() if {"sync", "async"} <= modes), None)
+    assert key is not None
+    recipe_name, tuple_name = key.split("::", 1)
+
+    config = load_config(root)
+    tuple_spec = config.tuples[tuple_name]
+    contract = official_contract(tuple_spec)
+    exact = {
+        "tuple": tuple_name,
+        "recipe": recipe_name,
+        "mode": "async",
+        "started_at": "2026-01-01T00:00:00+00:00",
+        "ended_at": "2026-01-01T00:00:01+00:00",
+        "commit": git_commit(),
+        "config_hash": config_hash(root),
+        "governance_hash": "c" * 64,
+        "validation_schema_version": 1,
+        "passed": True,
+        "cleanup": {"required": False, "completed": None},
+        "cost": {"observed": None, "estimated": None},
+        "audit": {"event_ids": []},
+        "official_contract": contract,
+        "official_contract_hash": official_contract_hash(contract),
+    }
+    (artifact_dir / "async-exact.json").write_text(json.dumps(exact), encoding="utf-8")
+
+    exact_report = build_readiness_report(config_dir=root, recipe=recipe_name, validation_dir=artifact_dir)
+    recipe_report = exact_report["recipes"][0]
+    assert recipe_report["production_activated"] is True
+    assert recipe_report["selected_mode"] == "async"
+    assert recipe_report["mode_readiness"]["async"]["live_ready_tuple_count"] >= 1
+    assert recipe_report["mode_readiness"]["sync"]["live_blocked_tuple_count"] >= 1
+    assert any(
+        item["tuple"] == tuple_name
+        and item["mode"] == "async"
+        and str(item.get("live_validation_artifact") or "").endswith("async-exact.json")
+        for item in recipe_report["live_ready_tuples"]
+    )
+    assert any(
+        item["tuple"] == tuple_name
+        and item["mode"] == "sync"
+        and item.get("live_reason") == "missing_route_validation_evidence"
+        for item in recipe_report["live_blocked_tuples"]
+    )
+
+
 def test_provider_smoke_writes_live_validation_artifact(tmp_path, monkeypatch) -> None:
     root = copy_config(tmp_path)
     monkeypatch.setenv("GPUCALL_ALLOW_FAKE_AUTO_TUPLES", "1")

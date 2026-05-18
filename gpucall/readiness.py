@@ -108,22 +108,23 @@ def _live_catalog_scope_for_recipes(recipes: list[Recipe], *, config: Any) -> di
     scoped: dict[str, Any] = {}
     for recipe in recipes:
         requirements = recipe_requirements(recipe)
-        mode = recipe.allowed_modes[0] if recipe.allowed_modes else ExecutionMode.SYNC
         required_inputs = _required_input_contracts(recipe)
         for tuple in config.tuples.values():
-            reason = tuple_route_rejection_reason(
-                policy=config.policy,
-                recipe=recipe,
-                tuple=tuple,
-                model=config.models.get(tuple.model_ref) if tuple.model_ref else None,
-                engine=config.engines.get(tuple.engine_ref) if tuple.engine_ref else None,
-                mode=mode,
-                required_len=requirements.context_budget_tokens,
-                required_input_contracts=required_inputs,
-                auto_selected=True,
-            )
-            if reason is None:
-                scoped[tuple.name] = tuple
+            for mode in _allowed_modes(recipe):
+                reason = tuple_route_rejection_reason(
+                    policy=config.policy,
+                    recipe=recipe,
+                    tuple=tuple,
+                    model=config.models.get(tuple.model_ref) if tuple.model_ref else None,
+                    engine=config.engines.get(tuple.engine_ref) if tuple.engine_ref else None,
+                    mode=mode,
+                    required_len=requirements.context_budget_tokens,
+                    required_input_contracts=required_inputs,
+                    auto_selected=True,
+                )
+                if reason is None:
+                    scoped[tuple.name] = tuple
+                    break
     return scoped
 
 
@@ -137,59 +138,62 @@ def _recipe_readiness(
     route_validation_evidence: Mapping[tuple[str, str, str], RouteValidationEvidence] | None = None,
 ) -> dict[str, Any]:
     requirements = recipe_requirements(recipe)
-    mode = recipe.allowed_modes[0] if recipe.allowed_modes else ExecutionMode.SYNC
+    modes = _allowed_modes(recipe)
     eligible: list[dict[str, Any]] = []
     rejected: list[dict[str, Any]] = []
     required_inputs = _required_input_contracts(recipe)
     for tuple in sorted(config.tuples.values(), key=lambda item: item.name):
-        reason = tuple_route_rejection_reason(
-            policy=config.policy,
-            recipe=recipe,
-            tuple=tuple,
-            model=config.models.get(tuple.model_ref) if tuple.model_ref else None,
-            engine=config.engines.get(tuple.engine_ref) if tuple.engine_ref else None,
-            mode=mode,
-            required_len=requirements.context_budget_tokens,
-            required_input_contracts=required_inputs,
-            auto_selected=True,
-        )
-        validation = (route_validation_evidence or {}).get(route_validation_key(tuple.name, recipe.name, mode.value))
-        row = {
-            "tuple": tuple.name,
-            "mode": mode.value,
-            "vram_gb": tuple.vram_gb,
-            "max_model_len": tuple.max_model_len,
-            "price_freshness": tuple_configured_price_freshness(tuple).value,
-            "live_validation_artifact": validation.path if validation else None,
-            "route_validation_required": route_validation_required_for_tuple(tuple),
-        }
-        live = (live_evidence or {}).get(tuple.name)
-        if isinstance(live, Mapping):
-            row["live_catalog_checked"] = bool(live.get("checked"))
-            row["live_catalog_status"] = live.get("status")
-            findings = live.get("findings")
-            row["live_catalog_findings"] = findings if isinstance(findings, list) else []
-            if live.get("status") == "blocked":
-                row["live_blocked"] = True
-                row["live_reason"] = _live_block_reason(row["live_catalog_findings"])
-        if reason is None:
-            if row["route_validation_required"] and validation is None and row.get("live_blocked") is not True:
-                row["live_blocked"] = True
-                row["live_reason"] = "missing_route_validation_evidence"
-            eligible.append(row)
-        else:
-            row["reason"] = reason
-            rejected.append(row)
-    sync_eligible = bool(eligible and ExecutionMode.SYNC in recipe.allowed_modes)
+        for mode in modes:
+            reason = tuple_route_rejection_reason(
+                policy=config.policy,
+                recipe=recipe,
+                tuple=tuple,
+                model=config.models.get(tuple.model_ref) if tuple.model_ref else None,
+                engine=config.engines.get(tuple.engine_ref) if tuple.engine_ref else None,
+                mode=mode,
+                required_len=requirements.context_budget_tokens,
+                required_input_contracts=required_inputs,
+                auto_selected=True,
+            )
+            validation = (route_validation_evidence or {}).get(route_validation_key(tuple.name, recipe.name, mode.value))
+            row = {
+                "tuple": tuple.name,
+                "mode": mode.value,
+                "vram_gb": tuple.vram_gb,
+                "max_model_len": tuple.max_model_len,
+                "price_freshness": tuple_configured_price_freshness(tuple).value,
+                "live_validation_artifact": validation.path if validation else None,
+                "route_validation_required": route_validation_required_for_tuple(tuple),
+            }
+            live = (live_evidence or {}).get(tuple.name)
+            if isinstance(live, Mapping):
+                row["live_catalog_checked"] = bool(live.get("checked"))
+                row["live_catalog_status"] = live.get("status")
+                findings = live.get("findings")
+                row["live_catalog_findings"] = findings if isinstance(findings, list) else []
+                if live.get("status") == "blocked":
+                    row["live_blocked"] = True
+                    row["live_reason"] = _live_block_reason(row["live_catalog_findings"])
+            if reason is None:
+                if row["route_validation_required"] and validation is None and row.get("live_blocked") is not True:
+                    row["live_blocked"] = True
+                    row["live_reason"] = "missing_route_validation_evidence"
+                eligible.append(row)
+            else:
+                row["reason"] = reason
+                rejected.append(row)
     live_blocked = [item for item in eligible if item.get("live_blocked") is True]
     live_ready = [item for item in eligible if item.get("live_blocked") is not True]
+    selected_mode = _selected_mode(modes, live_ready, eligible)
+    sync_live_ready = any(item.get("mode") == ExecutionMode.SYNC.value for item in live_ready)
     return {
         "recipe": recipe.name,
         "intent": recipe.intent,
         "task": recipe.task,
         "auto_select": recipe.auto_select,
-        "allowed_modes": [mode.value for mode in recipe.allowed_modes],
-        "selected_mode": mode.value,
+        "allowed_modes": [mode.value for mode in modes],
+        "selected_mode": selected_mode,
+        "mode_readiness": _mode_readiness(modes, eligible),
         "context_budget_tokens": requirements.context_budget_tokens,
         "max_input_bytes": requirements.max_input_bytes,
         "recipe_exists": True,
@@ -201,11 +205,43 @@ def _recipe_readiness(
         "live_ready_tuples": live_ready,
         "live_blocked_tuples": live_blocked,
         "production_activated": bool(live_ready and recipe.auto_select),
-        "sync_eligible": sync_eligible,
-        "async_only_recommended": bool(live_ready and not sync_eligible),
+        "sync_eligible": sync_live_ready,
+        "async_only_recommended": bool(live_ready and not sync_live_ready),
         "current_caller_action": "send_request" if live_ready else "retry_later_or_contact_gpucall_admin",
         "next_actions": _next_actions(recipe, eligible),
     }
+
+
+def _allowed_modes(recipe: Recipe) -> list[ExecutionMode]:
+    return list(recipe.allowed_modes) or [ExecutionMode.SYNC]
+
+
+def _selected_mode(
+    modes: list[ExecutionMode],
+    live_ready: list[Mapping[str, Any]],
+    eligible: list[Mapping[str, Any]],
+) -> str:
+    for mode in modes:
+        if any(item.get("mode") == mode.value for item in live_ready):
+            return mode.value
+    for mode in modes:
+        if any(item.get("mode") == mode.value for item in eligible):
+            return mode.value
+    return modes[0].value
+
+
+def _mode_readiness(modes: list[ExecutionMode], eligible: list[Mapping[str, Any]]) -> dict[str, dict[str, int]]:
+    result: dict[str, dict[str, int]] = {}
+    for mode in modes:
+        rows = [item for item in eligible if item.get("mode") == mode.value]
+        live_ready = [item for item in rows if item.get("live_blocked") is not True]
+        live_blocked = [item for item in rows if item.get("live_blocked") is True]
+        result[mode.value] = {
+            "eligible_tuple_count": len(rows),
+            "live_ready_tuple_count": len(live_ready),
+            "live_blocked_tuple_count": len(live_blocked),
+        }
+    return result
 
 
 def _live_block_reason(findings: object) -> str:

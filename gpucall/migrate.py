@@ -702,15 +702,17 @@ def _summarize_readiness_report(
         recipe
         for recipe in compatible
         if recipe.get("production_activated") is True and _safe_int(recipe.get("live_ready_tuple_count")) > 0
+        and _readiness_recipe_has_ready_mode(recipe, modes=modes)
     ]
     if ready:
+        ready_mode = _readiness_recipe_ready_mode(ready[0], modes=modes)
         return {
             "task": task,
             "intent": intent,
             "ok": True,
             "recipe": ready[0].get("recipe"),
             "live_ready_tuple_count": _safe_int(ready[0].get("live_ready_tuple_count")),
-            "recommended_mode": ready[0].get("recommended_mode"),
+            "recommended_mode": ready_mode or ready[0].get("selected_mode") or ready[0].get("recommended_mode"),
             "context_budget_tokens": ready[0].get("context_budget_tokens"),
         }
     return {
@@ -729,13 +731,34 @@ def _readiness_recipe_matches_contract(recipe: dict[str, Any], *, context_budget
     if context_budget_tokens > 0 and recipe_budget > 0 and recipe_budget < context_budget_tokens:
         return False
     requested_modes = {str(item) for item in modes or [] if str(item)}
-    selected_mode = str(recipe.get("selected_mode") or recipe.get("recommended_mode") or "")
-    if requested_modes and selected_mode and selected_mode not in requested_modes:
-        return False
     allowed_modes = {str(item) for item in recipe.get("allowed_modes") or [] if str(item)}
     if requested_modes and allowed_modes and not (requested_modes & allowed_modes):
         return False
     return True
+
+
+def _readiness_recipe_has_ready_mode(recipe: dict[str, Any], *, modes: list[str] | None) -> bool:
+    return _readiness_recipe_ready_mode(recipe, modes=modes) is not None
+
+
+def _readiness_recipe_ready_mode(recipe: dict[str, Any], *, modes: list[str] | None) -> str | None:
+    requested_modes = {str(item) for item in modes or [] if str(item)}
+    live_ready = recipe.get("live_ready_tuples")
+    if isinstance(live_ready, list) and live_ready:
+        for item in live_ready:
+            if not isinstance(item, dict):
+                continue
+            mode = str(item.get("mode") or "")
+            if mode and (not requested_modes or mode in requested_modes):
+                return mode
+        return None
+    selected_mode = str(recipe.get("selected_mode") or recipe.get("recommended_mode") or "")
+    if selected_mode and (not requested_modes or selected_mode in requested_modes):
+        return selected_mode
+    allowed_modes = [str(item) for item in recipe.get("allowed_modes") or [] if str(item)]
+    if not requested_modes and allowed_modes:
+        return allowed_modes[0]
+    return None
 
 
 def _safe_int(value: Any) -> int:
@@ -756,6 +779,7 @@ def _bounded_readiness_recipe(recipe: dict[str, Any]) -> dict[str, Any]:
         "production_activated": bool(recipe.get("production_activated")),
         "allowed_modes": list(recipe.get("allowed_modes") or []),
         "selected_mode": recipe.get("selected_mode") or recipe.get("recommended_mode"),
+        "mode_readiness": recipe.get("mode_readiness") if isinstance(recipe.get("mode_readiness"), dict) else {},
         "context_budget_tokens": _safe_int(recipe.get("context_budget_tokens")),
         "eligible_tuple_count": _safe_int(recipe.get("eligible_tuple_count")),
         "live_ready_tuple_count": _safe_int(recipe.get("live_ready_tuple_count")),
