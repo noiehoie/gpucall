@@ -103,8 +103,11 @@ def workload_profile_from_assessment(
     rows = [row for row in assessment.get("findings", []) if isinstance(row, Mapping)]
     trace_list = [dict(item) for item in traces]
     detected = _detected_workloads(rows)
+    trace_failures = _trace_failure_summary(trace_list)
     for workload in detected:
         _attach_trace_metrics(workload, trace_list)
+        if trace_failures:
+            workload["baseline_trace_failures"] = dict(trace_failures)
     return {
         "schema_version": PROFILE_SCHEMA_VERSION,
         "phase": "workload-profile",
@@ -113,6 +116,7 @@ def workload_profile_from_assessment(
         "summary": dict(assessment.get("summary") or {}),
         "workloads": detected,
         "traces": [_trace_summary(item) for item in trace_list],
+        "baseline_trace_failures": trace_failures,
         "redaction_report": {
             "raw_prompt_forwarded": False,
             "raw_output_forwarded": False,
@@ -297,6 +301,11 @@ def _intake_grammar_blockers(*, workload: Mapping[str, Any], intent: str, output
         blockers.append("quality_contract requires baseline metrics before recipe materialization")
     if not _mapping(quality.get("metrics")):
         blockers.append("quality_contract.metrics must not be empty")
+    trace_failures = _mapping(workload.get("baseline_trace_failures"))
+    if _positive_int(trace_failures.get("model_api_failure_count"), default=0) > 0:
+        blockers.append("baseline trace contains model/API failures; rerun baseline or supply a successful trace")
+    if _positive_int(trace_failures.get("json_extract_failures"), default=0) > 0:
+        blockers.append("baseline trace contains JSON extraction failures; rerun baseline or supply a successful trace")
     context_budget = _positive_int(_mapping(workload.get("input_profile")).get("context_budget_tokens"), default=0)
     if context_budget <= 0:
         blockers.append("input_profile.context_budget_tokens is required")
@@ -684,6 +693,7 @@ def _contract_workload(workload: Mapping[str, Any]) -> dict[str, Any]:
             "recommended_mode": modes[0],
             "timeout_seconds": 1800 if task == "vision" else (900 if context_budget > 32768 else 180),
         },
+        "baseline_trace_failures": dict(_mapping(workload.get("baseline_trace_failures"))),
         "evidence": list(workload.get("evidence") or [])[:20],
     }
 
@@ -881,6 +891,26 @@ def _trace_summary(trace: Mapping[str, Any]) -> dict[str, Any]:
         "metrics": trace.get("metrics"),
         "workload_hints": trace.get("workload_hints"),
     }
+
+
+def _trace_failure_summary(traces: Iterable[Mapping[str, Any]]) -> dict[str, int]:
+    failures: dict[str, int] = {}
+    for trace in traces:
+        metrics = _metrics(trace)
+        for key in (
+            "model_api_failure_count",
+            "json_extract_failures",
+            "no_auto_selectable_recipe_count",
+            "http_422_count",
+            "provider_temporary_failure_count",
+        ):
+            value = _optional_int(metrics.get(key)) or 0
+            if value > 0:
+                failures[key] = max(failures.get(key, 0), value)
+        returncode = trace.get("returncode")
+        if isinstance(returncode, int) and returncode != 0:
+            failures["nonzero_returncode"] = max(failures.get("nonzero_returncode", 0), returncode)
+    return failures
 
 
 def _select_workload(contract: Mapping[str, Any], workload_id: str | None) -> Mapping[str, Any] | None:

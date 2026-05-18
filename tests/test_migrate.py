@@ -1349,7 +1349,7 @@ def test_migrate_profile_and_contract_generate_deterministic_quality_metrics(tmp
     project = tmp_path / "project"
     project.mkdir()
     (project / "topic_engine.py").write_text("def run():\n    call_llm('rank topics')\n", encoding="utf-8")
-    (project / "overseas_vision.py").write_text("def run():\n    analyze_vision_image()\n", encoding="utf-8")
+    (project / "overseas_vision.py").write_text("def run():\n    generate('vision image ocr')\n", encoding="utf-8")
     trace_path = tmp_path / "trace.json"
     trace = trace_project(
         project,
@@ -1765,6 +1765,36 @@ def test_migrate_trace_extracts_aggregate_vision_and_model_api_failures(tmp_path
     assert trace["metrics"]["model_api_failure_count"] == 1
     assert comparison["ok"] is False
     assert comparison["violations"][0]["metric"] == "model_api_failure_count"
+
+
+def test_migrate_contract_rejects_failed_baseline_trace(tmp_path) -> None:
+    project = tmp_path / "project"
+    project.mkdir()
+    (project / "overseas_vision.py").write_text("def run():\n    generate('vision image ocr')\n", encoding="utf-8")
+    trace = trace_project(
+        project,
+        log_file=_write_log(
+            tmp_path,
+            "failed-baseline.log",
+            "\n".join(
+                [
+                    "src.analyze.vision INFO [Vision] 集約完了: 6紙, 6記事",
+                    "src.analyze.topic_engine ERROR Analysis API call failed (attempt 1): timeout",
+                ]
+            ),
+        ),
+        source="fixture",
+        backend="baseline",
+    )
+    profile = profile_project(project, trace_paths=[_write_json(tmp_path, "trace.json", trace)], source="fixture")
+    contract = draft_contract_project(project, profile_path=_write_json(tmp_path, "profile.json", profile), source="fixture")
+    workload = next(item for item in contract["workloads"] if item["intent"] == "understand_document_image")
+
+    intake = contract_to_recipe_intake(contract, workload_id=workload["id"])
+
+    assert workload["baseline_trace_failures"]["model_api_failure_count"] == 1
+    assert intake["sanitized_request"]["draft_grammar"]["materialization_allowed"] is False
+    assert any("baseline trace contains model/API failures" in item for item in intake["sanitized_request"]["draft_grammar"]["blockers"])
 
 
 def test_migrate_compare_scopes_provider_temporary_failures_by_workload(tmp_path) -> None:
