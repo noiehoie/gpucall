@@ -1543,6 +1543,61 @@ def test_migrate_compare_rejects_provider_temporary_failures(tmp_path) -> None:
     assert comparison["violations"][0]["observed"] == 2
 
 
+def test_migrate_compare_scopes_provider_temporary_failures_by_workload(tmp_path) -> None:
+    project = tmp_path / "project"
+    project.mkdir()
+    contract = {
+        "phase": "workload-contract",
+        "workloads": [
+            {
+                "id": "vision.understand_document_image",
+                "task": "vision",
+                "intent": "understand_document_image",
+                "quality_contract": {"metrics": {"max_provider_temporary_failures": 0}},
+            },
+            {
+                "id": "infer.rank_text_items",
+                "task": "infer",
+                "intent": "rank_text_items",
+                "quality_contract": {"metrics": {"max_provider_temporary_failures": 0}},
+            },
+            {
+                "id": "infer.translate_text",
+                "task": "infer",
+                "intent": "translate_text",
+                "quality_contract": {"metrics": {"max_provider_temporary_failures": 0}},
+            },
+        ],
+    }
+    log = "\n".join(
+        [
+            '[gpucall-migration] {"event":"async-provider-temporary-failure","task":"vision","intent":"understand_document_image","code":"PROVIDER_TIMEOUT"}',
+            '[gpucall-migration] {"event":"provider-temporary-scope-failure","scope":"vision:understand_document_image","count":1}',
+            '[gpucall-migration] {"event":"async-provider-temporary-failure","task":"infer","intent":"rank_text_items","code":"PROVIDER_RESOURCE_EXHAUSTED"}',
+            '[gpucall-migration] {"event":"provider-temporary-scope-failure","scope":"infer:rank_text_items","count":1}',
+        ]
+    )
+    trace = trace_project(
+        project,
+        log_file=_write_log(tmp_path, "candidate.log", log),
+        source="fixture",
+        backend="gpucall",
+    )
+
+    comparison = compare_trace_to_contract(contract, trace)
+
+    assert trace["metrics"]["provider_temporary_failure_count"] == 2
+    assert trace["workload_metrics"]["vision.understand_document_image"]["provider_temporary_failure_count"] == 1
+    assert trace["workload_metrics"]["infer.rank_text_items"]["provider_temporary_failure_count"] == 1
+    assert comparison["ok"] is False
+    assert [violation["workload_id"] for violation in comparison["violations"]] == [
+        "vision.understand_document_image",
+        "infer.rank_text_items",
+    ]
+    translate = next(item for item in comparison["workload_results"] if item["workload_id"] == "infer.translate_text")
+    assert translate["ok"] is True
+
+
 def test_contract_to_recipe_intake_marks_unknown_workload_non_materializable() -> None:
     contract = {
         "phase": "workload-contract",

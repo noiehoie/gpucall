@@ -53,10 +53,12 @@ def parse_trace_text(
 
     metrics = _empty_metrics()
     _merge_metrics(metrics, _regex_metrics(text))
+    workload_metrics = _workload_metrics_from_json_events(text)
     for payload in _iter_json_objects(text):
         _merge_metrics(metrics, _json_metrics(payload))
     metrics = _finalize_metrics(metrics)
     lines = text.splitlines()
+    finalized_workload_metrics = _finalized_workload_metrics(workload_metrics)
     return {
         "schema_version": TRACE_SCHEMA_VERSION,
         "phase": "workload-trace",
@@ -74,7 +76,8 @@ def parse_trace_text(
             "raw_forwarded": False,
         },
         "metrics": metrics,
-        "workload_hints": _workload_hints_from_metrics(metrics),
+        "workload_metrics": finalized_workload_metrics,
+        "workload_hints": _workload_hints_from_metrics(metrics, finalized_workload_metrics),
         "redaction_report": {
             "raw_log_forwarded": False,
             "prompt_body_forwarded": False,
@@ -141,11 +144,11 @@ def draft_workload_contract(profile: Mapping[str, Any], *, source: str | None = 
 
 
 def compare_trace_to_contract(contract: Mapping[str, Any], trace: Mapping[str, Any]) -> dict[str, Any]:
-    metrics = _metrics(trace)
     results = []
     for workload in contract.get("workloads", []) or []:
         if not isinstance(workload, Mapping):
             continue
+        metrics = _metrics_for_workload(trace, workload)
         results.append(_compare_workload(workload, metrics))
     violations = [violation for result in results for violation in result["violations"]]
     return {
@@ -164,12 +167,14 @@ def compare_trace_to_contract(contract: Mapping[str, Any], trace: Mapping[str, A
 def merge_traces(traces: Iterable[Mapping[str, Any]], *, source: str | None = None, backend: str | None = None) -> dict[str, Any]:
     trace_list = [trace for trace in traces if isinstance(trace, Mapping)]
     metrics = _empty_metrics()
+    workload_metrics: dict[str, dict[str, Any]] = {}
     hints: set[str] = set()
     fingerprints = []
     returncodes: list[int] = []
     duration = 0.0
     for trace in trace_list:
         _merge_metrics(metrics, _metrics(trace))
+        _merge_workload_metrics(workload_metrics, trace.get("workload_metrics"))
         hints.update(str(item) for item in trace.get("workload_hints") or [])
         fingerprint = trace.get("log_fingerprint")
         if isinstance(fingerprint, Mapping):
@@ -188,7 +193,8 @@ def merge_traces(traces: Iterable[Mapping[str, Any]], *, source: str | None = No
         "returncode": max(returncodes) if returncodes else None,
         "duration_seconds": round(duration, 3) if duration else None,
         "metrics": _finalize_metrics(metrics),
-        "workload_hints": sorted(hints) or _workload_hints_from_metrics(metrics),
+        "workload_metrics": _finalized_workload_metrics(workload_metrics),
+        "workload_hints": sorted(hints) or _workload_hints_from_metrics(metrics, workload_metrics),
         "log_fingerprints": fingerprints,
         "redaction_report": {
             "raw_log_forwarded": False,
@@ -366,7 +372,7 @@ def _regex_metrics(text: str) -> dict[str, Any]:
     metrics["provider_temporary_failure_count"] = len(
         re.findall(
             r"\bPROVIDER_(?:RESOURCE_EXHAUSTED|CAPACITY_UNAVAILABLE|PROVISION_UNAVAILABLE|QUEUE_SATURATED|"
-            r"WORKER_INITIALIZING|WORKER_THROTTLED|TIMEOUT|POLL_TIMEOUT|JOB_FAILED|UNHEALTHY|BOOTING|"
+            r"WORKER_INITIALIZING|WORKER_THROTTLED|TIMEOUT|POLL_TIMEOUT|JOB_FAILED|CANCELLED|UNHEALTHY|BOOTING|"
             r"PREEMPTED|MAINTENANCE|UPSTREAM_UNAVAILABLE|RATE_LIMITED|QUOTA_EXCEEDED|REGION_UNAVAILABLE|"
             r"IMAGE_PULL_DELAY|MODEL_LOADING|CONCURRENCY_LIMIT|LEASE_EXPIRED|STALE_JOB|ERROR)\b",
             text,
@@ -395,6 +401,8 @@ def _iter_json_objects(text: str) -> Iterable[Mapping[str, Any]]:
                 return
     for line in text.splitlines():
         stripped = line.strip()
+        if "[gpucall-migration]" in stripped:
+            stripped = stripped.split("[gpucall-migration]", 1)[1].strip()
         if not (stripped.startswith("{") and stripped.endswith("}")):
             continue
         try:
@@ -409,6 +417,63 @@ def _json_metrics(payload: Mapping[str, Any]) -> dict[str, Any]:
     metrics = _empty_metrics()
     _walk_json_metrics(payload, metrics)
     return metrics
+
+
+def _workload_metrics_from_json_events(text: str) -> dict[str, dict[str, Any]]:
+    scoped_counts: dict[str, int] = {}
+    fallback_counts: dict[str, int] = {}
+    for payload in _iter_json_objects(text):
+        event = str(payload.get("event") or "")
+        key = _workload_key_from_event(payload)
+        if key is None:
+            continue
+        if event == "provider-temporary-scope-failure":
+            count = _optional_int(payload.get("count"))
+            if count is not None:
+                scoped_counts[key] = max(scoped_counts.get(key, 0), count)
+        elif event == "async-provider-temporary-failure" and _is_provider_temporary_code(payload.get("code")):
+            fallback_counts[key] = fallback_counts.get(key, 0) + 1
+    metrics: dict[str, dict[str, Any]] = {}
+    for key in sorted(set(scoped_counts) | set(fallback_counts)):
+        count = max(scoped_counts.get(key, 0), fallback_counts.get(key, 0))
+        metrics[key] = _empty_metrics()
+        metrics[key]["provider_temporary_failure_count"] = count
+    return metrics
+
+
+def _workload_key_from_event(payload: Mapping[str, Any]) -> str | None:
+    scope = _str_or_none(payload.get("scope"))
+    if scope:
+        return _workload_key_from_scope(scope)
+    task = _str_or_none(payload.get("task"))
+    intent = normalize_intent(_str_or_none(payload.get("intent")))
+    if task and intent:
+        return f"{task}.{intent}"
+    return None
+
+
+def _workload_key_from_scope(scope: str) -> str | None:
+    parts = [part for part in scope.split(":") if part]
+    if len(parts) < 2:
+        return None
+    intent = normalize_intent(parts[1])
+    if not intent:
+        return None
+    return f"{parts[0]}.{intent}"
+
+
+def _is_provider_temporary_code(value: Any) -> bool:
+    if not isinstance(value, str):
+        return False
+    return bool(
+        re.fullmatch(
+            r"PROVIDER_(?:RESOURCE_EXHAUSTED|CAPACITY_UNAVAILABLE|PROVISION_UNAVAILABLE|QUEUE_SATURATED|"
+            r"WORKER_INITIALIZING|WORKER_THROTTLED|TIMEOUT|POLL_TIMEOUT|JOB_FAILED|CANCELLED|UNHEALTHY|BOOTING|"
+            r"PREEMPTED|MAINTENANCE|UPSTREAM_UNAVAILABLE|RATE_LIMITED|QUOTA_EXCEEDED|REGION_UNAVAILABLE|"
+            r"IMAGE_PULL_DELAY|MODEL_LOADING|CONCURRENCY_LIMIT|LEASE_EXPIRED|STALE_JOB|ERROR)",
+            value,
+        )
+    )
 
 
 def _walk_json_metrics(value: Any, metrics: dict[str, Any]) -> None:
@@ -745,8 +810,14 @@ def _compare_workload(workload: Mapping[str, Any], metrics: Mapping[str, Any]) -
     }
 
 
-def _workload_hints_from_metrics(metrics: Mapping[str, Any]) -> list[str]:
+def _workload_hints_from_metrics(
+    metrics: Mapping[str, Any],
+    workload_metrics: Mapping[str, Mapping[str, Any]] | None = None,
+) -> list[str]:
     hints: list[str] = []
+    for key in sorted(workload_metrics or {}):
+        if "." in key:
+            hints.append(key.split(".", 1)[1])
     if metrics.get("rss_match_total") is not None:
         hints.append("rss_semantic_match")
     if metrics.get("topics_count") is not None or metrics.get("source_count") is not None:
@@ -755,7 +826,7 @@ def _workload_hints_from_metrics(metrics: Mapping[str, Any]) -> list[str]:
         hints.append("understand_document_image")
     if metrics.get("response_chars") is not None and not hints:
         hints.append("summarize_text")
-    return hints
+    return sorted(dict.fromkeys(hints))
 
 
 def _metrics_match_intent(metrics: Mapping[str, Any], intent: str) -> bool:
@@ -802,6 +873,55 @@ def _select_workload(contract: Mapping[str, Any], workload_id: str | None) -> Ma
 def _metrics(trace: Mapping[str, Any]) -> Mapping[str, Any]:
     metrics = trace.get("metrics")
     return metrics if isinstance(metrics, Mapping) else {}
+
+
+def _metrics_for_workload(trace: Mapping[str, Any], workload: Mapping[str, Any]) -> Mapping[str, Any]:
+    metrics = dict(_metrics(trace))
+    workload_metrics = trace.get("workload_metrics")
+    if not isinstance(workload_metrics, Mapping):
+        return metrics
+    key = _workload_key_from_workload(workload)
+    scoped = workload_metrics.get(key)
+    has_scoped_provider_metrics = any(
+        isinstance(item, Mapping) and "provider_temporary_failure_count" in item
+        for item in workload_metrics.values()
+    )
+    if has_scoped_provider_metrics:
+        metrics["provider_temporary_failure_count"] = 0
+    if isinstance(scoped, Mapping):
+        for metric_key, value in scoped.items():
+            if value is None:
+                continue
+            if metric_key == "provider_temporary_failure_count":
+                metrics[metric_key] = value
+            else:
+                _merge_metrics(metrics, {metric_key: value})
+    return metrics
+
+
+def _workload_key_from_workload(workload: Mapping[str, Any]) -> str:
+    task = str(workload.get("task") or "infer")
+    intent = normalize_intent(_str_or_none(workload.get("intent"))) or str(workload.get("intent") or "")
+    return f"{task}.{intent}"
+
+
+def _merge_workload_metrics(target: dict[str, dict[str, Any]], source: Any) -> None:
+    if not isinstance(source, Mapping):
+        return
+    for key, metrics in source.items():
+        if not isinstance(metrics, Mapping):
+            continue
+        target.setdefault(str(key), _empty_metrics())
+        _merge_metrics(target[str(key)], metrics)
+
+
+def _finalized_workload_metrics(workload_metrics: Mapping[str, Mapping[str, Any]]) -> dict[str, dict[str, Any]]:
+    finalized: dict[str, dict[str, Any]] = {}
+    for key, value in sorted(workload_metrics.items()):
+        item = _finalize_metrics(value)
+        if item:
+            finalized[key] = item
+    return finalized
 
 
 def _merge_metrics(target: dict[str, Any], source: Mapping[str, Any]) -> None:
