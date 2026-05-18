@@ -63,6 +63,11 @@ def main(argv: list[str] | None = None) -> int:
     materialize.add_argument("--allow-contract-narrowing", action="store_true", help="allow --force to narrow an existing recipe contract")
     materialize.add_argument("--dry-run", action="store_true", help="print YAML without writing files")
 
+    validate_draft = subcommands.add_parser("validate-draft", help="validate caller recipe draft grammar before materialization")
+    validate_draft.add_argument("--input", "-i", required=True, help="path to caller intake/draft JSON, or '-' for stdin")
+    validate_draft.add_argument("--config-dir", help="gpucall config directory whose catalog should guide draft validation")
+    validate_draft.add_argument("--output", "-o", help="write draft validation report JSON")
+
     review = subcommands.add_parser("review", help="review a submitted recipe request against config, tuples, policy, and live evidence")
     review.add_argument("--input", "-i", required=True, help="path to caller submission/intake/draft JSON, or '-' for stdin")
     review.add_argument("--config-dir", help="gpucall config directory to review against")
@@ -140,7 +145,7 @@ def main(argv: list[str] | None = None) -> int:
     quality_watch.add_argument("--max-iterations", type=int)
 
     inbox_command = subcommands.add_parser("inbox", help="inspect and operate the recipe request inbox index")
-    inbox_command.add_argument("action", choices=["list", "status", "materialize", "readiness"])
+    inbox_command.add_argument("action", choices=["list", "status", "validate", "materialize", "readiness"])
     inbox_command.add_argument("--inbox-dir", required=True)
     inbox_command.add_argument("--output-dir")
     inbox_command.add_argument("--request-id")
@@ -163,9 +168,15 @@ def main(argv: list[str] | None = None) -> int:
         if not args.accept_all:
             raise SystemExit("refusing to materialize without --accept-all")
         artifact = _load_json(args.input)
+        draft_validation = validate_draft_artifact(artifact, config_dir=args.config_dir)
+        if draft_validation.get("decision") == "REJECTED_DRAFT":
+            if args.report:
+                Path(args.report).write_text(json.dumps(draft_validation, ensure_ascii=False, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+            raise SystemExit("draft validation rejected submission: " + "; ".join(_finding_reasons(draft_validation.get("blockers"))))
         catalog = _materialization_catalog(args.config_dir)
         recipe = canonical_recipe_from_artifact(artifact, catalog=catalog)
         report = materialization_report(artifact, recipe, catalog=catalog)
+        report["draft_validation"] = draft_validation
         if args.dry_run or not args.output_dir:
             sys.stdout.write(to_yaml(recipe))
         else:
@@ -174,6 +185,10 @@ def main(argv: list[str] | None = None) -> int:
         if args.report:
             Path(args.report).write_text(json.dumps(report, ensure_ascii=False, indent=2, sort_keys=True) + "\n", encoding="utf-8")
         return 0
+    if args.command == "validate-draft":
+        report = validate_draft_artifact(_load_json(args.input), config_dir=args.config_dir)
+        _write_json(report, args.output)
+        return 0 if report.get("decision") == "ACCEPTED_DRAFT" else 1
     if args.command == "review":
         report = review_artifact(
             _load_json(args.input),
@@ -331,6 +346,12 @@ def review_artifact(
         "live_validation": {"matched": []},
     }
     try:
+        draft_validation = validate_draft_artifact(artifact_or_submission, config_dir=config_dir)
+        report["draft_validation"] = draft_validation
+        if draft_validation.get("decision") == "REJECTED_DRAFT":
+            report["blockers"].extend(draft_validation.get("blockers") or [])
+            _finalize_review_decision(report)
+            return report
         artifact = _artifact_from_submission(artifact_or_submission)
         report["request_id"] = artifact_or_submission.get("request_id") if isinstance(artifact_or_submission, Mapping) else None
         report["submission_kind"] = artifact_or_submission.get("kind") if isinstance(artifact_or_submission, Mapping) else None
@@ -351,6 +372,53 @@ def review_artifact(
     except Exception as exc:
         report["blockers"].append({"check": "review_exception", "reason": str(exc)})
     _finalize_review_decision(report)
+    return report
+
+
+def validate_draft_artifact(
+    artifact_or_submission: Mapping[str, Any],
+    *,
+    config_dir: str | Path | None = None,
+) -> dict[str, Any]:
+    started = datetime.now(timezone.utc).isoformat()
+    report: dict[str, Any] = {
+        "schema_version": 1,
+        "phase": "admin-draft-validation",
+        "validated_at": started,
+        "decision": "REJECTED_DRAFT",
+        "accepted": False,
+        "findings": [],
+        "blockers": [],
+        "warnings": [],
+    }
+    try:
+        artifact = _artifact_from_submission(artifact_or_submission)
+        report["request_id"] = artifact_or_submission.get("request_id") if isinstance(artifact_or_submission, Mapping) else None
+        report["submission_kind"] = artifact_or_submission.get("kind") if isinstance(artifact_or_submission, Mapping) else None
+        report["intake_phase"] = artifact.get("phase")
+        _review_redaction(artifact, report)
+        catalog = _materialization_catalog(config_dir)
+        recipe = canonical_recipe_from_artifact(artifact, catalog=catalog)
+        report["materialization_preview"] = {
+            "name": recipe.get("name"),
+            "task": recipe.get("task"),
+            "intent": recipe.get("intent"),
+            "allowed_modes": recipe.get("allowed_modes"),
+            "context_budget_tokens": recipe.get("context_budget_tokens"),
+            "output_contract": recipe.get("output_contract"),
+            "auto_select": recipe.get("auto_select"),
+        }
+        report["findings"].append({"check": "draft_grammar", "ok": True, "reason": "draft is materializable as an administrator-reviewed recipe candidate"})
+    except Exception as exc:
+        report["blockers"].append({"check": "draft_grammar", "reason": str(exc)})
+    if report["blockers"]:
+        report["decision"] = "REJECTED_DRAFT"
+        report["accepted"] = False
+        report["caller_action"] = "submit a stricter deterministic workload contract with explicit intent, context budget, output contract, and baseline quality metrics"
+    else:
+        report["decision"] = "ACCEPTED_DRAFT"
+        report["accepted"] = True
+        report["caller_action"] = "none"
     return report
 
 
@@ -391,12 +459,31 @@ def process_inbox(
         try:
             submission = _load_json(str(path))
             request_id = index.upsert_pending(path, submission)["request_id"]
+            draft_validation = validate_draft_artifact(submission, config_dir=config_dir)
+            if draft_validation.get("decision") == "REJECTED_DRAFT":
+                report_path = reports / f"{path.stem}.report.json"
+                rejection_report = {
+                    "schema_version": 1,
+                    "phase": "recipe-request-processing",
+                    "request_id": request_id,
+                    "decision": "REJECTED_DRAFT",
+                    "draft_validation": draft_validation,
+                    "submission_path": str(path),
+                }
+                report_path.write_text(json.dumps(rejection_report, ensure_ascii=False, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+                destination = move_submission(current_path, failed / current_path.name)
+                current_path = destination
+                error = "draft validation rejected submission: " + "; ".join(_finding_reasons(draft_validation.get("blockers")))
+                index.mark_failed(request_id, original_path=destination, error=error, report_path=report_path)
+                results.append({"submission": str(destination), "report": str(report_path), "ok": False, "error": error})
+                continue
             review = review_artifact(submission, config_dir=config_dir, validation_dir=validation_dir)
             if review.get("decision") == "REJECT":
                 raise ValueError("admin review rejected submission: " + "; ".join(_finding_reasons(review.get("blockers"))))
             artifact = _artifact_from_submission(submission)
             recipe = canonical_recipe_from_artifact(artifact, catalog=catalog)
             report = materialization_report(artifact, recipe, catalog=catalog)
+            report["draft_validation"] = draft_validation
             report["admin_review"] = review
             recipe_path = _recipe_yaml_path(output, recipe["name"])
             if recipe_path.exists() and not force:
@@ -962,6 +1049,20 @@ def inbox_command_report(
         if not request_id:
             raise SystemExit("inbox status requires --request-id")
         return recipe_request_status(request_id, inbox, index_db=db_path)
+    if action == "validate":
+        targets = []
+        if request_id:
+            targets = [inbox / f"{request_id}.json"]
+        else:
+            targets = sorted(path for path in inbox.glob("*.json") if path.parent == inbox)
+        results = []
+        for path in targets:
+            if not path.exists():
+                results.append({"path": str(path), "ok": False, "error": "missing submission"})
+                continue
+            submission = _load_json(str(path))
+            results.append({"path": str(path), "validation": validate_draft_artifact(submission, config_dir=config_dir)})
+        return {"phase": "recipe-inbox-validate", "inbox_dir": str(inbox), "index_db": str(db_path), "results": results}
     if action == "materialize":
         if output_dir is None:
             raise SystemExit("inbox materialize requires --output-dir")

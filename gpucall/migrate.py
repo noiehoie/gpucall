@@ -11,8 +11,37 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from gpucall.workload_contract import (
+    compare_trace_to_contract,
+    contract_to_recipe_intake,
+    draft_workload_contract,
+    load_json_file,
+    merge_traces,
+    parse_trace_text,
+    read_trace_log,
+    workload_profile_from_assessment,
+)
 
-EXCLUDED_DIRS = {".git", ".hg", ".mypy_cache", ".pytest_cache", ".ruff_cache", ".tox", ".venv", "build", "dist", "node_modules", "__pycache__"}
+
+EXCLUDED_DIRS = {
+    ".git",
+    ".hg",
+    ".mypy_cache",
+    ".pytest_cache",
+    ".ruff_cache",
+    ".tox",
+    ".venv",
+    "artifacts",
+    "build",
+    "dist",
+    "docs",
+    "logs",
+    "node_modules",
+    "output",
+    "tasks",
+    "tests",
+    "__pycache__",
+}
 SOURCE_SUFFIXES = {".py", ".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs"}
 MAX_FILE_BYTES = 1_000_000
 
@@ -32,7 +61,7 @@ class Finding:
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="gpucall-migrate")
     sub = parser.add_subparsers(dest="command", required=True)
-    for name in ("assess", "preflight", "report", "canary", "patch", "onboard"):
+    for name in ("assess", "preflight", "report", "canary", "patch"):
         cmd = sub.add_parser(name)
         cmd.add_argument("project", type=Path)
         cmd.add_argument("--output-dir", type=Path, default=None)
@@ -41,6 +70,56 @@ def main(argv: list[str] | None = None) -> int:
         cmd.add_argument("--inbox-dir", default=None)
         cmd.add_argument("--command", dest="run_command", default=None, help="canary/onboard command to run inside the project")
         cmd.add_argument("--apply", action="store_true", help="write a local gpucall migration helper and annotate direct provider call sites")
+    trace = sub.add_parser("trace", help="run or parse a caller command and record sanitized workload metrics")
+    trace.add_argument("project", type=Path)
+    trace.add_argument("--output-dir", type=Path)
+    trace.add_argument("--source")
+    trace.add_argument("--backend")
+    trace.add_argument("--command", dest="run_command")
+    trace.add_argument("--log-file", type=Path)
+    trace.add_argument("--timeout-seconds", type=float, default=1800.0)
+
+    profile = sub.add_parser("profile", help="combine assessment and sanitized traces into a workload profile")
+    profile.add_argument("project", type=Path)
+    profile.add_argument("--output-dir", type=Path)
+    profile.add_argument("--source")
+    profile.add_argument("--trace", dest="trace_paths", action="append", type=Path, default=[])
+
+    contract = sub.add_parser("draft-contract", help="generate deterministic workload contracts from a profile")
+    contract.add_argument("project", type=Path)
+    contract.add_argument("--output-dir", type=Path)
+    contract.add_argument("--source")
+    contract.add_argument("--profile", type=Path)
+    contract.add_argument("--trace", dest="trace_paths", action="append", type=Path, default=[])
+    contract.add_argument("--write-intake", action="store_true", help="also write recipe-intake.json derived from the primary workload contract")
+
+    compare = sub.add_parser("compare", help="compare a candidate trace against a workload contract")
+    compare.add_argument("project", type=Path)
+    compare.add_argument("--output-dir", type=Path)
+    compare.add_argument("--source")
+    compare.add_argument("--contract", required=True, type=Path)
+    compare.add_argument("--trace", dest="trace_paths", action="append", type=Path, default=[])
+    compare.add_argument("--log-file", type=Path)
+    compare.add_argument("--backend")
+
+    onboard = sub.add_parser("onboard", help="assess, optionally trace, draft contract, and emit onboarding artifacts")
+    onboard.add_argument("project", type=Path)
+    onboard.add_argument("--output-dir", type=Path, default=None)
+    onboard.add_argument("--source", default=None)
+    onboard.add_argument("--remote-inbox", default=None)
+    onboard.add_argument("--inbox-dir", default=None)
+    onboard.add_argument("--command", dest="run_command", default=None, help="command to trace inside the project")
+    onboard.add_argument(
+        "--log-file",
+        dest="log_files",
+        action="append",
+        type=Path,
+        default=[],
+        help="existing baseline log or JSON artifact to parse; repeatable",
+    )
+    onboard.add_argument("--backend")
+    onboard.add_argument("--timeout-seconds", type=float, default=1800.0)
+    onboard.add_argument("--apply", action="store_true", help="write a local gpucall migration helper and annotate direct provider call sites")
     args = parser.parse_args(argv)
     output_dir = args.output_dir or (args.project / ".gpucall-migration")
     if args.command == "assess":
@@ -65,14 +144,64 @@ def main(argv: list[str] | None = None) -> int:
         report = patch_suggestions(args.project, source=args.source, apply=args.apply)
         _write_outputs(report, output_dir, "migration-patch")
         return 0
+    if args.command == "trace":
+        report = trace_project(
+            args.project,
+            command=args.run_command,
+            log_file=args.log_file,
+            source=args.source,
+            backend=args.backend,
+            timeout_seconds=args.timeout_seconds,
+        )
+        _write_outputs(report, output_dir, "workload-trace")
+        return 0
+    if args.command == "profile":
+        report = profile_project(args.project, trace_paths=args.trace_paths, source=args.source)
+        _write_outputs(report, output_dir, "workload-profile")
+        return 0
+    if args.command == "draft-contract":
+        report = draft_contract_project(
+            args.project,
+            profile_path=args.profile,
+            trace_paths=args.trace_paths,
+            source=args.source,
+        )
+        _write_outputs(report, output_dir, "workload-contract")
+        if args.write_intake:
+            intake = contract_to_recipe_intake(report)
+            _write_outputs(intake, output_dir, "recipe-intake")
+        return 0
+    if args.command == "compare":
+        report = compare_project(
+            args.project,
+            contract_path=args.contract,
+            trace_paths=args.trace_paths,
+            log_file=args.log_file,
+            source=args.source,
+            backend=args.backend,
+        )
+        _write_outputs(report, output_dir, "contract-comparison")
+        return 0
     if args.command == "onboard":
-        report = assess_project(args.project, source=args.source)
-        report["preflight_requests"] = build_preflight_requests(report, source=args.source)
-        report["patch_suggestions"] = patch_suggestions(args.project, source=args.source)["patches"]
-        if args.run_command:
-            report["canary"] = canary_project(args.project, command=args.run_command, source=args.source)
-        report["phase"] = "migration-onboard"
+        report = onboard_project(
+            args.project,
+            command=args.run_command,
+            log_files=args.log_files,
+            source=args.source,
+            backend=args.backend,
+            apply=args.apply,
+            timeout_seconds=args.timeout_seconds,
+        )
         _write_outputs(report, output_dir, "onboard-report")
+        profile_report = report.get("workload_profile")
+        contract_report = report.get("workload_contract")
+        recipe_intake = report.get("recipe_intake")
+        if isinstance(profile_report, dict):
+            _write_outputs(profile_report, output_dir, "workload-profile")
+        if isinstance(contract_report, dict):
+            _write_outputs(contract_report, output_dir, "workload-contract")
+        if isinstance(recipe_intake, dict):
+            _write_outputs(recipe_intake, output_dir, "recipe-intake")
         return 0
     raise AssertionError(args.command)
 
@@ -128,8 +257,18 @@ def canary_project(project: Path, *, command: str | None, source: str | None = N
     started = time.time()
     if not command:
         return {"schema_version": 1, "phase": "migration-canary", "source": source, "project": str(project.resolve()), "ran": False, "reason": "no command supplied"}
-    result = subprocess.run(shlex.split(command), cwd=project, shell=False, capture_output=True, text=True, timeout=1800)
-    output = result.stdout + "\n" + result.stderr
+    timed_out = False
+    try:
+        result = subprocess.run(shlex.split(command), cwd=project, shell=False, capture_output=True, text=True, timeout=1800)
+        stdout = result.stdout
+        stderr = result.stderr
+        returncode = result.returncode
+    except subprocess.TimeoutExpired as exc:
+        timed_out = True
+        stdout = _process_output_text(exc.stdout)
+        stderr = _process_output_text(exc.stderr) + "\ncommand timed out after 1800s"
+        returncode = None
+    output = stdout + "\n" + stderr
     return {
         "schema_version": 1,
         "phase": "migration-canary",
@@ -137,13 +276,159 @@ def canary_project(project: Path, *, command: str | None, source: str | None = N
         "project": str(project.resolve()),
         "ran": True,
         "command": command,
-        "returncode": result.returncode,
+        "returncode": returncode,
+        "timed_out": timed_out,
         "duration_seconds": round(time.time() - started, 3),
         "error_codes": _error_code_counts(output),
         "timeout_count": len(re.findall(r"Timeout|TimeoutException|timed out", output)),
         "circuit_breaker_mentions": len(re.findall(r"circuit|CB_", output, flags=re.IGNORECASE)),
-        "stdout_tail": result.stdout[-8000:],
-        "stderr_tail": result.stderr[-8000:],
+        "stdout_tail": stdout[-8000:],
+        "stderr_tail": stderr[-8000:],
+    }
+
+
+def trace_project(
+    project: Path,
+    *,
+    command: str | None = None,
+    log_file: Path | None = None,
+    source: str | None = None,
+    backend: str | None = None,
+    timeout_seconds: float = 1800.0,
+) -> dict[str, Any]:
+    root = project.resolve()
+    if command and log_file:
+        raise ValueError("use either --command or --log-file, not both")
+    if log_file:
+        text = read_trace_log(log_file)
+        return parse_trace_text(text, source=source, backend=backend, command=None, log_path=str(log_file))
+    if not command:
+        return {
+            "schema_version": 1,
+            "phase": "workload-trace",
+            "source": source,
+            "backend": backend,
+            "project": str(root),
+            "ran": False,
+            "reason": "no command or log file supplied",
+            "metrics": {},
+            "redaction_report": {"raw_log_forwarded": False},
+        }
+    started = time.time()
+    timed_out = False
+    try:
+        result = subprocess.run(
+            shlex.split(command),
+            cwd=root,
+            shell=False,
+            capture_output=True,
+            text=True,
+            timeout=timeout_seconds,
+        )
+        stdout = result.stdout
+        stderr = result.stderr
+        returncode = result.returncode
+    except subprocess.TimeoutExpired as exc:
+        timed_out = True
+        stdout = _process_output_text(exc.stdout)
+        stderr = _process_output_text(exc.stderr) + f"\ncommand timed out after {timeout_seconds}s"
+        returncode = None
+    trace = parse_trace_text(
+        stdout + "\n" + stderr,
+        source=source,
+        backend=backend,
+        command=command,
+        returncode=returncode,
+        duration_seconds=time.time() - started,
+    )
+    trace["project"] = str(root)
+    trace["ran"] = True
+    trace["timed_out"] = timed_out
+    return trace
+
+
+def profile_project(project: Path, *, trace_paths: list[Path], source: str | None = None) -> dict[str, Any]:
+    assessment = assess_project(project, source=source)
+    traces = [load_json_file(path) for path in trace_paths]
+    return workload_profile_from_assessment(assessment, traces=traces, source=source)
+
+
+def draft_contract_project(
+    project: Path,
+    *,
+    profile_path: Path | None = None,
+    trace_paths: list[Path] | None = None,
+    source: str | None = None,
+) -> dict[str, Any]:
+    if profile_path:
+        profile = load_json_file(profile_path)
+    else:
+        profile = profile_project(project, trace_paths=trace_paths or [], source=source)
+    return draft_workload_contract(profile, source=source)
+
+
+def compare_project(
+    project: Path,
+    *,
+    contract_path: Path,
+    trace_paths: list[Path] | None = None,
+    log_file: Path | None = None,
+    source: str | None = None,
+    backend: str | None = None,
+) -> dict[str, Any]:
+    contract = load_json_file(contract_path)
+    if trace_paths:
+        traces = [load_json_file(path) for path in trace_paths]
+        trace = traces[0] if len(traces) == 1 else merge_traces(traces, source=source, backend=backend)
+    elif log_file:
+        trace = trace_project(project, log_file=log_file, source=source, backend=backend)
+    else:
+        raise ValueError("compare requires --trace or --log-file")
+    return compare_trace_to_contract(contract, trace)
+
+
+def onboard_project(
+    project: Path,
+    *,
+    command: str | None = None,
+    log_files: list[Path] | None = None,
+    source: str | None = None,
+    backend: str | None = None,
+    apply: bool = False,
+    timeout_seconds: float = 1800.0,
+) -> dict[str, Any]:
+    assessment = assess_project(project, source=source)
+    traces = []
+    trace_report = None
+    if command:
+        trace_report = trace_project(
+            project,
+            command=command,
+            source=source,
+            backend=backend,
+            timeout_seconds=timeout_seconds,
+        )
+        traces.append(trace_report)
+    for path in log_files or []:
+        traces.append(trace_project(project, log_file=path, source=source, backend=backend, timeout_seconds=timeout_seconds))
+    if trace_report is None and traces:
+        trace_report = traces[0] if len(traces) == 1 else merge_traces(traces, source=source, backend=backend)
+    profile = workload_profile_from_assessment(assessment, traces=traces, source=source)
+    contract = draft_workload_contract(profile, source=source)
+    recipe_intake = contract_to_recipe_intake(contract) if contract.get("workloads") else None
+    return {
+        "schema_version": 1,
+        "phase": "migration-onboard",
+        "source": source,
+        "project": str(project.resolve()),
+        "assessment": assessment,
+        "preflight_requests": build_preflight_requests(assessment, source=source),
+        "patch_suggestions": patch_suggestions(project, source=source, apply=apply)["patches"],
+        "workload_trace": trace_report,
+        "workload_profile": profile,
+        "workload_contract": contract,
+        "recipe_intake": recipe_intake,
+        "next_actions": _onboard_next_actions(contract, trace_report),
     }
 
 
@@ -274,12 +559,17 @@ def _migration_helper_text(*, source: str | None) -> str:
         "        text = str(((result.get(\"result\") or {}).get(\"value\")) or result.get(\"value\") or \"\")\n"
         "        return _AnthropicMessage(content=[_AnthropicContent(text=text)])\n"
         "\n\n"
+        "class _AsyncAnthropicMessagesCompat:\n"
+        "    async def create(self, *, messages: list[dict[str, Any]] | None = None, max_tokens: int | None = None, temperature: float | None = None, **kwargs: Any) -> _AnthropicMessage:\n"
+        "        return _AnthropicMessagesCompat().create(messages=messages, max_tokens=max_tokens, temperature=temperature, **kwargs)\n"
+        "\n\n"
         "class AnthropicCompat:\n"
         "    def __init__(self, *_: Any, **__: Any) -> None:\n"
         "        self.messages = _AnthropicMessagesCompat()\n"
         "\n\n"
-        "class AsyncAnthropicCompat(AnthropicCompat):\n"
-        "    pass\n"
+        "class AsyncAnthropicCompat:\n"
+        "    def __init__(self, *_: Any, **__: Any) -> None:\n"
+        "        self.messages = _AsyncAnthropicMessagesCompat()\n"
     )
 
 
@@ -348,8 +638,12 @@ def _workload_guess(path: str, symbol: str, detail: str) -> tuple[str, str | Non
         return "infer", "translate_text", 32768
     if "vision" in text or "image" in text or "ocr" in text:
         return "vision", "understand_document_image", 8192
+    if "rss" in text or "feed" in text or "semantic" in text:
+        return "infer", "rss_semantic_match", 131072
+    if "pair" in text or "match" in text:
+        return "infer", "pairwise_match", 131072
     if "rank" in text or "ranking" in text or "score" in text or "topic" in text:
-        return "infer", "rank_text_items", 65536
+        return "infer", "rank_text_items", 131072
     if "summary" in text or "summarize" in text:
         return "infer", "summarize_text", 65536
     return "infer", None, 32768
@@ -380,6 +674,27 @@ def _error_code_counts(text: str) -> dict[str, int]:
     return {code: text.count(code) for code in codes}
 
 
+def _process_output_text(value: Any) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, bytes):
+        return value.decode("utf-8", errors="replace")
+    return str(value)
+
+
+def _onboard_next_actions(contract: dict[str, Any], trace: dict[str, Any] | None) -> list[str]:
+    actions = [
+        "review workload-contract.json; it contains deterministic caller success metrics only",
+        "materialize recipe-intake.json with gpucall-recipe-admin materialize --accept-all in a staging config",
+        "run gpucall validate-config and launch-check before production activation",
+    ]
+    if trace is None:
+        actions.insert(0, "run gpucall-migrate trace with the caller baseline command to populate quality metrics")
+    if contract.get("workloads"):
+        actions.append("run gpucall-migrate compare against a gpucall canary trace before declaring onboarding Go")
+    return actions
+
+
 def _write_outputs(report: dict[str, Any], output_dir: Path, stem: str) -> None:
     output_dir.mkdir(parents=True, exist_ok=True)
     json_path = output_dir / f"{stem}.json"
@@ -408,6 +723,33 @@ def _markdown(report: dict[str, Any]) -> str:
         lines.append("## Patches")
         for item in report["patches"]:
             lines.append(f"- `{item['path']}:{item['line']}` {item['reason']}")
+    if report.get("metrics"):
+        lines.append("")
+        lines.append("## Metrics")
+        for key, value in sorted(report["metrics"].items()):
+            lines.append(f"- `{key}`: {value}")
+    if report.get("workloads"):
+        lines.append("")
+        lines.append("## Workloads")
+        for item in report["workloads"]:
+            quality = item.get("quality_contract") or {}
+            metrics = quality.get("metrics") if isinstance(quality, dict) else {}
+            lines.append(f"- `{item.get('id')}` task=`{item.get('task')}` intent=`{item.get('intent')}`")
+            if metrics:
+                for key, value in sorted(metrics.items()):
+                    lines.append(f"  - `{key}`: {value}")
+    if report.get("violations"):
+        lines.append("")
+        lines.append("## Violations")
+        for item in report["violations"]:
+            lines.append(
+                f"- `{item.get('workload_id')}` `{item.get('metric')}` required={item.get('required')} observed={item.get('observed')}: {item.get('reason')}"
+            )
+    if report.get("next_actions"):
+        lines.append("")
+        lines.append("## Next Actions")
+        for item in report["next_actions"]:
+            lines.append(f"- {item}")
     return "\n".join(lines) + "\n"
 
 

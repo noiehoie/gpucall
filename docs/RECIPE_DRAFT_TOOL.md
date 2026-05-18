@@ -357,16 +357,31 @@ For `restricted` workloads, use the intake artifact only, or use an approved loc
 1. Caller runs `gpucall-recipe-draft intake` against the failure payload.
 2. Caller sends `intake.json` and a business-level description to the gpucall administrator.
 3. Administrator decides whether recipe authoring is appropriate.
-4. If the organization has adopted an accept-all policy, administrator runs the gateway-side `gpucall-recipe-admin` helper.
-5. Administrator writes canonical gpucall recipe intent and production tuple YAML.
-6. Administrator runs `gpucall validate-config`, tests, provider validation, and `gpucall launch-check`.
-7. Only reviewed and validated config is committed and deployed.
+4. Administrator validates the submitted draft grammar and rejects weak drafts before materialization.
+5. If the organization has adopted an accept-all policy, administrator runs the gateway-side `gpucall-recipe-admin` helper.
+6. Administrator writes canonical gpucall recipe intent and production tuple YAML.
+7. Administrator runs `gpucall validate-config`, tests, provider validation, and `gpucall launch-check`.
+8. Only reviewed and validated config is committed and deployed.
 
 ## Gateway-Side Admin Helper
 
 The caller-side helper ships with the SDK. The administrator-side helper ships with the gateway package, not the SDK.
 
-Before materializing a submitted request, review it against the capability catalog:
+Before materializing a submitted request, validate that the draft is strong enough
+to be considered by the gateway:
+
+```bash
+gpucall-recipe-admin validate-draft \
+  --input /path/to/gpucall-recipe-requests/inbox/rr-....json \
+  --config-dir config
+```
+
+Weak drafts are rejected before recipe YAML exists. Missing or generic intent,
+unknown workload placeholders, missing context budget, unsupported output
+contract, missing baseline quality metrics, unsafe redaction, or rejected
+`draft_grammar` all stop here.
+
+Accepted drafts can then be reviewed against the capability catalog:
 
 ```bash
 gpucall-recipe-admin review \
@@ -419,7 +434,14 @@ gpucall-recipe-admin process-inbox \
   --accept-all
 ```
 
-Processed submissions are moved to `inbox/processed`, failed submissions to `inbox/failed`, and materialization reports to `inbox/reports`. The original JSON file remains the canonical submission record; it is not deleted after materialization. `process-inbox` and `watch` also maintain `inbox/recipe_requests.db`, a SQLite WAL index containing request id, source, task, intent, status, original/report/recipe paths, original SHA-256, and timestamps.
+`process-inbox` and `watch` run draft validation first. Accepted submissions are
+moved to `inbox/processed`; rejected or failed submissions move to
+`inbox/failed`; validation/materialization reports are written to
+`inbox/reports`. The original JSON file remains the canonical submission
+record; it is not deleted after materialization. `process-inbox` and `watch`
+also maintain `inbox/recipe_requests.db`, a SQLite WAL index containing request
+id, source, task, intent, status, original/report/recipe paths, original
+SHA-256, and timestamps.
 
 Quality feedback uses a separate inbox because it is evidence about an existing
 recipe or tuple, not a recipe materialization request:

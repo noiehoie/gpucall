@@ -9,7 +9,9 @@ CAPABILITY_BY_INTENT: dict[str, tuple[str, ...]] = {
     "extract_json": ("structured_output",),
     "fine_tune_lora": ("lora_training",),
     "large_context_text_inference": ("instruction_following",),
-    "rank_text_items": ("instruction_following", "reasoning"),
+    "pairwise_match": ("instruction_following", "reasoning", "structured_output"),
+    "rank_text_items": ("instruction_following", "reasoning", "structured_output"),
+    "rss_semantic_match": ("instruction_following", "reasoning", "structured_output"),
     "short_text_inference": ("instruction_following",),
     "smoke_test": ("instruction_following",),
     "split_infer_activation": ("split_inference",),
@@ -26,6 +28,13 @@ CAPABILITY_BY_INTENT: dict[str, tuple[str, ...]] = {
 }
 
 INTENT_ALIASES: dict[str, str] = {
+    "article_match": "rss_semantic_match",
+    "pair_match": "pairwise_match",
+    "pairwise_similarity": "pairwise_match",
+    "rss_match": "rss_semantic_match",
+    "semantic_match": "rss_semantic_match",
+    "semantic_rss_match": "rss_semantic_match",
+    "short_pairwise_similarity": "pairwise_match",
     "topic_ranking": "rank_text_items",
     "rank_topics": "rank_text_items",
 }
@@ -45,6 +54,24 @@ def normalize_intent(intent: str | None) -> str | None:
     if not normalized:
         return None
     return INTENT_ALIASES.get(normalized, normalized)
+
+
+def is_valid_production_intent(intent: str | None) -> bool:
+    normalized = normalize_intent(intent)
+    if normalized is None:
+        return False
+    if normalized in {"infer", "vision", "task", "draft", "generic", "unknown"}:
+        return False
+    return normalized in CAPABILITY_BY_INTENT
+
+
+def is_known_intent(intent: str | None) -> bool:
+    return is_valid_production_intent(intent)
+
+
+def is_unknown_workload_intent(intent: str | None) -> bool:
+    normalized = normalize_intent(intent)
+    return bool(normalized and normalized.startswith("unknown_workload_"))
 
 
 def capabilities_for(*, task: str, intent: str | None) -> list[str]:

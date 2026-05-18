@@ -8,7 +8,12 @@ from typing import Any
 import yaml
 
 from gpucall.domain import ExecutionMode
-from gpucall.recipe_intents import capabilities_for, normalize_intent
+from gpucall.recipe_intents import (
+    capabilities_for,
+    is_valid_production_intent,
+    normalize_intent,
+)
+from gpucall.workload_contract import contract_to_recipe_intake
 
 TEXT_STOP_TOKENS = ["<|im_end|>", "<|endoftext|>"]
 ASYNC_ONLY_RESOURCE_CLASSES = {"large", "exlarge", "ultralong"}
@@ -28,7 +33,7 @@ def canonical_recipe_from_artifact(artifact: Mapping[str, Any], *, catalog: Any 
         proposed.get("latency_class")
         or ("long_running" if context_budget_tokens >= 524288 else ("batch" if context_budget_tokens >= 65536 else "standard"))
     )
-    intent = normalize_intent(str(proposed.get("intent") or f"{task}_draft")) or f"{task}_draft"
+    intent = _materializable_intent(proposed.get("intent"), task=task)
     recipe: dict[str, Any] = {
         "name": name,
         "recipe_schema_version": 3,
@@ -47,7 +52,7 @@ def canonical_recipe_from_artifact(artifact: Mapping[str, Any], *, catalog: Any 
         "context_budget_tokens": context_budget_tokens,
         "resource_class": resource_class,
         "latency_class": latency_class,
-        "quality_floor": "draft",
+        "quality_floor": str(proposed.get("quality_floor") or "draft"),
         "timeout_seconds": _timeout_for(task, context_budget_tokens),
         "lease_ttl_seconds": _lease_for(task, context_budget_tokens),
         "token_estimation_profile": str(proposed.get("token_estimation_profile") or "generic_utf8"),
@@ -155,22 +160,28 @@ def contract_narrowing_reasons(existing: Mapping[str, Any], proposed: Mapping[st
 
 def _proposed_recipe_from_artifact(artifact: Mapping[str, Any]) -> Mapping[str, Any]:
     if "proposed_recipe" in artifact:
-        return _mapping(artifact.get("proposed_recipe"))
+        proposed = _mapping(artifact.get("proposed_recipe"))
+        _require_materializable_proposed(proposed, strict=False)
+        return proposed
     sanitized = _mapping(artifact.get("sanitized_request"))
     if sanitized:
-        return _proposed_recipe_from_sanitized(sanitized)
+        return _proposed_recipe_from_sanitized(sanitized, strict=_strict_artifact(artifact))
+    if artifact.get("phase") == "workload-contract" or "workloads" in artifact:
+        return _proposed_recipe_from_sanitized(_mapping(contract_to_recipe_intake(artifact).get("sanitized_request")), strict=True)
     raise ValueError("artifact must be a gpucall-recipe-draft intake or draft JSON object")
 
 
-def _proposed_recipe_from_sanitized(sanitized: Mapping[str, Any]) -> dict[str, Any]:
+def _proposed_recipe_from_sanitized(sanitized: Mapping[str, Any], *, strict: bool = False) -> dict[str, Any]:
     task = str(sanitized.get("task") or "infer")
-    intent = normalize_intent(str(sanitized.get("intent") or task)) or task
+    intent = _materializable_intent(sanitized.get("intent"), task=task)
+    _require_strict_sanitized_contract(sanitized) if strict else None
+
     capabilities = sanitized.get("desired_capabilities")
     if not isinstance(capabilities, list) or not capabilities:
         capabilities = capabilities_for(task=task, intent=intent)
     requested_context_budget_tokens = _context_budget_from_context(_mapping(_mapping(sanitized.get("error")).get("context")))
     context_budget_tokens = _round_context_budget(requested_context_budget_tokens)
-    return {
+    res = {
         "name": _recipe_name(task, intent, context_budget_tokens=context_budget_tokens),
         "recipe_schema_version": 3,
         "task": task,
@@ -186,16 +197,74 @@ def _proposed_recipe_from_sanitized(sanitized: Mapping[str, Any]) -> dict[str, A
         "token_estimation_profile": "generic_utf8",
         "allowed_mime_prefixes": _mime_prefixes_for(task),
         "output_contract": sanitized.get("expected_output") or "plain_text",
+        "quality_floor": "draft",
     }
+    return res
+
+
+def _strict_artifact(artifact: Mapping[str, Any]) -> bool:
+    phase = str(artifact.get("phase") or "")
+    return phase in {"deterministic-contract-intake", "workload-contract"} or "workload_contract" in artifact
+
+
+def _materializable_intent(value: Any, *, task: str) -> str:
+    raw = str(value or "").strip()
+    if not raw:
+        raise ValueError("recipe draft requires explicit intent; task fallback is not allowed")
+    intent = normalize_intent(raw) or raw
+    if intent == task:
+        raise ValueError("recipe draft intent must not equal task; generic task fallback is not allowed")
+    if intent.startswith("unknown_workload_"):
+        raise ValueError(f"unknown workload intent requires operator mapping before materialization: {intent}")
+    if not is_valid_production_intent(intent):
+        raise ValueError(f"intent is not in the production intent registry: {intent}")
+    return intent
+
+
+def _require_materializable_proposed(proposed: Mapping[str, Any], *, strict: bool) -> None:
+    task = str(proposed.get("task") or "infer")
+    _materializable_intent(proposed.get("intent"), task=task)
+    if strict:
+        if _optional_positive_int(proposed.get("context_budget_tokens") or proposed.get("max_model_len")) is None:
+            raise ValueError("strict recipe draft requires context_budget_tokens")
+        if not str(proposed.get("output_contract") or "").strip():
+            raise ValueError("strict recipe draft requires output_contract")
+
+
+def _require_strict_sanitized_contract(sanitized: Mapping[str, Any]) -> None:
+    grammar = _mapping(sanitized.get("draft_grammar"))
+    blockers = [str(item) for item in grammar.get("blockers") or [] if str(item)]
+    if grammar and grammar.get("materialization_allowed") is False:
+        raise ValueError("strict recipe draft is not materializable: " + "; ".join(blockers or ["draft grammar rejected"]))
+    context_budget = _context_budget_from_context(_mapping(_mapping(sanitized.get("error")).get("context")))
+    if context_budget is None:
+        raise ValueError("strict recipe draft requires error.context.context_budget_tokens")
+    expected = str(sanitized.get("expected_output") or "").strip()
+    if not expected:
+        raise ValueError("strict recipe draft requires expected_output")
+    if not _is_supported_output_contract(expected):
+        raise ValueError(f"strict recipe draft has unsupported expected_output: {expected}")
+    quality = _mapping(sanitized.get("quality_contract"))
+    if not quality:
+        raise ValueError("strict recipe draft requires quality_contract")
+    if quality.get("missing_baseline_metrics"):
+        raise ValueError("strict recipe draft requires baseline quality metrics")
+    if not _mapping(quality.get("metrics")):
+        raise ValueError("strict recipe draft requires non-empty quality_contract.metrics")
 
 
 def _route_output_contract(proposed: Mapping[str, Any]) -> str:
     raw = str(proposed.get("output_contract") or "").strip().lower().replace("_", "-")
-    if raw in {"json_object", "json-schema"}:
+    if raw in {"json-object", "json-schema"}:
         return raw.replace("-", "_")
     if raw in {"plain-text", "text", "plain"}:
         return "plain-text"
     return "plain-text"
+
+
+def _is_supported_output_contract(value: str) -> bool:
+    raw = value.strip().lower().replace("_", "-")
+    return raw in {"json-object", "json-schema", "plain-text", "text", "plain"}
 
 
 def _mapping(value: Any) -> Mapping[str, Any]:

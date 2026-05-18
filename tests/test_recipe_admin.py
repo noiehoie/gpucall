@@ -26,6 +26,7 @@ from gpucall.recipe_admin import (
     quality_feedback_status,
     recipe_request_status,
     review_artifact,
+    validate_draft_artifact,
 )
 from gpucall.recipe_materialize import write_recipe_yaml
 from gpucall.registry import ObservedRegistry
@@ -61,12 +62,130 @@ def test_admin_materializes_intake_to_canonical_recipe() -> None:
     assert recipe["required_model_capabilities"] == ["document_understanding", "visual_question_answering", "instruction_following"]
 
 
+def test_admin_materialize_rejects_missing_or_generic_intent() -> None:
+    with pytest.raises(ValueError, match="explicit intent"):
+        canonical_recipe_from_artifact({"sanitized_request": {"task": "infer"}})
+
+    with pytest.raises(ValueError, match="must not equal task"):
+        canonical_recipe_from_artifact({"sanitized_request": {"task": "infer", "intent": "infer"}})
+
+
+def test_admin_materialize_rejects_unknown_workload_intent() -> None:
+    intake = {
+        "phase": "deterministic-contract-intake",
+        "sanitized_request": {
+            "task": "infer",
+            "mode": "async",
+            "intent": "unknown_workload_deadbeef",
+            "expected_output": "plain_text",
+            "error": {"context": {"context_budget_tokens": 131072}},
+            "quality_contract": {"metrics": {"min_response_chars": 1000}},
+            "draft_grammar": {
+                "materialization_allowed": False,
+                "blockers": ["unknown workload requires operator intent mapping before materialization"],
+            },
+        },
+    }
+
+    with pytest.raises(ValueError, match="unknown workload"):
+        canonical_recipe_from_artifact(intake)
+
+
+def test_admin_materialize_rejects_strict_intake_without_quality_contract() -> None:
+    intake = {
+        "phase": "deterministic-contract-intake",
+        "sanitized_request": {
+            "task": "infer",
+            "mode": "async",
+            "intent": "rss_semantic_match",
+            "expected_output": "json_object",
+            "error": {"context": {"context_budget_tokens": 131072}},
+        },
+    }
+
+    with pytest.raises(ValueError, match="quality_contract"):
+        canonical_recipe_from_artifact(intake)
+
+
+def test_admin_validate_draft_rejects_weak_contract_before_materialization() -> None:
+    intake = {
+        "phase": "deterministic-contract-intake",
+        "sanitized_request": {
+            "task": "infer",
+            "mode": "async",
+            "intent": "rss_semantic_match",
+            "expected_output": "json_object",
+            "error": {"context": {"context_budget_tokens": 131072}},
+            "draft_grammar": {"materialization_allowed": True, "blockers": []},
+        },
+        "redaction_report": {"prompt_body_forwarded": False, "data_ref_uri_forwarded": False, "presigned_url_forwarded": False},
+    }
+
+    report = validate_draft_artifact(intake)
+
+    assert report["phase"] == "admin-draft-validation"
+    assert report["decision"] == "REJECTED_DRAFT"
+    assert report["accepted"] is False
+    assert any("quality_contract" in item["reason"] for item in report["blockers"])
+
+
+def test_admin_validate_draft_accepts_strict_contract_candidate() -> None:
+    intake = {
+        "phase": "deterministic-contract-intake",
+        "sanitized_request": {
+            "task": "infer",
+            "mode": "async",
+            "intent": "rss_semantic_match",
+            "classification": "confidential",
+            "expected_output": "json_object",
+            "error": {"context": {"context_budget_tokens": 131072}},
+            "quality_contract": {"metrics": {"min_rss_matches": 33, "max_http_422": 0}},
+            "draft_grammar": {"materialization_allowed": True, "blockers": []},
+        },
+        "redaction_report": {"prompt_body_forwarded": False, "data_ref_uri_forwarded": False, "presigned_url_forwarded": False},
+    }
+
+    report = validate_draft_artifact(intake)
+
+    assert report["decision"] == "ACCEPTED_DRAFT"
+    assert report["accepted"] is True
+    assert report["materialization_preview"]["intent"] == "rss_semantic_match"
+    assert report["materialization_preview"]["context_budget_tokens"] == 131072
+
+
 def test_admin_materialize_requires_accept_all(tmp_path) -> None:
     intake_path = tmp_path / "intake.json"
     intake_path.write_text(json.dumps({"sanitized_request": {"task": "infer"}}), encoding="utf-8")
 
     with pytest.raises(SystemExit, match="refusing to materialize without --accept-all"):
         main(["materialize", "--input", str(intake_path), "--dry-run"])
+
+
+def test_admin_cli_validate_draft_rejects_without_writing_recipe(tmp_path) -> None:
+    intake_path = tmp_path / "weak.json"
+    report_path = tmp_path / "validation.json"
+    intake_path.write_text(
+        json.dumps(
+            {
+                "phase": "deterministic-contract-intake",
+                "sanitized_request": {
+                    "task": "infer",
+                    "mode": "async",
+                    "intent": "rss_semantic_match",
+                    "expected_output": "json_object",
+                    "error": {"context": {"context_budget_tokens": 131072}},
+                },
+                "redaction_report": {"prompt_body_forwarded": False, "data_ref_uri_forwarded": False, "presigned_url_forwarded": False},
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    assert main(["validate-draft", "--input", str(intake_path), "--output", str(report_path)]) == 1
+
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+    assert report["decision"] == "REJECTED_DRAFT"
+    assert any("quality_contract" in item["reason"] for item in report["blockers"])
 
 
 def test_admin_materialize_writes_yaml_and_report(tmp_path) -> None:
@@ -210,6 +329,41 @@ def test_admin_materializer_normalizes_legacy_topic_ranking_intent() -> None:
     assert recipe["allowed_modes"] == ["async"]
 
 
+def test_admin_materializes_workload_contract_to_recipe() -> None:
+    contract = {
+        "phase": "workload-contract",
+        "primary_workload_id": "infer.rank_text_items",
+        "workloads": [
+            {
+                "id": "infer.rank_text_items",
+                "task": "infer",
+                "intent": "rank_text_items",
+                "classification": "confidential",
+                "modes": ["async"],
+                "input_profile": {
+                    "content_types": ["text/plain"],
+                    "max_bytes": 16000,
+                    "input_count": 1,
+                    "context_budget_tokens": 131072,
+                },
+                "output_profile": {"output_contract": "json_object"},
+                "quality_contract": {
+                    "gateway_may_infer_quality": False,
+                    "metrics": {"min_topics": 12, "min_sources": 11, "min_response_chars": 20230},
+                },
+            }
+        ],
+    }
+
+    recipe = canonical_recipe_from_artifact(contract)
+
+    assert recipe["name"] == "infer-rank-text-items-draft"
+    assert recipe["intent"] == "rank_text_items"
+    assert recipe["allowed_modes"] == ["async"]
+    assert recipe["context_budget_tokens"] == 131072
+    assert recipe["output_contract"] == "json_object"
+
+
 def test_admin_process_inbox_materializes_submission(tmp_path) -> None:
     inbox = tmp_path / "inbox"
     output_dir = tmp_path / "recipes"
@@ -252,6 +406,43 @@ def test_admin_process_inbox_materializes_submission(tmp_path) -> None:
     assert record["report_path"] == str(inbox / "reports" / "rr-test.report.json")
     assert len(record["original_sha256"]) == 64
     assert status["index_record"]["status"] == "processed"
+
+
+def test_admin_process_inbox_rejects_weak_draft_before_recipe_write(tmp_path) -> None:
+    inbox = tmp_path / "inbox"
+    output_dir = tmp_path / "recipes"
+    inbox.mkdir()
+    submission = {
+        "kind": "gpucall.recipe_request_submission",
+        "request_id": "rr-weak",
+        "intake": {
+            "phase": "deterministic-contract-intake",
+            "sanitized_request": {
+                "task": "infer",
+                "mode": "async",
+                "intent": "rss_semantic_match",
+                "classification": "confidential",
+                "expected_output": "json_object",
+                "error": {"context": {"context_budget_tokens": 131072}},
+                "draft_grammar": {"materialization_allowed": True, "blockers": []},
+            },
+            "redaction_report": {"prompt_body_forwarded": False, "data_ref_uri_forwarded": False, "presigned_url_forwarded": False},
+        },
+    }
+    (inbox / "rr-weak.json").write_text(json.dumps(submission), encoding="utf-8")
+
+    results = process_inbox(inbox_dir=inbox, output_dir=output_dir, accept_all=True)
+
+    assert results[0]["ok"] is False
+    assert "draft validation rejected" in results[0]["error"]
+    assert not list(output_dir.glob("*.yml"))
+    assert (inbox / "failed" / "rr-weak.json").exists()
+    report = json.loads((inbox / "reports" / "rr-weak.report.json").read_text(encoding="utf-8"))
+    assert report["decision"] == "REJECTED_DRAFT"
+    assert report["draft_validation"]["decision"] == "REJECTED_DRAFT"
+    status = recipe_request_status("rr-weak", inbox)
+    assert status["state"] == "failed"
+    assert status["report"]["decision"] == "REJECTED_DRAFT"
 
 
 def test_admin_process_inbox_materializes_mega_context_submission(tmp_path) -> None:
@@ -1050,7 +1241,11 @@ def test_admin_process_inbox_indexes_failed_submission(tmp_path) -> None:
     assert record["task"] == "infer"
     assert record["intent"] == "summarize_text"
     assert record["original_path"] == str(inbox / "failed" / "rr-bad.json")
-    assert "admin review rejected submission" in record["error"]
+    assert "draft validation rejected submission" in record["error"]
+    assert "missing redaction_report" in record["error"]
+    report = json.loads((inbox / "reports" / "rr-bad.report.json").read_text(encoding="utf-8"))
+    assert report["decision"] == "REJECTED_DRAFT"
+    assert report["draft_validation"]["decision"] == "REJECTED_DRAFT"
 
 
 def test_admin_process_quality_inbox_accepts_quality_feedback_without_recipe_materialization(tmp_path) -> None:
