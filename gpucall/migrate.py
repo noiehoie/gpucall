@@ -836,6 +836,30 @@ def _migration_helper_text(*, source: str | None) -> str:
             def gpucall_guess_intent(prompt: str, system_prompt: str | None = None) -> str:
                 text = f"{system_prompt or ''}\\n{prompt}".lower()
                 has_rss_source = "rss" in text or "feed" in text or "フィード" in text
+                has_news_ranking_contract = (
+                    "rank" in text
+                    or "ranking" in text
+                    or "rankings" in text
+                    or "importance" in text
+                    or "important" in text
+                    or "score" in text
+                    or "top topics" in text
+                    or "topic list" in text
+                    or "source_articles" in text
+                    or "east-west" in text
+                    or "western_tone" in text
+                    or "non_western_tone" in text
+                    or "gap_description" in text
+                    or "japan-suru" in text
+                    or "重要" in text
+                    or "重要度" in text
+                    or "順位" in text
+                    or "ランキング" in text
+                    or "トピック" in text
+                    or "統合分析" in text
+                    or "報道ギャップ" in text
+                    or "東西" in text
+                )
                 has_match_contract = (
                     "semantic" in text
                     or "match" in text
@@ -849,11 +873,22 @@ def _migration_helper_text(*, source: str | None) -> str:
                 )
                 if ("pairwise" in text or "pair-wise" in text or "pairwise_similarity" in text) and has_match_contract:
                     return "pairwise_match"
+                explicit_match_contract = (
+                    "semantic match" in text
+                    or "rss match" in text
+                    or "rss_match" in text
+                    or "semantic_rss_match" in text
+                    or "rss semantic" in text
+                    or "突合" in text
+                    or "マッチ" in text
+                )
+                if has_rss_source and explicit_match_contract:
+                    return "rss_semantic_match"
+                if has_news_ranking_contract:
+                    return "rank_text_items"
                 if has_rss_source and has_match_contract:
                     return "rss_semantic_match"
-                if "rank" in text or "ranking" in text or "importance" in text or "重要度" in text or "トピック" in text:
-                    return "rank_text_items"
-                if "rss" in text or "semantic" in text or "match" in text or "突合" in text:
+                if explicit_match_contract:
                     return "rss_semantic_match"
                 if "translate" in text or "translation" in text or "翻訳" in text:
                     return "translate_text"
@@ -1340,14 +1375,45 @@ def _workload_guess(path: str, symbol: str, detail: str) -> tuple[str, str | Non
     text = " ".join([path, symbol, detail]).lower()
     if "translate" in text or "translation" in text:
         return "infer", "translate_text", 32768
+    has_news_ranking_contract = (
+        "rank" in text
+        or "ranking" in text
+        or "score" in text
+        or "topic" in text
+        or "importance" in text
+        or "source_articles" in text
+        or "east-west" in text
+        or "重要" in text
+        or "順位" in text
+        or "ランキング" in text
+        or "トピック" in text
+        or "統合分析" in text
+        or "報道ギャップ" in text
+    )
+    has_rss_source = "rss" in text or "feed" in text or "フィード" in text
+    has_match_contract = (
+        "semantic" in text
+        or "match" in text
+        or "matches" in text
+        or "matching" in text
+        or "similarity" in text
+        or "confidence" in text
+        or "突合" in text
+        or "照合" in text
+        or "マッチ" in text
+    )
+    if ("pairwise" in text or "pair-wise" in text or "pairwise_similarity" in text) and has_match_contract:
+        return "infer", "pairwise_match", 131072
+    if has_news_ranking_contract:
+        return "infer", "rank_text_items", 131072
     if "vision" in text or "image" in text or "ocr" in text:
         return "vision", "understand_document_image", 8192
-    if "rss" in text or "feed" in text or "semantic" in text:
+    if has_rss_source and has_match_contract:
+        return "infer", "rss_semantic_match", 131072
+    if "semantic match" in text or "rss match" in text or "rss_match" in text or "突合" in text or "マッチ" in text:
         return "infer", "rss_semantic_match", 131072
     if "pair" in text or "match" in text:
         return "infer", "pairwise_match", 131072
-    if "rank" in text or "ranking" in text or "score" in text or "topic" in text:
-        return "infer", "rank_text_items", 131072
     if "summary" in text or "summarize" in text:
         return "infer", "summarize_text", 65536
     return "infer", None, 32768

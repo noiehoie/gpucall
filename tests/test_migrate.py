@@ -72,6 +72,23 @@ def test_migrate_preflight_overdeclares_pairwise_match(tmp_path) -> None:
     assert "--required-model-len 131072" in requests[0]["command"]
 
 
+def test_migrate_preflight_prefers_integrated_news_analysis_over_rss_word(tmp_path) -> None:
+    project = tmp_path / "project"
+    project.mkdir()
+    (project / "topic_engine.py").write_text(
+        "def run():\n"
+        "    call_llm('RSSとVision結果を統合分析し、source_articles と east_west_gap を含む重要度ランキングJSONを返す')\n",
+        encoding="utf-8",
+    )
+
+    report = assess_project(project, source="news-system")
+    requests = build_preflight_requests(report, source="news-system")
+
+    assert requests[0]["task"] == "infer"
+    assert requests[0]["intent"] == "rank_text_items"
+    assert "--required-model-len 131072" in requests[0]["command"]
+
+
 def test_migrate_cli_writes_reports(tmp_path) -> None:
     project = tmp_path / "project"
     out = tmp_path / "out"
@@ -382,6 +399,25 @@ def test_migrate_helper_does_not_treat_rank_prompt_with_pairs_as_pairwise(tmp_pa
     intent = namespace["gpucall_guess_intent"](
         "Rank global news topics by importance. Compare source pairs and matching coverage as evidence.",
         "Return a ranked topic list with east-west gap analysis.",
+    )
+    assert intent == "rank_text_items"
+
+
+def test_migrate_helper_routes_integrated_news_analysis_to_rank_not_rss_match(tmp_path, monkeypatch) -> None:
+    project = tmp_path / "project"
+    project.mkdir()
+    source = project / "client.py"
+    source.write_text("from openai import OpenAI\nclient = OpenAI()\n", encoding="utf-8")
+    monkeypatch.setenv("GPUCALL_BASE_URL", "http://127.0.0.1:9")
+    monkeypatch.setenv("GPUCALL_API_KEY", "x")
+
+    patch_suggestions(project, source="openai-app", apply=True)
+    namespace: dict[str, object] = {}
+    exec((project / "gpucall_migration.py").read_text(encoding="utf-8"), namespace)
+
+    intent = namespace["gpucall_guess_intent"](
+        "国内紙RSS、海外RSS、Vision抽出結果を統合分析し、source_articles、east_west_gap、Japan-suruを含むJSONを返す。",
+        "You are the integrated daily news analysis engine.",
     )
     assert intent == "rank_text_items"
 
