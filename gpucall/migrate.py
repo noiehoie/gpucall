@@ -711,7 +711,8 @@ def _migration_helper_text(*, source: str | None) -> str:
             SOURCE = __SOURCE_REPR__
             _GATEWAY_RATE_LOCK = threading.Lock()
             _GATEWAY_NEXT_REQUEST_AT = 0.0
-            _GATEWAY_ASYNC_SEMAPHORE = threading.BoundedSemaphore(int(os.environ.get("GPUCALL_MIGRATION_ASYNC_CONCURRENCY", "2")))
+            _GATEWAY_ASYNC_SEMAPHORE = threading.BoundedSemaphore(max(1, int(os.environ.get("GPUCALL_MIGRATION_ASYNC_CONCURRENCY", "2"))))
+            _GATEWAY_REQUEST_SEMAPHORE = threading.BoundedSemaphore(max(1, int(os.environ.get("GPUCALL_MIGRATION_REQUEST_CONCURRENCY", "1"))))
 
 
             class _AttrDict(dict):
@@ -779,6 +780,19 @@ def _migration_helper_text(*, source: str | None) -> str:
                 base = _float_env("GPUCALL_MIGRATION_RATE_LIMIT_BACKOFF_SECONDS", "3")
                 ceiling = _float_env("GPUCALL_MIGRATION_RATE_LIMIT_MAX_BACKOFF_SECONDS", "30")
                 return min(ceiling, base * float(attempt + 1))
+
+
+            def _no_eligible_backoff_seconds(attempt: int) -> float:
+                base = _float_env("GPUCALL_MIGRATION_NO_ELIGIBLE_BACKOFF_SECONDS", "10")
+                ceiling = _float_env("GPUCALL_MIGRATION_NO_ELIGIBLE_MAX_BACKOFF_SECONDS", "60")
+                return min(ceiling, base * float(attempt + 1))
+
+
+            def _is_retryable_no_eligible(exc: urllib.error.HTTPError, body: str) -> bool:
+                if exc.code != 503:
+                    return False
+                lowered = body.lower()
+                return "no_eligible_tuple" in lowered or "no eligible tuple" in lowered
 
 
             def _openai_base_url(base_url: str | None = None) -> str:
@@ -857,7 +871,9 @@ def _migration_helper_text(*, source: str | None) -> str:
                     method=method,
                 )
                 request_timeout = timeout if timeout is not None else float(os.environ.get("GPUCALL_MIGRATION_TIMEOUT_SECONDS", "900"))
-                max_retries = _int_env("GPUCALL_MIGRATION_HTTP_RETRIES", "8")
+                rate_limit_retries = _int_env("GPUCALL_MIGRATION_HTTP_RETRIES", "8")
+                no_eligible_retries = _int_env("GPUCALL_MIGRATION_NO_ELIGIBLE_RETRIES", "12")
+                max_retries = max(rate_limit_retries, no_eligible_retries)
                 for attempt in range(max_retries + 1):
                     _pace_gateway_request()
                     try:
@@ -866,9 +882,13 @@ def _migration_helper_text(*, source: str | None) -> str:
                         break
                     except urllib.error.HTTPError as exc:
                         body = exc.read().decode("utf-8", errors="replace")[:2000]
-                        if exc.code == 429 and attempt < max_retries:
+                        if exc.code == 429 and attempt < rate_limit_retries:
                             request.data = json.dumps(payload).encode("utf-8")
                             time.sleep(_retry_after_seconds(exc, attempt))
+                            continue
+                        if _is_retryable_no_eligible(exc, body) and attempt < no_eligible_retries:
+                            request.data = json.dumps(payload).encode("utf-8")
+                            time.sleep(_no_eligible_backoff_seconds(attempt))
                             continue
                         raise RuntimeError(f"gpucall request failed status={exc.code} body={body}") from exc
                 return json.loads(body) if body else {}
@@ -926,10 +946,11 @@ def _migration_helper_text(*, source: str | None) -> str:
 
             def _submit_task_and_wait(payload: dict[str, Any], *, timeout: float | None = None, prompt_bytes: int = 0) -> dict[str, Any]:
                 task = str(payload.get("task") or "infer")
-                if not _should_submit_async(task, prompt_bytes=prompt_bytes):
-                    return _json_request("POST", _base_url() + "/v2/tasks/sync", payload, timeout=timeout)
-                with _GATEWAY_ASYNC_SEMAPHORE:
-                    return _submit_async_task_and_wait(payload, timeout=timeout, prompt_bytes=prompt_bytes)
+                with _GATEWAY_REQUEST_SEMAPHORE:
+                    if not _should_submit_async(task, prompt_bytes=prompt_bytes):
+                        return _json_request("POST", _base_url() + "/v2/tasks/sync", payload, timeout=timeout)
+                    with _GATEWAY_ASYNC_SEMAPHORE:
+                        return _submit_async_task_and_wait(payload, timeout=timeout, prompt_bytes=prompt_bytes)
 
 
             def _submit_async_task_and_wait(payload: dict[str, Any], *, timeout: float | None = None, prompt_bytes: int = 0) -> dict[str, Any]:
