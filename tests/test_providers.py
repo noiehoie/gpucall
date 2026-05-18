@@ -1360,6 +1360,23 @@ def test_runpod_vllm_native_poll_timeout_accepts_legacy_estimated_runtime_key(mo
     assert _runpod_vllm_native_poll_timeout_seconds(plan) == 360
 
 
+def test_runpod_vllm_native_poll_timeout_includes_cold_start(monkeypatch) -> None:
+    monkeypatch.delenv("GPUCALL_RUNPOD_VLLM_NATIVE_POLL_TIMEOUT_SECONDS", raising=False)
+    monkeypatch.delenv("GPUCALL_RUNPOD_VLLM_NATIVE_RUNTIME_MULTIPLIER", raising=False)
+    monkeypatch.setenv("GPUCALL_RUNPOD_VLLM_NATIVE_POLL_MIN_SECONDS", "60")
+    monkeypatch.setenv("GPUCALL_RUNPOD_VLLM_NATIVE_POLL_MAX_SECONDS", "600")
+
+    plan = plan_payload_plan().model_copy(
+        update={
+            "mode": ExecutionMode.ASYNC,
+            "timeout_seconds": 600,
+            "attestations": {"cost_estimate": {"runtime_seconds": 68.0, "cold_start_seconds": 180.0}},
+        }
+    )
+
+    assert _runpod_vllm_native_poll_timeout_seconds(plan) == 316
+
+
 def test_runpod_vllm_native_poll_timeout_cancels_running_job(monkeypatch) -> None:
     calls: list[tuple[str, str, dict[str, object] | None]] = []
 

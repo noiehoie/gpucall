@@ -790,13 +790,14 @@ def _runpod_vllm_native_poll_timeout_seconds(plan: CompiledPlan) -> float:
         except ValueError:
             pass
     runtime_seconds = _plan_expected_runtime_seconds(plan)
+    cold_start_seconds = _plan_expected_cold_start_seconds(plan)
     multiplier = _float_env("GPUCALL_RUNPOD_VLLM_NATIVE_RUNTIME_MULTIPLIER", 2.0, minimum=1.0)
     floor = _float_env("GPUCALL_RUNPOD_VLLM_NATIVE_POLL_MIN_SECONDS", 60.0, minimum=1.0)
     ceiling = _float_env("GPUCALL_RUNPOD_VLLM_NATIVE_POLL_MAX_SECONDS", 300.0, minimum=floor)
     if runtime_seconds is None:
         target = max(plan_timeout * 0.1, floor)
     else:
-        target = max(runtime_seconds * multiplier, floor)
+        target = max(cold_start_seconds + (runtime_seconds * multiplier), floor)
     return min(target, ceiling, plan_timeout)
 
 
@@ -814,6 +815,20 @@ def _plan_expected_runtime_seconds(plan: CompiledPlan) -> float | None:
         if isinstance(value, int | float) and value > 0:
             return float(value)
     return None
+
+
+def _plan_expected_cold_start_seconds(plan: CompiledPlan) -> float:
+    cost_estimate = plan.attestations.get("cost_estimate")
+    if isinstance(cost_estimate, dict):
+        value = cost_estimate.get("cold_start_seconds")
+        if isinstance(value, int | float) and value > 0:
+            return float(value)
+    recipe = plan.attestations.get("recipe_snapshot")
+    if isinstance(recipe, dict):
+        value = recipe.get("expected_cold_start_seconds")
+        if isinstance(value, int | float) and value > 0:
+            return float(value)
+    return 0.0
 
 
 def _float_env(name: str, default: float, *, minimum: float) -> float:
