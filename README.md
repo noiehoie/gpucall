@@ -2,6 +2,32 @@
 
 [日本語版 README](README.ja.md)
 
+## North Star
+
+gpucall turns GPU compute into electricity for external systems and AI agents:
+callers declare workload intent, while gpucall governs provider, GPU, model,
+cost, readiness, validation evidence, data sovereignty, execution, and cleanup.
+
+In practice, this means workload-declarative execution, cost prediction and hard
+ceilings, data-sovereignty evidence, agent-native structured APIs,
+multi-provider market arbitration, and provider lifecycle governance.
+
+See [docs/PRODUCT_NORTH_STAR.md](docs/PRODUCT_NORTH_STAR.md) for the project
+north star. Provider Panopticon is documented there as a small near-term
+control-plane milestone on the way to the north star, not as the north star
+itself.
+
+Roadmap summary:
+
+- **v2**: governed `infer` / `vision` job gateway kernel with minimal Provider
+  Panopticon, persistent job state, metering hooks, budget enforcement points,
+  and cleanup evidence.
+- **v2.5**: agent-native execution layer with public async API/CLI, structured
+  machine-readable output, budget hardening, and MCP/tool interface.
+- **v3**: training, LoRA, checkpoint, and artifact lifecycle.
+- **v4**: managed product and enterprise control plane.
+- **v5**: public provider plugin platform.
+
 **gpucall is a gateway that keeps GPU / model / provider choice out of application code and enforces GPU execution with 100% deterministic routing from organizational policy and evidence.**
 
 Sending business data to hosted AI APIs such as Gemini, GPT, or Claude is, for many organizations, still an external transfer of internal resources. The natural way to avoid that is to run LLMs, vLLM, or Transformers on GPU capacity under your own governance. Buying and operating GPUs directly, however, means large upfront spend, procurement lead time, operational burden, hardware failure handling, and idle capacity.
@@ -248,6 +274,9 @@ For productized migration, use the deterministic migration kit:
 
 ```bash
 gpucall-migrate assess /path/to/project --source example-caller-app
+gpucall-migrate trace /path/to/project --command "uv run python -m app.canary" --backend baseline
+gpucall-migrate profile /path/to/project --trace .gpucall-migration/workload-trace.json
+gpucall-migrate draft-contract /path/to/project --profile .gpucall-migration/workload-profile.json --write-intake
 gpucall-migrate preflight /path/to/project --source example-caller-app
 gpucall-migrate canary /path/to/project --command "uv run python -m src.pipeline.main"
 gpucall-migrate patch /path/to/project
@@ -255,9 +284,12 @@ gpucall-migrate onboard /path/to/project --source example-caller-app
 ```
 
 The migration kit scans source files, classifies direct OpenAI/Anthropic paths,
-detects caller-side routing selectors, generates sanitized preflight commands,
-runs optional canaries, and writes JSON/Markdown reports under
-`.gpucall-migration`. It is deterministic and does not call an LLM.
+detects caller-side routing selectors, parses sanitized baseline/candidate
+traces, generates deterministic workload contracts, runs optional canaries, and
+writes JSON/Markdown reports under `.gpucall-migration`. It is deterministic
+and does not call an LLM. Workload contracts are caller-declared success
+metrics; gpucall treats them as contract checks, not subjective quality
+inference. See [docs/WORKLOAD_CONTRACT.md](docs/WORKLOAD_CONTRACT.md).
 
 If a caller's workload is unknown to the installed recipe catalog and production tuples, gpucall fails closed instead of guessing or routing to a weaker model. If gpucall returns `200 OK` but the caller's own business validator rejects the output, treat it as low-quality success feedback. Use the SDK-distributed `gpucall-recipe-draft` helper to sanitize either case and submit a recipe intent request for gpucall administrators. See [docs/RECIPE_DRAFT_TOOL.md](docs/RECIPE_DRAFT_TOOL.md).
 
@@ -468,15 +500,15 @@ Production launch checks require gateway auth, object-store credentials, a live 
 
 For Netcup or other bare-metal production deployments using Tailscale and explicit configuration directories, see [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md).
 
-## v3 Roadmap
+## Future Security / Sovereignty Tracks
 
-v2.0 made deterministic governance routing production-ready. v3 builds on that foundation with execution guarantees from TEE attestation, sovereignty routing by legal jurisdiction, external KMS-backed key management, and encrypted training artifact export/reuse.
+The product roadmap is governed by [docs/PRODUCT_NORTH_STAR.md](docs/PRODUCT_NORTH_STAR.md). The following tracks describe future security, sovereignty, TEE, KMS, and hardened-deployment work that may land across v3 and later releases.
 
 ### Provider Coverage
 
 gpucall's implemented and planned cloud GPU provider coverage:
 
-| Category | Provider | v2.0 | v3 | Notes |
+| Category | Provider | v2.0 | Future | Notes |
 | :--- | :--- | :---: | :---: | :--- |
 | Serverless / PaaS | Modal | Implemented | — | Serverless function surface |
 | Serverless / PaaS | RunPod Serverless / Flash | Implemented | — | Managed endpoint surface |
@@ -493,11 +525,11 @@ gpucall's implemented and planned cloud GPU provider coverage:
 | Sovereign cloud | Hetzner / IONOS / Northern Data Taiga Cloud | — | Planned | Germany-oriented, EU-GDPR-native options |
 | On-prem / edge | Local (Ollama / vLLM) | Implemented | — | Local runtime |
 
-Providers referenced in v3 feature sections are expected to come from this list. Additional providers should be evaluated explicitly before being added.
+Providers referenced in future security and sovereignty feature sections are expected to come from this list. Additional providers should be evaluated explicitly before being added.
 
 ### TEE Provider Adapters
 
-v3 adds provider adapters for Trusted Execution Environment execution in addition to the current Modal, RunPod, Hyperstack, and local runtime surfaces.
+Future security work adds provider adapters for Trusted Execution Environment execution in addition to the current Modal, RunPod, Hyperstack, and local runtime surfaces.
 
 - **Microsoft Azure Confidential VMs (H100 CC Mode)**: use NVIDIA H100 Confidential Computing mode. GPU memory is hardware-encrypted and not readable by the host operator. The adapter handles VM provisioning, CC mode verification, and attestation report retrieval.
 - **Google Cloud Confidential Space (AMD SEV-SNP)**: use AMD SEV-SNP memory encryption. The adapter verifies Confidential Space workload identity tokens, retrieves attestation reports, and verifies workload container integrity.
@@ -505,7 +537,7 @@ v3 adds provider adapters for Trusted Execution Environment execution in additio
 
 ### Sovereignty Routing
 
-v3 adds legal-jurisdiction metadata to provider definitions and lets tenant policy constrain routing by jurisdiction.
+Future sovereignty work adds legal-jurisdiction metadata to provider definitions and lets tenant policy constrain routing by jurisdiction.
 
 - **Provider jurisdiction field**: each provider declares jurisdiction metadata such as `us`, `eu-fr`, `eu-de`, or `jp`, representing the legal regime that controls provider data access.
 - **Tenant sovereignty policy**: tenant policy gains `allowed_jurisdictions` and `denied_jurisdictions`. An EU tenant that must avoid CLOUD Act exposure can set `denied_jurisdictions: [us]` and deterministically block routing to US-jurisdiction providers.
@@ -513,7 +545,7 @@ v3 adds legal-jurisdiction metadata to provider definitions and lets tenant poli
 
 ### IaaS Provider Adapters
 
-In parallel with TEE and sovereignty work, v3 expands non-TEE IaaS execution surfaces.
+In parallel with TEE and sovereignty work, future releases expand non-TEE IaaS execution surfaces.
 
 - **Oracle Cloud Infrastructure**: BM.GPU shapes and FastConnect for dedicated bare-metal and strong network isolation.
 - **CoreWeave**: AI-focused IaaS with SOC 2 posture. gpucall should integrate at VM/container execution boundaries rather than requiring Kubernetes as the control plane.
@@ -522,7 +554,7 @@ In parallel with TEE and sovereignty work, v3 expands non-TEE IaaS execution sur
 
 ### External KMS Integration
 
-v3 moves artifact encryption key management out of gateway-local implementation and into external KMS systems.
+Future artifact security work moves artifact encryption key management out of gateway-local implementation and into external KMS systems.
 
 - **Supported KMS targets**: Azure Key Vault, Google Cloud KMS, AWS KMS, and HashiCorp Vault through a provider-agnostic KMS adapter interface.
 - **Key-release gate**: KMS releases a decryption key only after a valid TEE attestation report. The gateway orchestrates the attestation -> key release -> artifact decrypt chain and relies on KMS conditional access policies where available, such as Azure Secure Key Release or GCP EKM with Confidential Space.
@@ -530,7 +562,7 @@ v3 moves artifact encryption key management out of gateway-local implementation 
 
 ### Chained LoRA Export
 
-v3 allows LoRA adapters produced by fine-tuning inside TEE to be exported encrypted and reused by later inference jobs.
+Future artifact lifecycle work allows LoRA adapters produced by fine-tuning inside TEE to be exported encrypted and reused by later inference jobs.
 
 - **Export**: base model weights stay public or provider-local. Fine-tuning output is captured as a small LoRA adapter, encrypted under a KMS-managed key inside the TEE, and exported to the organization's object store.
 - **Reuse**: later inference jobs pass the encrypted adapter to a TEE worker. The worker obtains key release, decrypts inside the TEE, merges the adapter with the base model, and runs inference. The adapter does not leave the organization boundary in plaintext.
@@ -538,7 +570,7 @@ v3 allows LoRA adapters produced by fine-tuning inside TEE to be exported encryp
 
 ### Split-Learning Execution
 
-v3 adds split-learning execution for cases where TEE is unavailable or unsuitable.
+Future secure execution work adds split-learning execution for cases where TEE is unavailable or unsuitable.
 
 - **Goal**: keep part of the model or forward pass under organizational control while only activation tensors cross the trust boundary.
 - **Execution gate**: split-learning routes require `trust_profile: split_learning` and explicit execution contracts for split ratio, activation transfer protocol, and the organization-side forward-pass endpoint.
@@ -546,7 +578,7 @@ v3 adds split-learning execution for cases where TEE is unavailable or unsuitabl
 
 ### Hardened Deployment Profile
 
-v3 adds a production hardened deployment profile alongside the v2 Docker Compose / Postgres profile.
+Future deployment work adds a production hardened deployment profile alongside the v2 Docker Compose / Postgres profile.
 
 - **Standard profile**: Docker Compose, Postgres-backed gateway jobs/idempotency, single-node; suitable for PoC and early production.
 - **Hardened profile**: Helm chart, PostgreSQL HA, multi-replica gateway. Governance logic stays identical; only infrastructure changes.

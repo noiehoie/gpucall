@@ -234,6 +234,45 @@ gpucall runtime validate --name site-gpu-ds4
 gpucall validate-config
 ```
 
+## Large Context Hardening
+
+To prevent slow local execution for large analytical workloads, the gateway enforces a context length threshold (default 32,768 tokens) for local controlled runtimes.
+
+1. Large context workloads (exceeding the policy `local_large_context_threshold`) will not select a local controlled runtime unless the recipe explicitly sets `allow_local_large_context: true`.
+2. When multiple tuples are eligible for a large workload, production-validated remote high-throughput tuples (e.g., Modal, RunPod) are prioritized over local runtimes, even if local is allowed.
+3. If no suitable remote tuple is available and local is not allowed for that workload, the request will fail closed with a `NO_ELIGIBLE_TUPLE` error.
+
+This ensures that expensive, long-context tasks are routed to high-throughput cloud infrastructure by default, avoiding the "performance trap" of running large models on slower local hardware.
+
+## Cost And Budget Estimation
+
+Cost admission is deterministic, but it must not treat a caller timeout as a normal runtime forecast when better tuple evidence exists.
+
+For LLM tuples, operators can declare an estimated throughput envelope on the execution tuple:
+
+- `estimated_prefill_tokens_per_second`
+- `estimated_decode_tokens_per_second`
+- `estimated_runtime_overhead_seconds`
+- `runtime_estimate_safety_multiplier`
+
+When these fields are present, gpucall estimates runtime from the compiled request:
+
+```text
+runtime_seconds =
+  (overhead_seconds
+   + estimated_input_tokens / estimated_prefill_tokens_per_second
+   + output_tokens / estimated_decode_tokens_per_second)
+  * runtime_estimate_safety_multiplier
+```
+
+If no tuple throughput evidence is declared, gpucall keeps the previous fail-closed behavior and estimates runtime from `timeout_seconds`. That may over-reserve budget, but it prevents unknown provider cost from being treated as cheap.
+
+Provider billing boundaries remain separate:
+
+- Modal function runtimes are charged as compute time and do not add idle scaledown time to request budget.
+- RunPod Serverless request marginal cost does not add idle scaledown time. Warm or active worker cost is tracked separately as standing cost when configured.
+- Warm/standing endpoint costs are tracked separately from request marginal budget unless a provider's billing model makes the lease itself the request cost.
+
 Discovery may find candidates, but discovery alone never makes a runtime
 production-routable. Operator declaration, config validation, and validation
 evidence remain required.

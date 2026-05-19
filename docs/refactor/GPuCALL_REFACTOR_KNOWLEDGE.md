@@ -1,8 +1,8 @@
 # gpucall Refactor Knowledge Base
 
-Last verified: 2026-05-16 JST
+Last verified: 2026-05-17 JST
 Branch: `codex/rc-audit-product-static-conditional-go`
-Current HEAD: `aa342ee rc: harden production canary gates`
+Current code HEAD at note time: `5d0b6bc`
 
 This document is the durable working memory for the upcoming large refactor.
 It intentionally separates four kinds of information:
@@ -33,6 +33,52 @@ implementation work, use the short execution packets first:
    reviewing Codex CLI progress.
 
 Use this file as the detailed background map after the short packets are read.
+
+## External Canary Product Discipline
+
+The agreed external-system hardening loop is:
+
+```text
+news-system production canary
+  -> classify observed failure
+  -> fix generic gpucall contract, usually YAML first
+  -> validate locally and on production gateway
+  -> rerun external canary
+```
+
+`news-system` is a valuable first canary because it exercises many GPU workload
+shapes, including text, vision, DataRef, long-running, and production scheduling
+paths. It is not the owner of gpucall's product contract. Do not introduce
+`news-system`-specific behavior, newspaper-specific assumptions, local macmini
+paths, OCR-only shortcuts, or caller-specific branches into gpucall.
+
+When the canary fails, prefer the least product-distorting fix surface:
+
+1. caller request / SDK / OpenAI-compatible usage
+2. recipe YAML
+3. tuple / worker / surface YAML
+4. policy YAML
+5. validation evidence / launch gates
+6. gateway or provider adapter code only if the explicit contract layer cannot
+   represent the missing generic behavior
+
+Every canary-driven change must pass the product-philosophy check:
+
+- deterministic routing remains intact
+- no inference is added to control decisions
+- unsupported or unsafe states still fail closed
+- OpenAI entrance semantics remain separated from governance semantics
+- provider differences remain contained behind provider egress contracts
+- DataRef, budget, tenant, validation, and audit guarantees are not weakened
+- the change benefits at least one non-`news-system` external caller class, or
+  it belongs in caller-side integration instead of gpucall
+
+The larger product ambition is to make gpucall a broadly useful, honest,
+lightweight GPU governance router. A stable v3 with TEE, sovereignty, external
+KMS, and encrypted artifact guarantees should be a natural extension of the v2
+governance contract, not a retrofit. External canary pressure should improve
+that general product shape rather than turning gpucall into a private adapter
+for one workload.
 
 ## Indexed Source Snapshot
 
