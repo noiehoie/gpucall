@@ -1255,6 +1255,72 @@ def test_runpod_vllm_async_uses_native_run_and_status(monkeypatch) -> None:
     assert result.value == "async ok"
 
 
+@pytest.mark.asyncio
+async def test_runpod_vllm_async_falls_back_to_openai_route_when_native_run_is_404(monkeypatch) -> None:
+    calls: list[tuple[str, str, dict[str, object] | None]] = []
+
+    class FakeResponse:
+        def __init__(self, status_code: int, data: dict[str, object]) -> None:
+            self.status_code = status_code
+            self._data = data
+            self.text = json.dumps(data)
+
+        def json(self) -> dict[str, object]:
+            return self._data
+
+    def fake_get(url: str, **_kwargs):
+        calls.append(("GET", url, None))
+        if url.endswith("/health") or url.endswith("/openai/v1/models"):
+            return FakeResponse(404, {"error": "not found"})
+        return FakeResponse(404, {"error": "unexpected"})
+
+    def fake_post(url: str, **kwargs):
+        calls.append(("POST", url, kwargs.get("json")))
+        if url.endswith("/run"):
+            return FakeResponse(404, {"error": "not found"})
+        if url.endswith("/openai/v1/chat/completions"):
+            return FakeResponse(
+                200,
+                {
+                    "choices": [
+                        {
+                            "message": {"content": "openai fallback ok"},
+                            "finish_reason": "stop",
+                        }
+                    ]
+                },
+            )
+        return FakeResponse(404, {"error": "unexpected"})
+
+    monkeypatch.setattr("gpucall.execution_surfaces.managed_endpoint._request_get", fake_get)
+    monkeypatch.setattr("gpucall.execution_surfaces.managed_endpoint._request_post", fake_post)
+    adapter = RunpodVllmServerlessAdapter(
+        api_key="rk_test",
+        endpoint_id="endpoint-1",
+        endpoint_contract="openai-chat-completions",
+        model="Qwen/Qwen2.5-1.5B-Instruct",
+    )
+    plan = plan_payload_plan().model_copy(
+        update={"mode": ExecutionMode.ASYNC, "messages": [ChatMessage(role="user", content="hello")], "max_tokens": 512}
+    )
+
+    handle = await adapter.start(plan)
+    result = await adapter.wait(handle, plan)
+
+    assert handle.remote_id == f"openai-{plan.plan_id}"
+    assert handle.meta["runpod_openai_route"] is True
+    assert "runpod_native_queue" not in handle.meta
+    assert result.value == "openai fallback ok"
+    assert [call[:2] for call in calls] == [
+        ("GET", "https://api.runpod.ai/v2/endpoint-1/health"),
+        ("GET", "https://api.runpod.ai/v2/endpoint-1/openai/v1/models"),
+        ("POST", "https://api.runpod.ai/v2/endpoint-1/run"),
+        ("GET", "https://api.runpod.ai/v2/endpoint-1/health"),
+        ("GET", "https://api.runpod.ai/v2/endpoint-1/openai/v1/models"),
+        ("POST", "https://api.runpod.ai/v2/endpoint-1/openai/v1/chat/completions"),
+    ]
+
+
 def test_runpod_vllm_async_queue_tolerance_matches_batch_jobs(monkeypatch) -> None:
     monkeypatch.delenv("GPUCALL_RUNPOD_VLLM_QUEUE_SATURATION_SECONDS", raising=False)
     monkeypatch.delenv("GPUCALL_PROVIDER_QUEUE_SATURATION_SECONDS", raising=False)

@@ -400,18 +400,23 @@ class RunpodVllmServerlessAdapter(TupleAdapter):
         if plan.mode.value == "stream":
             raise TupleError("RunPod worker-vLLM streaming is not supported in v2.0", retryable=False, status_code=400)
         if plan.mode.value == "async" and not _runpod_vllm_requires_openai_route(plan):
-            job_id = await asyncio.to_thread(self._start_native_sync, plan)
-            return RemoteHandle(
-                tuple=self.name,
-                remote_id=job_id,
-                expires_at=plan.expires_at(),
-                account_ref="runpod",
-                execution_surface="managed_endpoint",
-                resource_kind="endpoint_job",
-                cleanup_required=False,
-                reaper_eligible=False,
-                meta={"official_vllm": True, "runpod_native_queue": True},
-            )
+            try:
+                job_id = await asyncio.to_thread(self._start_native_sync, plan)
+            except TupleError as exc:
+                if exc.status_code != 404:
+                    raise
+            else:
+                return RemoteHandle(
+                    tuple=self.name,
+                    remote_id=job_id,
+                    expires_at=plan.expires_at(),
+                    account_ref="runpod",
+                    execution_surface="managed_endpoint",
+                    resource_kind="endpoint_job",
+                    cleanup_required=False,
+                    reaper_eligible=False,
+                    meta={"official_vllm": True, "runpod_native_queue": True},
+                )
         return RemoteHandle(
             tuple=self.name,
             remote_id=f"openai-{plan.plan_id}",
