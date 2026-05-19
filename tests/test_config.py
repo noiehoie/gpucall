@@ -20,6 +20,8 @@ from gpucall.cli import (
     _iaas_vm_live_cost_audit,
     _bounded_live_tuple_catalog_findings,
     _managed_endpoint_live_cost_audit,
+    _optional_float,
+    _optional_int,
     _provider_smoke_request,
     _provider_smoke_process_wall_seconds,
     _provider_smoke_signal_wall_seconds,
@@ -178,6 +180,84 @@ def test_runpod_endpoint_inventory_follows_next_page(monkeypatch: pytest.MonkeyP
         "https://rest.runpod.io/v1/endpoints?page=2",
     ]
     assert sorted(by_id) == ["endpoint-1", "endpoint-2"]
+
+
+def test_runpod_endpoint_inventory_preserves_partial_rows_on_error(monkeypatch: pytest.MonkeyPatch) -> None:
+    def fake_http_json(url: str, *args: object, **kwargs: object) -> dict[str, object]:
+        if url == "https://rest.runpod.io/v1/endpoints?includeWorkers=true&includeTemplate=true":
+            return {"ok": True, "body": {"endpoints": [{"id": "endpoint-1"}], "next": "https://rest.runpod.io/v1/endpoints?page=2"}}
+        if url == "https://rest.runpod.io/v1/endpoints?page=2":
+            return {"ok": False, "status_code": 502, "body": {"endpoints": [{"id": "endpoint-2"}], "partial": True}}
+        raise AssertionError(f"unexpected url: {url}")
+
+    monkeypatch.setattr("gpucall.cli._http_json", fake_http_json)
+
+    inventory = _runpod_endpoint_inventory("secret")
+    by_id = _runpod_endpoint_inventory_by_id(inventory)
+
+    assert inventory["ok"] is False
+    assert sorted(by_id) == ["endpoint-1", "endpoint-2"]
+
+
+def test_runpod_endpoint_inventory_rejects_pagination_loop(monkeypatch: pytest.MonkeyPatch) -> None:
+    def fake_http_json(url: str, *args: object, **kwargs: object) -> dict[str, object]:
+        assert url == "https://rest.runpod.io/v1/endpoints?includeWorkers=true&includeTemplate=true"
+        return {"ok": True, "body": {"endpoints": [{"id": "endpoint-1"}], "next": url}}
+
+    monkeypatch.setattr("gpucall.cli._http_json", fake_http_json)
+
+    inventory = _runpod_endpoint_inventory("secret")
+    by_id = _runpod_endpoint_inventory_by_id(inventory)
+
+    assert inventory["ok"] is False
+    assert inventory["error"] == "RunPod endpoint inventory pagination loop detected"
+    assert sorted(by_id) == ["endpoint-1"]
+
+
+def test_runpod_endpoint_inventory_rejects_malformed_page(monkeypatch: pytest.MonkeyPatch) -> None:
+    def fake_http_json(url: str, *args: object, **kwargs: object) -> dict[str, object]:
+        assert url == "https://rest.runpod.io/v1/endpoints?includeWorkers=true&includeTemplate=true"
+        return {"ok": True, "body": {"unexpected": [{"id": "endpoint-hidden"}]}}
+
+    monkeypatch.setattr("gpucall.cli._http_json", fake_http_json)
+
+    inventory = _runpod_endpoint_inventory("secret")
+
+    assert inventory["ok"] is False
+    assert inventory["error"] == "RunPod endpoint inventory response did not contain endpoint rows"
+
+
+def test_runpod_endpoint_inventory_accepts_empty_endpoint_list(monkeypatch: pytest.MonkeyPatch) -> None:
+    def fake_http_json(url: str, *args: object, **kwargs: object) -> dict[str, object]:
+        assert url == "https://rest.runpod.io/v1/endpoints?includeWorkers=true&includeTemplate=true"
+        return {"ok": True, "body": {"endpoints": []}}
+
+    monkeypatch.setattr("gpucall.cli._http_json", fake_http_json)
+
+    inventory = _runpod_endpoint_inventory("secret")
+
+    assert inventory == {"ok": True, "status_code": 200, "body": {"endpoints": []}}
+
+
+def test_optional_numeric_manifest_fields_reject_invalid_values() -> None:
+    with pytest.raises(SystemExit, match="requests_per_minute must be an integer"):
+        _optional_int("not-int", field="requests_per_minute")
+    with pytest.raises(SystemExit, match="requests_per_minute must be an integer"):
+        _optional_int(True, field="requests_per_minute")
+    with pytest.raises(SystemExit, match="requests_per_minute must be an integer"):
+        _optional_int(1.5, field="requests_per_minute")
+    with pytest.raises(SystemExit, match="requests_per_minute must be >= 1"):
+        _optional_int(0, field="requests_per_minute")
+    with pytest.raises(SystemExit, match="daily_budget_usd must be a number"):
+        _optional_float("not-float", field="daily_budget_usd")
+    with pytest.raises(SystemExit, match="daily_budget_usd must be a number"):
+        _optional_float(False, field="daily_budget_usd")
+    with pytest.raises(SystemExit, match="daily_budget_usd must be a finite number"):
+        _optional_float(float("nan"), field="daily_budget_usd")
+    with pytest.raises(SystemExit, match="daily_budget_usd must be a finite number"):
+        _optional_float(float("inf"), field="daily_budget_usd")
+    with pytest.raises(SystemExit, match="daily_budget_usd must be >= 0"):
+        _optional_float(-0.1, field="daily_budget_usd")
 
 
 def test_managed_endpoint_live_cost_audit_keeps_runpod_rows_with_unsupported_family(monkeypatch: pytest.MonkeyPatch) -> None:

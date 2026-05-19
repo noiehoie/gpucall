@@ -4,6 +4,7 @@ import argparse
 import asyncio
 import hashlib
 import json
+import math
 import multiprocessing as mp
 import os
 import queue
@@ -34,6 +35,7 @@ from gpucall.admin_automation import admin_automation_summary, configure_admin_a
 from gpucall.catalog import SQLiteCapabilityCatalog, dumps_snapshot
 from gpucall.handoff import handoff_payload as _handoff_payload, render_handoff as _render_handoff
 from gpucall.cli_commands.readiness import add_readiness_parser, run_readiness_command
+from gpucall.cli_commands.panopticon import add_panopticon_parser, run_panopticon_command
 from gpucall.cli_commands.setup import add_setup_parser, run_setup_command
 from gpucall.compiler import GovernanceCompiler
 from gpucall.config import ConfigError, default_config_dir, default_state_dir, load_config
@@ -51,8 +53,9 @@ from gpucall.execution.contracts import (
     tuple_evidence_label,
 )
 from gpucall.lease_reaper import active_manifest_leases, lease_reaper_report
+from gpucall.live_catalog_scope import live_catalog_scope
 from gpucall.panopticon import load_panopticon_evidence, merge_panopticon_evidence, store_panopticon_evidence
-from gpucall.tuple_audit import _tuple_from_candidate, tuple_audit_report
+from gpucall.tuple_audit import tuple_audit_report
 from gpucall.tuple_catalog import live_tuple_catalog_evidence, live_tuple_catalog_findings
 from gpucall.execution.registry import adapter_descriptor, vendor_family_for_adapter
 from gpucall.execution_surfaces.managed_endpoint import (
@@ -198,6 +201,7 @@ def main() -> None:
     production_acceptance.add_argument("--config-dir", type=Path, default=None)
     production_acceptance.add_argument("--output", type=Path, default=None)
     add_readiness_parser(sub)
+    add_panopticon_parser(sub)
     add_setup_parser(sub)
     configure = sub.add_parser("configure")
     configure.add_argument("--config-dir", type=Path, default=default_config_dir())
@@ -390,6 +394,8 @@ def main() -> None:
         production_acceptance_command(args.output, config_dir=args.config_dir)
     elif args.command == "readiness":
         run_readiness_command(args)
+    elif args.command == "panopticon":
+        run_panopticon_command(args)
     elif args.command == "setup":
         run_setup_command(args)
     elif args.command == "configure":
@@ -1188,10 +1194,10 @@ def admin_command(
             tenant_path = _ensure_tenant_file(
                 config_dir,
                 name=tenant_name,
-                requests_per_minute=_optional_int(spec.get("requests_per_minute")),
-                daily_budget_usd=_optional_float(spec.get("daily_budget_usd")),
-                monthly_budget_usd=_optional_float(spec.get("monthly_budget_usd")),
-                max_request_estimated_cost_usd=_optional_float(spec.get("max_request_estimated_cost_usd")),
+                requests_per_minute=_optional_int(spec.get("requests_per_minute"), field="requests_per_minute"),
+                daily_budget_usd=_optional_float(spec.get("daily_budget_usd"), field="daily_budget_usd"),
+                monthly_budget_usd=_optional_float(spec.get("monthly_budget_usd"), field="monthly_budget_usd"),
+                max_request_estimated_cost_usd=_optional_float(spec.get("max_request_estimated_cost_usd"), field="max_request_estimated_cost_usd"),
                 object_prefix=str(spec.get("object_prefix") or tenant_name),
             )
             token = _create_tenant_key(tenant_name)
@@ -1417,16 +1423,36 @@ def _validate_batch_specs(specs: list[dict[str, object]], output_dir: Path, outp
         outputs.add(handoff_path)
 
 
-def _optional_int(value: object) -> int | None:
+def _optional_int(value: object, *, field: str = "value") -> int | None:
     if value is None:
         return None
-    return int(value)
+    if isinstance(value, bool):
+        raise SystemExit(f"{field} must be an integer")
+    if isinstance(value, int):
+        parsed = value
+    elif isinstance(value, str) and re.fullmatch(r"[+-]?\d+", value.strip()):
+        parsed = int(value.strip())
+    else:
+        raise SystemExit(f"{field} must be an integer")
+    if parsed < 1:
+        raise SystemExit(f"{field} must be >= 1")
+    return parsed
 
 
-def _optional_float(value: object) -> float | None:
+def _optional_float(value: object, *, field: str = "value") -> float | None:
     if value is None:
         return None
-    return float(value)
+    if isinstance(value, bool):
+        raise SystemExit(f"{field} must be a number")
+    try:
+        parsed = float(value)
+    except (TypeError, ValueError) as exc:
+        raise SystemExit(f"{field} must be a number") from exc
+    if not math.isfinite(parsed):
+        raise SystemExit(f"{field} must be a finite number")
+    if parsed < 0:
+        raise SystemExit(f"{field} must be >= 0")
+    return parsed
 
 
 def launch_check_command(
@@ -2381,16 +2407,7 @@ def _catalog_live_evidence(config, config_dir: Path, *, live: bool) -> dict[str,
 
 
 def _live_catalog_scope(config, config_dir: Path) -> dict[str, object]:
-    scope: dict[str, object] = dict(config.tuples)
-    from gpucall.candidate_sources import load_tuple_candidate_payloads
-
-    for candidate in load_tuple_candidate_payloads(config_dir):
-        try:
-            tuple_spec = _tuple_from_candidate(candidate, config)
-        except Exception:
-            continue
-        scope[tuple_spec.name] = tuple_spec
-    return scope
+    return live_catalog_scope(config, config_dir)
 
 
 def smoke_gateway(url: str, *, api_key: str | None, recipe: str | None) -> None:
@@ -3154,13 +3171,37 @@ def _runpod_endpoint_inventory(api_key: str) -> dict[str, object]:
         seen_urls.add(url)
         page = _http_json(url, headers={"authorization": f"Bearer {api_key}", "accept": "application/json"})
         if page.get("ok") is not True:
+            page_rows = _runpod_endpoint_inventory_rows(page.get("body"))
+            if page_rows is not None:
+                rows.extend(page_rows)
+            if rows:
+                return {
+                    "ok": False,
+                    "status_code": page.get("status_code", 502),
+                    "body": {"endpoints": rows, "partial": True, "provider_body": page.get("body")},
+                    "error": page.get("error") or "RunPod endpoint inventory request failed after partial data",
+                }
             return page
         last_page = page
         body = page.get("body")
         page_rows = _runpod_endpoint_inventory_rows(body)
-        if page_rows is not None:
-            rows.extend(page_rows)
-        url = _runpod_endpoint_inventory_next_url(body, current_url=url)
+        if page_rows is None:
+            return {
+                "ok": False,
+                "status_code": 502,
+                "body": {"endpoints": rows, "partial": bool(rows), "malformed_body": body},
+                "error": "RunPod endpoint inventory response did not contain endpoint rows",
+            }
+        rows.extend(page_rows)
+        next_url = _runpod_endpoint_inventory_next_url(body, current_url=url)
+        if next_url and next_url in seen_urls:
+            return {
+                "ok": False,
+                "status_code": 502,
+                "body": {"endpoints": rows, "partial": True, "next": next_url},
+                "error": "RunPod endpoint inventory pagination loop detected",
+            }
+        url = next_url
     if url and len(seen_urls) >= 100:
         return {
             "ok": False,
@@ -3171,6 +3212,8 @@ def _runpod_endpoint_inventory(api_key: str) -> dict[str, object]:
     if rows:
         return {"ok": True, "status_code": 200, "body": {"endpoints": rows}}
     if last_page is not None:
+        if _runpod_endpoint_inventory_rows(last_page.get("body")) == []:
+            return {"ok": True, "status_code": last_page.get("status_code", 200), "body": {"endpoints": []}}
         return last_page
     return {"ok": True, "status_code": 200, "body": {"endpoints": []}}
 
@@ -3180,8 +3223,11 @@ def _runpod_endpoint_inventory_rows(body: object) -> list[object] | None:
         return body
     if not isinstance(body, dict):
         return None
-    rows = body.get("endpoints") or body.get("data") or body.get("items") or body.get("results")
-    return rows if isinstance(rows, list) else None
+    for key in ("endpoints", "data", "items", "results"):
+        if key in body:
+            rows = body.get(key)
+            return rows if isinstance(rows, list) else None
+    return None
 
 
 def _runpod_endpoint_inventory_next_url(body: object, *, current_url: str) -> str:
@@ -3200,8 +3246,6 @@ def _runpod_endpoint_inventory_next_url(body: object, *, current_url: str) -> st
 
 
 def _runpod_endpoint_inventory_by_id(inventory: dict[str, object]) -> dict[str, dict[str, object]]:
-    if inventory.get("ok") is not True:
-        return {}
     body = inventory.get("body")
     rows: object = body
     if isinstance(body, dict):
