@@ -694,6 +694,12 @@ class RunpodVllmServerlessAdapter(TupleAdapter):
                 headers=self._headers(),
                 timeout=30,
             )
+            if models_response.status_code == 404:
+                return {
+                    "workers": {"idle": 1, "initializing": 0, "ready": 1, "running": 0, "throttled": 0, "unhealthy": 0},
+                    "health_probe": "openai_chat_completions_fallback",
+                    "models": None,
+                }
             models = json_or_error(models_response, "RunPod worker-vLLM OpenAI models preflight failed")
             return {
                 "workers": {"idle": 1, "initializing": 0, "ready": 1, "running": 0, "throttled": 0, "unhealthy": 0},
