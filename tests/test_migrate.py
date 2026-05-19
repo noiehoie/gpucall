@@ -1680,6 +1680,9 @@ def test_migrate_cli_onboard_fails_closed_when_gateway_readiness_blocks_canary(t
     assert report["ready_for_canary"] is False
     assert report["gateway_readiness"]["ok"] is False
     assert report["gateway_readiness"]["checks"][0]["reason"] == "no_production_ready_route"
+    markdown = (output / "onboard-report.md").read_text(encoding="utf-8")
+    assert "recipe `infer-rank-text-items`" in markdown
+    assert "blocked_reasons: `missing_route_validation_evidence`" in markdown
 
 
 def test_migrate_cli_onboard_fails_closed_when_readiness_gate_lacks_gateway_url(tmp_path, monkeypatch) -> None:

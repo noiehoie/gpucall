@@ -2717,6 +2717,17 @@ def _markdown(report: dict[str, Any]) -> str:
             lines.append(
                 f"- `{item.get('task')}` / `{item.get('intent')}` ok=`{item.get('ok')}` reason=`{item.get('reason', '')}`"
             )
+            for recipe in (item.get("recipes") or [])[:5]:
+                if not isinstance(recipe, dict):
+                    continue
+                lines.append(
+                    f"  - recipe `{recipe.get('recipe')}` production=`{recipe.get('production_activated')}` "
+                    f"eligible=`{recipe.get('eligible_tuple_count')}` live_ready=`{recipe.get('live_ready_tuple_count')}` "
+                    f"action=`{recipe.get('current_caller_action', '')}`"
+                )
+                blocked = [str(reason) for reason in recipe.get("blocked_reasons") or [] if reason]
+                if blocked:
+                    lines.append("    - blocked_reasons: " + ", ".join(f"`{reason}`" for reason in blocked[:8]))
     if report.get("workloads"):
         lines.append("")
         lines.append("## Workloads")
