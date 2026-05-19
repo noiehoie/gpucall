@@ -1944,7 +1944,7 @@ async def provider_smoke_command(
             if not _provider_smoke_passed(summary):
                 raise SystemExit(1)
             return
-        with _provider_smoke_wall_timeout(wait_seconds):
+        with _provider_smoke_wall_timeout(_provider_smoke_signal_wall_seconds(wait_seconds)):
             if mode is ExecutionMode.STREAM:
                 chunks = []
                 stream = runtime.dispatcher.execute_stream(plan)
@@ -2107,6 +2107,10 @@ def _provider_smoke_process_wall_seconds(mode: str, poll_timeout_seconds: float)
     if mode == ExecutionMode.ASYNC.value:
         return float(poll_timeout_seconds) + min(float(poll_timeout_seconds), 10.0) + 15.0
     return float(poll_timeout_seconds) + 5.0
+
+
+def _provider_smoke_signal_wall_seconds(wait_seconds: float) -> float:
+    return float(wait_seconds) + 5.0
 
 
 def _cap_provider_smoke_admission_lease_ttl(poll_timeout_seconds: float | None) -> None:

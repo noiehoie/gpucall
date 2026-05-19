@@ -22,6 +22,7 @@ from gpucall.cli import (
     _managed_endpoint_live_cost_audit,
     _provider_smoke_request,
     _provider_smoke_process_wall_seconds,
+    _provider_smoke_signal_wall_seconds,
     _provider_smoke_wait_seconds,
     _runpod_endpoint_inventory,
     _runpod_endpoint_inventory_by_id,
@@ -1094,6 +1095,7 @@ def test_tuple_smoke_poll_timeout_is_bounded() -> None:
     assert _provider_smoke_wait_seconds(3600, None) == pytest.approx(3600.0)
     assert _provider_smoke_process_wall_seconds("sync", 15.0) == pytest.approx(20.0)
     assert _provider_smoke_process_wall_seconds("async", 15.0) == pytest.approx(40.0)
+    assert _provider_smoke_signal_wall_seconds(15.0) == pytest.approx(20.0)
 
 
 def test_tuple_smoke_caps_admission_lease_ttl(monkeypatch) -> None:
