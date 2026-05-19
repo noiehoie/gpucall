@@ -77,7 +77,8 @@ from gpucall.openai_facade import (
     openai_stream_chunks,
 )
 from gpucall.postgres_store import PostgresIdempotencyStore, PostgresJobStore
-from gpucall.panopticon import load_panopticon_evidence, store_panopticon_evidence
+from gpucall.panopticon import store_panopticon_evidence
+from gpucall.panopticon_client import fetch_panopticon_snapshot, panopticon_report_summary
 from gpucall.readiness import build_readiness_report
 from gpucall.registry import ObservedRegistry
 from gpucall.routing import route_warning_tags
@@ -109,6 +110,7 @@ class Runtime(BaseModel):
     tenants: dict[str, TenantSpec] = {}
     tenant_usage: Any
     metrics: dict[str, Any] = {}
+    panopticon_fetch: dict[str, Any] = {}
 
 
 class BatchTaskRequest(BaseModel):
@@ -249,6 +251,7 @@ def build_runtime(config_dir: Path) -> Runtime:
     tuples = config.tuples
     registry = ObservedRegistry(path=state_dir / "registry.db")
     live_catalog: dict[str, dict[str, Any]] = {}
+    panopticon_fetch: dict[str, Any] = {}
     if os.getenv("GPUCALL_LIVE_CATALOG_ON_STARTUP", "").strip().lower() in {"1", "true", "yes", "on"}:
         try:
             live_catalog = live_tuple_catalog_evidence(tuples, load_credentials())
@@ -257,7 +260,20 @@ def build_runtime(config_dir: Path) -> Runtime:
         except Exception:
             live_catalog = {}
     else:
-        live_catalog = load_panopticon_evidence()
+        panopticon_fetch = fetch_panopticon_snapshot(tuple_scope=tuples)
+        live_catalog = panopticon_fetch.get("snapshot") if isinstance(panopticon_fetch.get("snapshot"), dict) else {}
+    if not panopticon_fetch:
+        panopticon_fetch = {
+            "schema_version": 1,
+            "phase": "provider-panopticon-fetch",
+            "source_kind": "live_startup_refresh",
+            "status": "ok" if live_catalog else "missing",
+            "fail_closed": False,
+            "tuple_count": len(live_catalog),
+            "stale_tuple_count": 0,
+            "snapshot_hash": None,
+            "snapshot": live_catalog,
+        }
     if live_catalog:
         for tuple_name, evidence in live_catalog.items():
             if evidence.get("status") == "blocked":
@@ -303,6 +319,7 @@ def build_runtime(config_dir: Path) -> Runtime:
         tenants=config.tenants,
         tenant_usage=tenant_usage,
         metrics={"requests": {}, "latency_ms": []},
+        panopticon_fetch=panopticon_fetch,
     )
 
 
@@ -508,6 +525,7 @@ def create_app(config_dir: Path | None = None) -> FastAPI:
                 for name, tuple in sorted(runtime.compiler.tuples.items())
             },
             "runtime_admission": runtime.dispatcher.admission.snapshot(),
+            "panopticon": panopticon_report_summary(runtime.panopticon_fetch),
         }
 
     @app.get("/readyz")

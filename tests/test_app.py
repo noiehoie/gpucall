@@ -249,6 +249,8 @@ def test_readyz_is_minimal_and_details_report_recipe_and_provider_capacity(tmp_p
     assert "tenants_dir" not in payload["trusted_bootstrap"]
     assert payload["recipes"]["text-infer-standard"]["context_budget_tokens"] == 32768
     assert payload["tuples"]["local-echo"]["max_model_len"] == 32768
+    assert payload["panopticon"]["source_kind"] == "file"
+    assert payload["panopticon"]["status"] in {"ok", "stale", "missing"}
 
 
 def test_intent_readiness_separates_static_eligible_from_live_blocked(tmp_path) -> None:

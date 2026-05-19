@@ -54,7 +54,8 @@ from gpucall.execution.contracts import (
 )
 from gpucall.lease_reaper import active_manifest_leases, lease_reaper_report
 from gpucall.live_catalog_scope import live_catalog_scope
-from gpucall.panopticon import load_panopticon_evidence, merge_panopticon_evidence, store_panopticon_evidence
+from gpucall.panopticon import merge_panopticon_evidence, store_panopticon_evidence
+from gpucall.panopticon_client import fetch_panopticon_snapshot
 from gpucall.tuple_audit import tuple_audit_report
 from gpucall.tuple_catalog import live_tuple_catalog_evidence, live_tuple_catalog_findings
 from gpucall.execution.registry import adapter_descriptor, vendor_family_for_adapter
@@ -2398,10 +2399,12 @@ def validator_plan_command(
 
 
 def _catalog_live_evidence(config, config_dir: Path, *, live: bool) -> dict[str, dict[str, object]] | None:
-    cached = load_panopticon_evidence()
+    scope = _live_catalog_scope(config, config_dir)
+    cached_report = fetch_panopticon_snapshot(tuple_scope=scope)
+    cached = cached_report.get("snapshot") if isinstance(cached_report.get("snapshot"), dict) else {}
     if not live:
         return cached or None
-    observed = live_tuple_catalog_evidence(_live_catalog_scope(config, config_dir), load_credentials())
+    observed = live_tuple_catalog_evidence(scope, load_credentials())
     store_panopticon_evidence(observed)
     return merge_panopticon_evidence(observed, cached)
 

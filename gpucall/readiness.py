@@ -8,7 +8,8 @@ from typing import Any
 from gpucall.config import ConfigError, default_state_dir, load_config
 from gpucall.credentials import load_credentials
 from gpucall.domain import ExecutionMode, Recipe, recipe_requirements
-from gpucall.panopticon import default_panopticon_path, load_panopticon_evidence, store_panopticon_evidence
+from gpucall.panopticon import default_panopticon_path, store_panopticon_evidence
+from gpucall.panopticon_client import PanopticonClientConfig, fetch_panopticon_snapshot, panopticon_report_summary
 from gpucall.price_freshness import tuple_configured_price_freshness
 from gpucall.routing import tuple_route_rejection_reason
 from gpucall.tuple_catalog import live_tuple_catalog_evidence
@@ -38,7 +39,11 @@ def build_readiness_report(
     recipes = _selected_recipes(config.recipes, intent=intent, recipe=recipe)
     live_scope = _live_catalog_scope_for_recipes(recipes, config=config)
     panopticon = Path(panopticon_path) if panopticon_path is not None else default_panopticon_path()
-    live_evidence: Mapping[str, Mapping[str, Any]] = load_panopticon_evidence(panopticon)
+    panopticon_fetch = fetch_panopticon_snapshot(
+        config=PanopticonClientConfig(source_kind="file", path=panopticon),
+        tuple_scope=live_scope,
+    )
+    live_evidence: Mapping[str, Mapping[str, Any]] = panopticon_fetch.get("snapshot") if isinstance(panopticon_fetch.get("snapshot"), Mapping) else {}
     live_source = "panopticon_snapshot"
     if live:
         credentials = load_credentials()
@@ -46,7 +51,11 @@ def build_readiness_report(
             observed = live_tuple_catalog_evidence(live_scope, credentials) if live_scope else {}
             if observed:
                 store_panopticon_evidence(observed, panopticon)
-            live_evidence = load_panopticon_evidence(panopticon)
+            panopticon_fetch = fetch_panopticon_snapshot(
+                config=PanopticonClientConfig(source_kind="file", path=panopticon),
+                tuple_scope=live_scope,
+            )
+            live_evidence = panopticon_fetch.get("snapshot") if isinstance(panopticon_fetch.get("snapshot"), Mapping) else {}
             live_source = "live_refresh"
         except Exception as exc:
             live_evidence = {
@@ -66,6 +75,19 @@ def build_readiness_report(
                 for name in live_scope
             }
             live_source = "live_refresh_failed"
+            panopticon_fetch = {
+                "schema_version": 1,
+                "phase": "provider-panopticon-fetch",
+                "source_kind": "live_refresh",
+                "snapshot_path": str(panopticon),
+                "status": "invalid",
+                "fail_closed": True,
+                "snapshot_hash": None,
+                "tuple_count": len(live_evidence),
+                "stale_tuple_count": 0,
+                "error": {"type": type(exc).__name__, "message": str(exc), "reason": "panopticon_live_refresh_failed"},
+                "snapshot": live_evidence,
+            }
     route_validation_evidence = load_route_validation_evidence(config_dir=root, validation_dir=validation_dir)
     route_validation_statuses = load_route_validation_statuses(config_dir=root, validation_dir=validation_dir)
     report = {
@@ -79,6 +101,7 @@ def build_readiness_report(
             "source": live_source,
             "live_refresh": live,
             "tuple_count": len(live_evidence),
+            **panopticon_report_summary(panopticon_fetch),
         },
         "recipes": [],
     }

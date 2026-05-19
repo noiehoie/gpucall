@@ -1022,6 +1022,8 @@ def test_readiness_uses_panopticon_snapshot_without_live_probe(tmp_path, monkeyp
 
     recipe = report["recipes"][0]
     assert report["panopticon"]["source"] == "panopticon_snapshot"
+    assert report["panopticon"]["status"] == "ok"
+    assert str(report["panopticon"]["snapshot_hash"]).startswith("sha256:")
     assert any(item["tuple"] == "local-author-ollama" and item["live_reason"] == "panopticon_test_block" for item in recipe["live_blocked_tuples"])
 
 

@@ -350,6 +350,7 @@ GPUCALL_LOCAL_OPENAI_MODEL=deepseek-v4-flash \
 uv run uvicorn gpucall.local_dataref_worker:app --host 127.0.0.1 --port 18181
 ```
 RunPod Serverless catalog expansion rules は [docs/RUNPOD_SERVERLESS_CATALOG.md](docs/RUNPOD_SERVERLESS_CATALOG.md) にあります。
+Provider Panopticon の file/HTTP communication contract は [docs/PROVIDER_PANOPTICON_CONTRACT.md](docs/PROVIDER_PANOPTICON_CONTRACT.md) にあります。
 
 ## Zero-Trust Contracts
 
