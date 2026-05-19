@@ -77,6 +77,7 @@ from gpucall.openai_facade import (
     openai_stream_chunks,
 )
 from gpucall.postgres_store import PostgresIdempotencyStore, PostgresJobStore
+from gpucall.panopticon import load_panopticon_evidence, store_panopticon_evidence
 from gpucall.readiness import build_readiness_report
 from gpucall.registry import ObservedRegistry
 from gpucall.routing import route_warning_tags
@@ -247,11 +248,17 @@ def build_runtime(config_dir: Path) -> Runtime:
     recipes = config.recipes
     tuples = config.tuples
     registry = ObservedRegistry(path=state_dir / "registry.db")
+    live_catalog: dict[str, dict[str, Any]] = {}
     if os.getenv("GPUCALL_LIVE_CATALOG_ON_STARTUP", "").strip().lower() in {"1", "true", "yes", "on"}:
         try:
             live_catalog = live_tuple_catalog_evidence(tuples, load_credentials())
+            if live_catalog:
+                store_panopticon_evidence(live_catalog)
         except Exception:
             live_catalog = {}
+    else:
+        live_catalog = load_panopticon_evidence()
+    if live_catalog:
         for tuple_name, evidence in live_catalog.items():
             if evidence.get("status") == "blocked":
                 registry.mark_unavailable(tuple_name)
@@ -435,9 +442,11 @@ def create_app(config_dir: Path | None = None) -> FastAPI:
         nonlocal rate_limit_prune_next
         if request.url.path in {"/healthz", "/readyz"}:
             return await call_next(request)
-        tenant_id = getattr(request.state, "tenant_id", None)
+        auth = request.headers.get("authorization", "")
+        token = auth.removeprefix("Bearer ").strip()
+        tenant_id = getattr(request.state, "tenant_id", None) or tenant_for_api_key(token)
         client_host = request.client.host if request.client else "unknown"
-        identity = tenant_id or getattr(request.state, "api_key", None) or client_host
+        identity = tenant_id or getattr(request.state, "api_key", None) or token or client_host
         tenant = app.state.runtime.tenants.get(tenant_id) if tenant_id and hasattr(app.state, "runtime") else None
         effective_rpm = int(tenant.requests_per_minute) if tenant is not None and tenant.requests_per_minute else requests_per_minute
         now = time.monotonic()
@@ -546,6 +555,10 @@ def create_app(config_dir: Path | None = None) -> FastAPI:
             recipe["live_ready_tuples"] = live_ready
             recipe["live_blocked_tuples"] = blocked
             recipe["runtime_admission"] = admission
+            sync_live_ready = any(item.get("mode") == ExecutionMode.SYNC.value for item in live_ready)
+            recipe["production_activated"] = bool(live_ready and recipe.get("auto_select"))
+            recipe["sync_eligible"] = sync_live_ready
+            recipe["async_only_recommended"] = bool(live_ready and not sync_live_ready)
             recipe["recommended_mode"] = "async" if recipe.get("async_only_recommended") else ("sync" if recipe.get("sync_eligible") else "none")
             recipe["current_caller_action"] = "send_request" if live_ready else "retry_later_or_contact_gpucall_admin"
         report["runtime_admission"] = admission
@@ -702,6 +715,7 @@ def create_app(config_dir: Path | None = None) -> FastAPI:
             record_error_code(runtime, exc.code)
             return tenant_budget_error_response(exc, request=request)
         except Exception:
+            refund_request_budget(runtime, plan)
             if idempotency_reserved and idempotency_identity_value and idempotency_hash_value:
                 idempotency_release(request, current_idempotency_cache(), request_hash=idempotency_hash_value, identity=idempotency_identity_value)
             raise
@@ -743,12 +757,18 @@ def create_app(config_dir: Path | None = None) -> FastAPI:
                                 terminal_seen = terminal_seen or chunk_terminal
                                 yield chunk
                         commit_request_budget(runtime, plan)
+                    except asyncio.CancelledError:
+                        refund_request_budget(runtime, plan)
+                        raise
                     except TupleError as exc:
                         refund_request_budget(runtime, plan)
                         record_error_code(runtime, exc.code or "TUPLE_ERROR")
                         yield "data: " + json.dumps({"error": {"message": public_tuple_error(exc), "code": exc.code or "tuple_error"}}, separators=(",", ":")) + "\n\n"
                         yield "data: [DONE]\n\n"
                         return
+                    except Exception:
+                        refund_request_budget(runtime, plan)
+                        raise
                     if not terminal_seen:
                         yield "data: " + json.dumps(openai_stream_chunk(response_model, "", stream_id=stream_id, finish_reason="stop"), separators=(",", ":")) + "\n\n"
                     yield "data: [DONE]\n\n"
@@ -805,6 +825,9 @@ def create_app(config_dir: Path | None = None) -> FastAPI:
         except TenantBudgetError as exc:
             record_error_code(runtime, exc.code)
             return openai_error_response(exc.status_code, str(exc), code=exc.code.lower())
+        except Exception:
+            refund_request_budget(runtime, plan)
+            raise
 
     @app.post("/v2/tasks/async")
     async def task_async(
@@ -905,6 +928,7 @@ def create_app(config_dir: Path | None = None) -> FastAPI:
             record_error_code(runtime, exc.code)
             return tenant_budget_error_response(exc, request=request)
         except Exception:
+            refund_request_budget(runtime, plan)
             if idempotency_reserved and idempotency_identity_value and idempotency_hash_value:
                 idempotency_release(request, current_idempotency_cache(), request_hash=idempotency_hash_value, identity=idempotency_identity_value)
             raise
@@ -936,11 +960,17 @@ def create_app(config_dir: Path | None = None) -> FastAPI:
                 async for event in runtime.dispatcher.execute_stream(plan):
                     yield event
                 commit_request_budget(runtime, plan)
+            except asyncio.CancelledError:
+                refund_request_budget(runtime, plan)
+                raise
             except TupleError as exc:
                 refund_request_budget(runtime, plan)
                 record_error_code(runtime, exc.code or "TUPLE_ERROR")
                 yield "event: error\n"
                 yield "data: " + json.dumps({"code": exc.code or "TUPLE_ERROR", "message": public_tuple_error(exc)}, separators=(",", ":")) + "\n\n"
+            except Exception:
+                refund_request_budget(runtime, plan)
+                raise
 
         return StreamingResponse(
             events(),
@@ -1008,6 +1038,9 @@ def create_app(config_dir: Path | None = None) -> FastAPI:
                 results.append({"index": index, "ok": False, "status_code": exc.status_code, "code": exc.code, "error": str(exc)})
                 if not request.continue_on_error:
                     break
+            except Exception:
+                refund_request_budget(runtime, plan)
+                raise
         return JSONResponse(status_code=status_code, content={"results": results, "ok": all(item.get("ok") for item in results)})
 
     @app.get("/v2/jobs/{job_id}")

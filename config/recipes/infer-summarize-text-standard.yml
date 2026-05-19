@@ -13,7 +13,7 @@ latency_class: standard
 quality_floor: standard
 timeout_seconds: 180
 lease_ttl_seconds: 240
-token_estimation_profile: generic_utf8
+token_estimation_profile: qwen
 max_input_bytes: 33554432
 allowed_mime_prefixes:
 - text/

@@ -260,10 +260,13 @@ def main(argv: list[str] | None = None) -> int:
             gateway_env_overlay=gateway_env_overlay,
         )
         _write_outputs(report, output_dir, "onboard-report")
+        trace_report = report.get("workload_trace")
         profile_report = report.get("workload_profile")
         contract_report = report.get("workload_contract")
         recipe_intake = report.get("recipe_intake")
         recipe_intakes = report.get("recipe_intakes")
+        if isinstance(trace_report, dict):
+            _write_outputs(trace_report, output_dir, "workload-trace")
         if isinstance(profile_report, dict):
             _write_outputs(profile_report, output_dir, "workload-profile")
         if isinstance(contract_report, dict):

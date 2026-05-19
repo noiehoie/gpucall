@@ -384,7 +384,7 @@ def test_migrate_helper_async_intents_wait_for_migration_timeout(tmp_path, monke
         raise AssertionError(url)
 
     namespace["_json_request"] = fake_json_request
-    namespace["time"].sleep = lambda _seconds: None
+    monkeypatch.setattr(namespace["time"], "sleep", lambda _seconds: None)
 
     assert namespace["gpucall_infer_text"]("short summary", intent="summarize_text", timeout=60) == "ok"
     assert any(url.endswith("/v2/tasks/async") and payload["mode"] == "async" for _method, url, payload, _kwargs in captured)
@@ -621,7 +621,7 @@ def test_migrate_helper_routes_vision_and_large_text_through_async(tmp_path, mon
 
     namespace["_json_request"] = fake_json_request
     namespace["urllib"].request.urlopen = lambda *_args, **_kwargs: type("Response", (), {"__enter__": lambda self: self, "__exit__": lambda self, *_: None})()
-    namespace["time"].sleep = lambda _seconds: None
+    monkeypatch.setattr(namespace["time"], "sleep", lambda _seconds: None)
     namespace["gpucall_infer_text"]("x" * 70000, intent="rank_text_items", timeout=1)
     async_payloads = [payload for _method, url, payload, _kwargs in captured if url.endswith("/v2/tasks/async")]
     assert async_payloads
@@ -795,7 +795,7 @@ def test_migrate_helper_keeps_medium_text_inline_for_text_tuple_compatibility(tm
         raise AssertionError(url)
 
     namespace["_json_request"] = fake_json_request
-    namespace["time"].sleep = lambda _seconds: None
+    monkeypatch.setattr(namespace["time"], "sleep", lambda _seconds: None)
 
     assert namespace["gpucall_infer_text"]("x" * 70000, intent="rss_semantic_match", timeout=1) == "ok"
     task_payload = next(payload for _method, url, payload, _kwargs in captured if url.endswith(("/v2/tasks/sync", "/v2/tasks/async")))
@@ -836,7 +836,7 @@ def test_migrate_helper_retries_sync_preferred_no_eligible_as_async_for_large_co
         raise AssertionError(url)
 
     namespace["_json_request"] = fake_json_request
-    namespace["time"].sleep = lambda _seconds: None
+    monkeypatch.setattr(namespace["time"], "sleep", lambda _seconds: None)
 
     assert namespace["gpucall_infer_text"]("large ranking prompt", intent="rss_semantic_match", timeout=1) == "ok"
     assert any(url.endswith("/v2/tasks/sync") for _method, url, _payload, _kwargs in captured)
@@ -875,7 +875,7 @@ def test_migrate_helper_large_sync_preferred_skips_no_eligible_wait_before_async
         raise AssertionError(url)
 
     namespace["_json_request"] = fake_json_request
-    namespace["time"].sleep = lambda _seconds: None
+    monkeypatch.setattr(namespace["time"], "sleep", lambda _seconds: None)
 
     assert namespace["gpucall_infer_text"]("x" * 40000, intent="rss_semantic_match", timeout=1) == "ok"
     sync_kwargs = [kwargs for _method, url, _payload, kwargs in captured if url.endswith("/v2/tasks/sync")]
@@ -952,7 +952,7 @@ def test_migrate_helper_retries_async_provider_temporary_failure(tmp_path, monke
         raise AssertionError(url)
 
     namespace["_json_request"] = fake_json_request
-    namespace["time"].sleep = lambda _seconds: None
+    monkeypatch.setattr(namespace["time"], "sleep", lambda _seconds: None)
 
     assert namespace["gpucall_infer_text"]("short summary", intent="summarize_text", timeout=60) == "ok"
     assert sum(1 for _method, url, _payload, _kwargs in captured if url.endswith("/v2/tasks/async")) == 2
@@ -1042,7 +1042,7 @@ def test_migrate_helper_retries_gateway_rate_limit_without_fallback(tmp_path, mo
         return Response()
 
     namespace["urllib"].request.urlopen = fake_urlopen
-    namespace["time"].sleep = lambda seconds: sleeps.append(seconds)
+    monkeypatch.setattr(namespace["time"], "sleep", lambda seconds: sleeps.append(seconds))
 
     assert namespace["gpucall_infer_text"]("small prompt", intent="rss_semantic_match", timeout=1) == "ok"
     assert len(calls) == 2
@@ -1086,7 +1086,7 @@ def test_migrate_helper_retries_transient_network_error_without_fallback(tmp_pat
         return Response()
 
     namespace["urllib"].request.urlopen = fake_urlopen
-    namespace["time"].sleep = lambda seconds: sleeps.append(seconds)
+    monkeypatch.setattr(namespace["time"], "sleep", lambda seconds: sleeps.append(seconds))
 
     assert namespace["gpucall_infer_text"]("small prompt", intent="rss_semantic_match", timeout=1) == "ok"
     assert len(calls) == 2
@@ -1136,7 +1136,7 @@ def test_migrate_helper_retries_temporary_no_eligible_without_fallback(tmp_path,
         return Response()
 
     namespace["urllib"].request.urlopen = fake_urlopen
-    namespace["time"].sleep = lambda seconds: sleeps.append(seconds)
+    monkeypatch.setattr(namespace["time"], "sleep", lambda seconds: sleeps.append(seconds))
 
     assert namespace["gpucall_infer_text"]("small prompt", intent="rss_semantic_match", timeout=1) == "ok"
     assert len(calls) == 2
@@ -1186,7 +1186,7 @@ def test_migrate_helper_retries_provider_temporary_http_503(tmp_path, monkeypatc
         return Response()
 
     namespace["urllib"].request.urlopen = fake_urlopen
-    namespace["time"].sleep = lambda seconds: sleeps.append(seconds)
+    monkeypatch.setattr(namespace["time"], "sleep", lambda seconds: sleeps.append(seconds))
 
     assert namespace["gpucall_infer_text"]("small prompt", intent="rss_semantic_match", timeout=1) == "ok"
     assert len(calls) == 2
@@ -1261,13 +1261,13 @@ def test_migrate_helper_bounds_temporary_no_eligible_retry_wait(tmp_path, monkey
         )
 
     namespace["urllib"].request.urlopen = fake_urlopen
-    namespace["time"].monotonic = lambda: clock["now"]
+    monkeypatch.setattr(namespace["time"], "monotonic", lambda: clock["now"])
 
     def fake_sleep(seconds: float) -> None:
         sleeps.append(seconds)
         clock["now"] += seconds
 
-    namespace["time"].sleep = fake_sleep
+    monkeypatch.setattr(namespace["time"], "sleep", fake_sleep)
 
     with pytest.raises(RuntimeError, match="NO_ELIGIBLE_TUPLE"):
         namespace["gpucall_infer_text"]("small prompt", timeout=1)
@@ -1305,8 +1305,8 @@ def test_migrate_helper_cancels_async_job_on_poll_timeout(tmp_path, monkeypatch)
         raise AssertionError(url)
 
     namespace["_json_request"] = fake_json_request
-    namespace["time"].monotonic = lambda: clock["now"]
-    namespace["time"].sleep = lambda seconds: clock.__setitem__("now", clock["now"] + seconds)
+    monkeypatch.setattr(namespace["time"], "monotonic", lambda: clock["now"])
+    monkeypatch.setattr(namespace["time"], "sleep", lambda seconds: clock.__setitem__("now", clock["now"] + seconds))
 
     with pytest.raises(TimeoutError, match="j1"):
         namespace["gpucall_infer_text"]("x" * 70000, intent="rank_text_items", timeout=1)
@@ -1344,8 +1344,8 @@ def test_migrate_helper_text_async_uses_text_poll_timeout(tmp_path, monkeypatch)
         raise AssertionError(url)
 
     namespace["_json_request"] = fake_json_request
-    namespace["time"].monotonic = lambda: clock["now"]
-    namespace["time"].sleep = lambda seconds: clock.__setitem__("now", clock["now"] + seconds)
+    monkeypatch.setattr(namespace["time"], "monotonic", lambda: clock["now"])
+    monkeypatch.setattr(namespace["time"], "sleep", lambda seconds: clock.__setitem__("now", clock["now"] + seconds))
 
     with pytest.raises(TimeoutError, match="3.0s"):
         namespace["gpucall_infer_text"]("x" * 70000, intent="rank_text_items", timeout=1)
@@ -2033,9 +2033,12 @@ def test_migrate_onboard_command_loads_env_file_before_running_trace(tmp_path, m
     )
 
     report = json.loads((output / "onboard-report.json").read_text(encoding="utf-8"))
+    trace_report = json.loads((output / "workload-trace.json").read_text(encoding="utf-8"))
     assert report["workload_trace"]["metrics"]["topics_count"] == 15
     assert report["workload_trace"]["metrics"]["source_count"] == 14
     assert report["workload_trace"]["log_fingerprint"]["raw_forwarded"] is False
+    assert trace_report == report["workload_trace"]
+    assert (output / "workload-trace.md").exists()
 
 
 def test_migrate_trace_command_loads_env_file(tmp_path) -> None:
@@ -2119,7 +2122,13 @@ def test_migrate_onboard_log_file_accepts_existing_trace_artifact(tmp_path, monk
     )
 
     report = json.loads((output / "onboard-report.json").read_text(encoding="utf-8"))
+    persisted_trace = json.loads((output / "workload-trace.json").read_text(encoding="utf-8"))
     blockers = report["gateway_readiness"]["checks"][0]["blockers"]
+    assert persisted_trace == report["workload_trace"]
+    assert persisted_trace["returncode"] == trace["returncode"]
+    assert persisted_trace["metrics"] == trace["metrics"]
+    assert persisted_trace["workload_hints"] == trace["workload_hints"]
+    assert (output / "workload-trace.md").exists()
     assert report["patch_deferred"] is True
     assert report["patch_defer_reason"] == "recipe_draft_not_materializable"
     assert any("non-zero exit code" in item for item in blockers)

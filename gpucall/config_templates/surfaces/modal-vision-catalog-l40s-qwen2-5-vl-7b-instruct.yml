@@ -12,6 +12,10 @@ configured_price_observed_at: '2026-05-11T00:00:00+00:00'
 configured_price_ttl_seconds: 604800
 stock_state: configured
 billing_granularity_seconds: 0
+estimated_prefill_tokens_per_second: 180
+estimated_decode_tokens_per_second: 8
+estimated_runtime_overhead_seconds: 45
+runtime_estimate_safety_multiplier: 1.75
 max_data_classification: confidential
 scaledown_window_seconds: 60
 min_billable_seconds: 0

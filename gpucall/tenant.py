@@ -4,7 +4,7 @@ import hashlib
 import json
 import os
 import sqlite3
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
@@ -18,6 +18,21 @@ class TenantBudgetError(RuntimeError):
         super().__init__(message)
         self.code = code
         self.status_code = status_code
+
+
+_DEFAULT_STALE_RESERVATION_SECONDS = 6 * 60 * 60
+_FAILED_TERMINAL_JOB_STATES = ("FAILED", "CANCELLED", "EXPIRED")
+
+
+def _stale_reservation_cutoff(now: datetime) -> datetime | None:
+    raw = os.getenv("GPUCALL_TENANT_RESERVATION_STALE_SECONDS", str(_DEFAULT_STALE_RESERVATION_SECONDS))
+    try:
+        seconds = float(raw)
+    except (TypeError, ValueError):
+        seconds = float(_DEFAULT_STALE_RESERVATION_SECONDS)
+    if seconds <= 0:
+        return None
+    return now - timedelta(seconds=seconds)
 
 
 class TenantUsageLedger:
@@ -89,6 +104,7 @@ class TenantUsageLedger:
         month_start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
         with self._connect() as conn:
             conn.execute("BEGIN IMMEDIATE")
+            self._reconcile_reservations_conn(conn, now)
             if tenant is not None:
                 if tenant.max_request_estimated_cost_usd is not None and estimated_cost_usd > float(tenant.max_request_estimated_cost_usd):
                     raise TenantBudgetError(
@@ -129,8 +145,25 @@ class TenantUsageLedger:
 
     def spend_since(self, tenant_id: str, since: datetime) -> float:
         with self._connect() as conn:
+            self._reconcile_reservations_conn(conn, datetime.now(timezone.utc))
             row = self._spend_since_row(conn, tenant_id, since)
         return float(row[0] or 0)
+
+    def reconcile_reservations(self) -> dict[str, int]:
+        with self._connect() as conn:
+            return self._reconcile_reservations_conn(conn, datetime.now(timezone.utc))
+
+    @staticmethod
+    def _reconcile_reservations_conn(conn: sqlite3.Connection, now: datetime) -> dict[str, int]:
+        cutoff = _stale_reservation_cutoff(now)
+        released = 0
+        if cutoff is not None:
+            cur = conn.execute(
+                "UPDATE tenant_usage SET status = 'released' WHERE status = 'reserved' AND recorded_at < ?",
+                (cutoff.isoformat(),),
+            )
+            released = int(cur.rowcount or 0)
+        return {"released_stale": released, "released_terminal": 0, "committed_terminal": 0}
 
     @staticmethod
     def _spend_since_row(conn: sqlite3.Connection, tenant_id: str, since: datetime):
@@ -213,6 +246,7 @@ class PostgresTenantUsageLedger:
         with self._conn.cursor() as cur:
             lock_key = int(hashlib.sha256(tenant_id.encode("utf-8")).hexdigest()[:15], 16)
             cur.execute("SELECT pg_advisory_xact_lock(%s)", (lock_key,))
+            self._reconcile_reservations_cur(cur, now)
             if tenant is not None:
                 if tenant.max_request_estimated_cost_usd is not None and estimated_cost_usd > float(tenant.max_request_estimated_cost_usd):
                     self._conn.rollback()
@@ -257,7 +291,69 @@ class PostgresTenantUsageLedger:
 
     def spend_since(self, tenant_id: str, since: datetime) -> float:
         with self._conn.cursor() as cur:
+            self._reconcile_reservations_cur(cur, datetime.now(timezone.utc))
+            self._conn.commit()
             return self._spend_since_cur(cur, tenant_id, since)
+
+    def reconcile_reservations(self) -> dict[str, int]:
+        with self._conn.cursor() as cur:
+            result = self._reconcile_reservations_cur(cur, datetime.now(timezone.utc))
+        self._conn.commit()
+        return result
+
+    @staticmethod
+    def _reconcile_reservations_cur(cur: Any, now: datetime) -> dict[str, int]:
+        cur.execute(
+            """
+            UPDATE gpucall_tenant_usage AS usage
+            SET status = 'released'
+            FROM gpucall_jobs AS jobs
+            WHERE usage.status = 'reserved'
+              AND usage.plan_id IS NOT NULL
+              AND jobs.payload->'plan'->>'plan_id' = usage.plan_id
+              AND jobs.state = ANY(%s)
+            """,
+            (list(_FAILED_TERMINAL_JOB_STATES),),
+        )
+        released_terminal = int(cur.rowcount or 0)
+        cur.execute(
+            """
+            UPDATE gpucall_tenant_usage AS usage
+            SET status = 'committed'
+            FROM gpucall_jobs AS jobs
+            WHERE usage.status = 'reserved'
+              AND usage.plan_id IS NOT NULL
+              AND jobs.payload->'plan'->>'plan_id' = usage.plan_id
+              AND jobs.state = 'COMPLETED'
+            """
+        )
+        committed_terminal = int(cur.rowcount or 0)
+        released_stale = 0
+        cutoff = _stale_reservation_cutoff(now)
+        if cutoff is not None:
+            cur.execute(
+                """
+                UPDATE gpucall_tenant_usage
+                SET status = 'released'
+                WHERE status = 'reserved'
+                  AND recorded_at < %s
+                  AND (
+                    plan_id IS NULL
+                    OR NOT EXISTS (
+                      SELECT 1
+                      FROM gpucall_jobs AS jobs
+                      WHERE jobs.payload->'plan'->>'plan_id' = gpucall_tenant_usage.plan_id
+                    )
+                  )
+                """,
+                (cutoff,),
+            )
+            released_stale = int(cur.rowcount or 0)
+        return {
+            "released_stale": released_stale,
+            "released_terminal": released_terminal,
+            "committed_terminal": committed_terminal,
+        }
 
     @staticmethod
     def _spend_since_cur(cur: Any, tenant_id: str, since: datetime) -> float:

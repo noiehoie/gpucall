@@ -51,7 +51,7 @@ from gpucall.execution.contracts import (
     tuple_evidence_label,
 )
 from gpucall.lease_reaper import active_manifest_leases, lease_reaper_report
-from gpucall.price_cache import load_cached_price_evidence, merge_price_evidence, store_live_price_evidence
+from gpucall.panopticon import load_panopticon_evidence, merge_panopticon_evidence, store_panopticon_evidence
 from gpucall.tuple_audit import _tuple_from_candidate, tuple_audit_report
 from gpucall.tuple_catalog import live_tuple_catalog_evidence, live_tuple_catalog_findings
 from gpucall.execution.registry import adapter_descriptor, vendor_family_for_adapter
@@ -2372,12 +2372,12 @@ def validator_plan_command(
 
 
 def _catalog_live_evidence(config, config_dir: Path, *, live: bool) -> dict[str, dict[str, object]] | None:
-    cached = load_cached_price_evidence()
+    cached = load_panopticon_evidence()
     if not live:
         return cached or None
     observed = live_tuple_catalog_evidence(_live_catalog_scope(config, config_dir), load_credentials())
-    store_live_price_evidence(observed)
-    return merge_price_evidence(observed, cached)
+    store_panopticon_evidence(observed)
+    return merge_panopticon_evidence(observed, cached)
 
 
 def _live_catalog_scope(config, config_dir: Path) -> dict[str, object]:

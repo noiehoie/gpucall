@@ -267,11 +267,23 @@ def tuple_route_rejection_reason(
         return "recipe data classification exceeds policy ceiling"
     if not tuple.max_data_classification.permits(recipe.data_classification):
         return "tuple data classification ceiling is below recipe requirement"
+
+    # Hardening for large context on local/controlled runtimes
+    # We use a threshold to prevent slow local execution for large analytical workloads
+    # unless explicitly allowed by the recipe.
+    if (
+        required_len is not None
+        and required_len > policy.local_large_context_threshold
+        and is_local_execution_tuple(tuple)
+        and not recipe.allow_local_large_context
+    ):
+        return f"local execution is disabled for large context workloads (>{policy.local_large_context_threshold} tokens)"
+
     security_reason = tuple_security_rejection_reason(policy=policy, recipe=recipe, tuple=tuple)
     if security_reason is not None:
         return security_reason
     requirements = recipe_requirements(recipe)
-    if tuple.vram_gb < requirements.minimum_vram_gb:
+    if _requires_recipe_vram_gate(tuple) and tuple.vram_gb < requirements.minimum_vram_gb:
         return "tuple vram_gb is below derived recipe requirement"
     minimum_model_len = required_len if required_len is not None else requirements.context_budget_tokens
     if tuple.max_model_len < minimum_model_len:
@@ -316,6 +328,12 @@ def tuple_route_rejection_reason(
             elif not value:
                 return reason
     return None
+
+
+def _requires_recipe_vram_gate(tuple: ExecutionTupleSpec) -> bool:
+    if tuple.controlled_runtime_ref and tuple.execution_surface is ExecutionSurface.LOCAL_RUNTIME:
+        return False
+    return True
 
 
 def catalog_route_rejection_reason(

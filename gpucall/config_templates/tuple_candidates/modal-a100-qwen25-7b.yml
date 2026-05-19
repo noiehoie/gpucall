@@ -6,11 +6,15 @@ vram_gb: 80
 max_model_len: 131072
 cost_per_second: 0.000694
 configured_price_source: https://modal.com/pricing
-configured_price_observed_at: '2026-05-08T00:00:00+00:00'
+configured_price_observed_at: '2026-05-17T14:24:00+00:00'
 configured_price_ttl_seconds: 604800
 scaledown_window_seconds: 60
 min_billable_seconds: 0
 billing_granularity_seconds: 0
+estimated_prefill_tokens_per_second: 700
+estimated_decode_tokens_per_second: 25
+estimated_runtime_overhead_seconds: 30
+runtime_estimate_safety_multiplier: 1.5
 model_ref: qwen2.5-7b-instruct
 engine_ref: modal-vllm
 endpoint_contract: modal-function

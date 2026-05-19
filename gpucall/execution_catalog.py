@@ -223,6 +223,7 @@ class WorkerContractSpec(BaseModel):
     worker_binding_ref: str
     adapter: str
     execution_surface: str
+    controlled_runtime_ref: str | None = None
     model_ref: str | None = None
     engine_ref: str | None = None
     modes: tuple[str, ...] = Field(default_factory=tuple)
@@ -814,6 +815,7 @@ def _worker_contract(row: Mapping[str, Any]) -> WorkerContractSpec:
         worker_binding_ref=str(row.get("worker_ref") or name),
         adapter=adapter,
         execution_surface=str(row.get("execution_surface") or _surface_for_adapter(adapter) or "unknown"),
+        controlled_runtime_ref=str(row.get("controlled_runtime_ref") or "") or None,
         model_ref=str(row.get("model_ref") or "") or None,
         engine_ref=str(row.get("engine_ref") or "") or None,
         modes=[str(item) for item in row.get("modes") or ["sync", "async"]],
@@ -831,7 +833,7 @@ def _recipe_fit(resource: ResourceCatalogEntry, worker: WorkerContractSpec, reci
         return {"eligible": True, "reasons": []}
     reasons: list[str] = []
     requirements = recipe_requirements(recipe)
-    if resource.vram_gb < requirements.minimum_vram_gb:
+    if _requires_recipe_vram_gate(worker) and resource.vram_gb < requirements.minimum_vram_gb:
         reasons.append("resource vram_gb is below derived recipe requirement")
     if resource.max_model_len < requirements.context_budget_tokens:
         reasons.append("resource max_model_len is below recipe requirement")
@@ -851,6 +853,12 @@ def _recipe_fit(resource: ResourceCatalogEntry, worker: WorkerContractSpec, reci
     if recipe.output_contract and worker.output_contract and not _output_contract_compatible(recipe.output_contract, worker.output_contract):
         reasons.append("worker output_contract does not match recipe output_contract")
     return {"eligible": not reasons, "reasons": reasons}
+
+
+def _requires_recipe_vram_gate(worker: WorkerContractSpec) -> bool:
+    if worker.controlled_runtime_ref and worker.execution_surface == "local_runtime":
+        return False
+    return True
 
 
 def _output_contract_compatible(recipe_contract: str, worker_contract: str) -> bool:

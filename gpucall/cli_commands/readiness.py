@@ -14,6 +14,7 @@ def add_readiness_parser(subparsers: argparse._SubParsersAction[argparse.Argumen
     parser.add_argument("--intent", default=None)
     parser.add_argument("--recipe", default=None)
     parser.add_argument("--validation-dir", type=Path, default=None)
+    parser.add_argument("--live", action="store_true", help="refresh Provider Panopticon with live non-generation provider probes")
     return parser
 
 
@@ -26,6 +27,7 @@ def run_readiness_command(args: argparse.Namespace) -> None:
                 intent=args.intent,
                 recipe=args.recipe,
                 validation_dir=args.validation_dir,
+                live=args.live,
             )
         ),
         end="",

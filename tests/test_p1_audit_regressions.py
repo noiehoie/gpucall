@@ -16,6 +16,7 @@ import httpx
 import pytest
 from fastapi.testclient import TestClient
 
+import gpucall.tenant as tenant_module
 from gpucall.artifacts import SQLiteArtifactRegistry
 from gpucall.admission import AdmissionController
 from gpucall.domain import TenantSpec, TupleError
@@ -241,6 +242,36 @@ def test_tenant_budget_reservation_is_atomic(tmp_path: Path) -> None:
 
     assert sorted(results) == ["budget", "ok"]
     assert ledger.spend_since("tenant-a", datetime.fromtimestamp(0, timezone.utc)) == 0.75
+
+
+def test_sqlite_tenant_budget_reconciles_stale_reservations(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("GPUCALL_TENANT_RESERVATION_STALE_SECONDS", "60")
+    ledger = TenantUsageLedger(tmp_path / "tenant_usage.db")
+    ledger.reserve("tenant-a", 0.75, tuple="tuple-a", recipe="recipe-a", plan_id="stale-plan")
+    with sqlite3.connect(tmp_path / "tenant_usage.db") as conn:
+        conn.execute(
+            "UPDATE tenant_usage SET recorded_at = ? WHERE plan_id = ?",
+            (datetime(2026, 1, 1, tzinfo=timezone.utc).isoformat(), "stale-plan"),
+        )
+
+    result = ledger.reconcile_reservations()
+
+    assert result["released_stale"] == 1
+    assert ledger.spend_since("tenant-a", datetime.fromtimestamp(0, timezone.utc)) == 0.0
+
+
+def test_postgres_tenant_budget_reconciles_terminal_job_reservations_before_spend() -> None:
+    source = inspect.getsource(PostgresTenantUsageLedger.reserve_with_budget)
+    reconcile_source = inspect.getsource(PostgresTenantUsageLedger._reconcile_reservations_cur)
+
+    assert source.index("_reconcile_reservations_cur") < source.index("_spend_since_cur")
+    assert "gpucall_jobs" in reconcile_source
+    assert "jobs.payload->'plan'->>'plan_id' = usage.plan_id" in reconcile_source
+    module_source = inspect.getsource(tenant_module)
+    assert "FAILED" in module_source
+    assert "CANCELLED" in module_source
+    assert "EXPIRED" in module_source
+    assert "jobs.state = 'COMPLETED'" in reconcile_source
 
 
 def test_artifact_latest_compare_and_set_rejects_stale_expected_version(tmp_path: Path) -> None:

@@ -1,59 +1,41 @@
 from __future__ import annotations
 
-import json
-import os
-import tempfile
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Mapping
 
-from gpucall.config import default_state_dir
+from gpucall.panopticon import (
+    default_panopticon_path,
+    load_panopticon_evidence,
+    merge_panopticon_evidence,
+    store_panopticon_evidence,
+)
 
 
 def default_price_cache_path() -> Path:
-    return default_state_dir() / "catalog" / "live-price-cache.json"
+    return default_panopticon_path()
 
 
 def load_cached_price_evidence(path: Path | None = None, *, now: datetime | None = None) -> dict[str, dict[str, Any]]:
-    path = path or default_price_cache_path()
-    now = now or datetime.now(timezone.utc)
-    if not path.exists():
-        return {}
-    try:
-        payload = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
-        return {}
+    now = _utc_datetime(now or datetime.now(timezone.utc))
+    evidence = load_panopticon_evidence(
+        path or default_price_cache_path(),
+        now=now,
+        expired_status="unknown",
+        expired_reason="cached live price TTL expired",
+        allow_legacy_price_finding=True,
+    )
     cached: dict[str, dict[str, Any]] = {}
-    for tuple_name, row in (payload.get("tuples") or {}).items():
-        if not isinstance(row, Mapping):
+    for tuple_name, row in evidence.items():
+        findings = _price_findings(row, now=now)
+        if not findings:
             continue
-        expires_at = _parse_time(str(row.get("expires_at") or ""))
-        finding = dict(row.get("finding") or {})
-        if not finding:
-            continue
-        if expires_at is not None and expires_at > now:
-            cached[str(tuple_name)] = {
-                "tuple": str(tuple_name),
-                "status": "live_revalidated",
-                "checked": True,
-                "findings": [finding],
-            }
-        else:
-            cached[str(tuple_name)] = {
-                "tuple": str(tuple_name),
-                "status": "unknown",
-                "checked": True,
-                "findings": [
-                    {
-                        "tuple": str(tuple_name),
-                        "adapter": str(finding.get("adapter") or ""),
-                        "dimension": "price",
-                        "severity": "error",
-                        "reason": "cached live price TTL expired",
-                        "source": str(finding.get("live_price_source") or finding.get("source") or "live-price-cache"),
-                    }
-                ],
-            }
+        cached[str(tuple_name)] = {
+            "tuple": str(row.get("tuple") or tuple_name),
+            "status": row.get("status", "unknown"),
+            "checked": bool(row.get("checked")),
+            "findings": findings,
+        }
     return cached
 
 
@@ -64,85 +46,68 @@ def store_live_price_evidence(
     now: datetime | None = None,
     ttl_seconds: int = 3600,
 ) -> None:
-    path = path or default_price_cache_path()
-    now = now or datetime.now(timezone.utc)
-    existing = _read_payload(path)
-    tuples = dict(existing.get("tuples") or {})
+    price_evidence: dict[str, dict[str, Any]] = {}
     for tuple_name, row in evidence.items():
-        for finding in row.get("findings") or []:
-            if not isinstance(finding, Mapping) or finding.get("dimension") != "price":
-                continue
-            if finding.get("live_price_per_second") is None:
-                continue
-            enriched = dict(finding)
-            enriched["observed_at"] = now.isoformat()
-            enriched["expires_at"] = (now + timedelta(seconds=ttl_seconds)).isoformat()
-            tuples[str(tuple_name)] = {
-                "finding": enriched,
-                "observed_at": enriched["observed_at"],
-                "expires_at": enriched["expires_at"],
-                "ttl_seconds": ttl_seconds,
-            }
-    payload = {
-        "schema_version": 1,
-        "updated_at": now.isoformat(),
-        "tuples": tuples,
-    }
-    _atomic_write_json(path, payload)
+        findings = [
+            dict(item)
+            for item in row.get("findings") or []
+            if isinstance(item, Mapping)
+            and item.get("dimension") == "price"
+            and item.get("live_price_per_second") is not None
+        ]
+        if findings:
+            price_evidence[str(tuple_name)] = {**dict(row), "findings": findings}
+    if price_evidence:
+        store_panopticon_evidence(price_evidence, path or default_price_cache_path(), now=now, ttl_seconds=ttl_seconds)
 
 
 def merge_price_evidence(*items: Mapping[str, Mapping[str, Any]] | None) -> dict[str, dict[str, Any]]:
-    merged: dict[str, dict[str, Any]] = {}
-    for evidence in items:
-        if not evidence:
-            continue
-        for tuple_name, row in evidence.items():
-            current = merged.get(tuple_name)
-            if current is None:
-                merged[tuple_name] = {
-                    "tuple": str(row.get("tuple") or tuple_name),
-                    "adapter": row.get("adapter"),
-                    "status": row.get("status", "unknown"),
-                    "checked": bool(row.get("checked")),
-                    "findings": list(row.get("findings") or []),
-                }
-                continue
-            current["checked"] = bool(current.get("checked")) or bool(row.get("checked"))
-            # A blocked live observation wins over cached price success; budget and routing gates fail closed.
-            if row.get("status") == "blocked" or current.get("status") == "blocked":
-                current["status"] = "blocked"
-            elif row.get("status") == "live_revalidated":
-                current["status"] = "live_revalidated"
-            current["findings"] = [*list(current.get("findings") or []), *list(row.get("findings") or [])]
-    return merged
+    return merge_panopticon_evidence(*items)
 
 
-def _read_payload(path: Path) -> dict[str, Any]:
+def _price_findings(row: Mapping[str, Any], *, now: datetime) -> list[dict[str, Any]]:
+    raw_findings = [dict(item) for item in row.get("findings") or [] if isinstance(item, Mapping)]
+    price_findings = [finding for finding in raw_findings if finding.get("dimension") == "price"]
+    valid_price_findings = [
+        finding
+        for finding in price_findings
+        if finding.get("live_price_per_second") is not None and _finding_expires_after(finding, now)
+    ]
+    if valid_price_findings:
+        return valid_price_findings
+    has_price_evidence = bool(price_findings) or "price" in {str(item) for item in row.get("dimensions") or []}
+    if row.get("panopticon_stale") and has_price_evidence:
+        for finding in raw_findings:
+            raw = finding.get("raw") if isinstance(finding.get("raw"), Mapping) else {}
+            if raw.get("live_reason") == "panopticon_evidence_expired":
+                return [{**finding, "dimension": "price"}]
+        return [
+            {
+                "tuple": row.get("tuple"),
+                "dimension": "price",
+                "severity": "error",
+                "reason": "cached live price TTL expired",
+                "raw": {"live_reason": "panopticon_evidence_expired"},
+            }
+        ]
+    return []
+
+
+def _finding_expires_after(finding: Mapping[str, Any], now: datetime) -> bool:
+    now = _utc_datetime(now)
+    raw = str(finding.get("expires_at") or "")
+    if not raw:
+        return False
     try:
-        return json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
-        return {"schema_version": 1, "tuples": {}}
-
-
-def _atomic_write_json(path: Path, payload: Mapping[str, Any]) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    fd, tmp_name = tempfile.mkstemp(prefix=f".{path.name}.", suffix=".tmp", dir=path.parent)
-    try:
-        with os.fdopen(fd, "w", encoding="utf-8") as handle:
-            json.dump(payload, handle, ensure_ascii=False, indent=2, sort_keys=True)
-            handle.write("\n")
-        Path(tmp_name).replace(path)
-    finally:
-        tmp = Path(tmp_name)
-        if tmp.exists():
-            tmp.unlink()
-
-
-def _parse_time(value: str) -> datetime | None:
-    try:
-        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+        parsed = datetime.fromisoformat(raw.replace("Z", "+00:00"))
     except ValueError:
-        return None
+        return False
     if parsed.tzinfo is None:
-        return parsed.replace(tzinfo=timezone.utc)
-    return parsed
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed > now
+
+
+def _utc_datetime(value: datetime) -> datetime:
+    if value.tzinfo is None:
+        return value.replace(tzinfo=timezone.utc)
+    return value.astimezone(timezone.utc)

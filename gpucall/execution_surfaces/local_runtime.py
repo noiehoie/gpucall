@@ -83,10 +83,12 @@ class LocalOllamaAdapter(TupleAdapter):
         *,
         base_url: str = "http://127.0.0.1:11434",
         model: str = "llama3",
+        transport: httpx.AsyncBaseTransport | None = None,
     ) -> None:
         self.name = name
         self.base_url = base_url.rstrip("/")
         self.model = model
+        self.transport = transport
 
     async def start(self, plan: CompiledPlan) -> RemoteHandle:
         return RemoteHandle(
@@ -104,13 +106,16 @@ class LocalOllamaAdapter(TupleAdapter):
         prompt = self._prompt_from_plan(plan)
         try:
             payload: dict[str, Any] = {"model": self.model, "prompt": prompt, "stream": False}
+            options = self._options_from_plan(plan)
+            if options:
+                payload["options"] = options
             if plan.max_tokens is not None:
-                payload["options"] = {"num_predict": int(plan.max_tokens)}
+                payload.setdefault("options", {})["num_predict"] = int(plan.max_tokens)
             if plan.temperature is not None:
                 payload.setdefault("options", {})["temperature"] = float(plan.temperature)
             if plan.response_format is not None and plan.response_format.type.value == "json_object":
                 payload["format"] = "json"
-            async with httpx.AsyncClient(timeout=plan.timeout_seconds) as client:
+            async with httpx.AsyncClient(timeout=plan.timeout_seconds, transport=self.transport) as client:
                 response = await client.post(
                     f"{self.base_url}/api/generate",
                     json=payload,
@@ -137,6 +142,7 @@ class LocalOllamaAdapter(TupleAdapter):
                 code=ProviderErrorCode.PROVIDER_UPSTREAM_UNAVAILABLE if retryable else None,
             ) from exc
         except httpx.TimeoutException as exc:
+            await self._unload_model()
             raise TupleError(
                 "local Ollama timed out",
                 retryable=True,
@@ -145,7 +151,17 @@ class LocalOllamaAdapter(TupleAdapter):
             ) from exc
 
     async def cancel_remote(self, handle: RemoteHandle) -> None:
-        return None
+        await self._unload_model()
+
+    async def _unload_model(self) -> None:
+        try:
+            async with httpx.AsyncClient(timeout=_local_cleanup_timeout_seconds(), transport=self.transport) as client:
+                await client.post(
+                    f"{self.base_url}/api/generate",
+                    json={"model": self.model, "keep_alive": 0},
+                )
+        except Exception:
+            return None
 
     def _prompt_from_plan(self, plan: CompiledPlan) -> str:
         if plan.input_refs:
@@ -157,6 +173,26 @@ class LocalOllamaAdapter(TupleAdapter):
         if plan.inline_inputs:
             return "\n".join(value.value for value in plan.inline_inputs.values())
         return ""
+
+    def _options_from_plan(self, plan: CompiledPlan) -> dict[str, Any]:
+        options: dict[str, Any] = {}
+        context_estimate = plan.attestations.get("context_estimate")
+        if isinstance(context_estimate, dict):
+            required_model_len = context_estimate.get("required_model_len")
+            if required_model_len is not None:
+                try:
+                    required_context = int(required_model_len)
+                except (TypeError, ValueError):
+                    required_context = 0
+                if required_context > 0:
+                    options["num_ctx"] = required_context
+        if plan.top_p is not None:
+            options["top_p"] = float(plan.top_p)
+        if plan.seed is not None:
+            options["seed"] = int(plan.seed)
+        if plan.stop_tokens:
+            options["stop"] = list(plan.stop_tokens)
+        return options
 
 
 @register_adapter(
@@ -179,6 +215,15 @@ def build_local_ollama_adapter(spec, _credentials):
         base_url=str(spec.endpoint),
         model=spec.model,
     )
+
+
+def _local_cleanup_timeout_seconds() -> float:
+    raw = os.environ.get("GPUCALL_LOCAL_OLLAMA_CLEANUP_TIMEOUT_SECONDS", "10")
+    try:
+        value = float(raw)
+    except ValueError:
+        return 10.0
+    return max(value, 1.0)
 
 
 class LocalOpenAICompatibleAdapter(TupleAdapter):

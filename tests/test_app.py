@@ -260,10 +260,14 @@ def test_intent_readiness_separates_static_eligible_from_live_blocked(tmp_path) 
 
     assert response.status_code == 200
     recipe = response.json()["recipes"][0]
-    assert recipe["eligible_tuple_count"] == 1
+    assert recipe["eligible_tuple_count"] == len(recipe["eligible_tuples"])
     assert recipe["live_ready_tuple_count"] == 0
-    assert recipe["live_blocked_tuples"][0]["tuple"] == "local-echo"
-    assert recipe["live_blocked_tuples"][0]["live_reason"] == "tuple_suppressed"
+    assert {item["tuple"] for item in recipe["live_blocked_tuples"]} == {"local-echo"}
+    assert {item["live_reason"] for item in recipe["live_blocked_tuples"]} == {"tuple_suppressed"}
+    assert recipe["production_activated"] is False
+    assert recipe["sync_eligible"] is False
+    assert recipe["async_only_recommended"] is False
+    assert recipe["recommended_mode"] == "none"
     assert recipe["current_caller_action"] == "retry_later_or_contact_gpucall_admin"
 
 

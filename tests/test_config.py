@@ -872,11 +872,16 @@ def test_readiness_reports_live_catalog_blocked_tuple(tmp_path, monkeypatch) -> 
         lambda tuples, credentials: {
             name: {
                 "tuple": name,
+                "adapter": tuples[name].adapter,
                 "status": "blocked",
                 "checked": True,
                 "findings": [
                     {
+                        "tuple": name,
+                        "adapter": tuples[name].adapter,
+                        "dimension": "endpoint",
                         "severity": "error",
+                        "reason": "RunPod serverless billing guard blocked this endpoint",
                         "field": "runpod_serverless_billing_guard",
                         "raw": {"live_reason": "active_workers_present"},
                     }
@@ -886,13 +891,58 @@ def test_readiness_reports_live_catalog_blocked_tuple(tmp_path, monkeypatch) -> 
         },
     )
 
-    report = build_readiness_report(config_dir=root, intent="standard_text_inference")
+    report = build_readiness_report(config_dir=root, intent="standard_text_inference", live=True)
 
     recipe = report["recipes"][0]
     blocked = recipe["live_blocked_tuples"]
     assert recipe["eligible_tuple_count"] > 0
     assert blocked
     assert any(item["live_reason"] == "active_workers_present" for item in blocked)
+
+
+def test_readiness_uses_panopticon_snapshot_without_live_probe(tmp_path, monkeypatch) -> None:
+    from datetime import datetime, timezone
+
+    from gpucall.panopticon import store_panopticon_evidence
+    from gpucall.readiness import build_readiness_report
+
+    root = copy_config(tmp_path)
+    state = tmp_path / "state"
+    monkeypatch.setenv("GPUCALL_STATE_DIR", str(state))
+    monkeypatch.setattr("gpucall.readiness.load_credentials", lambda: {"runpod": {"api_key": "rk_test"}})
+
+    def fail_live_probe(*_args, **_kwargs):
+        raise AssertionError("readiness must not call live provider probes without live=True")
+
+    monkeypatch.setattr("gpucall.readiness.live_tuple_catalog_evidence", fail_live_probe)
+    store_panopticon_evidence(
+        {
+            "local-author-ollama": {
+                "tuple": "local-author-ollama",
+                "status": "blocked",
+                "checked": True,
+                "findings": [
+                    {
+                        "tuple": "local-author-ollama",
+                        "adapter": "local-ollama",
+                        "dimension": "stock",
+                        "severity": "error",
+                        "reason": "cached provider snapshot says tuple is not ready",
+                        "raw": {"live_reason": "panopticon_test_block"},
+                    }
+                ],
+            }
+        },
+        state / "catalog" / "provider-panopticon.json",
+        now=datetime(2026, 5, 19, tzinfo=timezone.utc),
+        ttl_seconds=86400,
+    )
+
+    report = build_readiness_report(config_dir=root, intent="standard_text_inference")
+
+    recipe = report["recipes"][0]
+    assert report["panopticon"]["source"] == "panopticon_snapshot"
+    assert any(item["tuple"] == "local-author-ollama" and item["live_reason"] == "panopticon_test_block" for item in recipe["live_blocked_tuples"])
 
 
 def test_readiness_requires_exact_recipe_mode_validation_evidence(tmp_path, monkeypatch) -> None:
@@ -1022,6 +1072,148 @@ def test_readiness_evaluates_route_validation_for_each_allowed_mode(tmp_path, mo
         and item.get("live_reason") == "missing_route_validation_evidence"
         for item in recipe_report["live_blocked_tuples"]
     )
+
+
+def test_readiness_reports_latest_failed_route_validation_artifact(tmp_path, monkeypatch) -> None:
+    from gpucall.execution.contracts import official_contract, official_contract_hash
+    from gpucall.readiness import build_readiness_report
+    from gpucall.validation_evidence import config_hash, git_commit
+
+    root = copy_config(tmp_path)
+    state = tmp_path / "state"
+    artifact_dir = state / "tuple-validation"
+    artifact_dir.mkdir(parents=True)
+    monkeypatch.setenv("GPUCALL_STATE_DIR", str(state))
+    monkeypatch.setattr("gpucall.readiness.load_credentials", lambda: {})
+
+    report = build_readiness_report(config_dir=root, intent="summarize_text", validation_dir=artifact_dir)
+    recipe_report = next(item for item in report["recipes"] if item["recipe"] == "infer-summarize-text-draft")
+    blocked = next(item for item in recipe_report["live_blocked_tuples"] if item.get("live_reason") == "missing_route_validation_evidence")
+    tuple_name = blocked["tuple"]
+    recipe_name = recipe_report["recipe"]
+    mode = blocked["mode"]
+    config = load_config(root)
+    tuple_spec = config.tuples[tuple_name]
+    contract = official_contract(tuple_spec)
+    failed = {
+        "tuple": tuple_name,
+        "recipe": recipe_name,
+        "mode": mode,
+        "started_at": "2026-01-01T00:00:00+00:00",
+        "ended_at": "2026-01-01T00:00:01+00:00",
+        "commit": git_commit(),
+        "config_hash": config_hash(root),
+        "governance_hash": "c" * 64,
+        "validation_schema_version": 1,
+        "passed": False,
+        "error": {"code": "PROVIDER_RESOURCE_EXHAUSTED", "retryable": True, "status_code": 503},
+        "cleanup": {"required": False, "completed": None},
+        "cost": {"observed": None, "estimated": None},
+        "audit": {"event_ids": []},
+        "official_contract": contract,
+        "official_contract_hash": official_contract_hash(contract),
+    }
+    (artifact_dir / "failed.json").write_text(json.dumps(failed), encoding="utf-8")
+
+    failed_report = build_readiness_report(config_dir=root, recipe=recipe_name, validation_dir=artifact_dir)
+    failed_recipe_report = failed_report["recipes"][0]
+    row = next(item for item in failed_recipe_report["live_blocked_tuples"] if item["tuple"] == tuple_name and item["mode"] == mode)
+
+    assert row["live_reason"] == "latest_route_validation_failed:PROVIDER_RESOURCE_EXHAUSTED"
+    assert row["route_validation_status"] == "rejected"
+    assert row["route_validation_reason"] == "latest_route_validation_failed:PROVIDER_RESOURCE_EXHAUSTED"
+    assert str(row["latest_route_validation_artifact"]).endswith("failed.json")
+    assert any("rerun explicit tuple validation" in action for action in failed_recipe_report["next_actions"])
+
+
+def test_readiness_does_not_label_unloaded_accepted_validation_as_rejected(tmp_path, monkeypatch) -> None:
+    from gpucall.execution.contracts import official_contract, official_contract_hash
+    from gpucall.readiness import build_readiness_report
+    from gpucall.validation_evidence import config_hash
+
+    root = copy_config(tmp_path)
+    state = tmp_path / "state"
+    artifact_dir = state / "tuple-validation"
+    artifact_dir.mkdir(parents=True)
+    monkeypatch.setenv("GPUCALL_STATE_DIR", str(state))
+    monkeypatch.setattr("gpucall.readiness.load_credentials", lambda: {})
+    monkeypatch.setattr("gpucall.validation_evidence.git_commit", lambda: None)
+
+    report = build_readiness_report(config_dir=root, intent="summarize_text", validation_dir=artifact_dir)
+    recipe_report = next(item for item in report["recipes"] if item["recipe"] == "infer-summarize-text-draft")
+    blocked = next(item for item in recipe_report["live_blocked_tuples"] if item.get("live_reason") == "missing_route_validation_evidence")
+    tuple_name = blocked["tuple"]
+    mode = blocked["mode"]
+    tuple_spec = load_config(root).tuples[tuple_name]
+    contract = official_contract(tuple_spec)
+    accepted_but_unloaded = {
+        "tuple": tuple_name,
+        "recipe": recipe_report["recipe"],
+        "mode": mode,
+        "started_at": "2026-01-01T00:00:00+00:00",
+        "ended_at": "2026-01-01T00:00:01+00:00",
+        "commit": "unavailable-during-test",
+        "config_hash": config_hash(root),
+        "governance_hash": "c" * 64,
+        "validation_schema_version": 1,
+        "passed": True,
+        "cleanup": {"required": False, "completed": None},
+        "cost": {"observed": None, "estimated": None},
+        "audit": {"event_ids": []},
+        "official_contract": contract,
+        "official_contract_hash": official_contract_hash(contract),
+    }
+    (artifact_dir / "accepted-but-unloaded.json").write_text(json.dumps(accepted_but_unloaded), encoding="utf-8")
+
+    checked = build_readiness_report(config_dir=root, recipe=recipe_report["recipe"], validation_dir=artifact_dir)
+    row = next(item for item in checked["recipes"][0]["live_blocked_tuples"] if item["tuple"] == tuple_name and item["mode"] == mode)
+
+    assert row["route_validation_status"] == "accepted"
+    assert row["live_reason"] == "missing_route_validation_evidence"
+
+
+def test_readiness_reports_policy_blocked_replacement_candidates(tmp_path, monkeypatch) -> None:
+    from gpucall.readiness import build_readiness_report
+
+    root = copy_config(tmp_path)
+    config = load_config(root)
+    config.policy.tuples.allow = ["local-echo"]
+    monkeypatch.setattr("gpucall.readiness.load_credentials", lambda: {})
+
+    report = build_readiness_report(config_dir=root, config=config, intent="summarize_text", validation_dir=tmp_path / "validation")
+    recipe_report = next(item for item in report["recipes"] if item["recipe"] == "infer-summarize-text-draft")
+
+    assert recipe_report["rejected_tuple_reasons"]["tuple is not in policy allowlist"] > 0
+    assert recipe_report["policy_blocked_candidate_tuples"]
+    assert all(item["max_model_len"] >= recipe_report["context_budget_tokens"] for item in recipe_report["policy_blocked_candidate_tuples"])
+    assert any("add validated replacement tuple to policy allowlist" in action for action in recipe_report["next_actions"])
+
+
+def test_runpod_endpoint_inventory_miss_exposes_machine_reason(monkeypatch) -> None:
+    from gpucall.execution_surfaces import managed_endpoint
+
+    monkeypatch.setattr(managed_endpoint, "_runpod_endpoint_live_inventory_rows", lambda api_key, base_url: [])
+    tuple_spec = SimpleNamespace(
+        name="runpod-vllm-a100-80gb-qwen2-5-7b-instruct-1m-524k",
+        adapter="runpod-vllm-serverless",
+        target="yum0u6a4khw7gi",
+        endpoint=None,
+    )
+
+    findings = managed_endpoint.runpod_endpoint_catalog_findings([tuple_spec], {"runpod": {"api_key": "rk_test"}})
+
+    assert findings == [
+        {
+            "adapter": "runpod-vllm-serverless",
+            "dimension": "endpoint",
+            "field": "runpod_endpoint_inventory",
+            "raw": {"endpoint_id": "yum0u6a4khw7gi", "live_reason": "endpoint_missing_from_inventory"},
+            "reason": "configured RunPod endpoint was not present in live endpoint inventory",
+            "severity": "error",
+            "source": "https://rest.runpod.io/v1/endpoints",
+            "tuple": "runpod-vllm-a100-80gb-qwen2-5-7b-instruct-1m-524k",
+        }
+    ]
 
 
 def test_provider_smoke_writes_live_validation_artifact(tmp_path, monkeypatch) -> None:

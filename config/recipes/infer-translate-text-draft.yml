@@ -2,7 +2,7 @@ name: infer-translate-text-draft
 recipe_schema_version: 3
 task: infer
 intent: translate_text
-auto_select: true
+auto_select: false
 data_classification: confidential
 allowed_modes:
 - sync
@@ -12,7 +12,7 @@ latency_class: standard
 quality_floor: standard
 timeout_seconds: 180
 lease_ttl_seconds: 240
-token_estimation_profile: generic_utf8
+token_estimation_profile: qwen
 max_input_bytes: 33554432
 allowed_mime_prefixes:
 - text/

@@ -13,6 +13,10 @@ configured_price_ttl_seconds: 604800
 stock_state: configured
 expected_cold_start_seconds: 600
 billing_granularity_seconds: 0
+estimated_prefill_tokens_per_second: 405
+estimated_decode_tokens_per_second: 20
+estimated_runtime_overhead_seconds: 90
+runtime_estimate_safety_multiplier: 1.75
 max_data_classification: confidential
 scaledown_window_seconds: 300
 min_billable_seconds: 0

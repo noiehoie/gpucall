@@ -134,6 +134,10 @@ def runpod_endpoint_catalog_findings(tuples: list[Any], credentials: dict[str, d
                     field="runpod_endpoint_inventory",
                     reason="configured RunPod endpoint was not present in live endpoint inventory",
                     source=f"{inventory_base_url}/endpoints",
+                    raw={
+                        "endpoint_id": tuple.target,
+                        "live_reason": "endpoint_missing_from_inventory",
+                    },
                 )
             )
             continue

@@ -1,0 +1,39 @@
+name: infer-translate-text-standard
+recipe_schema_version: 3
+task: infer
+intent: translate_text
+auto_select: true
+data_classification: confidential
+allowed_modes:
+- sync
+context_budget_tokens: 32768
+resource_class: standard
+latency_class: standard
+quality_floor: standard
+timeout_seconds: 180
+lease_ttl_seconds: 240
+token_estimation_profile: qwen
+max_input_bytes: 33554432
+allowed_mime_prefixes:
+- text/
+default_temperature: 0.0
+structured_temperature: 0.0
+structured_system_prompt: Return only valid JSON when response_format requests JSON.
+  Do not include markdown fences or prose.
+system_prompt: |
+  Translate only the supplied text according to the caller's instructions.
+  Preserve source facts exactly. Do not change dates, weekdays, numbers, names,
+  places, currencies, units, quantities, or causal relationships. Do not infer
+  missing context.
+stop_tokens:
+- <|im_end|>
+- <|endoftext|>
+repetition_penalty: 1.05
+guided_decoding: true
+output_validation_attempts: 1
+required_model_capabilities:
+- translation
+output_contract: plain-text
+expected_cold_start_seconds: 180
+cost_policy:
+  max_estimated_cost_usd: 5.0

@@ -1,12 +1,28 @@
 from __future__ import annotations
 
+import math
 import re
 from dataclasses import dataclass, field as dataclass_field
 from typing import Any, Literal, Mapping
 
 
 LiveSeverity = Literal["error", "info"]
-LiveDimension = Literal["contract", "price", "stock", "endpoint", "credential", "cost"]
+LiveDimension = Literal[
+    "contract",
+    "price",
+    "stock",
+    "endpoint",
+    "credential",
+    "cost",
+    "capacity",
+    "health",
+    "worker",
+    "queue",
+    "model",
+    "models",
+    "live_tuple_catalog",
+    "panopticon",
+]
 
 
 @dataclass(frozen=True)
@@ -159,9 +175,14 @@ def price_per_second_from_pricing_text(text: str, label_patterns: list[str]) -> 
 def _floatish(value: Any) -> float | None:
     if value is None:
         return None
+    if isinstance(value, bool):
+        return None
     if isinstance(value, str):
         value = value.strip().replace("$", "").replace(",", "")
     try:
-        return float(value)
+        parsed = float(value)
     except (TypeError, ValueError):
         return None
+    if not math.isfinite(parsed):
+        return None
+    return parsed
