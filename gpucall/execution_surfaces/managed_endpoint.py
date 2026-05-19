@@ -784,12 +784,15 @@ def _runpod_vllm_requires_openai_route(plan: CompiledPlan) -> bool:
 
 
 def _runpod_vllm_openai_request_timeout_seconds(timeout_seconds: int | float) -> float:
-    raw = os.getenv("GPUCALL_RUNPOD_VLLM_OPENAI_REQUEST_TIMEOUT_SECONDS", "300")
+    plan_timeout = max(float(timeout_seconds), 1.0)
+    raw = os.getenv("GPUCALL_RUNPOD_VLLM_OPENAI_REQUEST_TIMEOUT_SECONDS")
+    if not raw:
+        return plan_timeout
     try:
         cap = max(float(raw), 1.0)
     except ValueError:
-        cap = 300.0
-    return min(max(float(timeout_seconds), 1.0), cap)
+        return plan_timeout
+    return min(plan_timeout, cap)
 
 
 def _runpod_vllm_native_poll_timeout_seconds(plan: CompiledPlan) -> float:

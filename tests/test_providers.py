@@ -35,6 +35,7 @@ from gpucall.execution_surfaces.managed_endpoint import RunpodServerlessAdapter
 from gpucall.execution_surfaces.managed_endpoint import (
     RunpodVllmServerlessAdapter,
     _runpod_vllm_native_poll_timeout_seconds,
+    _runpod_vllm_openai_request_timeout_seconds,
     _runpod_vllm_queue_saturation_seconds,
     runpod_vllm_health_preflight_rejection_reason,
     runpod_vllm_health_rejection_code,
@@ -1201,6 +1202,12 @@ def test_runpod_vllm_openai_route_request_timeout_is_bounded(monkeypatch) -> Non
 
     assert result.value == "worker-vllm ok"
     assert calls == [("https://api.runpod.ai/v2/endpoint-1/openai/v1/chat/completions", 45.0)]
+
+
+def test_runpod_vllm_openai_route_request_timeout_defaults_to_plan_timeout(monkeypatch) -> None:
+    monkeypatch.delenv("GPUCALL_RUNPOD_VLLM_OPENAI_REQUEST_TIMEOUT_SECONDS", raising=False)
+
+    assert _runpod_vllm_openai_request_timeout_seconds(600) == 600.0
 
 
 def test_runpod_vllm_async_uses_native_run_and_status(monkeypatch) -> None:
