@@ -1787,6 +1787,7 @@ def test_migrate_cli_onboard_yes_defers_patch_when_gateway_readiness_is_not_ok(t
     assert report["patch_applied"] is False
     assert report["patch_deferred"] is True
     assert report["patch_defer_reason"] == "gateway_readiness_not_ok"
+    assert report["patch_defer_reasons"] == ["gateway_readiness_not_ok"]
     assert source.read_text(encoding="utf-8") == original
     assert not (project / "gpucall_migration.py").exists()
     assert not (project / ".gpucall-migration" / "applied-patch.json").exists()
@@ -1826,7 +1827,8 @@ def test_migrate_onboard_skips_unobserved_inventory_workloads_in_readiness(tmp_p
     assert translate["materialization_candidate"] is False
     assert called_intents == ["rank_text_items"]
     assert any(item["reason"] == "inventory_only_unobserved_workload" for item in report["gateway_readiness"]["checks"])
-    assert report["patch_defer_reason"] == "unobserved_workloads_require_baseline"
+    assert report["patch_defer_reason"] == "gateway_readiness_not_ok"
+    assert report["patch_defer_reasons"] == ["gateway_readiness_not_ok", "unobserved_workloads_require_baseline"]
     assert report["workload_observation"]["inventory_only_workload_count"] == 1
 
 
@@ -1862,6 +1864,7 @@ def test_migrate_onboard_yes_defers_patch_when_unobserved_inventory_remains(tmp_
     assert report["patch_applied"] is False
     assert report["patch_deferred"] is True
     assert report["patch_defer_reason"] == "unobserved_workloads_require_baseline"
+    assert report["patch_defer_reasons"] == ["unobserved_workloads_require_baseline"]
     assert source.read_text(encoding="utf-8") == original
     assert not (project / "gpucall_migration.py").exists()
 

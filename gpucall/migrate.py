@@ -828,7 +828,8 @@ def onboard_project(
         "ok": True,
         "reason": "no_workloads",
     }
-    patch_defer_reason = _onboard_patch_defer_reason(contract, gateway_readiness) if apply else None
+    patch_defer_reasons = _onboard_patch_defer_reasons(contract, gateway_readiness) if apply else []
+    patch_defer_reason = patch_defer_reasons[0] if patch_defer_reasons else None
     patch_report = patch_suggestions(project, source=source, apply=apply and patch_defer_reason is None)
     observation_summary = _contract_observation_summary(contract)
     return {
@@ -843,6 +844,7 @@ def onboard_project(
         "patch_applied": patch_report["applied"] and bool(patch_report["changed_files"]),
         "patch_deferred": bool(apply and patch_defer_reason is not None),
         "patch_defer_reason": patch_defer_reason,
+        "patch_defer_reasons": patch_defer_reasons,
         "changed_files": patch_report["changed_files"],
         "workload_observation": observation_summary,
         "workload_trace": trace_report,
@@ -2572,19 +2574,26 @@ def _onboard_next_actions(contract: dict[str, Any], trace: dict[str, Any] | None
 
 
 def _onboard_patch_defer_reason(contract: dict[str, Any], gateway_readiness: dict[str, Any] | None) -> str | None:
+    reasons = _onboard_patch_defer_reasons(contract, gateway_readiness)
+    return reasons[0] if reasons else None
+
+
+def _onboard_patch_defer_reasons(contract: dict[str, Any], gateway_readiness: dict[str, Any] | None) -> list[str]:
     if not contract.get("workloads"):
-        return "no_workloads"
+        return ["no_workloads"]
     if not isinstance(gateway_readiness, dict):
-        return "gateway_readiness_missing"
+        return ["gateway_readiness_missing"]
+
+    reasons: list[str] = []
     if _non_materializable_draft_blockers(gateway_readiness):
-        return "recipe_draft_not_materializable"
+        reasons.append("recipe_draft_not_materializable")
+    if gateway_readiness.get("reason") != "readiness_gate_disabled" and not _readiness_checked_ok(gateway_readiness):
+        reasons.append("gateway_readiness_not_ok")
     if _unobserved_inventory_workloads(contract):
-        return "unobserved_workloads_require_baseline"
+        reasons.append("unobserved_workloads_require_baseline")
     if gateway_readiness.get("reason") == "readiness_gate_disabled":
-        return None
-    if not _readiness_checked_ok(gateway_readiness):
-        return "gateway_readiness_not_ok"
-    return None
+        return [reason for reason in reasons if reason != "gateway_readiness_not_ok"]
+    return reasons
 
 
 def _readiness_checked_ok(gateway_readiness: dict[str, Any]) -> bool:
@@ -2680,6 +2689,15 @@ def _markdown(report: dict[str, Any]) -> str:
         lines.append("## Patches")
         for item in report["patches"]:
             lines.append(f"- `{item['path']}:{item['line']}` {item['reason']}")
+    if report.get("patch_deferred"):
+        lines.append("")
+        lines.append("## Patch Deferred")
+        lines.append(f"- primary_reason: `{report.get('patch_defer_reason')}`")
+        reasons = report.get("patch_defer_reasons") or []
+        if reasons:
+            lines.append("- reasons:")
+            for reason in reasons:
+                lines.append(f"  - `{reason}`")
     if report.get("metrics"):
         lines.append("")
         lines.append("## Metrics")
