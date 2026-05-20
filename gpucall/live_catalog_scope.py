@@ -15,5 +15,7 @@ def live_catalog_scope(config: Any, config_dir: Path) -> dict[str, ExecutionTupl
             tuple_spec = _tuple_from_candidate(candidate, config)
         except Exception:
             continue
+        if tuple_spec.name in scope:
+            continue
         scope[tuple_spec.name] = tuple_spec
     return scope

@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-from gpucall.shipment_gap import classify_workload_demand
+from gpucall.shipment_gap import build_shipment_gap_report, classify_workload_demand
 
 
 def _workload(intent: str = "rank_text_items", *, modes: list[str] | None = None, context: int = 32768) -> dict[str, object]:
@@ -172,6 +172,57 @@ def test_classifies_provider_missing_when_no_compatible_recipe() -> None:
 
     assert result["category"] == "provider_missing"
     assert result["blockers"][0]["reason"] == "no_contract_compatible_readiness_recipe"
+
+
+def test_readiness_status_override_adds_matching_blocker() -> None:
+    result = classify_workload_demand(
+        _workload(),
+        _readiness(_recipe(shipment_status="validation_lack")),
+    )
+
+    assert result["category"] == "validation_missing"
+    assert result["blockers"] == [
+        {
+            "category": "validation_missing",
+            "label": "validation 不足",
+            "reason": "readiness_shipment_status_validation_lack",
+        }
+    ]
+
+
+def test_build_report_reuses_readiness_for_duplicate_intents(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    contract = tmp_path / "workload-contract.json"
+    contract.write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "phase": "workload-contract",
+                "source": "fixture",
+                "workloads": [_workload(), _workload()],
+            }
+        ),
+        encoding="utf-8",
+    )
+    calls: list[str] = []
+
+    def fake_readiness(**kwargs: object) -> dict[str, object]:
+        calls.append(str(kwargs["intent"]))
+        return _readiness(_recipe())
+
+    monkeypatch.setattr("gpucall.shipment_gap.build_readiness_report", fake_readiness)
+
+    report = build_shipment_gap_report(config_dir=tmp_path, contract_path=contract)
+
+    assert calls == ["rank_text_items"]
+    assert report["summary"]["shipment_ready_count"] == 2
+
+
+def test_build_report_rejects_invalid_contract_json(tmp_path: Path) -> None:
+    contract = tmp_path / "workload-contract.json"
+    contract.write_text("{", encoding="utf-8")
+
+    with pytest.raises(ValueError, match="not valid JSON"):
+        build_shipment_gap_report(config_dir=tmp_path, contract_path=contract)
 
 
 def test_shipment_check_cli_fails_on_blocker(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:

@@ -39,21 +39,26 @@ def build_shipment_gap_report(
 ) -> dict[str, Any]:
     contract = _load_json(Path(contract_path))
     workloads = [item for item in contract.get("workloads", []) or [] if isinstance(item, Mapping)]
-    demands = [
-        classify_workload_demand(
-            workload,
-            build_readiness_report(
+    readiness_by_intent: dict[str, Mapping[str, Any]] = {}
+    demands = []
+    for workload in workloads:
+        intent = str(workload.get("intent") or "")
+        if intent not in readiness_by_intent:
+            readiness_by_intent[intent] = build_readiness_report(
                 config_dir=config_dir,
                 source=source or str(contract.get("source") or ""),
-                intent=str(workload.get("intent") or ""),
+                intent=intent,
                 validation_dir=validation_dir,
                 live=live,
                 panopticon_path=panopticon_path,
-            ),
-            min_live_ready_tuples=min_live_ready_tuples,
+            )
+        demands.append(
+            classify_workload_demand(
+                workload,
+                readiness_by_intent[intent],
+                min_live_ready_tuples=min_live_ready_tuples,
+            )
         )
-        for workload in workloads
-    ]
     category_counts = Counter(str(item.get("category") or PROVIDER_MISSING) for item in demands)
     blocker_counts = Counter(str(blocker.get("category")) for item in demands for blocker in item.get("blockers", []) or [])
     ready_count = category_counts.get(SHIPMENT_READY, 0)
@@ -122,7 +127,9 @@ def classify_workload_demand(
             "endpoint_stale": ENDPOINT_STALE,
         }.get(recipe_status)
         if mapped_category and mapped_category != category and mapped_category in BLOCKER_PRIORITY:
-             category = mapped_category
+            category = mapped_category
+            if not any(blocker.get("category") == mapped_category for blocker in blockers):
+                blockers.append(_blocker(mapped_category, f"readiness_shipment_status_{recipe_status}"))
 
     return {
         "workload_id": workload.get("id"),
@@ -289,9 +296,13 @@ def _safe_int(value: Any) -> int:
 
 def _load_json(path: Path) -> dict[str, Any]:
     try:
-        payload = json.loads(path.read_text(encoding="utf-8"))
+        text = path.read_text(encoding="utf-8")
     except OSError as exc:
         raise FileNotFoundError(f"failed to read workload contract: {path}") from exc
+    try:
+        payload = json.loads(text)
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"workload contract is not valid JSON: {path}") from exc
     if not isinstance(payload, dict):
         raise ValueError("workload contract must be a JSON object")
     return payload
