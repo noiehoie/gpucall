@@ -17,6 +17,7 @@ from pathlib import Path
 from textwrap import dedent
 from typing import Any
 
+from gpucall.blocker_taxonomy import primary_typed_blocker, typed_blocker_counts, typed_intake_blockers
 from gpucall.workload_contract import (
     compare_trace_to_contract,
     contract_to_recipe_intake,
@@ -65,26 +66,39 @@ def recipe_intakes_from_contract(contract: dict[str, Any]) -> dict[str, Any]:
             else {}
         )
         if draft_grammar.get("materialization_candidate") is False:
+            blockers = list(draft_grammar.get("blockers") or [])
+            typed_blockers = _draft_grammar_typed_blockers(draft_grammar, blockers)
             rejected.append(
-                {
-                    "workload_id": workload.get("id"),
-                    "intent": intake.get("sanitized_request", {}).get("intent"),
-                    "reason": "inventory_only_unobserved_workload",
-                    "blockers": list(draft_grammar.get("blockers") or []),
-                }
+                _rejected_recipe_intake(
+                    workload_id=workload.get("id"),
+                    intent=intake.get("sanitized_request", {}).get("intent"),
+                    reason="inventory_only_unobserved_workload",
+                    blockers=blockers,
+                    typed_blockers=typed_blockers,
+                )
             )
             continue
         if draft_grammar.get("materialization_allowed") is False:
+            blockers = list(draft_grammar.get("blockers") or [])
+            typed_blockers = _draft_grammar_typed_blockers(draft_grammar, blockers)
             rejected.append(
-                {
-                    "workload_id": workload.get("id"),
-                    "intent": intake.get("sanitized_request", {}).get("intent"),
-                    "reason": "recipe_draft_not_materializable",
-                    "blockers": list(draft_grammar.get("blockers") or []),
-                }
+                _rejected_recipe_intake(
+                    workload_id=workload.get("id"),
+                    intent=intake.get("sanitized_request", {}).get("intent"),
+                    reason="recipe_draft_not_materializable",
+                    blockers=blockers,
+                    typed_blockers=typed_blockers,
+                )
             )
             continue
         intakes.append(intake)
+    rejected_primary = [
+        {"code": item.get("reject_type"), "owner": item.get("owner"), "handoff": item.get("handoff")}
+        for item in rejected
+    ]
+    rejected_primary_counts = typed_blocker_counts(rejected_primary)
+    rejected_typed = [blocker for item in rejected for blocker in item.get("typed_blockers", []) if isinstance(blocker, dict)]
+    rejected_typed_counts = typed_blocker_counts(rejected_typed)
     return {
         "schema_version": 1,
         "phase": "recipe-intake-bundle",
@@ -92,8 +106,43 @@ def recipe_intakes_from_contract(contract: dict[str, Any]) -> dict[str, Any]:
         "primary_workload_id": contract.get("primary_workload_id"),
         "count": len(intakes),
         "rejected_count": len(rejected),
+        "rejected_owner_counts": rejected_primary_counts["owner_counts"],
+        "rejected_type_counts": rejected_primary_counts["code_counts"],
+        "rejected_handoff_counts": rejected_primary_counts["handoff_counts"],
+        "typed_blocker_owner_counts": rejected_typed_counts["owner_counts"],
+        "typed_blocker_type_counts": rejected_typed_counts["code_counts"],
+        "typed_blocker_handoff_counts": rejected_typed_counts["handoff_counts"],
         "intakes": intakes,
         "rejected": rejected,
+    }
+
+
+def _draft_grammar_typed_blockers(draft_grammar: dict[str, Any], blockers: list[Any]) -> list[dict[str, str]]:
+    typed = draft_grammar.get("typed_blockers") if isinstance(draft_grammar.get("typed_blockers"), list) else []
+    rows = [dict(item) for item in typed if isinstance(item, dict)]
+    return rows or typed_intake_blockers(blockers)
+
+
+def _rejected_recipe_intake(
+    *,
+    workload_id: Any,
+    intent: Any,
+    reason: str,
+    blockers: list[Any],
+    typed_blockers: list[dict[str, str]],
+) -> dict[str, Any]:
+    primary = primary_typed_blocker(typed_blockers) or {}
+    return {
+        "workload_id": workload_id,
+        "intent": intent,
+        "reason": reason,
+        "blockers": blockers,
+        "reject_type": primary.get("code"),
+        "owner": primary.get("owner"),
+        "handoff": primary.get("handoff"),
+        "next_action": primary.get("next_action"),
+        "next_artifact_required": primary.get("next_artifact_required"),
+        "typed_blockers": typed_blockers,
     }
 
 
@@ -619,6 +668,9 @@ def _workload_draft_grammar_check(contract: dict[str, Any], workload: dict[str, 
         else {}
     )
     if draft_grammar.get("materialization_allowed") is False:
+        blockers = list(draft_grammar.get("blockers") or [])
+        typed_blockers = _draft_grammar_typed_blockers(draft_grammar, blockers)
+        primary = primary_typed_blocker(typed_blockers) or {}
         if draft_grammar.get("materialization_candidate") is False:
             return {
                 "task": task,
@@ -627,6 +679,12 @@ def _workload_draft_grammar_check(contract: dict[str, Any], workload: dict[str, 
                 "ok": True,
                 "reason": "inventory_only_unobserved_workload",
                 "detail": "statically detected but not observed in baseline trace; skipping materialization",
+                "reject_type": primary.get("code"),
+                "owner": primary.get("owner"),
+                "handoff": primary.get("handoff"),
+                "next_action": primary.get("next_action"),
+                "next_artifact_required": primary.get("next_artifact_required"),
+                "typed_blockers": typed_blockers,
             }
         return {
             "task": task,
@@ -634,7 +692,13 @@ def _workload_draft_grammar_check(contract: dict[str, Any], workload: dict[str, 
             "workload_id": workload_id,
             "ok": False,
             "reason": "recipe_draft_not_materializable",
-            "blockers": list(draft_grammar.get("blockers") or [])[:8],
+            "blockers": blockers[:8],
+            "reject_type": primary.get("code"),
+            "owner": primary.get("owner"),
+            "handoff": primary.get("handoff"),
+            "next_action": primary.get("next_action"),
+            "next_artifact_required": primary.get("next_artifact_required"),
+            "typed_blockers": typed_blockers,
         }
     return {"task": task, "intent": intent, "workload_id": workload_id, "ok": True, "reason": "recipe_draft_materializable"}
 

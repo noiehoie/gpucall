@@ -88,6 +88,9 @@ def test_classifies_validation_missing() -> None:
 
     assert result["category"] == "validation_missing"
     assert result["blockers"][0]["label"] == "validation 不足"
+    assert result["blockers"][0]["code"] == "ADMIN_VALIDATION_MISSING"
+    assert result["blockers"][0]["owner"] == "admin"
+    assert result["blockers"][0]["handoff"] == "gpucall-recipe-admin"
 
 
 def test_classifies_price_unknown_even_when_route_is_live_ready() -> None:
@@ -105,6 +108,7 @@ def test_classifies_price_unknown_even_when_route_is_live_ready() -> None:
 
     assert result["category"] == "price_unknown"
     assert result["blockers"][0]["label"] == "price 不明"
+    assert result["blockers"][0]["code"] == "ADMIN_PRICE_EVIDENCE_MISSING"
 
 
 def test_ignores_blocked_tuple_for_unrequested_mode_when_requested_mode_is_ready() -> None:
@@ -162,6 +166,9 @@ def test_classifies_endpoint_stale_before_validation_missing() -> None:
 
     assert result["category"] == "endpoint_stale"
     assert {item["category"] for item in result["blockers"]} == {"endpoint_stale", "validation_missing"}
+    endpoint_blocker = next(item for item in result["blockers"] if item["category"] == "endpoint_stale")
+    assert endpoint_blocker["code"] == "PROVIDER_ENDPOINT_STALE"
+    assert endpoint_blocker["owner"] == "provider"
 
 
 def test_endpoint_info_does_not_turn_missing_validation_into_endpoint_stale() -> None:
@@ -206,6 +213,8 @@ def test_classifies_provider_missing_when_no_compatible_recipe() -> None:
 
     assert result["category"] == "provider_missing"
     assert result["blockers"][0]["reason"] == "no_contract_compatible_readiness_recipe"
+    assert result["blockers"][0]["code"] == "ADMIN_TUPLE_MISSING"
+    assert result["blockers"][0]["owner"] == "admin"
 
 
 def test_classifies_no_static_eligible_tuple_before_no_live_ready_tuple() -> None:
@@ -224,6 +233,7 @@ def test_classifies_no_static_eligible_tuple_before_no_live_ready_tuple() -> Non
 
     assert result["category"] == "provider_missing"
     assert result["blockers"][0]["reason"] == "no_static_eligible_tuple"
+    assert result["blockers"][0]["code"] == "ADMIN_TUPLE_MISSING"
 
 
 def test_readiness_status_override_adds_matching_blocker() -> None:
@@ -233,13 +243,11 @@ def test_readiness_status_override_adds_matching_blocker() -> None:
     )
 
     assert result["category"] == "validation_missing"
-    assert result["blockers"] == [
-        {
-            "category": "validation_missing",
-            "label": "validation 不足",
-            "reason": "readiness_shipment_status_validation_lack",
-        }
-    ]
+    assert len(result["blockers"]) == 1
+    assert result["blockers"][0]["category"] == "validation_missing"
+    assert result["blockers"][0]["label"] == "validation 不足"
+    assert result["blockers"][0]["reason"] == "readiness_shipment_status_validation_lack"
+    assert result["blockers"][0]["code"] == "ADMIN_VALIDATION_MISSING"
 
 
 def test_readiness_status_does_not_downgrade_endpoint_stale() -> None:
@@ -310,6 +318,39 @@ def test_build_report_reuses_readiness_for_duplicate_intents(tmp_path: Path, mon
 
     assert calls == ["rank_text_items"]
     assert report["summary"]["shipment_ready_count"] == 2
+
+
+def test_build_report_summarizes_blocker_owner_and_code_counts(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    contract = tmp_path / "workload-contract.json"
+    contract.write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "phase": "workload-contract",
+                "source": "fixture",
+                "workloads": [_workload()],
+            }
+        ),
+        encoding="utf-8",
+    )
+    row = {
+        "tuple": "runpod-h100",
+        "mode": "sync",
+        "price_freshness": "fresh",
+        "route_validation_required": True,
+        "live_reason": "missing_route_validation_evidence",
+    }
+
+    def fake_readiness(**_kwargs: object) -> dict[str, object]:
+        return _readiness(_recipe(eligible_tuples=[row], live_ready_tuples=[], live_blocked_tuples=[row]))
+
+    monkeypatch.setattr("gpucall.shipment_gap.build_readiness_report", fake_readiness)
+
+    report = build_shipment_gap_report(config_dir=tmp_path, contract_path=contract)
+
+    assert report["summary"]["owner_counts"] == {"admin": 1}
+    assert report["summary"]["code_counts"] == {"ADMIN_VALIDATION_MISSING": 1}
+    assert report["summary"]["handoff_counts"] == {"gpucall-recipe-admin": 1}
 
 
 def test_build_report_rejects_invalid_contract_json(tmp_path: Path) -> None:

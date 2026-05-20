@@ -2218,6 +2218,7 @@ def test_contract_to_recipe_intake_preserves_contract_metadata() -> None:
     assert intake["sanitized_request"]["mode"] == "async"
     assert intake["sanitized_request"]["intent"] == "rank_text_items"
     assert intake["sanitized_request"]["quality_contract"]["metrics"]["min_topics"] == 12
+    assert intake["sanitized_request"]["draft_grammar"]["typed_blockers"] == []
 
 
 def test_recipe_intakes_from_contract_preserves_all_materializable_workloads() -> None:
@@ -2266,6 +2267,55 @@ def test_recipe_intakes_from_contract_preserves_all_materializable_workloads() -
     assert [item["sanitized_request"]["intent"] for item in bundle["intakes"]] == ["rank_text_items", "understand_document_image"]
     assert bundle["rejected"][0]["workload_id"] == "infer.unknown"
     assert any("operator intent mapping" in item for item in bundle["rejected"][0]["blockers"])
+    assert bundle["rejected"][0]["reject_type"] == "CALLER_QUALITY_BASELINE_MISSING"
+    assert bundle["rejected"][0]["owner"] == "caller"
+    assert bundle["rejected"][0]["handoff"] == "caller-c-kit"
+    assert bundle["rejected"][0]["next_artifact_required"] == "workload-trace.json"
+    assert {item["code"] for item in bundle["rejected"][0]["typed_blockers"]} >= {
+        "ADMIN_RECIPE_MISSING",
+        "CALLER_QUALITY_BASELINE_MISSING",
+    }
+    assert bundle["rejected_type_counts"] == {"CALLER_QUALITY_BASELINE_MISSING": 1}
+    assert bundle["rejected_owner_counts"] == {"caller": 1}
+    assert bundle["rejected_handoff_counts"] == {"caller-c-kit": 1}
+    assert bundle["typed_blocker_type_counts"] == {"ADMIN_RECIPE_MISSING": 2, "CALLER_QUALITY_BASELINE_MISSING": 2}
+    assert bundle["typed_blocker_owner_counts"] == {"admin": 2, "caller": 2}
+    assert bundle["typed_blocker_handoff_counts"] == {"caller-c-kit": 2, "gpucall-recipe-admin": 2}
+
+
+def test_recipe_intakes_from_contract_types_baseline_rejects_for_caller() -> None:
+    contract = {
+        "phase": "workload-contract",
+        "source": "fixture",
+        "primary_workload_id": "infer.rank_text_items",
+        "workloads": [
+            {
+                "id": "infer.rank_text_items",
+                "task": "infer",
+                "intent": "rank_text_items",
+                "classification": "confidential",
+                "modes": ["async"],
+                "input_profile": {"content_types": ["text/plain"], "context_budget_tokens": 131072},
+                "output_profile": {"output_contract": "json_object"},
+                "quality_contract": {"missing_baseline_metrics": True, "metrics": {}},
+            }
+        ],
+    }
+
+    bundle = recipe_intakes_from_contract(contract)
+
+    assert bundle["count"] == 0
+    assert bundle["rejected_count"] == 1
+    rejected = bundle["rejected"][0]
+    assert rejected["reject_type"] == "CALLER_QUALITY_BASELINE_MISSING"
+    assert rejected["owner"] == "caller"
+    assert rejected["handoff"] == "caller-c-kit"
+    assert rejected["next_artifact_required"] == "workload-trace.json"
+    assert rejected["typed_blockers"][0]["code"] == "CALLER_QUALITY_BASELINE_MISSING"
+    assert bundle["rejected_type_counts"] == {"CALLER_QUALITY_BASELINE_MISSING": 1}
+    assert bundle["rejected_owner_counts"] == {"caller": 1}
+    assert bundle["typed_blocker_type_counts"]["CALLER_QUALITY_BASELINE_MISSING"] == 2
+    assert bundle["typed_blocker_owner_counts"] == {"caller": 2}
 
 
 def test_migrate_compare_rejects_provider_temporary_failures(tmp_path) -> None:

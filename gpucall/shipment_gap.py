@@ -6,6 +6,7 @@ from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
+from gpucall.blocker_taxonomy import shipment_blocker_metadata
 from gpucall.config import default_config_dir
 from gpucall.readiness import build_readiness_report
 
@@ -61,6 +62,9 @@ def build_shipment_gap_report(
         )
     category_counts = Counter(str(item.get("category") or PROVIDER_MISSING) for item in demands)
     blocker_counts = Counter(str(blocker.get("category")) for item in demands for blocker in item.get("blockers", []) or [])
+    owner_counts = Counter(str(blocker.get("owner")) for item in demands for blocker in item.get("blockers", []) or [] if blocker.get("owner"))
+    code_counts = Counter(str(blocker.get("code")) for item in demands for blocker in item.get("blockers", []) or [] if blocker.get("code"))
+    handoff_counts = Counter(str(blocker.get("handoff")) for item in demands for blocker in item.get("blockers", []) or [] if blocker.get("handoff"))
     ready_count = category_counts.get(SHIPMENT_READY, 0)
     blocker_count = len(demands) - ready_count
     return {
@@ -78,6 +82,9 @@ def build_shipment_gap_report(
             "blocker_count": blocker_count,
             "category_counts": dict(sorted(category_counts.items())),
             "blocker_counts": dict(sorted(blocker_counts.items())),
+            "owner_counts": dict(sorted(owner_counts.items())),
+            "code_counts": dict(sorted(code_counts.items())),
+            "handoff_counts": dict(sorted(handoff_counts.items())),
         },
         "demands": demands,
     }
@@ -178,7 +185,17 @@ def _blockers_from_rows(
 
 
 def _blocker(category: str, reason: str, *, rows: list[Mapping[str, Any]] | None = None) -> dict[str, Any]:
-    payload: dict[str, Any] = {"category": category, "label": CATEGORY_LABELS[category], "reason": reason}
+    metadata = shipment_blocker_metadata(category, reason)
+    payload: dict[str, Any] = {
+        "category": category,
+        "label": CATEGORY_LABELS[category],
+        "reason": reason,
+        "code": metadata["code"],
+        "owner": metadata["owner"],
+        "handoff": metadata["handoff"],
+        "next_action": metadata["next_action"],
+        "next_artifact_required": metadata["next_artifact_required"],
+    }
     if rows is not None:
         payload["tuples"] = [_bounded_tuple(row) for row in rows[:12]]
     return payload

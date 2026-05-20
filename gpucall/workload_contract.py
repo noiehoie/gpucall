@@ -9,6 +9,7 @@ from collections.abc import Iterable, Mapping
 from pathlib import Path
 from typing import Any
 
+from gpucall.blocker_taxonomy import typed_intake_blockers
 from gpucall.recipe_intents import (
     capabilities_for,
     is_valid_production_intent,
@@ -251,6 +252,7 @@ def contract_to_recipe_intake(contract: Mapping[str, Any], *, workload_id: str |
         intent = _unknown_intent_for_text(json.dumps(dict(workload), sort_keys=True, default=str))
 
     grammar_blockers = _intake_grammar_blockers(workload=workload, intent=intent, output_contract=output_contract, quality=quality)
+    typed_grammar_blockers = typed_intake_blockers(grammar_blockers)
     is_incomplete = bool(grammar_blockers)
 
     mode = _first_mode(workload.get("modes"))
@@ -289,6 +291,7 @@ def contract_to_recipe_intake(contract: Mapping[str, Any], *, workload_id: str |
                 "observed_in_baseline": observed_in_baseline,
                 "materialization_candidate": materialization_candidate,
                 "blockers": grammar_blockers,
+                "typed_blockers": typed_grammar_blockers,
                 "caller_bias": "overdeclare_when_uncertain",
                 "admin_policy": "reject_or_narrow_deterministically",
             },
