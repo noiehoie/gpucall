@@ -922,7 +922,7 @@ def _runpod_vllm_models_probe_timeout_seconds() -> float:
     if not raw:
         return 10.0
     try:
-        return min(max(float(raw), 1.0), 60.0)
+        return min(max(float(raw), 1.0), 420.0)
     except ValueError:
         return 10.0
 

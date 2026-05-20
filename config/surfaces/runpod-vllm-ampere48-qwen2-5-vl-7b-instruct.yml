@@ -4,7 +4,7 @@ adapter: runpod-vllm-serverless
 execution_surface: managed_endpoint
 gpu: AMPERE_48
 vram_gb: 48
-max_model_len: 32768
+max_model_len: 8192
 cost_per_second: 0.00034
 configured_price_source: https://docs.runpod.io/serverless/pricing
 configured_price_observed_at: '2026-05-17T15:22:00+00:00'

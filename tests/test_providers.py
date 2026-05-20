@@ -34,6 +34,7 @@ from gpucall.execution_surfaces.function_runtime import RunpodVllmFlashBootAdapt
 from gpucall.execution_surfaces.managed_endpoint import RunpodServerlessAdapter
 from gpucall.execution_surfaces.managed_endpoint import (
     RunpodVllmServerlessAdapter,
+    _runpod_vllm_models_probe_timeout_seconds,
     _runpod_vllm_native_poll_timeout_seconds,
     _runpod_vllm_openai_request_timeout_seconds,
     _runpod_vllm_queue_saturation_seconds,
@@ -1208,6 +1209,26 @@ def test_runpod_vllm_openai_route_request_timeout_defaults_to_plan_timeout(monke
     monkeypatch.delenv("GPUCALL_RUNPOD_VLLM_OPENAI_REQUEST_TIMEOUT_SECONDS", raising=False)
 
     assert _runpod_vllm_openai_request_timeout_seconds(600) == 600.0
+
+
+def test_runpod_vllm_models_probe_timeout_accepts_cold_start_budget(monkeypatch) -> None:
+    monkeypatch.setenv("GPUCALL_RUNPOD_VLLM_MODELS_PROBE_TIMEOUT_SECONDS", "420")
+
+    assert _runpod_vllm_models_probe_timeout_seconds() == 420.0
+
+
+def test_runpod_vllm_models_probe_timeout_defaults_and_bounds(monkeypatch) -> None:
+    monkeypatch.delenv("GPUCALL_RUNPOD_VLLM_MODELS_PROBE_TIMEOUT_SECONDS", raising=False)
+    assert _runpod_vllm_models_probe_timeout_seconds() == 10.0
+
+    monkeypatch.setenv("GPUCALL_RUNPOD_VLLM_MODELS_PROBE_TIMEOUT_SECONDS", "not-a-number")
+    assert _runpod_vllm_models_probe_timeout_seconds() == 10.0
+
+    monkeypatch.setenv("GPUCALL_RUNPOD_VLLM_MODELS_PROBE_TIMEOUT_SECONDS", "0")
+    assert _runpod_vllm_models_probe_timeout_seconds() == 1.0
+
+    monkeypatch.setenv("GPUCALL_RUNPOD_VLLM_MODELS_PROBE_TIMEOUT_SECONDS", "999")
+    assert _runpod_vllm_models_probe_timeout_seconds() == 420.0
 
 
 def test_runpod_vllm_async_uses_native_run_and_status(monkeypatch) -> None:
