@@ -34,7 +34,7 @@ from gpucall.app import build_runtime, create_app, plan_with_worker_refs, worker
 from gpucall.admin_automation import admin_automation_summary, configure_admin_automation
 from gpucall.catalog import SQLiteCapabilityCatalog, dumps_snapshot
 from gpucall.handoff import handoff_payload as _handoff_payload, render_handoff as _render_handoff
-from gpucall.cli_commands.readiness import add_readiness_parser, run_readiness_command
+from gpucall.cli_commands.readiness import add_readiness_parser, run_readiness_command, add_shipment_blockers_parser, run_shipment_blockers_command
 from gpucall.cli_commands.panopticon import add_panopticon_parser, run_panopticon_command
 from gpucall.cli_commands.setup import add_setup_parser, run_setup_command
 from gpucall.compiler import GovernanceCompiler
@@ -72,6 +72,7 @@ from gpucall.tenant import TenantUsageLedger
 from gpucall.validator_plan import build_validator_plan, dumps_validator_plan
 from gpucall.dispatcher import is_terminal_job_state
 from gpucall.production_acceptance import dumps_acceptance_report, run_production_acceptance
+from gpucall.shipment_gap import build_shipment_gap_report, dumps_shipment_gap
 
 
 def _positive_int(value: str) -> int:
@@ -201,7 +202,18 @@ def main() -> None:
     production_acceptance = sub.add_parser("production-acceptance")
     production_acceptance.add_argument("--config-dir", type=Path, default=None)
     production_acceptance.add_argument("--output", type=Path, default=None)
+    shipment_check = sub.add_parser("shipment-check")
+    shipment_check.add_argument("--config-dir", type=Path, default=default_config_dir())
+    shipment_check.add_argument("--contract", type=Path, required=True, help="C-kit workload-contract.json demand file")
+    shipment_check.add_argument("--validation-dir", type=Path, default=None)
+    shipment_check.add_argument("--panopticon-path", type=Path, default=None)
+    shipment_check.add_argument("--live", action="store_true", help="refresh Provider Panopticon with non-generation provider probes before classification")
+    shipment_check.add_argument("--source", default=None)
+    shipment_check.add_argument("--min-live-ready-tuples", type=_positive_int, default=1)
+    shipment_check.add_argument("--output-json", type=Path, default=None)
+    shipment_check.add_argument("--fail-on-blocker", action="store_true")
     add_readiness_parser(sub)
+    add_shipment_blockers_parser(sub)
     add_panopticon_parser(sub)
     add_setup_parser(sub)
     configure = sub.add_parser("configure")
@@ -393,8 +405,27 @@ def main() -> None:
         release_check_command(args.config_dir, args.output_dir)
     elif args.command == "production-acceptance":
         production_acceptance_command(args.output, config_dir=args.config_dir)
+    elif args.command == "shipment-check":
+        report = build_shipment_gap_report(
+            config_dir=args.config_dir,
+            contract_path=args.contract,
+            validation_dir=args.validation_dir,
+            panopticon_path=args.panopticon_path,
+            live=args.live,
+            source=args.source,
+            min_live_ready_tuples=args.min_live_ready_tuples,
+        )
+        payload = dumps_shipment_gap(report)
+        if args.output_json is not None:
+            args.output_json.parent.mkdir(parents=True, exist_ok=True)
+            args.output_json.write_text(payload, encoding="utf-8")
+        print(payload, end="")
+        if args.fail_on_blocker and report.get("go") is not True:
+            raise SystemExit(2)
     elif args.command == "readiness":
         run_readiness_command(args)
+    elif args.command == "shipment-blockers":
+        run_shipment_blockers_command(args)
     elif args.command == "panopticon":
         run_panopticon_command(args)
     elif args.command == "setup":
