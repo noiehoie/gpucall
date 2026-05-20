@@ -124,7 +124,7 @@ def classify_workload_demand(
         blockers.extend(_blockers_from_rows(rows=rows, ready_rows=ready_rows, fresh_ready_rows=fresh_ready_rows, min_live_ready_tuples=min_live_ready_tuples))
     category = SHIPMENT_READY if not blockers else _primary_category(blockers)
     # Use compatible recipe shipment status only when it strengthens this classification.
-    status_source = compatible[0] if compatible else None
+    status_source = _shipment_status_source_recipe(compatible, modes=modes)
     if status_source and status_source.get("shipment_status"):
         recipe_status = str(status_source["shipment_status"])
         mapped_category = {
@@ -242,6 +242,13 @@ def _recipe_is_contract_compatible(recipe: Mapping[str, Any], *, context_budget_
     if requested_modes and allowed_modes and not requested_modes.intersection(allowed_modes):
         return False
     return True
+
+
+def _shipment_status_source_recipe(recipes: list[Mapping[str, Any]], *, modes: list[str]) -> Mapping[str, Any] | None:
+    for recipe in recipes:
+        if _ready_rows(recipe, modes=modes):
+            return recipe
+    return recipes[0] if recipes else None
 
 
 def _eligible_rows(recipe: Mapping[str, Any]) -> list[Mapping[str, Any]]:

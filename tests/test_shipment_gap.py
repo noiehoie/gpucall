@@ -286,6 +286,45 @@ def test_readiness_status_override_adds_matching_blocker() -> None:
     assert result["blockers"][0]["code"] == "ADMIN_VALIDATION_MISSING"
 
 
+def test_readiness_status_override_uses_ready_compatible_recipe() -> None:
+    blocked_recipe = _recipe(
+        recipe="infer-rank-text-items-long",
+        auto_select=False,
+        production_activated=False,
+        allowed_modes=["sync", "async"],
+        context_budget_tokens=131072,
+        eligible_tuple_count=0,
+        eligible_tuples=[],
+        live_ready_tuple_count=0,
+        live_ready_tuples=[],
+        live_blocked_tuples=[],
+        shipment_status="provider_lack",
+    )
+    ready_row = {
+        "tuple": "runpod-h100",
+        "mode": "async",
+        "price_freshness": "fresh",
+        "route_validation_required": True,
+        "live_validation_artifact": "/state/tuple-validation/ok.json",
+    }
+    ready_recipe = _recipe(
+        recipe="infer-rank-text-items-standard",
+        allowed_modes=["sync", "async"],
+        context_budget_tokens=131072,
+        eligible_tuples=[ready_row],
+        live_ready_tuples=[ready_row],
+        shipment_status="shippable",
+    )
+
+    result = classify_workload_demand(
+        _workload(modes=["async"], context=131072),
+        {"schema_version": 1, "phase": "readiness", "recipes": [blocked_recipe, ready_recipe]},
+    )
+
+    assert result["category"] == "shipment_ready"
+    assert result["blockers"] == []
+
+
 def test_readiness_status_does_not_downgrade_endpoint_stale() -> None:
     row = {
         "tuple": "runpod-a100-dead",
