@@ -34,7 +34,7 @@ from gpucall.app import build_runtime, create_app, plan_with_worker_refs, worker
 from gpucall.admin_automation import admin_automation_summary, configure_admin_automation
 from gpucall.catalog import SQLiteCapabilityCatalog, dumps_snapshot
 from gpucall.handoff import handoff_payload as _handoff_payload, render_handoff as _render_handoff
-from gpucall.cli_commands.readiness import add_readiness_parser, run_readiness_command, add_shipment_blockers_parser, run_shipment_blockers_command
+from gpucall.cli_commands.readiness import add_readiness_parser, run_readiness_command
 from gpucall.cli_commands.panopticon import add_panopticon_parser, run_panopticon_command
 from gpucall.cli_commands.setup import add_setup_parser, run_setup_command
 from gpucall.compiler import GovernanceCompiler
@@ -213,7 +213,6 @@ def main() -> None:
     shipment_check.add_argument("--output-json", type=Path, default=None)
     shipment_check.add_argument("--fail-on-blocker", action="store_true")
     add_readiness_parser(sub)
-    add_shipment_blockers_parser(sub)
     add_panopticon_parser(sub)
     add_setup_parser(sub)
     configure = sub.add_parser("configure")
@@ -424,8 +423,6 @@ def main() -> None:
             raise SystemExit(2)
     elif args.command == "readiness":
         run_readiness_command(args)
-    elif args.command == "shipment-blockers":
-        run_shipment_blockers_command(args)
     elif args.command == "panopticon":
         run_panopticon_command(args)
     elif args.command == "setup":
