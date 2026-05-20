@@ -325,6 +325,96 @@ def test_readiness_status_override_uses_ready_compatible_recipe() -> None:
     assert result["blockers"] == []
 
 
+def test_non_production_compatible_recipe_does_not_block_ready_production_route() -> None:
+    draft_row = {
+        "tuple": "runpod-h100",
+        "mode": "sync",
+        "price_freshness": "fresh",
+        "route_validation_required": True,
+        "live_reason": "missing_route_validation_evidence",
+    }
+    draft_recipe = _recipe(
+        recipe="infer-translate-text-draft",
+        intent="translate_text",
+        auto_select=False,
+        production_activated=False,
+        eligible_tuples=[draft_row],
+        live_ready_tuples=[],
+        live_blocked_tuples=[draft_row],
+        shipment_status="validation_lack",
+    )
+    ready_row = {
+        "tuple": "runpod-h100",
+        "mode": "sync",
+        "price_freshness": "fresh",
+        "route_validation_required": True,
+        "live_validation_artifact": "/state/tuple-validation/ok.json",
+    }
+    production_recipe = _recipe(
+        recipe="infer-translate-text-standard",
+        intent="translate_text",
+        auto_select=True,
+        production_activated=True,
+        eligible_tuples=[ready_row],
+        live_ready_tuples=[ready_row],
+        shipment_status="shippable",
+    )
+
+    result = classify_workload_demand(
+        _workload("translate_text", modes=["sync", "async"], context=32768),
+        {"schema_version": 1, "phase": "readiness", "recipes": [draft_recipe, production_recipe]},
+    )
+
+    assert result["category"] == "shipment_ready"
+    assert result["blockers"] == []
+
+
+def test_status_source_fallback_stays_with_production_classification_recipes() -> None:
+    draft_ready_row = {
+        "tuple": "draft-ok",
+        "mode": "sync",
+        "price_freshness": "fresh",
+        "route_validation_required": True,
+        "live_validation_artifact": "/state/tuple-validation/draft-ok.json",
+    }
+    draft_recipe = _recipe(
+        recipe="infer-translate-text-draft",
+        intent="translate_text",
+        auto_select=False,
+        production_activated=False,
+        eligible_tuples=[draft_ready_row],
+        live_ready_tuples=[draft_ready_row],
+        shipment_status="shippable",
+    )
+    production_blocked_row = {
+        "tuple": "prod-missing-validation",
+        "mode": "sync",
+        "price_freshness": "fresh",
+        "route_validation_required": True,
+        "live_reason": "missing_route_validation_evidence",
+    }
+    production_recipe = _recipe(
+        recipe="infer-translate-text-standard",
+        intent="translate_text",
+        auto_select=True,
+        production_activated=True,
+        eligible_tuples=[production_blocked_row],
+        live_ready_tuples=[],
+        live_blocked_tuples=[production_blocked_row],
+        shipment_status="validation_lack",
+    )
+
+    result = classify_workload_demand(
+        _workload("translate_text", modes=["sync"], context=32768),
+        {"schema_version": 1, "phase": "readiness", "recipes": [draft_recipe, production_recipe]},
+    )
+
+    assert result["category"] == "validation_missing"
+    assert {item["reason"] for item in result["blockers"]} == {
+        "route_validation_evidence_missing_or_rejected"
+    }
+
+
 def test_readiness_status_does_not_downgrade_endpoint_stale() -> None:
     row = {
         "tuple": "runpod-a100-dead",

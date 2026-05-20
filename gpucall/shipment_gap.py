@@ -118,8 +118,9 @@ def classify_workload_demand(
     elif not compatible:
         blockers.append(_blocker(PROVIDER_MISSING, "no_contract_compatible_readiness_recipe"))
     else:
-        rows = _rows_for_requested_modes([row for recipe in compatible for row in _eligible_rows(recipe)], modes=modes)
-        ready_rows = [row for recipe in compatible for row in _ready_rows(recipe, modes=modes)]
+        classification_recipes = _shipment_classification_recipes(compatible)
+        rows = _rows_for_requested_modes([row for recipe in classification_recipes for row in _eligible_rows(recipe)], modes=modes)
+        ready_rows = [row for recipe in classification_recipes for row in _ready_rows(recipe, modes=modes)]
         fresh_ready_rows = [row for row in ready_rows if row.get("price_freshness") == "fresh"]
         blockers.extend(_blockers_from_rows(rows=rows, ready_rows=ready_rows, fresh_ready_rows=fresh_ready_rows, min_live_ready_tuples=min_live_ready_tuples))
     category = SHIPMENT_READY if not blockers else _primary_category(blockers)
@@ -245,10 +246,20 @@ def _recipe_is_contract_compatible(recipe: Mapping[str, Any], *, context_budget_
 
 
 def _shipment_status_source_recipe(recipes: list[Mapping[str, Any]], *, modes: list[str]) -> Mapping[str, Any] | None:
-    for recipe in recipes:
+    classification_recipes = _shipment_classification_recipes(recipes)
+    for recipe in classification_recipes:
         if _ready_rows(recipe, modes=modes):
             return recipe
-    return recipes[0] if recipes else None
+    return classification_recipes[0] if classification_recipes else None
+
+
+def _shipment_classification_recipes(recipes: list[Mapping[str, Any]]) -> list[Mapping[str, Any]]:
+    production_recipes = [
+        recipe
+        for recipe in recipes
+        if recipe.get("auto_select") is True and recipe.get("production_activated") is True
+    ]
+    return production_recipes or recipes
 
 
 def _eligible_rows(recipe: Mapping[str, Any]) -> list[Mapping[str, Any]]:
