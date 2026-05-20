@@ -1298,6 +1298,78 @@ def test_runpod_endpoint_inventory_miss_exposes_machine_reason(monkeypatch) -> N
     ]
 
 
+def test_runpod_openai_models_probe_timeout_blocks_serving_readiness(monkeypatch) -> None:
+    from gpucall.execution_surfaces import managed_endpoint
+
+    monkeypatch.setattr(
+        managed_endpoint,
+        "_runpod_endpoint_live_inventory_rows",
+        lambda api_key, base_url: [{"id": "30g7ze5wb2n3xw", "workersMin": 0, "workersMax": 1}],
+    )
+
+    class Response:
+        def __init__(self, status_code: int, payload: dict[str, object]) -> None:
+            self.status_code = status_code
+            self._payload = payload
+            self.text = json.dumps(payload)
+
+        def json(self) -> dict[str, object]:
+            return self._payload
+
+    class Session:
+        def get(self, url: str, **kwargs: object) -> Response:
+            if url.endswith("/health"):
+                return Response(200, {"workers": {"ready": 1, "idle": 1, "running": 0, "inQueue": 0}})
+            if url.endswith("/openai/v1/models"):
+                raise TimeoutError("models probe timed out")
+            raise AssertionError(url)
+
+    monkeypatch.setattr(managed_endpoint, "requests_session", lambda: Session())
+    tuple_spec = SimpleNamespace(
+        name="runpod-vllm-h100-80gb-qwen2-5-7b-instruct",
+        adapter="runpod-vllm-serverless",
+        target="30g7ze5wb2n3xw",
+        endpoint=None,
+        endpoint_contract="openai-chat-completions",
+        model="Qwen/Qwen2.5-7B-Instruct",
+        provider_params={},
+        standing_cost_per_second=None,
+        standing_cost_window_seconds=None,
+    )
+
+    findings = managed_endpoint.runpod_endpoint_catalog_findings([tuple_spec], {"runpod": {"api_key": "rk_test"}})
+
+    models_finding = next(item for item in findings if item["dimension"] == "models")
+    assert models_finding["severity"] == "error"
+    assert models_finding["field"] == "openai_models"
+    assert models_finding["raw"]["live_reason"] == "models_probe_timeout"
+    assert models_finding["raw"]["error_code"] == "PROVIDER_TIMEOUT"
+
+
+def test_readiness_shipment_status_treats_models_probe_error_as_provider_lack() -> None:
+    from gpucall.readiness import classify_shipment_status
+
+    report = {
+        "eligible_tuple_count": 1,
+        "live_ready_tuple_count": 0,
+        "live_blocked_tuples": [
+            {
+                "live_reason": "models_probe_timeout",
+                "live_catalog_findings": [
+                    {
+                        "dimension": "models",
+                        "severity": "error",
+                        "field": "openai_models",
+                        "raw": {"live_reason": "models_probe_timeout", "error_code": "PROVIDER_TIMEOUT"},
+                    }
+                ],
+            }
+        ],
+    }
+
+    assert classify_shipment_status(report) == "provider_lack"
+
+
 def test_provider_smoke_writes_live_validation_artifact(tmp_path, monkeypatch) -> None:
     root = copy_config(tmp_path)
     monkeypatch.setenv("GPUCALL_ALLOW_FAKE_AUTO_TUPLES", "1")

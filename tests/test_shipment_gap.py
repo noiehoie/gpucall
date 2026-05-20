@@ -93,6 +93,42 @@ def test_classifies_validation_missing() -> None:
     assert result["blockers"][0]["handoff"] == "gpucall-recipe-admin"
 
 
+def test_classifies_models_probe_timeout_as_provider_missing_before_validation() -> None:
+    row = {
+        "tuple": "runpod-h100",
+        "mode": "sync",
+        "price_freshness": "fresh",
+        "route_validation_required": True,
+        "live_reason": "models_probe_timeout",
+        "live_catalog_findings": [
+            {
+                "dimension": "models",
+                "severity": "error",
+                "field": "openai_models",
+                "raw": {"live_reason": "models_probe_timeout", "error_code": "PROVIDER_TIMEOUT"},
+            }
+        ],
+    }
+    result = classify_workload_demand(
+        _workload(),
+        _readiness(
+            _recipe(
+                production_activated=False,
+                eligible_tuples=[row],
+                live_ready_tuple_count=0,
+                live_ready_tuples=[],
+                live_blocked_tuples=[row],
+            )
+        ),
+    )
+
+    assert result["category"] == "provider_missing"
+    assert {item["category"] for item in result["blockers"]} == {"provider_missing", "validation_missing"}
+    provider_blocker = next(item for item in result["blockers"] if item["category"] == "provider_missing")
+    assert provider_blocker["reason"] == "provider_serving_unready"
+    assert provider_blocker["code"] == "PROVIDER_SUPPLY_MISSING"
+
+
 def test_classifies_price_unknown_even_when_route_is_live_ready() -> None:
     row = {
         "tuple": "runpod-h100",

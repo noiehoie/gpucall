@@ -79,7 +79,7 @@ from gpucall.openai_facade import (
 from gpucall.postgres_store import PostgresIdempotencyStore, PostgresJobStore
 from gpucall.panopticon import store_panopticon_evidence
 from gpucall.panopticon_client import fetch_panopticon_snapshot, panopticon_report_summary
-from gpucall.readiness import build_readiness_report
+from gpucall.readiness import build_readiness_report, classify_shipment_status
 from gpucall.registry import ObservedRegistry
 from gpucall.routing import route_warning_tags
 from gpucall.tuple_catalog import live_tuple_catalog_evidence
@@ -579,6 +579,7 @@ def create_app(config_dir: Path | None = None) -> FastAPI:
             recipe["async_only_recommended"] = bool(live_ready and not sync_live_ready)
             recipe["recommended_mode"] = "async" if recipe.get("async_only_recommended") else ("sync" if recipe.get("sync_eligible") else "none")
             recipe["current_caller_action"] = "send_request" if live_ready else "retry_later_or_contact_gpucall_admin"
+            recipe["shipment_status"] = classify_shipment_status(recipe)
         report["runtime_admission"] = admission
         return report
 

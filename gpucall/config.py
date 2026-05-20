@@ -228,7 +228,7 @@ def load_engines(config_dir: Path | None = None) -> dict[str, EngineSpec]:
     return engines
 
 
-def load_config(config_dir: Path | None = None) -> GpucallConfig:
+def load_config(config_dir: Path | None = None, *, validate: bool = True) -> GpucallConfig:
     root = config_dir or default_config_dir()
     config = GpucallConfig(
         policy=load_policy(root),
@@ -241,7 +241,8 @@ def load_config(config_dir: Path | None = None) -> GpucallConfig:
         admin_automation=load_admin_automation(root),
         runtimes=load_runtimes(root),
     )
-    validate_config(config)
+    if validate:
+        validate_config(config)
     return config
 
 

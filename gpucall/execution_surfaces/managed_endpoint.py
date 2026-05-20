@@ -236,6 +236,8 @@ def runpod_endpoint_catalog_findings(tuples: list[Any], credentials: dict[str, d
                         },
                     )
                 )
+        if getattr(tuple, "endpoint_contract", None) == "openai-chat-completions":
+            findings.append(_runpod_openai_models_finding(tuple, api_key, base_url))
         price = _runpod_endpoint_live_price(tuple, api_key, inventory_base_url, endpoint=endpoint)
         if price is not None:
             findings.append(
@@ -248,6 +250,108 @@ def runpod_endpoint_catalog_findings(tuples: list[Any], credentials: dict[str, d
                 )
             )
     return findings
+
+
+def _runpod_openai_models_finding(tuple: Any, api_key: str, base_url: str) -> dict[str, Any]:
+    url = f"{base_url}/{tuple.target}/openai/v1/models"
+    started_at = time.monotonic()
+    try:
+        response = _request_get(
+            url,
+            error_message="RunPod worker-vLLM OpenAI models preflight failed",
+            headers={"authorization": f"Bearer {api_key}", "accept": "application/json"},
+            timeout=_runpod_vllm_models_probe_timeout_seconds(),
+        )
+        elapsed_ms = int((time.monotonic() - started_at) * 1000)
+        if response.status_code not in {200, 201, 202}:
+            return live_error(
+                tuple,
+                dimension="models",
+                field="openai_models",
+                reason=f"RunPod OpenAI models probe did not return success: {response.status_code}",
+                source=url,
+                raw={
+                    "endpoint_id": tuple.target,
+                    "http_status": response.status_code,
+                    "probe_elapsed_ms": elapsed_ms,
+                    "live_reason": "models_probe_http_error",
+                    "source_url": url,
+                },
+            )
+        payload = json_or_error(response, "RunPod worker-vLLM OpenAI models preflight failed")
+    except TupleError as exc:
+        elapsed_ms = int((time.monotonic() - started_at) * 1000)
+        return live_error(
+            tuple,
+            dimension="models",
+            field="openai_models",
+            reason=f"RunPod OpenAI models probe failed: {exc}",
+            source=url,
+            raw={
+                "endpoint_id": tuple.target,
+                "probe_elapsed_ms": elapsed_ms,
+                "live_reason": "models_probe_timeout" if exc.code == "PROVIDER_TIMEOUT" else "models_probe_failed",
+                "error_code": exc.code,
+                "error_type": type(exc).__name__,
+                "source_url": url,
+            },
+        )
+    except Exception as exc:
+        elapsed_ms = int((time.monotonic() - started_at) * 1000)
+        return live_error(
+            tuple,
+            dimension="models",
+            field="openai_models",
+            reason=f"RunPod OpenAI models probe failed: {type(exc).__name__}: {exc}",
+            source=url,
+            raw={
+                "endpoint_id": tuple.target,
+                "probe_elapsed_ms": elapsed_ms,
+                "live_reason": "models_probe_failed",
+                "error_type": type(exc).__name__,
+                "source_url": url,
+            },
+        )
+
+    elapsed_ms = int((time.monotonic() - started_at) * 1000)
+    model_rows = payload.get("data") if isinstance(payload, dict) else None
+    served_models = [str(item.get("id")) for item in model_rows if isinstance(item, dict) and item.get("id")] if isinstance(model_rows, list) else []
+    configured_model = str(getattr(tuple, "model", None) or "").strip()
+    first_served_model = served_models[0] if served_models else None
+    raw = {
+        "endpoint_id": tuple.target,
+        "http_status": response.status_code,
+        "probe_elapsed_ms": elapsed_ms,
+        "model_name": configured_model or None,
+        "served_model_name": first_served_model,
+        "served_model_count": len(served_models),
+        "served_models": served_models[:20],
+        "source_url": url,
+    }
+    if not served_models:
+        return live_error(
+            tuple,
+            dimension="models",
+            field="openai_models",
+            reason="RunPod OpenAI models probe returned no served models",
+            source=url,
+            raw={**raw, "live_reason": "models_empty"},
+        )
+    if configured_model and configured_model not in served_models:
+        return live_error(
+            tuple,
+            dimension="models",
+            field="model",
+            reason="RunPod OpenAI models probe did not include the configured tuple model",
+            source=url,
+            raw={**raw, "live_reason": "model_serving_mismatch"},
+        )
+    return live_info(
+        tuple,
+        dimension="models",
+        source=url,
+        raw={**raw, "live_reason": "models_probe_ok"},
+    )
 
 
 def _runpod_endpoint_live_inventory_rows(api_key: str, base_url: str) -> list[dict[str, Any]]:
@@ -811,6 +915,16 @@ def _runpod_vllm_openai_request_timeout_seconds(timeout_seconds: int | float) ->
     except ValueError:
         return plan_timeout
     return min(plan_timeout, cap)
+
+
+def _runpod_vllm_models_probe_timeout_seconds() -> float:
+    raw = os.getenv("GPUCALL_RUNPOD_VLLM_MODELS_PROBE_TIMEOUT_SECONDS")
+    if not raw:
+        return 10.0
+    try:
+        return min(max(float(raw), 1.0), 60.0)
+    except ValueError:
+        return 10.0
 
 
 def _runpod_vllm_native_poll_timeout_seconds(plan: CompiledPlan) -> float:

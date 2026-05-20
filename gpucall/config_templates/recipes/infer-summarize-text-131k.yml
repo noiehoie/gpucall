@@ -1,0 +1,50 @@
+name: infer-summarize-text-131k
+recipe_schema_version: 3
+task: infer
+intent: summarize_text
+auto_select: true
+data_classification: confidential
+allowed_modes:
+- async
+context_budget_tokens: 131072
+resource_class: standard
+latency_class: long_running
+quality_floor: standard
+timeout_seconds: 900
+lease_ttl_seconds: 1200
+token_estimation_profile: qwen
+max_input_bytes: 134217728
+allowed_mime_prefixes:
+- text/
+allowed_inline_mime_prefixes: []
+default_temperature: 0.0
+structured_temperature: 0.0
+structured_system_prompt: Return only valid JSON when response_format requests JSON.
+  Do not include markdown fences or prose.
+system_prompt: |
+  Summarize only the supplied text according to the caller's instructions.
+  Preserve source facts exactly. Do not change dates, weekdays, numbers, names,
+  places, currencies, units, quantities, or causal relationships.
+  CRITICAL: If the source contains an English date or weekday token, the output
+  must include that exact source token. Do not translate it, normalize it, or
+  output any other date or weekday.
+  CRITICAL: If the source contains a numeric, currency, percentage, unit, or
+  measurement token, the output must include the exact source token. Do not
+  convert, round, translate, omit, or normalize it.
+  Do not infer missing context. Do not add facts that are not present in the
+  supplied text. If the caller asks for translation while summarizing, translate
+  faithfully without converting or normalizing factual values.
+stop_tokens:
+- <|im_end|>
+- <|endoftext|>
+repetition_penalty: 1.05
+guided_decoding: true
+output_validation_attempts: 1
+artifact_export: false
+requires_key_release: false
+required_model_capabilities:
+- summarization
+output_contract: plain-text
+expected_cold_start_seconds: 180
+cost_policy:
+  max_estimated_cost_usd: 5.0

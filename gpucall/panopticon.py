@@ -101,6 +101,8 @@ class PanopticonFindingDetails(BaseModel):
     active_workers: NonNegativeInt | None = None
     active_pods: NonNegativeInt | None = None
     queue_depth: NonNegativeInt | None = None
+    served_model_count: NonNegativeInt | None = None
+    probe_elapsed_ms: NonNegativeInt | None = None
     price_per_second: NonNegativeFloat | None = None
     price_source: str | None = None
     live_reason: str | None = None
@@ -121,6 +123,8 @@ class PanopticonFindingDetails(BaseModel):
         "active_workers",
         "active_pods",
         "queue_depth",
+        "served_model_count",
+        "probe_elapsed_ms",
         "price_per_second",
         mode="before",
     )
@@ -645,6 +649,8 @@ def _details_from_raw(raw: Any) -> dict[str, Any]:
         "active_workers",
         "active_pods",
         "queue_depth",
+        "served_model_count",
+        "probe_elapsed_ms",
         "price_per_second",
         "price_source",
         "live_reason",

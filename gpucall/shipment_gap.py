@@ -25,7 +25,7 @@ CATEGORY_LABELS = {
     ENDPOINT_STALE: "endpoint stale",
 }
 
-BLOCKER_PRIORITY = (ENDPOINT_STALE, PRICE_UNKNOWN, VALIDATION_MISSING, PROVIDER_MISSING)
+BLOCKER_PRIORITY = (ENDPOINT_STALE, PRICE_UNKNOWN, PROVIDER_MISSING, VALIDATION_MISSING)
 
 
 def build_shipment_gap_report(
@@ -173,6 +173,8 @@ def _blockers_from_rows(
         blockers.append(_blocker(ENDPOINT_STALE, "endpoint_stale_or_missing", rows=[row for row in rows if _is_endpoint_stale(row)]))
     if ready_rows and len(fresh_ready_rows) < min_live_ready_tuples:
         blockers.append(_blocker(PRICE_UNKNOWN, "fresh_price_evidence_missing", rows=ready_rows))
+    if any(_is_provider_unavailable(row) for row in rows):
+        blockers.append(_blocker(PROVIDER_MISSING, "provider_serving_unready", rows=[row for row in rows if _is_provider_unavailable(row)]))
     if any(_is_validation_missing(row) for row in rows):
         blockers.append(_blocker(VALIDATION_MISSING, "route_validation_evidence_missing_or_rejected", rows=[row for row in rows if _is_validation_missing(row)]))
     if not rows and not blockers:
@@ -280,6 +282,34 @@ def _is_endpoint_stale(row: Mapping[str, Any]) -> bool:
         if isinstance(finding, Mapping) and _endpoint_stale_finding(finding):
             return True
     return False
+
+
+def _is_provider_unavailable(row: Mapping[str, Any]) -> bool:
+    if row.get("live_reason") == "live_stock_unavailable":
+        return True
+    for finding in row.get("live_catalog_findings") or []:
+        if isinstance(finding, Mapping) and _provider_unavailable_finding(finding):
+            return True
+    return False
+
+
+def _provider_unavailable_finding(finding: Mapping[str, Any]) -> bool:
+    if finding.get("live_stock_state") == "unavailable":
+        return True
+    if str(finding.get("severity") or "").lower() != "error":
+        return False
+    dimension = str(finding.get("dimension") or "").lower()
+    if dimension in {"capacity", "health", "worker", "queue", "model", "models", "stock"}:
+        return True
+    raw = finding.get("raw")
+    live_reason = str(raw.get("live_reason") or "") if isinstance(raw, Mapping) else ""
+    return live_reason in {
+        "model_serving_mismatch",
+        "models_empty",
+        "models_probe_failed",
+        "models_probe_http_error",
+        "models_probe_timeout",
+    }
 
 
 def _endpoint_stale_finding(finding: Mapping[str, Any]) -> bool:

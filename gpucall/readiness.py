@@ -35,7 +35,12 @@ def build_readiness_report(
     panopticon_path: str | Path | None = None,
 ) -> dict[str, Any]:
     root = Path(config_dir)
-    config = config or load_config(root)
+    try:
+        config = config or load_config(root, validate=True)
+        static_config_valid = True
+    except ConfigError:
+        config = config or load_config(root, validate=False)
+        static_config_valid = False
     recipes = _selected_recipes(config.recipes, intent=intent, recipe=recipe)
     live_scope = _live_catalog_scope_for_recipes(recipes, config=config)
     panopticon = Path(panopticon_path) if panopticon_path is not None else default_panopticon_path()
@@ -131,6 +136,7 @@ def build_readiness_report(
                 live_evidence=live_evidence,
                 route_validation_evidence=route_validation_evidence,
                 route_validation_statuses=route_validation_statuses,
+                static_config_valid=static_config_valid,
             )
         )
     return report
@@ -185,6 +191,7 @@ def _recipe_readiness(
     live_evidence: Mapping[str, Mapping[str, Any]] | None = None,
     route_validation_evidence: Mapping[tuple[str, str, str], RouteValidationEvidence] | None = None,
     route_validation_statuses: Mapping[tuple[str, str, str], RouteValidationStatus] | None = None,
+    static_config_valid: bool = True,
 ) -> dict[str, Any]:
     requirements = recipe_requirements(recipe)
     modes = _allowed_modes(recipe)
@@ -253,7 +260,7 @@ def _recipe_readiness(
     policy_blocked_candidates = _policy_blocked_candidate_tuples(rejected, min_model_len=requirements.context_budget_tokens)
     selected_mode = _selected_mode(modes, live_ready, eligible)
     sync_live_ready = any(item.get("mode") == ExecutionMode.SYNC.value for item in live_ready)
-    return {
+    report = {
         "recipe": recipe.name,
         "intent": recipe.intent,
         "task": recipe.task,
@@ -278,7 +285,40 @@ def _recipe_readiness(
         "async_only_recommended": bool(live_ready and not sync_live_ready),
         "current_caller_action": "send_request" if live_ready else "retry_later_or_contact_gpucall_admin",
         "next_actions": _next_actions(recipe, eligible, policy_blocked_candidates),
+        "static_config_valid": static_config_valid,
     }
+    report["shipment_status"] = classify_shipment_status(report)
+    return report
+
+
+def classify_shipment_status(report: dict[str, Any]) -> str:
+    if report.get("live_ready_tuple_count", 0) > 0:
+        return "shippable"
+    if report.get("eligible_tuple_count", 0) == 0:
+        return "provider_lack"
+
+    live_blocked = report.get("live_blocked_tuples", [])
+    reasons = {str(item.get("live_reason") or "") for item in live_blocked}
+
+    for tuple_row in live_blocked:
+        findings = tuple_row.get("live_catalog_findings", [])
+        if any(f.get("dimension") == "price" and f.get("severity") == "error" for f in findings):
+            return "price_unknown"
+        if any(f.get("dimension") == "endpoint" and f.get("severity") == "error" for f in findings):
+            return "endpoint_stale"
+        if any(_provider_unavailable_finding(f) for f in findings):
+            return "provider_lack"
+
+    if any(item.get("panopticon_stale") for item in live_blocked):
+        return "endpoint_stale"
+
+    if "live_stock_unavailable" in reasons:
+        return "provider_lack"
+
+    if any(r in {"missing_route_validation_evidence", "route_validation_rejected"} for r in reasons):
+        return "validation_lack"
+
+    return "configuration_blocked"
 
 
 def _allowed_modes(recipe: Recipe) -> list[ExecutionMode]:
@@ -367,6 +407,28 @@ def _live_block_reason(findings: object) -> str:
             if finding.get("reason"):
                 return str(finding["reason"])
     return "live_catalog_blocked"
+
+
+def _provider_unavailable_finding(finding: object) -> bool:
+    if not isinstance(finding, Mapping):
+        return False
+    dimension = str(finding.get("dimension") or "").lower()
+    severity = str(finding.get("severity") or "").lower()
+    if finding.get("live_stock_state") == "unavailable":
+        return True
+    if severity != "error":
+        return False
+    if dimension in {"capacity", "health", "worker", "queue", "model", "models", "stock"}:
+        return True
+    raw = finding.get("raw")
+    live_reason = str(raw.get("live_reason") or "") if isinstance(raw, Mapping) else ""
+    return live_reason in {
+        "model_serving_mismatch",
+        "models_empty",
+        "models_probe_failed",
+        "models_probe_http_error",
+        "models_probe_timeout",
+    }
 
 
 def _route_validation_block_reason(status: RouteValidationStatus | None) -> str:

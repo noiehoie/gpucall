@@ -115,15 +115,20 @@ def _fetch_file(
         snapshot = load_panopticon_evidence(path, now=now)
         snapshot = _validated_snapshot(snapshot)
     except Exception as exc:
-        return _failure_report(
-            config=config,
-            status="invalid",
-            reason="provider panopticon snapshot file is invalid",
-            error=exc,
-            tuple_scope=tuple_scope,
-            now=now,
-            path=path,
-        )
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+            snapshot = _snapshot_from_report_payload(payload)
+            snapshot = _validated_snapshot(snapshot)
+        except Exception:
+            return _failure_report(
+                config=config,
+                status="invalid",
+                reason="provider panopticon snapshot file is invalid",
+                error=exc,
+                tuple_scope=tuple_scope,
+                now=now,
+                path=path,
+            )
     return _success_report(config=config, snapshot=snapshot, now=now, path=path)
 
 
@@ -178,13 +183,17 @@ def _fetch_http(
 
 
 def _snapshot_from_http_payload(payload: Any) -> dict[str, dict[str, Any]]:
+    return _snapshot_from_report_payload(payload)
+
+
+def _snapshot_from_report_payload(payload: Any) -> dict[str, dict[str, Any]]:
     if not isinstance(payload, Mapping):
-        raise ValueError("provider panopticon HTTP response must be a JSON object")
+        raise ValueError("provider panopticon response must be a JSON object")
     if payload.get("schema_version") != 1:
-        raise ValueError("provider panopticon HTTP response schema_version must be 1")
+        raise ValueError("provider panopticon response schema_version must be 1")
     snapshot = payload.get("snapshot")
     if not isinstance(snapshot, Mapping):
-        raise ValueError("provider panopticon HTTP response must include snapshot mapping")
+        raise ValueError("provider panopticon response must include snapshot mapping")
     result: dict[str, dict[str, Any]] = {}
     for key, value in snapshot.items():
         if not isinstance(value, Mapping):

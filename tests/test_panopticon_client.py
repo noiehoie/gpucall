@@ -54,6 +54,48 @@ def test_panopticon_client_file_snapshot_reports_hash_and_stale(tmp_path) -> Non
     assert report["snapshot"]["runpod-h100"]["panopticon_stale"] is True
 
 
+def test_panopticon_client_file_accepts_refresh_report_wrapper(tmp_path) -> None:
+    path = tmp_path / "provider-panopticon-refresh-report.json"
+    path.write_text(
+        """
+{
+  "schema_version": 1,
+  "phase": "provider-panopticon-refresh",
+  "snapshot": {
+    "runpod-h100": {
+      "tuple": "runpod-h100",
+      "adapter": "runpod-vllm-serverless",
+      "status": "blocked",
+      "checked": true,
+      "dimensions": ["models"],
+      "findings": [
+        {
+          "tuple": "runpod-h100",
+          "adapter": "runpod-vllm-serverless",
+          "dimension": "models",
+          "severity": "error",
+          "field": "openai_models",
+          "reason": "models probe failed",
+          "raw": {"live_reason": "models_probe_failed"}
+        }
+      ],
+      "observed_at": "2026-05-20T01:00:00+00:00",
+      "expires_at": "2026-05-20T01:05:00+00:00",
+      "ttl_seconds": 300
+    }
+  }
+}
+""",
+        encoding="utf-8",
+    )
+
+    report = fetch_panopticon_snapshot(config=PanopticonClientConfig(source_kind="file", path=path), now=NOW)
+
+    assert report["status"] == "ok"
+    assert report["snapshot"]["runpod-h100"]["status"] == "blocked"
+    assert report["snapshot"]["runpod-h100"]["findings"][0]["raw"]["live_reason"] == "models_probe_failed"
+
+
 def test_panopticon_client_http_success_reads_snapshot_wrapper() -> None:
     def handler(request: httpx.Request) -> httpx.Response:
         assert str(request.url) == "http://127.0.0.1:18090/v1/snapshot"

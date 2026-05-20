@@ -497,6 +497,13 @@ class GPUCallClient:
         except httpx.HTTPStatusError as exc:
             _raise_typed_http_error(response, exc)
 
+    def check_readiness(self, intent: str) -> dict[str, Any]:
+        """Check shipment readiness for a specific intent."""
+        response = self.client.get(f"/v2/readiness/intents/{intent}")
+        self._emit_warnings(response)
+        self._raise_for_status(response)
+        return response.json()
+
 
 class AsyncGPUCallClient:
     def __init__(
@@ -605,6 +612,13 @@ class AsyncGPUCallClient:
         if response.status_code == 202 and poll:
             return await self.poll_job(data["job_id"], interval=poll_interval, timeout=poll_timeout)
         return data
+
+    async def check_readiness(self, intent: str) -> dict[str, Any]:
+        """Check shipment readiness for a specific intent."""
+        response = await self.client.get(f"/v2/readiness/intents/{intent}")
+        _emit_warnings(response)
+        _raise_for_status(response)
+        return response.json()
 
     async def vision(
         self,
