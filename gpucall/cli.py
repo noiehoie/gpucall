@@ -1527,26 +1527,61 @@ def release_check_command(config_dir: Path, output_dir: Path) -> None:
     config = load_config(config_dir)
     openapi_path = output_dir / "openapi.json"
     manifest_path = output_dir / "release-manifest.json"
+    static_launch_path = output_dir / "static-launch-check.json"
+    acceptance_path = output_dir / "production-acceptance.json"
     launch_report = build_launch_report(config_dir, profile="static")
+    acceptance_report = run_production_acceptance()
+    release_go = bool(
+        launch_report.get("go") is True
+        and launch_report.get("code_static_go") is True
+        and acceptance_report.get("passed") is True
+    )
     openapi_path.write_text(json.dumps(create_app(config_dir).openapi(), indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    static_launch_path.write_text(json.dumps(launch_report, indent=2, sort_keys=True, default=str) + "\n", encoding="utf-8")
+    acceptance_path.write_text(json.dumps(acceptance_report, indent=2, sort_keys=True, default=str) + "\n", encoding="utf-8")
     manifest = {
-        "schema_version": 1,
+        "schema_version": 2,
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "commit": _git_commit(),
         "config_hash": _config_hash(config_dir),
         "policy_version": config.policy.version,
+        "go": release_go,
+        "release_go": release_go,
+        "release_status": "GO" if release_go else "NO-GO",
+        "release_scope": "v2_public_product_artifact",
         "tuples": sorted(config.tuples),
         "recipes": sorted(config.recipes),
         "tenants": sorted(config.tenants),
         "static_launch_go": launch_report["go"],
         "code_static_go": launch_report.get("code_static_go"),
-        "production_traffic_go": launch_report.get("production_traffic_go"),
+        "product_acceptance_go": acceptance_report.get("passed"),
+        "operator_production_traffic_go": launch_report.get("production_traffic_go"),
+        "operator_production_traffic_status": "NOT_EVALUATED_BY_RELEASE_CHECK",
         "release_gates": launch_report.get("release_gates"),
         "static_launch_blockers": launch_report["blockers"],
-        "artifacts": {"openapi": str(openapi_path)},
+        "product_acceptance": {
+            "phase": acceptance_report.get("phase"),
+            "passed": acceptance_report.get("passed"),
+            "check_ids": [item.get("id") for item in acceptance_report.get("checks", []) if isinstance(item, dict)],
+        },
+        "operator_deployment_gate": {
+            "production_launch_check_required": True,
+            "command": "gpucall launch-check --profile production --config-dir <config> --url <gateway-url>",
+            "requires_live_provider_evidence": True,
+            "requires_gateway_auth": True,
+            "requires_object_store": True,
+            "requires_tuple_live_validation": True,
+        },
+        "artifacts": {
+            "openapi": str(openapi_path),
+            "static_launch_check": str(static_launch_path),
+            "production_acceptance": str(acceptance_path),
+        },
     }
     manifest_path.write_text(json.dumps(manifest, indent=2, sort_keys=True, default=str) + "\n", encoding="utf-8")
     print(json.dumps({**manifest, "manifest_path": str(manifest_path)}, indent=2, sort_keys=True, default=str))
+    if not release_go:
+        raise SystemExit(1)
 
 
 def build_launch_report(config_dir: Path, *, url: str | None = None, api_key: str | None = None, profile: str = "production") -> dict[str, object]:
@@ -3277,6 +3312,8 @@ def _runpod_unmanaged_endpoint_findings(inventory: dict[str, object], *, configu
         if not blockers:
             continue
         for blocker in blockers:
+            if _runpod_unmanaged_endpoint_blocker_is_non_billable_disabled(blocker):
+                continue
             findings.append(
                 {
                     **blocker,
@@ -3285,6 +3322,18 @@ def _runpod_unmanaged_endpoint_findings(inventory: dict[str, object], *, configu
                 }
             )
     return findings
+
+
+def _runpod_unmanaged_endpoint_blocker_is_non_billable_disabled(blocker: dict[str, object]) -> bool:
+    if blocker.get("live_reason") != "workers_max_zero":
+        return False
+    for key in ("workers_min", "active_workers", "active_pods"):
+        try:
+            if int(blocker.get(key) or 0) > 0:
+                return False
+        except (TypeError, ValueError):
+            return False
+    return True
 
 
 def _runpod_endpoint_runtime_cost(tuple_spec: object, endpoint: dict[str, object] | None) -> dict[str, object]:

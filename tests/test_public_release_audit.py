@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 import subprocess
+import tomllib
 from pathlib import Path
 
 import pytest
 import yaml
 
 from gpucall.recipe_intents import CAPABILITY_BY_INTENT
+from gpucall.release import GITHUB_RELEASE_TAG, SDK_WHEEL_URL
 
 
 def test_tracked_files_do_not_contain_private_operator_artifacts() -> None:
@@ -60,3 +62,25 @@ def test_public_repo_uses_canonical_release_checklist_only() -> None:
         pytest.skip("public release tracked-file audit requires a git checkout")
     assert not (root / "RELEASE_CHECKLIST.md").exists()
     assert (root / "docs" / "PUBLIC_RELEASE_CHECKLIST.md").exists()
+
+
+def test_sdk_release_urls_match_python_sdk_version() -> None:
+    root = Path(__file__).resolve().parents[1]
+    sdk_project = tomllib.loads((root / "sdk" / "python" / "pyproject.toml").read_text(encoding="utf-8"))
+    version = sdk_project["project"]["version"]
+    wheel_name = f"gpucall_sdk-{version}-py3-none-any.whl"
+
+    assert GITHUB_RELEASE_TAG == f"v{version}"
+    assert SDK_WHEEL_URL == f"https://github.com/noiehoie/gpucall/releases/download/v{version}/{wheel_name}"
+    for relative in (
+        "README.md",
+        "README.ja.md",
+        "docs/EXTERNAL_SYSTEM_ONBOARDING_PROMPT.md",
+        "docs/EXTERNAL_SYSTEM_ONBOARDING_MANUAL.md",
+        "docs/GATEWAY_API_KEYS.md",
+        "docs/PUBLIC_RELEASE_CHECKLIST.md",
+        "docs/SDK_DISTRIBUTION.md",
+        "sdk/python/README.md",
+    ):
+        text = (root / relative).read_text(encoding="utf-8")
+        assert wheel_name in text

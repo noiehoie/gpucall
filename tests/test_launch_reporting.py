@@ -6,7 +6,7 @@ import os
 
 import yaml
 
-from gpucall.cli import build_launch_report
+from gpucall.cli import build_launch_report, release_check_command
 from gpucall.config import ConfigError
 from gpucall.domain import ExecutionTupleSpec
 
@@ -39,6 +39,29 @@ def test_launch_report_is_go_for_sample_config(tmp_path, monkeypatch) -> None:
     assert checks["cost_audit"]["tuples"]
     assert all(row["metadata_complete"] for row in checks["cost_audit"]["tuples"])
     assert checks["cleanup_audit"]["ok"] is True
+
+
+def test_release_check_declares_product_release_gate_without_operator_launch(tmp_path, monkeypatch, capsys) -> None:
+    monkeypatch.setenv("GPUCALL_STATE_DIR", str(tmp_path / "state"))
+    config_dir = copy_config(tmp_path)
+    output_dir = tmp_path / "release"
+
+    release_check_command(config_dir, output_dir)
+
+    payload = json.loads(capsys.readouterr().out)
+    manifest = json.loads((output_dir / "release-manifest.json").read_text(encoding="utf-8"))
+    assert payload["schema_version"] == 2
+    assert payload["release_go"] is True
+    assert payload["release_status"] == "GO"
+    assert payload["release_scope"] == "v2_public_product_artifact"
+    assert payload["product_acceptance_go"] is True
+    assert payload["operator_production_traffic_go"] is False
+    assert payload["operator_production_traffic_status"] == "NOT_EVALUATED_BY_RELEASE_CHECK"
+    assert payload["operator_deployment_gate"]["production_launch_check_required"] is True
+    assert Path(payload["artifacts"]["openapi"]).exists()
+    assert Path(payload["artifacts"]["static_launch_check"]).exists()
+    assert Path(payload["artifacts"]["production_acceptance"]).exists()
+    assert manifest["release_go"] is True
 
 
 def test_launch_report_blocks_missing_cost_metadata(tmp_path, monkeypatch) -> None:
@@ -442,6 +465,19 @@ def test_live_cost_audit_flags_unmanaged_runpod_warm_endpoint() -> None:
     assert findings[0]["check"] == "runpod_unmanaged_endpoint_live_blocked"
     assert findings[0]["endpoint_id"] == "endpoint-1"
     assert "not declared" in findings[0]["reason"]
+
+
+def test_live_cost_audit_ignores_unmanaged_disabled_runpod_endpoint() -> None:
+    from gpucall.cli import _live_cost_audit_findings, _runpod_unmanaged_endpoint_findings
+
+    inventory = {"ok": True, "body": [{"id": "endpoint-1", "workersMin": 0, "workersMax": 0, "workers": []}]}
+
+    unmanaged = _runpod_unmanaged_endpoint_findings(inventory, configured_endpoint_ids=set())
+    live = {"managed_endpoint": {"configured": True, "unmanaged_endpoint_findings": unmanaged}}
+    findings = _live_cost_audit_findings(live)
+
+    assert unmanaged == []
+    assert findings == []
 
 
 def test_live_cost_audit_worker_count_falls_through_invalid_alias() -> None:

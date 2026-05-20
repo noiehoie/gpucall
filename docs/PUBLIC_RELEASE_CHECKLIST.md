@@ -18,6 +18,7 @@ uv run pytest
 (cd sdk/python && uv run --with-editable . pytest)
 uv run gpucall validate-config --config-dir config
 uv run gpucall launch-check --profile static --config-dir config --output-json "$XDG_STATE_HOME/gpucall/release/static-launch-check.json"
+uv run gpucall release-check --config-dir config --output-dir "$XDG_STATE_HOME/gpucall/release"
 git ls-files | rg '(^|/)(0508fullaudit|0509githubfullaudit|admin/|\.env$|known_hosts|id_rsa|id_ed25519|.*\.pem$|.*\.key$|.*secret.*|AGENTS\.md|RESTART_HANDOFF\.md)$'
 git ls-files | while IFS= read -r path; do case "$path" in scripts/public_release_audit.sh|docs/PUBLIC_RELEASE_CHECKLIST.md|tests/test_public_release_audit.py) continue ;; esac; [ -f "$path" ] && printf '%s\0' "$path"; done | xargs -0 rg --pcre2 -n '100\.([6-9][0-9]|1[01][0-9]|12[0-7])\.[0-9]{1,3}\.[0-9]{1,3}|api\.runpod\.ai/v2/[a-z0-9]{12,}|vllm-[a-z0-9]{12,}|^\s*ssh_remote_cidr:\s+(?!(203\.0\.113\.|198\.51\.100\.|192\.0\.2\.|""|null))([0-9]{1,3}\.){3}[0-9]{1,3}|\broot@|news-system|/Users/tamotsu|PRIVATE KEY|sk-[A-Za-z0-9]|AKIA[0-9A-Z]{16}|no eligible provider after policy, recipe, and circuit constraints|provider-smoke|https://raw\.githubusercontent\.com/noiehoie/gpucall/main/|sdk/python/dist/.*\.whl'
 uv tool run --from https://github.com/noiehoie/gpucall/releases/download/v2.0.18/gpucall_sdk-2.0.18-py3-none-any.whl gpucall-recipe-draft --help
@@ -27,6 +28,12 @@ curl -fsSLO https://github.com/noiehoie/gpucall/releases/download/v2.0.18/SHA256
 The final `git ls-files | rg ...` and private-artifact `rg ...` commands must
 return no tracked sensitive operational files. Public examples may remain when
 they contain placeholders only.
+
+`release-check` is the public product artifact gate. It writes
+`release-manifest.json`, `openapi.json`, `static-launch-check.json`, and
+`production-acceptance.json`. It does not claim operator production traffic is
+ready; live provider evidence, gateway auth, object-store credentials, and
+tuple validation remain deployment launch gates.
 
 ## Publication Scope
 

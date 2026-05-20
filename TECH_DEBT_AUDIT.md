@@ -26,12 +26,13 @@ The table below is authoritative for current status. The original finding table 
 | P1-12 | P1 | Fixed | `tests/test_app.py` copies `tests/fixtures/config` instead of mutable operator `config/`; fixture README documents intent. `tests/test_app.py` now passes with dirty repo config. |
 | P2-08 | P2 | Backlog | `validate-config` still emits full tuple names. Current command remains valid; bounded summary should be a follow-up CLI contract change. |
 | P2-09 | P2 | Fixed | FastAPI app version now reads `gpucall.__version__`, aligned with `pyproject.toml` at `2.0.9`. |
-| P2-17 | P2 | Partially Fixed | Python SDK is bumped to `2.0.16`, docs/install examples now reference `gpucall_sdk-2.0.16`, and SDK tests cover cold-start-safe timeout/idempotency. Remaining backlog: formal release-process check and TS SDK parity. |
+| P2-17 | P2 | Fixed | Python SDK is bumped to `2.0.18`, `gpucall.release` and public install docs reference `gpucall_sdk-2.0.18`, TypeScript source package metadata is aligned, and `tests/test_public_release_audit.py::test_sdk_release_urls_match_python_sdk_version` now fails stale wheel URLs. |
 | P2-21 | P2 | Accepted Risk | Local DataRef worker now requires gateway-presigned refs and a host allowlist and rejects private/reserved resolved IPs. The local worker still does not pin the actual httpx connection to the validated IP; full DNS-rebinding pinning is backlog because it needs a custom transport without breaking TLS/SNI. |
 | P3-04 | P3 | Fixed | `.gitignore` now ignores `.state/` and `.cache/`. |
+| P3-05 | P3 | Fixed | TypeScript SDK dependency management now has `pnpm-lock.yaml`; the stale npm `package-lock.json` has been removed and `pnpm install --frozen-lockfile && pnpm exec tsc -p tsconfig.json` passes. |
 | RB-01 | Release blocker | Fixed | `tests/test_config.py` no longer depends on dirty active `config/` recipe `auto_select` for long-route assertions; temp copies explicitly enable the required fixture recipes. `tests/test_worker_io.py` was updated for hardened DataRef fetch mocks. Full pytest: `522 passed, 1 skipped`. |
 | RB-02 | Release blocker | Fixed | `doctor --live-tuple-catalog` now returns bounded failure without provider credentials instead of entering live provider catalog/network paths. Regression: `test_doctor_supports_live_tuple_catalog_flag_without_credentials`; full pytest: `522 passed, 1 skipped`. |
-| SDK-01 | Release blocker | Fixed | Python SDK `2.0.16` forwards `idempotency_key` through sync/async infer, vision, and chat completions; default request timeout is now 600s and callers can override per request with `request_timeout`. Regressions: `tests/test_sdk.py` and `sdk/python/tests/test_client.py`. |
+| SDK-01 | Release blocker | Fixed | Python SDK `2.0.18` forwards `idempotency_key` through sync/async infer, vision, and chat completions; default request timeout is now 600s and callers can override per request with `request_timeout`. Regressions: `tests/test_sdk.py` and `sdk/python/tests/test_client.py`. |
 
 ## 2026-05-15 Remediation Update
 

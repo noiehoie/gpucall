@@ -1014,7 +1014,7 @@ def test_readiness_uses_panopticon_snapshot_without_live_probe(tmp_path, monkeyp
             }
         },
         state / "catalog" / "provider-panopticon.json",
-        now=datetime(2026, 5, 19, tzinfo=timezone.utc),
+        now=datetime.now(timezone.utc),
         ttl_seconds=86400,
     )
 

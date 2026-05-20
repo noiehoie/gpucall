@@ -103,12 +103,12 @@ per system name and refuses to reprint existing keys.
 For every release candidate:
 
 ```bash
-gpucall validate-config
-gpucall security scan-secrets
-gpucall cost-audit
-gpucall cleanup-audit
-gpucall launch-check --profile static
-gpucall release-check --output-dir "$XDG_STATE_HOME/gpucall/release"
+gpucall validate-config --config-dir config
+gpucall security scan-secrets --config-dir config
+gpucall cost-audit --config-dir config
+gpucall cleanup-audit --config-dir config
+gpucall launch-check --profile static --config-dir config
+gpucall release-check --config-dir config --output-dir "$XDG_STATE_HOME/gpucall/release"
 ```
 
 Production promotion additionally requires:
@@ -122,8 +122,13 @@ gpucall audit verify
 
 - `openapi.json`
 - `release-manifest.json`
+- `static-launch-check.json`
+- `production-acceptance.json`
 
-The manifest records commit, config hash, policy version, providers, recipes, tenants, and static launch blockers.
+The manifest records commit, config hash, policy version, providers, recipes,
+tenants, static launch blockers, and product acceptance status. It is a product
+artifact release gate; production traffic still requires the separate
+`launch-check --profile production --url ...` gate with live provider evidence.
 
 ## Operational Alerts
 
