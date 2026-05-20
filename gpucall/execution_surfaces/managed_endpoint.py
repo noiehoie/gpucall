@@ -31,7 +31,10 @@ def requests_session():
 
 def json_or_error(response: Any, message: str) -> dict[str, Any]:
     if response.status_code in {200, 201, 202}:
-        data = response.json()
+        try:
+            data = response.json()
+        except Exception as exc:
+            raise TupleError(f"{message}: invalid JSON response", retryable=True, status_code=502, code="PROVIDER_UPSTREAM_UNAVAILABLE") from exc
         return data if isinstance(data, dict) else {"output": data}
     retryable = response.status_code in {408, 409, 425, 429, 500, 502, 503, 504}
     code = _provider_http_error_code(response.status_code, response.text)
@@ -191,6 +194,14 @@ def runpod_endpoint_catalog_findings(tuples: list[Any], credentials: dict[str, d
                 )
             else:
                 health = response.json() if hasattr(response, "json") else {}
+                findings.append(
+                    live_info(
+                        tuple,
+                        dimension="endpoint",
+                        source=f"{base_url}/{tuple.target}/health",
+                        raw={"endpoint_id": tuple.target, "http_status": response.status_code},
+                    )
+                )
                 stock_state = "unavailable" if runpod_vllm_health_rejection_reason(health) else "available"
                 findings.append(
                     live_info(
@@ -261,7 +272,10 @@ def _runpod_endpoint_live_inventory_rows(api_key: str, base_url: str) -> list[di
             params = None
             if response.status_code not in {200, 201, 202}:
                 raise TupleError(f"RunPod endpoint inventory failed: {response.status_code}", retryable=True, status_code=502)
-            payload = response.json()
+            try:
+                payload = response.json()
+            except Exception as exc:
+                raise TupleError("RunPod endpoint inventory invalid JSON response", retryable=True, status_code=502) from exc
             rows.extend(_runpod_inventory_rows(payload))
             url = _runpod_inventory_next_url(payload, current_url=url)
         return rows

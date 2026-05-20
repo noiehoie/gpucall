@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import pytest
+
 from gpucall.config import ConfigError, GpucallConfig, validate_config
-from gpucall.domain import Policy, ExecutionTupleSpec, Recipe
+from gpucall.domain import Policy, ExecutionTupleSpec, Recipe, TupleError
 from gpucall.tuple_catalog import live_tuple_catalog_evidence, live_tuple_catalog_findings
 
 
@@ -421,7 +423,59 @@ def test_runpod_live_catalog_allows_approved_standing_workers(monkeypatch) -> No
 
     assert evidence[tuple.name]["status"] == "live_revalidated"
     assert not [item for item in evidence[tuple.name]["findings"] if item.get("field") == "runpod_serverless_billing_guard"]
+    endpoint_findings = [item for item in evidence[tuple.name]["findings"] if item.get("dimension") == "endpoint"]
+    assert endpoint_findings == [
+        {
+            "tuple": "runpod-vllm-serverless",
+            "adapter": "runpod-vllm-serverless",
+            "dimension": "endpoint",
+            "severity": "info",
+            "source": "https://api.runpod.ai/v2/endpoint-1/health",
+            "raw": {"endpoint_id": "endpoint-1", "http_status": 200},
+        }
+    ]
     assert calls == ["https://rest.runpod.io/v1/endpoints", "https://api.runpod.ai/v2/endpoint-1/health"]
+
+
+def test_runpod_json_or_error_wraps_invalid_success_json() -> None:
+    from gpucall.execution_surfaces.managed_endpoint import json_or_error
+
+    class FakeResponse:
+        status_code = 200
+
+        def json(self) -> dict:
+            raise ValueError("not json")
+
+    with pytest.raises(TupleError, match="invalid JSON response"):
+        json_or_error(FakeResponse(), "RunPod status failed")
+
+
+def test_runpod_inventory_wraps_invalid_json(monkeypatch) -> None:
+    from gpucall.execution_surfaces.managed_endpoint import _runpod_endpoint_live_inventory_rows
+
+    class FakeResponse:
+        status_code = 200
+
+        def json(self) -> dict:
+            raise ValueError("not json")
+
+    class FakeSession:
+        def mount(self, *_args, **_kwargs) -> None:
+            return None
+
+        def get(self, *_args, **_kwargs):
+            return FakeResponse()
+
+    fake_requests = __import__("types").SimpleNamespace(Session=lambda: FakeSession())
+    fake_adapters = __import__("types").SimpleNamespace(HTTPAdapter=lambda **_kwargs: object())
+    fake_retry = __import__("types").SimpleNamespace(Retry=lambda **_kwargs: object())
+    modules = __import__("sys").modules
+    monkeypatch.setitem(modules, "requests", fake_requests)
+    monkeypatch.setitem(modules, "requests.adapters", fake_adapters)
+    monkeypatch.setitem(modules, "urllib3.util.retry", fake_retry)
+
+    with pytest.raises(TupleError, match="invalid JSON response"):
+        _runpod_endpoint_live_inventory_rows("rk_test", "https://rest.runpod.io/v1")
 
 
 def test_runpod_health_rejection_treats_nonnumeric_worker_counts_as_zero() -> None:
