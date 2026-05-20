@@ -116,9 +116,10 @@ def classify_workload_demand(
         fresh_ready_rows = [row for row in ready_rows if row.get("price_freshness") == "fresh"]
         blockers.extend(_blockers_from_rows(rows=rows, ready_rows=ready_rows, fresh_ready_rows=fresh_ready_rows, min_live_ready_tuples=min_live_ready_tuples))
     category = SHIPMENT_READY if not blockers else _primary_category(blockers)
-    # Use recipe's own classification if available as a hint
-    if matching and matching[0].get("shipment_status"):
-        recipe_status = matching[0]["shipment_status"]
+    # Use compatible recipe shipment status only when it strengthens this classification.
+    status_source = compatible[0] if compatible else None
+    if status_source and status_source.get("shipment_status"):
+        recipe_status = str(status_source["shipment_status"])
         mapped_category = {
             "shippable": SHIPMENT_READY,
             "validation_lack": VALIDATION_MISSING,
@@ -126,7 +127,7 @@ def classify_workload_demand(
             "price_unknown": PRICE_UNKNOWN,
             "endpoint_stale": ENDPOINT_STALE,
         }.get(recipe_status)
-        if mapped_category and mapped_category != category and mapped_category in BLOCKER_PRIORITY:
+        if mapped_category and _status_should_override(category, mapped_category, has_blockers=bool(blockers)):
             category = mapped_category
             if not any(blocker.get("category") == mapped_category for blocker in blockers):
                 blockers.append(_blocker(mapped_category, f"readiness_shipment_status_{recipe_status}"))
@@ -167,12 +168,12 @@ def _blockers_from_rows(
         blockers.append(_blocker(PRICE_UNKNOWN, "fresh_price_evidence_missing", rows=ready_rows))
     if any(_is_validation_missing(row) for row in rows):
         blockers.append(_blocker(VALIDATION_MISSING, "route_validation_evidence_missing_or_rejected", rows=[row for row in rows if _is_validation_missing(row)]))
+    if not rows and not blockers:
+        blockers.append(_blocker(PROVIDER_MISSING, "no_static_eligible_tuple"))
     if not ready_rows and not blockers:
         blockers.append(_blocker(PROVIDER_MISSING, "no_live_ready_tuple", rows=rows))
     if ready_rows and len(ready_rows) < min_live_ready_tuples and not any(item["category"] == PRICE_UNKNOWN for item in blockers):
         blockers.append(_blocker(PROVIDER_MISSING, "insufficient_live_ready_tuples", rows=ready_rows))
-    if not rows and not blockers:
-        blockers.append(_blocker(PROVIDER_MISSING, "no_static_eligible_tuple"))
     return _dedupe_blockers(blockers)
 
 
@@ -189,6 +190,16 @@ def _primary_category(blockers: list[Mapping[str, Any]]) -> str:
         if category in categories:
             return category
     return PROVIDER_MISSING
+
+
+def _status_should_override(current: str, mapped: str, *, has_blockers: bool) -> bool:
+    if mapped not in BLOCKER_PRIORITY:
+        return False
+    if current == SHIPMENT_READY and not has_blockers:
+        return True
+    if current not in BLOCKER_PRIORITY:
+        return False
+    return BLOCKER_PRIORITY.index(mapped) < BLOCKER_PRIORITY.index(current)
 
 
 def _dedupe_blockers(blockers: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -242,14 +253,42 @@ def _is_validation_missing(row: Mapping[str, Any]) -> bool:
 
 
 def _is_endpoint_stale(row: Mapping[str, Any]) -> bool:
+    reasons = [
+        str(row.get("live_reason") or ""),
+        str(row.get("route_validation_reason") or ""),
+    ]
+    if any(_endpoint_stale_text(reason) for reason in reasons):
+        return True
+    for finding in row.get("live_catalog_findings") or []:
+        if isinstance(finding, Mapping) and _endpoint_stale_finding(finding):
+            return True
+    return False
+
+
+def _endpoint_stale_finding(finding: Mapping[str, Any]) -> bool:
+    dimension = str(finding.get("dimension") or "").lower()
+    severity = str(finding.get("severity") or "").lower()
+    status_code = str(finding.get("status_code") or finding.get("http_status") or "")
     text = " ".join(
         [
-            str(row.get("live_reason") or ""),
-            str(row.get("route_validation_reason") or ""),
-            json.dumps(row.get("live_catalog_findings") or [], sort_keys=True, default=str),
+            str(finding.get("reason") or ""),
+            json.dumps(finding.get("details") or {}, sort_keys=True, default=str),
         ]
     ).lower()
-    return "endpoint" in text and any(token in text for token in ("missing", "stale", "not found", "not present", "404"))
+    if dimension != "endpoint" and "endpoint" not in text:
+        return False
+    if status_code == "404":
+        return True
+    if severity in {"error", "critical"} and _endpoint_stale_text(text):
+        return True
+    return _endpoint_stale_text(text)
+
+
+def _endpoint_stale_text(text: str) -> bool:
+    normalized = text.lower()
+    if "endpoint" not in normalized:
+        return False
+    return any(token in normalized for token in ("missing", "stale", "not found", "not present", "not configured", "404"))
 
 
 def _bounded_recipe(recipe: Mapping[str, Any]) -> dict[str, Any]:
@@ -288,10 +327,28 @@ def _mapping(value: Any) -> Mapping[str, Any]:
 
 
 def _safe_int(value: Any) -> int:
-    try:
-        return int(value or 0)
-    except (TypeError, ValueError):
+    if value is None or value == "":
         return 0
+    if isinstance(value, bool):
+        return int(value)
+    if isinstance(value, int):
+        return value
+    if isinstance(value, float):
+        if value.is_integer():
+            return int(value)
+        raise ValueError(f"context_budget_tokens must be an integer, got {value!r}")
+    if isinstance(value, str):
+        text = value.strip()
+        if not text:
+            return 0
+        try:
+            return int(text, 10)
+        except ValueError as exc:
+            raise ValueError(f"context_budget_tokens must be an integer string, got {value!r}") from exc
+    try:
+        return int(value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"context_budget_tokens must be integer-convertible, got {value!r}") from exc
 
 
 def _load_json(path: Path) -> dict[str, Any]:

@@ -164,6 +164,40 @@ def test_classifies_endpoint_stale_before_validation_missing() -> None:
     assert {item["category"] for item in result["blockers"]} == {"endpoint_stale", "validation_missing"}
 
 
+def test_endpoint_info_does_not_turn_missing_validation_into_endpoint_stale() -> None:
+    row = {
+        "tuple": "runpod-h100",
+        "mode": "sync",
+        "price_freshness": "fresh",
+        "route_validation_required": True,
+        "live_reason": "missing_route_validation_evidence",
+        "live_catalog_status": "live_revalidated",
+        "live_catalog_findings": [
+            {
+                "dimension": "endpoint",
+                "severity": "info",
+                "source": "https://api.runpod.ai/v2/30g7ze5wb2n3xw/health",
+                "details": {"endpoint_id": "30g7ze5wb2n3xw", "http_status": 200},
+            }
+        ],
+    }
+    result = classify_workload_demand(
+        _workload(),
+        _readiness(
+            _recipe(
+                production_activated=False,
+                eligible_tuples=[row],
+                live_ready_tuple_count=0,
+                live_ready_tuples=[],
+                live_blocked_tuples=[row],
+            )
+        ),
+    )
+
+    assert result["category"] == "validation_missing"
+    assert {item["category"] for item in result["blockers"]} == {"validation_missing"}
+
+
 def test_classifies_provider_missing_when_no_compatible_recipe() -> None:
     result = classify_workload_demand(
         _workload(context=131072),
@@ -172,6 +206,24 @@ def test_classifies_provider_missing_when_no_compatible_recipe() -> None:
 
     assert result["category"] == "provider_missing"
     assert result["blockers"][0]["reason"] == "no_contract_compatible_readiness_recipe"
+
+
+def test_classifies_no_static_eligible_tuple_before_no_live_ready_tuple() -> None:
+    result = classify_workload_demand(
+        _workload(),
+        _readiness(
+            _recipe(
+                eligible_tuple_count=0,
+                eligible_tuples=[],
+                live_ready_tuple_count=0,
+                live_ready_tuples=[],
+                live_blocked_tuples=[],
+            )
+        ),
+    )
+
+    assert result["category"] == "provider_missing"
+    assert result["blockers"][0]["reason"] == "no_static_eligible_tuple"
 
 
 def test_readiness_status_override_adds_matching_blocker() -> None:
@@ -188,6 +240,49 @@ def test_readiness_status_override_adds_matching_blocker() -> None:
             "reason": "readiness_shipment_status_validation_lack",
         }
     ]
+
+
+def test_readiness_status_does_not_downgrade_endpoint_stale() -> None:
+    row = {
+        "tuple": "runpod-a100-dead",
+        "mode": "sync",
+        "price_freshness": "fresh",
+        "route_validation_required": True,
+        "live_reason": "endpoint_missing_from_inventory",
+        "live_catalog_findings": [{"reason": "configured endpoint not present", "status_code": 404}],
+    }
+    result = classify_workload_demand(
+        _workload(),
+        _readiness(
+            _recipe(
+                production_activated=False,
+                shipment_status="validation_lack",
+                eligible_tuples=[row],
+                live_ready_tuple_count=0,
+                live_ready_tuples=[],
+                live_blocked_tuples=[row],
+            )
+        ),
+    )
+
+    assert result["category"] == "endpoint_stale"
+
+
+def test_non_string_readiness_status_does_not_crash() -> None:
+    result = classify_workload_demand(
+        _workload(),
+        _readiness(_recipe(shipment_status={"bad": "shape"})),
+    )
+
+    assert result["category"] == "shipment_ready"
+
+
+def test_invalid_context_budget_is_rejected() -> None:
+    workload = _workload()
+    workload["input_profile"] = {"context_budget_tokens": "131072 tokens"}
+
+    with pytest.raises(ValueError, match="context_budget_tokens"):
+        classify_workload_demand(workload, _readiness(_recipe()))
 
 
 def test_build_report_reuses_readiness_for_duplicate_intents(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
