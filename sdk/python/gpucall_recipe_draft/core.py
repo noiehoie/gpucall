@@ -288,7 +288,7 @@ def draft_from_intake(intake: Mapping[str, Any]) -> dict[str, Any]:
     classification = _str_or_none(sanitized.get("classification")) or "confidential"
     context_budget_tokens = _round_context_budget(_context_budget_from_context(_as_mapping(_as_mapping(sanitized.get("error")).get("context"))))
     recipe_name = _recipe_name(task, intent)
-    return {
+    draft = {
         "schema_version": 1,
         "phase": "draft",
         "source": "sanitized_request_only",
@@ -322,6 +322,10 @@ def draft_from_intake(intake: Mapping[str, Any]) -> dict[str, Any]:
             "If the caller's intent is wrong or too broad, revise the intent before adding a production recipe.",
         ],
     }
+    redaction_report = _as_mapping(intake.get("redaction_report"))
+    if redaction_report:
+        draft["redaction_report"] = dict(redaction_report)
+    return draft
 
 
 def _capabilities_for(*, task: str, intent: str | None) -> list[str]:
@@ -393,8 +397,12 @@ _SCHEMA_KEYS = {
 }
 
 
-def _sanitize_schema(value: Mapping[str, Any] | None, *, depth: int = 0) -> dict[str, Any] | None:
+def _sanitize_schema(value: Any, *, depth: int = 0) -> Any | None:
     if value is None:
+        return None
+    if isinstance(value, bool):
+        return value
+    if not isinstance(value, Mapping):
         return None
     if depth > 8:
         return {"truncated": True}
@@ -405,7 +413,7 @@ def _sanitize_schema(value: Mapping[str, Any] | None, *, depth: int = 0) -> dict
         item = value.get(key)
         if key == "properties" and isinstance(item, Mapping):
             cleaned[key] = {
-                _sanitize_schema_name(str(prop_key)): _sanitize_schema(_as_mapping(prop_value), depth=depth + 1) or {}
+                _sanitize_schema_name(str(prop_key)): _sanitize_property_schema(prop_value, depth=depth + 1)
                 for prop_key, prop_value in sorted(item.items(), key=lambda pair: str(pair[0]))
                 if _sanitize_schema_name(str(prop_key))
             }
@@ -413,11 +421,18 @@ def _sanitize_schema(value: Mapping[str, Any] | None, *, depth: int = 0) -> dict
         if key == "required" and isinstance(item, list):
             cleaned[key] = [_sanitize_schema_name(str(entry)) for entry in item if _sanitize_schema_name(str(entry))][:100]
             continue
-        if key in {"items", "additionalProperties"} and isinstance(item, Mapping):
-            cleaned[key] = _sanitize_schema(item, depth=depth + 1)
+        if key in {"items", "additionalItems", "additionalProperties"}:
+            sanitized = _sanitize_schema_item(item, depth=depth + 1)
+            if sanitized is not None:
+                cleaned[key] = sanitized
             continue
         if key in {"allOf", "anyOf", "oneOf"} and isinstance(item, list):
-            cleaned[key] = [_sanitize_schema(_as_mapping(entry), depth=depth + 1) or {} for entry in item[:20]]
+            cleaned[key] = [_sanitize_schema_item(entry, depth=depth + 1) or {} for entry in item[:20]]
+            continue
+        if key == "type" and isinstance(item, list):
+            types = [_sanitize_schema_text(str(entry)) for entry in item if isinstance(entry, str)][:20]
+            if types:
+                cleaned[key] = types
             continue
         if isinstance(item, bool | int | float):
             cleaned[key] = item
@@ -425,6 +440,21 @@ def _sanitize_schema(value: Mapping[str, Any] | None, *, depth: int = 0) -> dict
         if isinstance(item, str):
             cleaned[key] = _sanitize_schema_text(item)
     return cleaned or None
+
+
+def _sanitize_schema_item(value: Any, *, depth: int) -> Any | None:
+    if isinstance(value, list):
+        result = []
+        for item in value[:20]:
+            sanitized = _sanitize_schema_item(item, depth=depth + 1)
+            result.append(sanitized if sanitized is not None else {})
+        return result
+    return _sanitize_schema(value, depth=depth)
+
+
+def _sanitize_property_schema(value: Any, *, depth: int) -> Any:
+    sanitized = _sanitize_schema(value, depth=depth)
+    return sanitized if sanitized is not None else {}
 
 
 def _sanitize_schema_name(value: str) -> str:

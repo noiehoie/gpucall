@@ -113,13 +113,19 @@ def test_draft_uses_sanitized_intake_only() -> None:
             "expected_output": "plain_text",
             "desired_capabilities": ["document_understanding", "visual_question_answering", "instruction_following"],
             "error": {"context": {"context_budget_tokens": 9000}},
-        }
+        },
+        "redaction_report": {
+            "prompt_body_forwarded": False,
+            "data_ref_uri_forwarded": False,
+            "presigned_url_forwarded": False,
+        },
     }
 
     draft = draft_from_intake(intake)
 
     assert draft["human_review_required"] is True
     assert draft["source"] == "sanitized_request_only"
+    assert draft["redaction_report"] == intake["redaction_report"]
     assert draft["proposed_recipe"]["name"] == "vision-understand-document-image-draft"
     assert draft["proposed_recipe"]["recipe_schema_version"] == 3
     assert draft["proposed_recipe"]["context_budget_tokens"] == 32768
@@ -193,8 +199,16 @@ def test_recipe_draft_cli_intake_and_draft(tmp_path, capsys) -> None:
 
 def test_submit_writes_file_based_bundle(tmp_path) -> None:
     bundle = build_submission_bundle(
-        intake={"phase": "deterministic-intake", "sanitized_request": {"task": "infer"}},
-        draft={"phase": "draft", "proposed_recipe": {"name": "infer-draft", "task": "infer"}},
+        intake={
+            "phase": "deterministic-intake",
+            "sanitized_request": {"task": "infer"},
+            "redaction_report": {"prompt_body_forwarded": False},
+        },
+        draft={
+            "phase": "draft",
+            "proposed_recipe": {"name": "infer-draft", "task": "infer"},
+            "redaction_report": {"prompt_body_forwarded": False},
+        },
         source="example-caller-app",
     )
 
@@ -205,6 +219,7 @@ def test_submit_writes_file_based_bundle(tmp_path) -> None:
     assert data["kind"] == "gpucall.recipe_request_submission"
     assert data["source"] == "example-caller-app"
     assert data["intake"]["sanitized_request"]["task"] == "infer"
+    assert data["draft"]["redaction_report"]["prompt_body_forwarded"] is False
 
 
 def test_recipe_draft_cli_submit(tmp_path, capsys) -> None:
@@ -517,9 +532,12 @@ def test_quality_feedback_carries_schema_mismatch_metadata_only() -> None:
                             "required": ["headline_original", "rank"],
                             "properties": {
                                 "headline_original": {"type": "string", "description": "raw headline text must not be included here"},
-                                "rank": {"type": "integer"},
+                                "rank": {"type": ["integer", "null"]},
+                                "forbidden_raw_payload": False,
                             },
+                            "additionalProperties": False,
                         },
+                        "additionalItems": [{"type": "string"}, False],
                     }
                 },
                 "description": "must be dropped",
@@ -544,6 +562,11 @@ def test_quality_feedback_carries_schema_mismatch_metadata_only() -> None:
     assert contract["expected_json_schema"]["required"] == ["articles"]
     assert "description" not in contract["expected_json_schema"]
     assert "description" not in contract["expected_json_schema"]["properties"]["articles"]["items"]["properties"]["headline_original"]
+    expected_article = contract["expected_json_schema"]["properties"]["articles"]["items"]
+    assert expected_article["properties"]["rank"]["type"] == ["integer", "null"]
+    assert expected_article["properties"]["forbidden_raw_payload"] is False
+    assert expected_article["additionalProperties"] is False
+    assert contract["expected_json_schema"]["properties"]["articles"]["additionalItems"] == [{"type": "string"}, False]
     assert contract["observed_json_schema"]["required"] == ["contains_text", "dominant_color", "summary"]
     assert contract["raw_output_forwarded"] is False
 
