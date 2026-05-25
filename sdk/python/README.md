@@ -18,6 +18,14 @@ gpucall-recipe-draft --help
 External systems should use the public wheel or an operator-provided wheel. They
 should not clone the gpucall gateway repository to obtain this helper.
 
+Caller-side helper use must keep the application workspace clean. The helper
+writes only to paths the caller explicitly supplies, such as `--output`,
+`--inbox-dir`, `--quality-inbox-dir`, or their remote inbox variants. It must
+not create sibling clones, sandbox directories, latest-pointer files, or
+provider-observer workspaces next to the caller repository. If an operator needs
+temporary E2E scratch space, put it under `$XDG_STATE_HOME/gpucall` or
+`$XDG_CACHE_HOME/gpucall` and remove it after preserving a bounded manifest.
+
 Configure:
 
 ```bash
@@ -70,6 +78,10 @@ Use `gpucall-recipe-draft` for workloads that the gateway cannot route with its 
 
 It does not change gateway routing and it does not bypass policy. It also does not choose providers, GPUs, models, engines, or tuples. The `intake` phase is deterministic and strips prompt bodies, DataRef URIs, presigned URLs, and secrets before any draft is produced.
 
+Recipe-request submissions automatically include a deterministic draft for
+recipe intake and preflight intake. Quality feedback submissions do not create
+recipe drafts.
+
 ```bash
 gpucall-recipe-draft preflight \
   --task vision \
@@ -110,7 +122,6 @@ gpucall-recipe-draft compare \
 
 gpucall-recipe-draft submit \
   --intake intake.json \
-  --draft recipe-draft.json \
   --remote-inbox operator@gateway.example.internal:/opt/gpucall/state/recipe_requests/inbox \
   --source example-caller-app
 

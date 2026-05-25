@@ -17,7 +17,10 @@ def admin_automation_summary(config_dir: Path) -> dict[str, object]:
         "recipe_inbox_auto_validate_existing_tuples": config.recipe_inbox_auto_validate_existing_tuples,
         "recipe_inbox_auto_activate_existing_validated_recipe": config.recipe_inbox_auto_activate_existing_validated_recipe,
         "recipe_inbox_auto_promote_candidates": config.recipe_inbox_auto_promote_candidates,
+        "recipe_inbox_auto_provision_supply": config.recipe_inbox_auto_provision_supply,
+        "recipe_inbox_auto_apply_supply": config.recipe_inbox_auto_apply_supply,
         "recipe_inbox_auto_billable_validation": config.recipe_inbox_auto_billable_validation,
+        "recipe_inbox_auto_validation_budget_usd": config.recipe_inbox_auto_validation_budget_usd,
         "recipe_inbox_auto_activate_validated": config.recipe_inbox_auto_activate_validated,
         "recipe_inbox_auto_require_auto_select_safe": config.recipe_inbox_auto_require_auto_select_safe,
         "recipe_inbox_auto_set_auto_select": config.recipe_inbox_auto_set_auto_select,
@@ -49,7 +52,10 @@ def configure_admin_automation(
     recipe_inbox_auto_validate_existing_tuples: bool | None = None,
     recipe_inbox_auto_activate_existing_validated_recipe: bool | None = None,
     recipe_inbox_auto_promote_candidates: bool | None = None,
+    recipe_inbox_auto_provision_supply: bool | None = None,
+    recipe_inbox_auto_apply_supply: bool | None = None,
     recipe_inbox_auto_billable_validation: bool | None = None,
+    recipe_inbox_auto_validation_budget_usd: float | None = None,
     recipe_inbox_auto_activate_validated: bool | None = None,
     recipe_inbox_auto_require_auto_select_safe: bool | None = None,
     recipe_inbox_auto_set_auto_select: bool | None = None,
@@ -91,10 +97,25 @@ def configure_admin_automation(
         if recipe_inbox_auto_promote_candidates is None
         else recipe_inbox_auto_promote_candidates
     )
+    auto_provision_supply = (
+        current.recipe_inbox_auto_provision_supply
+        if recipe_inbox_auto_provision_supply is None
+        else recipe_inbox_auto_provision_supply
+    )
+    auto_apply_supply = (
+        current.recipe_inbox_auto_apply_supply
+        if recipe_inbox_auto_apply_supply is None
+        else recipe_inbox_auto_apply_supply
+    )
     auto_billable_validation = (
         current.recipe_inbox_auto_billable_validation
         if recipe_inbox_auto_billable_validation is None
         else recipe_inbox_auto_billable_validation
+    )
+    validation_budget = (
+        current.recipe_inbox_auto_validation_budget_usd
+        if recipe_inbox_auto_validation_budget_usd is None
+        else recipe_inbox_auto_validation_budget_usd
     )
     auto_activate = (
         current.recipe_inbox_auto_activate_validated
@@ -123,6 +144,10 @@ def configure_admin_automation(
     )
     if auto_promote and not auto_materialize:
         raise ValueError("recipe auto-promotion requires recipe auto-materialize")
+    if auto_provision_supply and not auto_promote:
+        raise ValueError("recipe supply provisioning requires recipe auto-promotion")
+    if auto_apply_supply and not auto_provision_supply:
+        raise ValueError("recipe supply apply requires recipe supply provisioning")
     if auto_validate_existing and not auto_materialize:
         raise ValueError("recipe existing tuple validation requires recipe auto-materialize")
     if auto_activate_existing and not auto_validate_existing:
@@ -140,7 +165,10 @@ def configure_admin_automation(
         recipe_inbox_auto_validate_existing_tuples=auto_validate_existing,
         recipe_inbox_auto_activate_existing_validated_recipe=auto_activate_existing,
         recipe_inbox_auto_promote_candidates=auto_promote,
+        recipe_inbox_auto_provision_supply=auto_provision_supply,
+        recipe_inbox_auto_apply_supply=auto_apply_supply,
         recipe_inbox_auto_billable_validation=auto_billable_validation,
+        recipe_inbox_auto_validation_budget_usd=validation_budget,
         recipe_inbox_auto_activate_validated=auto_activate,
         recipe_inbox_auto_require_auto_select_safe=require_auto_select_safe,
         recipe_inbox_auto_set_auto_select=auto_set_auto_select,

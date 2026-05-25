@@ -3,7 +3,10 @@ recipe_inbox_auto_materialize: false
 recipe_inbox_auto_validate_existing_tuples: false
 recipe_inbox_auto_activate_existing_validated_recipe: false
 recipe_inbox_auto_promote_candidates: false
+recipe_inbox_auto_provision_supply: false
+recipe_inbox_auto_apply_supply: false
 recipe_inbox_auto_billable_validation: false
+recipe_inbox_auto_validation_budget_usd: 0.10
 recipe_inbox_auto_activate_validated: false
 recipe_inbox_auto_require_auto_select_safe: true
 recipe_inbox_auto_set_auto_select: false

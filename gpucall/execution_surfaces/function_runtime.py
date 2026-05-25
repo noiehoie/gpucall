@@ -23,11 +23,31 @@ _ephemeral_run_lock = threading.Lock()
 
 
 def _import_modal():
+    _ensure_modal_credentials_env()
     try:
         import modal  # type: ignore
     except ImportError as exc:
         raise TupleError("modal SDK is not installed", retryable=False, status_code=501) from exc
     return modal
+
+
+def _ensure_modal_credentials_env(credentials: dict[str, dict[str, str]] | None = None) -> None:
+    if credentials is None:
+        try:
+            from gpucall.credentials import load_credentials
+
+            credentials = load_credentials()
+        except Exception:
+            credentials = {}
+    modal = credentials.get("modal", {})
+    for key, env_name in (
+        ("token_id", "MODAL_TOKEN_ID"),
+        ("token_secret", "MODAL_TOKEN_SECRET"),
+        ("environment", "MODAL_ENVIRONMENT"),
+    ):
+        value = modal.get(key)
+        if value and not os.getenv(env_name):
+            os.environ[env_name] = value
 
 
 def _lock_timeout() -> float:
@@ -347,8 +367,8 @@ def modal_config_findings(tuple: Any) -> list[str]:
 
 
 def modal_catalog_findings(tuples: list[Any], credentials: dict[str, dict[str, str]]) -> list[dict[str, Any]]:
-    del credentials
     findings: list[dict[str, Any]] = []
+    _ensure_modal_credentials_env(credentials)
     try:
         modal = _import_modal()
     except TupleError as exc:

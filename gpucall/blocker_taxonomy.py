@@ -143,6 +143,14 @@ def shipment_blocker_metadata(category: str, reason: str) -> dict[str, str]:
             next_action="run gpucall-recipe-admin promotion validation for the listed tuple and activate only after validation evidence is current",
             next_artifact_required="validation-evidence.json",
         )
+    if category == "supply_provisioning_required":
+        return _typed(
+            code=PROVIDER_SUPPLY_MISSING,
+            owner=PROVIDER_OWNER,
+            reason=normalized,
+            next_action="run gpucall panopticon provision-plan/provision-apply for the reviewed tuple, then refresh Provider Panopticon readiness",
+            next_artifact_required="provider-supply-provisioning-plan.json",
+        )
     if normalized == "no_matching_readiness_recipe":
         return _typed(
             code=ADMIN_RECIPE_MISSING,
@@ -151,7 +159,15 @@ def shipment_blocker_metadata(category: str, reason: str) -> dict[str, str]:
             next_action="author or materialize an admin-side recipe candidate for this caller intent",
             next_artifact_required="recipe-candidate.yml",
         )
-    if normalized in {"no_static_eligible_tuple", "no_contract_compatible_readiness_recipe"}:
+    if normalized == "invalid_workload_contract_context_budget_tokens":
+        return _typed(
+            code=CALLER_CONTRACT_INCOMPLETE,
+            owner=CALLER_OWNER,
+            reason=normalized,
+            next_action="regenerate the caller workload contract with an integer context_budget_tokens value",
+            next_artifact_required="workload-contract.json",
+        )
+    if normalized in {"no_static_eligible_tuple", "no_contract_compatible_readiness_recipe", "readiness_shipment_status_provider_lack"}:
         return _typed(
             code=ADMIN_TUPLE_MISSING,
             owner=ADMIN_OWNER,

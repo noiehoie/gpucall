@@ -108,7 +108,21 @@ The caller-side and administrator-side helpers are boundary tools. The caller-si
 
 ## Quickstart
 
-For a first install, start with the operator setup journey:
+For a first install, install the operator CLI first:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/noiehoie/gpucall/main/install.sh | sh
+```
+
+If you are installing from a checked-out repository, run:
+
+```bash
+./install.sh
+```
+
+The installer runs a dependency preflight, bootstraps `uv` when it is missing,
+installs the `gpucall` CLI with provider extras through `uv tool`, and then
+prints the setup commands. After install, start the operator setup journey:
 
 ```bash
 gpucall setup
@@ -128,6 +142,10 @@ GPU execution surfaces, object-store DataRefs, tenant handoff, launch checks,
 recipe inbox automation, and external-system onboarding. The underlying low-level commands remain
 available for automation and debugging: `gpucall init`, `gpucall configure`,
 `gpucall admin ...`, `gpucall validate-config`, and `gpucall launch-check`.
+`gpucall setup status` is non-interactive and prints only the current checks plus
+next commands. `gpucall validate-config` prints a bounded count/sample summary by
+default; use `gpucall validate-config --verbose` when you need the full catalog
+name lists.
 `gpucall setup apply` runs post-apply checks and rejects interactive
 `credentials.source: prompt` when `--yes` is used. Setup plan syntax is
 documented in [docs/SETUP_PLAN.md](docs/SETUP_PLAN.md).
@@ -243,6 +261,17 @@ worktree is the application being migrated. The operator-provided handoff must
 include the real `GPUCALL_BASE_URL`, `GPUCALL_RECIPE_INBOX`, API-key delivery
 route, and SDK/helper wheel URL before the migration agent starts.
 
+Caller-side onboarding must keep a strict workspace footprint. The only
+implicit local output from `gpucall-migrate` is the caller repo's
+`.gpucall-migration` directory. Other writes must be explicitly supplied by the
+operator, such as a recipe/quality inbox, a neutral `--output-dir`, or
+gpucall-owned scratch space under `$XDG_STATE_HOME/gpucall` or
+`$XDG_CACHE_HOME/gpucall`. Onboarding automation must not invent sibling
+worktrees, clones, latest-pointer files, or provider-observer sandboxes next to
+the caller repo, such as
+`gpucall-c-tooling`, `gpucall-panopticon-*`, `news-system-*-sandbox`, or
+`news-system-latest-*`.
+
 If the caller-side helper is not installed, install only the SDK helper wheel:
 
 ```bash
@@ -325,13 +354,21 @@ of a per-command flag. This remains disabled by default:
 ```yaml
 # config/admin.yml
 recipe_inbox_auto_materialize: true
+recipe_inbox_auto_validate_existing_tuples: true
+recipe_inbox_auto_promote_candidates: true
+recipe_inbox_auto_provision_supply: true
+recipe_inbox_auto_apply_supply: false
+recipe_inbox_auto_billable_validation: false
+recipe_inbox_auto_validation_budget_usd: 0.10
+recipe_inbox_auto_activate_validated: false
 ```
 
 With that file present, `gpucall-recipe-admin watch` and `process-inbox` can
-materialize sanitized caller submissions without `--accept-all`. This route only
-writes reviewed recipe YAML and a static catalog-readiness report. Billable
-smoke validation and production activation are separate explicit promotion
-steps, because they can spend provider money or mutate active routing.
+materialize sanitized caller submissions without `--accept-all`, prepare
+candidate promotion workspaces, and write Provider Panopticon supply
+provisioning plans. Provider mutation, billable smoke validation, and production
+activation remain separate explicit gates because they can spend provider money
+or mutate active routing.
 
 Inbox processing preserves the original submitted JSON as the audit source of
 truth under `inbox/processed` or `inbox/failed`. It also maintains a SQLite WAL

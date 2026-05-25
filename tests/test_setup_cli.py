@@ -7,7 +7,7 @@ import pytest
 
 from gpucall.cli_commands.setup import apply_setup_plan, export_handoff_prompt, setup_next_text, setup_section_text, setup_status_text
 from gpucall.config import load_admin_automation, load_object_store
-from gpucall.credentials import load_credentials
+from gpucall.credentials import load_credentials, save_credentials
 from gpucall.domain import ApiKeyHandoffMode
 
 
@@ -18,6 +18,15 @@ def test_setup_status_starts_from_operator_dashboard(tmp_path, monkeypatch) -> N
     assert "Profile: unselected" in text
     assert "[missing] config initialized" in text
     assert "GPU execution surfaces" in text
+    assert "Choose section" not in text
+    assert "gpucall setup next" in text
+
+
+def test_setup_status_can_render_interactive_menu(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("GPUCALL_CREDENTIALS", str(tmp_path / "credentials.yml"))
+    text = setup_status_text(tmp_path / "config", include_menu=True)
+
+    assert "Choose section" in text
     assert "External-system onboarding prompt" in text
 
 
@@ -174,6 +183,71 @@ launch:
     assert "profile: internal-team" in (config_dir / "setup.yml").read_text(encoding="utf-8")
 
 
+def test_setup_plan_accepts_runpod_credentials_without_endpoint_for_first_install(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("GPUCALL_CREDENTIALS", str(tmp_path / "credentials.yml"))
+    save_credentials("runpod", {"api_key": "rk_test"})
+    config_dir = tmp_path / "config"
+    plan = tmp_path / "gpucall.setup.yml"
+    plan.write_text(
+        """
+setup_schema_version: 1
+profile: internal-team
+providers:
+  runpod:
+    enabled: true
+    credentials:
+      source: gpucall_credentials
+recipe_automation:
+  auto_materialize: true
+  auto_promote_candidates: true
+  auto_provision_supply: true
+  auto_apply_supply: false
+""".lstrip(),
+        encoding="utf-8",
+    )
+
+    dry_run = apply_setup_plan(config_dir, plan, dry_run=True, yes=True)
+    assert "Setup plan: internal-team" in dry_run
+    assert "provider account: runpod (endpoint provisioning pending)" in dry_run
+    assert "runpod endpoint_id omitted; provider account will be connected" in dry_run
+    assert "runpod requires endpoint_id" not in dry_run
+
+    report = apply_setup_plan(config_dir, plan, dry_run=False, yes=True)
+    assert "Applied setup plan." in report
+    assert "RunPod configured" in report
+    surface = (config_dir / "surfaces" / "runpod-vllm-serverless.yml").read_text(encoding="utf-8")
+    assert "target:" not in surface
+    assert "endpoint: null" in surface
+
+
+def test_setup_plan_accepts_modal_gpucall_credentials_without_cli_profile(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("GPUCALL_CREDENTIALS", str(tmp_path / "credentials.yml"))
+    save_credentials("modal", {"token_id": "ak-test", "token_secret": "as-test"})
+    config_dir = tmp_path / "config"
+    plan = tmp_path / "gpucall.setup.yml"
+    plan.write_text(
+        """
+setup_schema_version: 1
+profile: internal-team
+providers:
+  modal:
+    enabled: true
+    credentials:
+      source: gpucall_credentials
+""".lstrip(),
+        encoding="utf-8",
+    )
+
+    dry_run = apply_setup_plan(config_dir, plan, dry_run=True, yes=True)
+    assert "Setup plan: internal-team" in dry_run
+    assert "modal requires credentials.source: official_cli" not in dry_run
+    assert "modal credentials.source=gpucall_credentials but missing" not in dry_run
+
+    report = apply_setup_plan(config_dir, plan, dry_run=False, yes=True)
+    assert "Applied setup plan." in report
+    assert "Modal configured" in report
+
+
 def test_setup_plan_rejects_invalid_recipe_automation_chain(tmp_path) -> None:
     plan = tmp_path / "gpucall.setup.yml"
     plan.write_text(
@@ -259,7 +333,9 @@ tenant_onboarding:
 
     assert "System name: example-system" in prompt
     assert "https://gpucall.example.internal/v2/bootstrap/tenant-key" in prompt
-    assert "GPUCALL_API_KEY" not in prompt
+    assert "GPUCALL_API_KEY_HANDOFF_MODE" in prompt
+    assert "GPUCALL_API_KEY: `[redacted-key]`" not in prompt
+    assert 'export GPUCALL_API_KEY="' not in prompt
 
 
 def test_setup_handoff_prompt_uses_operator_asset_urls(tmp_path) -> None:

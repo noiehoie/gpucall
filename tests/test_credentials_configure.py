@@ -21,6 +21,21 @@ def test_credentials_save_uses_0600_and_env_override(tmp_path, monkeypatch) -> N
     assert creds["runpod"]["api_key"] == "from-env"
 
 
+def test_modal_credentials_use_gpucall_store_and_env_override(tmp_path, monkeypatch) -> None:
+    path = tmp_path / "credentials.yml"
+    monkeypatch.setenv("GPUCALL_CREDENTIALS", str(path))
+
+    save_credentials("modal", {"token_id": "from-file-id", "token_secret": "from-file-secret"})
+    monkeypatch.setenv("MODAL_TOKEN_ID", "from-env-id")
+    monkeypatch.setenv("MODAL_TOKEN_SECRET", "from-env-secret")
+
+    creds = load_credentials()
+
+    assert creds["modal"]["token_id"] == "from-env-id"
+    assert creds["modal"]["token_secret"] == "from-env-secret"
+    assert "token_pair:modal" in configured_credentials()
+
+
 def test_credentials_save_preserves_existing_owner_when_root(tmp_path, monkeypatch) -> None:
     path = tmp_path / "credentials.yml"
     monkeypatch.setenv("GPUCALL_CREDENTIALS", str(path))
@@ -53,6 +68,22 @@ def test_configure_runpod_interactive_flow(tmp_path, monkeypatch, capsys) -> Non
     assert "runpod-serverless" in out
     assert "Setup session finished" in out
     assert "gpucall doctor" in out
+
+
+def test_configure_modal_interactive_flow_uses_gpucall_credentials(tmp_path, monkeypatch, capsys) -> None:
+    path = tmp_path / "credentials.yml"
+    monkeypatch.setenv("GPUCALL_CREDENTIALS", str(path))
+    answers = iter(["modal", "ak-test", "main", "n"])
+    monkeypatch.setattr("builtins.input", lambda prompt="": next(answers))
+    monkeypatch.setattr("getpass.getpass", lambda prompt="": "as-test")
+
+    configure_command(tmp_path / "config")
+
+    creds = load_credentials()
+    out = capsys.readouterr().out
+    assert creds["modal"] == {"environment": "main", "token_id": "ak-test", "token_secret": "as-test"}
+    assert "token_pair:modal" in configured_credentials()
+    assert "Modal token pair saved to gpucall credentials." in out
 
 
 def test_configure_status_uses_checkmark(tmp_path, monkeypatch, capsys) -> None:

@@ -235,6 +235,14 @@ def test_shipment_blockers_are_complete_and_match_golden_owner_routes() -> None:
         "live_reason": "endpoint_missing_from_inventory",
         "live_catalog_findings": [{"reason": "configured endpoint not present", "status_code": 404}],
     }
+    supply_row = {
+        "tuple": "runpod-needs-supply",
+        "target": "RUNPOD_ENDPOINT_ID_PLACEHOLDER",
+        "mode": "sync",
+        "price_freshness": "fresh",
+        "route_validation_required": True,
+        "live_reason": "RunPod endpoint target is not configured",
+    }
     cases = [
         (
             classify_workload_demand(
@@ -275,6 +283,21 @@ def test_shipment_blockers_are_complete_and_match_golden_owner_routes() -> None:
                 ("validation_missing", "ADMIN_VALIDATION_MISSING", ADMIN_OWNER, "gpucall-recipe-admin", "validation-evidence.json"),
             },
         ),
+        (
+            classify_workload_demand(
+                _workload(),
+                _readiness(_recipe(eligible_tuples=[supply_row], live_ready_tuples=[], live_blocked_tuples=[supply_row])),
+            ),
+            {
+                (
+                    "supply_provisioning_required",
+                    "PROVIDER_SUPPLY_MISSING",
+                    PROVIDER_OWNER,
+                    "provider-ops",
+                    "provider-supply-provisioning-plan.json",
+                )
+            },
+        ),
     ]
 
     for result, expected in cases:
@@ -293,6 +316,33 @@ def test_shipment_blockers_are_complete_and_match_golden_owner_routes() -> None:
             for blocker in blockers
         }
         assert actual >= expected
+
+
+def test_invalid_workload_context_budget_is_classified_without_crashing() -> None:
+    result = classify_workload_demand(
+        _workload(context=32768.5),  # type: ignore[arg-type]
+        _readiness(_recipe()),
+    )
+
+    assert result["category"] == "provider_missing"
+    assert result["shipment_ready"] is False
+    invalid_blockers = [blocker for blocker in result["blockers"] if blocker["reason"] == "invalid_workload_contract_context_budget_tokens"]
+    assert invalid_blockers
+    assert invalid_blockers[0]["code"] == "CALLER_CONTRACT_INCOMPLETE"
+    assert invalid_blockers[0]["owner"] == CALLER_OWNER
+    assert invalid_blockers[0]["next_artifact_required"] == "workload-contract.json"
+    assert [blocker["reason"] for blocker in result["blockers"]] == ["invalid_workload_contract_context_budget_tokens"]
+
+
+def test_invalid_recipe_context_budget_is_classified_without_crashing() -> None:
+    result = classify_workload_demand(
+        _workload(),
+        _readiness(_recipe(context_budget_tokens=32768.5)),
+    )
+
+    assert result["category"] == "provider_missing"
+    assert result["shipment_ready"] is False
+    assert any(blocker["reason"] == "no_contract_compatible_readiness_recipe" for blocker in result["blockers"])
 
 
 def test_shipment_report_summary_counts_only_complete_typed_blockers(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
 
 import httpx
 
@@ -18,6 +19,7 @@ from gpucall_sdk import (
     GPUCallHTTPError,
     GPUCallJSONParseError,
     GPUCallNoEligibleTupleError,
+    GPUCallNoRecipeError,
     GPUCallProviderRuntimeError,
 )
 from gpucall_sdk.client import DEFAULT_ASYNC_POLL_TIMEOUT_SECONDS, DEFAULT_AUTO_UPLOAD_THRESHOLD_BYTES, DEFAULT_REQUEST_TIMEOUT_SECONDS
@@ -466,6 +468,66 @@ def test_http_error_preserves_failure_artifact() -> None:
     assert exc_info.value.code == "PROVIDER_PROVISION_FAILED"
     assert exc_info.value.failure_artifact == artifact
     assert exc_info.value.response_body["failure_artifact"] == artifact
+
+
+def test_contract_drift_failure_auto_submits_sanitized_recipe_intake(tmp_path) -> None:
+    inbox = tmp_path / "recipe-inbox"
+    artifact = {
+        "schema_version": 1,
+        "failure_id": "gf-contract-drift",
+        "failure_kind": "no_recipe",
+        "code": "REQUEST_EXCEEDS_RECIPE_CONTEXT",
+        "recipe_request_recommended": True,
+        "caller_action": "run_gpucall_recipe_draft_intake",
+        "capability_gap": "context_window_too_small",
+        "safe_request_summary": {
+            "task": "infer",
+            "mode": "sync",
+            "message_count": 1,
+            "message_max_bytes": 150000,
+            "message_total_bytes": 150000,
+        },
+        "redaction_guarantee": {
+            "prompt_body_included": False,
+            "message_content_included": False,
+            "data_ref_uri_included": False,
+            "presigned_url_included": False,
+            "api_key_included": False,
+            "tuple_raw_output_included": False,
+        },
+    }
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            422,
+            json={
+                "detail": "required model length 65536 exceeds recipe context budget 32768",
+                "code": "REQUEST_EXCEEDS_RECIPE_CONTEXT",
+                "context": {"task": "infer", "mode": "sync", "required_model_len": 65536, "largest_auto_recipe_model_len": 32768},
+                "failure_artifact": artifact,
+            },
+        )
+
+    client = GPUCallClient(
+        "http://gpucall.test",
+        transport=httpx.MockTransport(handler),
+        recipe_inbox_dir=inbox,
+        recipe_intake_source="news-system",
+    )
+
+    with pytest.raises(GPUCallNoRecipeError) as exc_info:
+        client.chat.completions.create(messages=[{"role": "user", "content": "redacted source text"}], intent="summarize_text")
+
+    submissions = exc_info.value.recipe_intake_submissions
+    assert len(submissions) == 1
+    bundle = json.loads(Path(submissions[0]).read_text(encoding="utf-8"))
+    assert bundle["source"] == "news-system"
+    sanitized = bundle["intake"]["sanitized_request"]
+    assert sanitized["task"] == "infer"
+    assert sanitized["intent"] == "summarize_text"
+    assert sanitized["error"]["capability_gap"] == "context_window_too_small"
+    assert sanitized["input_summary"]["max_bytes"] == 150000
+    assert "redacted source text" not in json.dumps(bundle, ensure_ascii=False)
 
 
 def test_redacts_presigned_httpx_url_log_args() -> None:

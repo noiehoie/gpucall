@@ -16,6 +16,7 @@ VALIDATION_MISSING = "validation_missing"
 PROVIDER_MISSING = "provider_missing"
 PRICE_UNKNOWN = "price_unknown"
 ENDPOINT_STALE = "endpoint_stale"
+SUPPLY_PROVISIONING_REQUIRED = "supply_provisioning_required"
 
 CATEGORY_LABELS = {
     SHIPMENT_READY: "出荷可能",
@@ -23,9 +24,10 @@ CATEGORY_LABELS = {
     PROVIDER_MISSING: "provider 不足",
     PRICE_UNKNOWN: "price 不明",
     ENDPOINT_STALE: "endpoint stale",
+    SUPPLY_PROVISIONING_REQUIRED: "supply provisioning required",
 }
 
-BLOCKER_PRIORITY = (ENDPOINT_STALE, PRICE_UNKNOWN, PROVIDER_MISSING, VALIDATION_MISSING)
+BLOCKER_PRIORITY = (ENDPOINT_STALE, PRICE_UNKNOWN, SUPPLY_PROVISIONING_REQUIRED, PROVIDER_MISSING, VALIDATION_MISSING)
 
 
 def build_shipment_gap_report(
@@ -99,7 +101,16 @@ def classify_workload_demand(
     task = str(workload.get("task") or "")
     intent = str(workload.get("intent") or "")
     modes = [str(item) for item in workload.get("modes") or [] if str(item)]
-    context_budget_tokens = _safe_int(_mapping(workload.get("input_profile")).get("context_budget_tokens"))
+    blockers: list[dict[str, Any]] = []
+    context_budget_parse_failed = False
+    try:
+        context_budget_tokens = _safe_int(_mapping(workload.get("input_profile")).get("context_budget_tokens"))
+    except ValueError as exc:
+        context_budget_parse_failed = True
+        context_budget_tokens = 0
+        blocker = _blocker(PROVIDER_MISSING, "invalid_workload_contract_context_budget_tokens")
+        blocker["detail"] = str(exc)
+        blockers.append(blocker)
     matching = [
         recipe
         for recipe in readiness_report.get("recipes", []) or []
@@ -107,17 +118,18 @@ def classify_workload_demand(
         and recipe.get("intent") == intent
         and (not recipe.get("task") or not task or recipe.get("task") == task)
     ]
-    compatible = [
-        recipe
-        for recipe in matching
-        if _recipe_is_contract_compatible(recipe, context_budget_tokens=context_budget_tokens, modes=modes)
-    ]
-    blockers: list[dict[str, Any]] = []
+    compatible = []
+    if not context_budget_parse_failed:
+        compatible = [
+            recipe
+            for recipe in matching
+            if _recipe_is_contract_compatible(recipe, context_budget_tokens=context_budget_tokens, modes=modes)
+        ]
     if not matching:
         blockers.append(_blocker(PROVIDER_MISSING, "no_matching_readiness_recipe"))
-    elif not compatible:
+    elif not context_budget_parse_failed and not compatible:
         blockers.append(_blocker(PROVIDER_MISSING, "no_contract_compatible_readiness_recipe"))
-    else:
+    elif not context_budget_parse_failed:
         classification_recipes = _shipment_classification_recipes(compatible)
         rows = _rows_for_requested_modes([row for recipe in classification_recipes for row in _eligible_rows(recipe)], modes=modes)
         ready_rows = [row for recipe in classification_recipes for row in _ready_rows(recipe, modes=modes)]
@@ -170,6 +182,8 @@ def _blockers_from_rows(
     min_live_ready_tuples: int,
 ) -> list[dict[str, Any]]:
     blockers: list[dict[str, Any]] = []
+    if any(_requires_supply_provisioning(row) for row in rows):
+        blockers.append(_blocker(SUPPLY_PROVISIONING_REQUIRED, "provider_supply_provisioning_required", rows=[row for row in rows if _requires_supply_provisioning(row)]))
     if any(_is_endpoint_stale(row) for row in rows):
         blockers.append(_blocker(ENDPOINT_STALE, "endpoint_stale_or_missing", rows=[row for row in rows if _is_endpoint_stale(row)]))
     if ready_rows and len(fresh_ready_rows) < min_live_ready_tuples:
@@ -235,7 +249,10 @@ def _dedupe_blockers(blockers: list[dict[str, Any]]) -> list[dict[str, Any]]:
 
 
 def _recipe_is_contract_compatible(recipe: Mapping[str, Any], *, context_budget_tokens: int, modes: list[str]) -> bool:
-    recipe_budget = _safe_int(recipe.get("context_budget_tokens"))
+    try:
+        recipe_budget = _safe_int(recipe.get("context_budget_tokens"))
+    except ValueError:
+        return False
     if context_budget_tokens > 0 and recipe_budget > 0 and recipe_budget < context_budget_tokens:
         return False
     allowed_modes = {str(item) for item in recipe.get("allowed_modes") or [] if str(item)}
@@ -290,6 +307,8 @@ def _is_validation_missing(row: Mapping[str, Any]) -> bool:
 
 
 def _is_endpoint_stale(row: Mapping[str, Any]) -> bool:
+    if _requires_supply_provisioning(row):
+        return False
     reasons = [
         str(row.get("live_reason") or ""),
         str(row.get("route_validation_reason") or ""),
@@ -328,6 +347,35 @@ def _provider_unavailable_finding(finding: Mapping[str, Any]) -> bool:
         "models_probe_http_error",
         "models_probe_timeout",
     }
+
+
+def _requires_supply_provisioning(row: Mapping[str, Any]) -> bool:
+    text_parts = [
+        str(row.get("tuple") or ""),
+        str(row.get("target") or ""),
+        str(row.get("live_reason") or ""),
+        str(row.get("route_validation_reason") or ""),
+    ]
+    for finding in row.get("live_catalog_findings") or []:
+        if isinstance(finding, Mapping):
+            text_parts.extend(
+                [
+                    str(finding.get("reason") or ""),
+                    json.dumps(finding.get("details") or {}, sort_keys=True, default=str),
+                    json.dumps(finding.get("raw") or {}, sort_keys=True, default=str),
+                ]
+            )
+    text = " ".join(text_parts).lower()
+    return any(
+        token in text
+        for token in (
+            "runpod_endpoint_id_placeholder",
+            "target is not configured",
+            "endpoint target is not configured",
+            "endpoint id placeholder",
+            "provider supply provisioning required",
+        )
+    )
 
 
 def _endpoint_stale_finding(finding: Mapping[str, Any]) -> bool:

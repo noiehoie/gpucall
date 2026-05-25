@@ -15,22 +15,22 @@ from gpucall.credentials import save_credentials
 from gpucall.domain import ApiKeyHandoffMode
 
 
-@register_configure_target("modal", success_message=None, credential_contracts=("sdk_profile:modal",))
+@register_configure_target("modal", success_message=None, credential_contracts=("token_pair:modal", "sdk_profile:modal"))
 def configure_modal(_config_dir: Path) -> bool:
-    if not shutil.which("modal"):
-        print("Error: 'modal' CLI not found.", file=sys.stderr)
-        print("Install it with: uv pip install --python /opt/gpucall/.venv/bin/python modal", file=sys.stderr)
-        return False
-    print("\n[INFO] Launching Modal's official setup. Follow the prompts below.\n")
     try:
-        result = subprocess.run(["modal", "setup"])
-    except KeyboardInterrupt:
+        token_id = input("Enter Modal token ID: ").strip()
+        token_secret = getpass.getpass("Enter Modal token secret (will be hidden): ").strip()
+        environment = input("Enter Modal environment (optional, default main): ").strip()
+        if not token_id or not token_secret:
+            return False
+        values = {"token_id": token_id, "token_secret": token_secret}
+        if environment:
+            values["environment"] = environment
+        save_credentials("modal", values)
+    except (EOFError, KeyboardInterrupt):
         print("\nAborted.", file=sys.stderr)
         return False
-    if result.returncode != 0:
-        print(f"\n'modal setup' failed (exit code {result.returncode}).", file=sys.stderr)
-        return False
-    print("\nModal authentication configured successfully.")
+    print("\nModal token pair saved to gpucall credentials.")
     return True
 
 

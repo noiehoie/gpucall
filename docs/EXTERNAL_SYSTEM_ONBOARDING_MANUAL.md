@@ -48,6 +48,27 @@ gpucall-recipe-draft --help
 already available, use deterministic `rg` inventory instead of installing the
 gateway package.
 
+## Workspace Footprint Contract
+
+External-system onboarding must not litter the caller host with gpucall working
+directories. The caller repo is the application being migrated; gpucall does not
+own the caller repo's parent directory.
+
+Implicit caller-side writes are limited to:
+
+- the caller repo's migration output, normally `.gpucall-migration`.
+
+Other writes must be operator-explicit: a recipe or quality inbox, a neutral
+`--output-dir`, or gpucall-owned scratch space under `$XDG_STATE_HOME/gpucall`
+or `$XDG_CACHE_HOME/gpucall`.
+
+Onboarding automation must not invent sibling clones, latest-pointer files, or
+observer sandboxes next to the caller repo. Names such as `gpucall-c-tooling`,
+`gpucall-panopticon-*`, `gpucall-c-kit-*`, `news-system-*-sandbox`,
+`news-system-panopticon-e2e-*`, and `news-system-latest-*` are not product
+artifacts. If an operator E2E needs an isolated sandbox, create it under XDG
+gpucall state/cache and remove it after preserving a bounded manifest.
+
 This manual is intentionally strict. `Conditional Go` is not an allowed final
 state. If live canary is skipped, required preflight intake is only generated but
 not submitted, direct hosted-AI fallback remains enabled by default, or DataRef
@@ -231,6 +252,12 @@ Use terms precisely:
   inbox received it.
 
 Generated-only preflight is not enough for `Go`.
+
+When a recipe intake or preflight command submits to `GPUCALL_RECIPE_INBOX`,
+the submitted bundle must include a deterministic top-level `draft` object. A
+submission with `draft: null` is only an intake signal and is not sufficient
+recipe-draft evidence. Quality feedback remains separate and must not create a
+recipe draft.
 
 Example for translation:
 

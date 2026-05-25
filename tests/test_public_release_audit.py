@@ -31,6 +31,53 @@ def test_recipe_intents_are_registered() -> None:
     assert sorted(intent for intent in intents if intent not in CAPABILITY_BY_INTENT) == []
 
 
+def test_shipping_recipe_catalog_is_generic_starter_catalog() -> None:
+    root = Path(__file__).resolve().parents[1]
+    required_starter_intents = {
+        "summarize_text",
+        "extract_json",
+        "translate_text",
+        "rank_text_items",
+        "understand_document_image",
+    }
+    prohibited_intents = {"rss_semantic_match"}
+    prohibited_terms = ("news-system", "rss", "feed", "newspaper", "frontpage")
+
+    for directory in (root / "config" / "recipes", root / "gpucall" / "config_templates" / "recipes"):
+        recipes = []
+        for path in directory.glob("*.yml"):
+            data = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+            recipes.append({"path": path, "data": data, "text": path.read_text(encoding="utf-8")})
+
+        intents = {str(item["data"].get("intent")) for item in recipes if item["data"].get("intent")}
+        assert required_starter_intents <= intents
+        assert prohibited_intents.isdisjoint(intents)
+        for item in recipes:
+            serialized = item["text"].lower()
+            assert not any(term in serialized for term in prohibited_terms), item["path"]
+
+
+def test_external_onboarding_prompt_placeholders_are_consistent() -> None:
+    root = Path(__file__).resolve().parents[1]
+    text = (root / "docs" / "EXTERNAL_SYSTEM_ONBOARDING_PROMPT.md").read_text(encoding="utf-8")
+
+    assert "<admin-inbox>" not in text
+    for placeholder in (
+        "<system-name>",
+        "<gpucall-base-url>",
+        "<gpucall-api-key>",
+        "<recipe-request-admin-inbox>",
+        "<quality-feedback-admin-inbox>",
+        "<canary-command>",
+        "<gpucall-sdk-wheel-url>",
+    ):
+        assert placeholder in text
+
+    assert "uv tool install <gpucall-sdk-wheel-url>" in text
+    assert "--remote-inbox <recipe-request-admin-inbox>" in text
+    assert 'export GPUCALL_QUALITY_FEEDBACK_INBOX="<quality-feedback-admin-inbox>"' in text
+
+
 def test_admin_automation_defaults_are_closed() -> None:
     root = Path(__file__).resolve().parents[1]
     if not (root / ".git").exists():
@@ -41,7 +88,10 @@ def test_admin_automation_defaults_are_closed() -> None:
         assert data.get("recipe_inbox_auto_validate_existing_tuples", False) is False
         assert data.get("recipe_inbox_auto_activate_existing_validated_recipe", False) is False
         assert data.get("recipe_inbox_auto_promote_candidates", False) is False
+        assert data.get("recipe_inbox_auto_provision_supply", False) is False
+        assert data.get("recipe_inbox_auto_apply_supply", False) is False
         assert data.get("recipe_inbox_auto_billable_validation", False) is False
+        assert float(data.get("recipe_inbox_auto_validation_budget_usd", 0.10)) == 0.10
         assert data.get("recipe_inbox_auto_activate_validated", False) is False
         assert data.get("recipe_inbox_auto_set_auto_select", False) is False
         assert data.get("recipe_inbox_auto_run_launch_check", False) is False

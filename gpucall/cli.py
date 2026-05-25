@@ -20,6 +20,7 @@ from pathlib import Path
 from datetime import datetime, timezone
 from importlib.resources import files
 from urllib.parse import urljoin
+from typing import Mapping
 
 import httpx
 import uvicorn
@@ -72,6 +73,7 @@ from gpucall.tenant import TenantUsageLedger
 from gpucall.validator_plan import build_validator_plan, dumps_validator_plan
 from gpucall.dispatcher import is_terminal_job_state
 from gpucall.production_acceptance import dumps_acceptance_report, run_production_acceptance
+from gpucall.installed_product_acceptance import dumps_installed_product_acceptance, run_installed_product_acceptance
 from gpucall.shipment_gap import build_shipment_gap_report, dumps_shipment_gap
 
 
@@ -105,6 +107,7 @@ def main() -> None:
     doctor.add_argument("--live-tuple-catalog", action="store_true")
     validate = sub.add_parser("validate-config")
     validate.add_argument("--config-dir", type=Path, default=default_config_dir())
+    validate.add_argument("--verbose", action="store_true", help="include full recipe/runtime/tuple/tenant name lists")
     runtime = sub.add_parser("runtime")
     runtime.add_argument("action", choices=["add-openai", "add-ollama", "validate", "show"])
     runtime.add_argument("--config-dir", type=Path, default=default_config_dir())
@@ -202,6 +205,9 @@ def main() -> None:
     production_acceptance = sub.add_parser("production-acceptance")
     production_acceptance.add_argument("--config-dir", type=Path, default=None)
     production_acceptance.add_argument("--output", type=Path, default=None)
+    installed_acceptance = sub.add_parser("installed-product-acceptance")
+    installed_acceptance.add_argument("--root", type=Path, default=None)
+    installed_acceptance.add_argument("--output", type=Path, default=None)
     shipment_check = sub.add_parser("shipment-check")
     shipment_check.add_argument("--config-dir", type=Path, default=default_config_dir())
     shipment_check.add_argument("--contract", type=Path, required=True, help="C-kit workload-contract.json demand file")
@@ -259,8 +265,13 @@ def main() -> None:
     admin.add_argument("--disable-recipe-auto-activate-existing", action="store_true")
     admin.add_argument("--enable-recipe-auto-promote", action="store_true")
     admin.add_argument("--disable-recipe-auto-promote", action="store_true")
+    admin.add_argument("--enable-recipe-auto-provision-supply", action="store_true")
+    admin.add_argument("--disable-recipe-auto-provision-supply", action="store_true")
+    admin.add_argument("--enable-recipe-auto-apply-supply", action="store_true")
+    admin.add_argument("--disable-recipe-auto-apply-supply", action="store_true")
     admin.add_argument("--enable-recipe-auto-billable-validation", action="store_true")
     admin.add_argument("--disable-recipe-auto-billable-validation", action="store_true")
+    admin.add_argument("--recipe-auto-validation-budget-usd", type=float, default=None)
     admin.add_argument("--enable-recipe-auto-activate", action="store_true")
     admin.add_argument("--disable-recipe-auto-activate", action="store_true")
     admin.add_argument("--enable-recipe-auto-require-auto-select-safe", action="store_true")
@@ -330,7 +341,7 @@ def main() -> None:
     elif args.command == "doctor":
         doctor_config(args.config_dir, live_tuple_catalog=args.live_tuple_catalog)
     elif args.command == "validate-config":
-        validate_config_command(args.config_dir)
+        validate_config_command(args.config_dir, verbose=args.verbose)
     elif args.command == "runtime":
         runtime_command(args)
     elif args.command == "seed-liveness":
@@ -404,6 +415,8 @@ def main() -> None:
         release_check_command(args.config_dir, args.output_dir)
     elif args.command == "production-acceptance":
         production_acceptance_command(args.output, config_dir=args.config_dir)
+    elif args.command == "installed-product-acceptance":
+        installed_product_acceptance_command(args.output, root=args.root)
     elif args.command == "shipment-check":
         report = build_shipment_gap_report(
             config_dir=args.config_dir,
@@ -458,8 +471,13 @@ def main() -> None:
             disable_recipe_auto_activate_existing=args.disable_recipe_auto_activate_existing,
             enable_recipe_auto_promote=args.enable_recipe_auto_promote,
             disable_recipe_auto_promote=args.disable_recipe_auto_promote,
+            enable_recipe_auto_provision_supply=args.enable_recipe_auto_provision_supply,
+            disable_recipe_auto_provision_supply=args.disable_recipe_auto_provision_supply,
+            enable_recipe_auto_apply_supply=args.enable_recipe_auto_apply_supply,
+            disable_recipe_auto_apply_supply=args.disable_recipe_auto_apply_supply,
             enable_recipe_auto_billable_validation=args.enable_recipe_auto_billable_validation,
             disable_recipe_auto_billable_validation=args.disable_recipe_auto_billable_validation,
+            recipe_auto_validation_budget_usd=args.recipe_auto_validation_budget_usd,
             enable_recipe_auto_activate=args.enable_recipe_auto_activate,
             disable_recipe_auto_activate=args.disable_recipe_auto_activate,
             enable_recipe_auto_require_auto_select_safe=args.enable_recipe_auto_require_auto_select_safe,
@@ -480,6 +498,17 @@ def main() -> None:
 def production_acceptance_command(output: Path | None, *, config_dir: Path | None = None) -> None:
     report = run_production_acceptance(config_dir=config_dir)
     rendered = dumps_acceptance_report(report)
+    if output is not None:
+        output.parent.mkdir(parents=True, exist_ok=True)
+        output.write_text(rendered, encoding="utf-8")
+    print(rendered, end="")
+    if not report.get("passed"):
+        raise SystemExit(1)
+
+
+def installed_product_acceptance_command(output: Path | None, *, root: Path | None = None) -> None:
+    report = run_installed_product_acceptance(root=root)
+    rendered = dumps_installed_product_acceptance(report)
     if output is not None:
         output.parent.mkdir(parents=True, exist_ok=True)
         output.write_text(rendered, encoding="utf-8")
@@ -657,21 +686,44 @@ def _live_tuple_catalog_timeout_seconds() -> float:
     return max(value, 0.0)
 
 
-def validate_config_command(config_dir: Path) -> None:
+def validate_config_command(config_dir: Path, *, verbose: bool = False) -> None:
     config = load_config(config_dir)
+    if verbose:
+        report = {
+            "valid": True,
+            "recipes": sorted(config.recipes),
+            "runtimes": sorted(config.runtimes),
+            "tuples": sorted(config.tuples),
+            "tenants": sorted(config.tenants),
+        }
+    else:
+        report = {
+            "valid": True,
+            "summary": {
+                "recipes": _name_summary(config.recipes),
+                "runtimes": _name_summary(config.runtimes),
+                "tuples": _name_summary(config.tuples),
+                "tenants": _name_summary(config.tenants),
+            },
+            "next": "run `gpucall validate-config --verbose` to print full name lists",
+        }
     print(
         json.dumps(
-            {
-                "valid": True,
-                "recipes": sorted(config.recipes),
-                "runtimes": sorted(config.runtimes),
-                "tuples": sorted(config.tuples),
-                "tenants": sorted(config.tenants),
-            },
+            report,
             indent=2,
             sort_keys=True,
         )
     )
+
+
+def _name_summary(items: Mapping[str, object], *, limit: int = 20) -> dict[str, object]:
+    names = sorted(items)
+    sample = names[:limit]
+    return {
+        "count": len(names),
+        "sample": sample,
+        "omitted": max(len(names) - len(sample), 0),
+    }
 
 
 def runtime_command(args) -> None:
@@ -1011,8 +1063,13 @@ def admin_command(
     disable_recipe_auto_activate_existing: bool = False,
     enable_recipe_auto_promote: bool = False,
     disable_recipe_auto_promote: bool = False,
+    enable_recipe_auto_provision_supply: bool = False,
+    disable_recipe_auto_provision_supply: bool = False,
+    enable_recipe_auto_apply_supply: bool = False,
+    disable_recipe_auto_apply_supply: bool = False,
     enable_recipe_auto_billable_validation: bool = False,
     disable_recipe_auto_billable_validation: bool = False,
+    recipe_auto_validation_budget_usd: float | None = None,
     enable_recipe_auto_activate: bool = False,
     disable_recipe_auto_activate: bool = False,
     enable_recipe_auto_require_auto_select_safe: bool = False,
@@ -1059,6 +1116,10 @@ def admin_command(
             raise SystemExit("choose only one of --enable-recipe-auto-activate-existing or --disable-recipe-auto-activate-existing")
         if enable_recipe_auto_promote and disable_recipe_auto_promote:
             raise SystemExit("choose only one of --enable-recipe-auto-promote or --disable-recipe-auto-promote")
+        if enable_recipe_auto_provision_supply and disable_recipe_auto_provision_supply:
+            raise SystemExit("choose only one of --enable-recipe-auto-provision-supply or --disable-recipe-auto-provision-supply")
+        if enable_recipe_auto_apply_supply and disable_recipe_auto_apply_supply:
+            raise SystemExit("choose only one of --enable-recipe-auto-apply-supply or --disable-recipe-auto-apply-supply")
         if enable_recipe_auto_billable_validation and disable_recipe_auto_billable_validation:
             raise SystemExit("choose only one of --enable-recipe-auto-billable-validation or --disable-recipe-auto-billable-validation")
         if enable_recipe_auto_activate and disable_recipe_auto_activate:
@@ -1091,6 +1152,16 @@ def admin_command(
             auto_promote = True
         if disable_recipe_auto_promote:
             auto_promote = False
+        auto_provision_supply = None
+        if enable_recipe_auto_provision_supply:
+            auto_provision_supply = True
+        if disable_recipe_auto_provision_supply:
+            auto_provision_supply = False
+        auto_apply_supply = None
+        if enable_recipe_auto_apply_supply:
+            auto_apply_supply = True
+        if disable_recipe_auto_apply_supply:
+            auto_apply_supply = False
         auto_billable_validation = None
         if enable_recipe_auto_billable_validation:
             auto_billable_validation = True
@@ -1129,7 +1200,10 @@ def admin_command(
                 recipe_inbox_auto_validate_existing_tuples=auto_validate_existing,
                 recipe_inbox_auto_activate_existing_validated_recipe=auto_activate_existing,
                 recipe_inbox_auto_promote_candidates=auto_promote,
+                recipe_inbox_auto_provision_supply=auto_provision_supply,
+                recipe_inbox_auto_apply_supply=auto_apply_supply,
                 recipe_inbox_auto_billable_validation=auto_billable_validation,
+                recipe_inbox_auto_validation_budget_usd=recipe_auto_validation_budget_usd,
                 recipe_inbox_auto_activate_validated=auto_activate,
                 recipe_inbox_auto_require_auto_select_safe=require_auto_select_safe,
                 recipe_inbox_auto_set_auto_select=auto_set_auto_select,

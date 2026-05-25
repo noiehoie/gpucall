@@ -19,6 +19,7 @@ PANOPTICON_TTL_BY_DIMENSION = {
     "contract": 86400,
     "credential": 300,
     "cost": 300,
+    "storage": 300,
     "endpoint": 300,
     "stock": 300,
     "capacity": 300,
@@ -36,6 +37,7 @@ PanopticonDimension = Literal[
     "contract",
     "credential",
     "cost",
+    "storage",
     "endpoint",
     "stock",
     "capacity",
@@ -109,6 +111,19 @@ class PanopticonFindingDetails(BaseModel):
     error_code: str | None = None
     error_type: str | None = None
     source_url: str | None = None
+    resource_type: str | None = None
+    resource_id: str | None = None
+    resource_name: str | None = None
+    data_center_id: str | None = None
+    storage_size_gb: NonNegativeInt | None = None
+    estimated_monthly_usd: NonNegativeFloat | None = None
+    attached_endpoint_count: NonNegativeInt | None = None
+    attached_endpoint_ids: list[str] | None = None
+    declared_by_tuple_count: NonNegativeInt | None = None
+    declared_by_tuples: list[str] | None = None
+    content_inventory_status: str | None = None
+    retention_policy: str | None = None
+    recreate_source: str | None = None
 
     @field_validator(
         "max_model_len",
@@ -126,6 +141,10 @@ class PanopticonFindingDetails(BaseModel):
         "served_model_count",
         "probe_elapsed_ms",
         "price_per_second",
+        "storage_size_gb",
+        "estimated_monthly_usd",
+        "attached_endpoint_count",
+        "declared_by_tuple_count",
         mode="before",
     )
     @classmethod
@@ -657,6 +676,19 @@ def _details_from_raw(raw: Any) -> dict[str, Any]:
         "error_code",
         "error_type",
         "source_url",
+        "resource_type",
+        "resource_id",
+        "resource_name",
+        "data_center_id",
+        "storage_size_gb",
+        "estimated_monthly_usd",
+        "attached_endpoint_count",
+        "attached_endpoint_ids",
+        "declared_by_tuple_count",
+        "declared_by_tuples",
+        "content_inventory_status",
+        "retention_policy",
+        "recreate_source",
     }
     for key in direct_keys:
         value = raw.get(key)
@@ -681,9 +713,13 @@ def _details_from_raw(raw: Any) -> dict[str, Any]:
 def _merge_details(extracted: Mapping[str, Any], explicit: Any) -> dict[str, Any]:
     if explicit is None:
         return dict(extracted)
-    if not isinstance(explicit, Mapping):
-        PanopticonFindingDetails.model_validate(explicit)
-    return PanopticonFindingDetails.model_validate({**dict(extracted), **dict(explicit)}).model_dump(exclude_none=True)
+    if isinstance(explicit, PanopticonFindingDetails):
+        explicit_details = explicit.model_dump(exclude_none=True)
+    elif isinstance(explicit, Mapping):
+        explicit_details = dict(explicit)
+    else:
+        explicit_details = PanopticonFindingDetails.model_validate(explicit).model_dump(exclude_none=True)
+    return PanopticonFindingDetails.model_validate({**dict(extracted), **explicit_details}).model_dump(exclude_none=True)
 
 
 def _payload_dump(payload: PanopticonPayload) -> dict[str, Any]:

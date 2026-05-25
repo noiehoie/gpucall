@@ -17,6 +17,7 @@ from gpucall.migrate import (
     main,
     patch_suggestions,
     profile_project,
+    recipe_drafts_from_intakes,
     recipe_intakes_from_contract,
     trace_project,
 )
@@ -131,6 +132,42 @@ def test_migrate_cli_writes_reports(tmp_path) -> None:
     assert data["phase"] == "migration-assessment"
     assert data["preflight_requests"][0]["intent"] == "summarize_text"
     assert (out / "migration-report.md").exists()
+
+
+def test_migrate_cli_does_not_blacklist_explicit_output_dir_names(tmp_path) -> None:
+    project = tmp_path / "news-system"
+    explicit = tmp_path / "news-system-latest-gpucall-c-sandbox"
+    project.mkdir()
+    (project / "topic_engine.py").write_text("call_llm('summarize topic')\n", encoding="utf-8")
+
+    assert main(["report", str(project), "--source", "news-system", "--output-dir", str(explicit)]) == 0
+
+    assert (explicit / "migration-report.json").exists()
+
+
+def test_migrate_cli_allows_xdg_gpucall_scratch_output(tmp_path, monkeypatch) -> None:
+    project = tmp_path / "news-system"
+    state_home = tmp_path / "xdg-state"
+    output = state_home / "gpucall" / "e2e" / "news-system-panopticon-e2e-20260521T002543Z"
+    project.mkdir()
+    (project / "topic_engine.py").write_text("call_llm('summarize topic')\n", encoding="utf-8")
+    monkeypatch.setenv("XDG_STATE_HOME", str(state_home))
+
+    assert main(["report", str(project), "--source", "news-system", "--output-dir", str(output)]) == 0
+
+    assert (output / "migration-report.json").exists()
+
+
+def test_migrate_cli_default_output_stays_inside_caller_repo(tmp_path) -> None:
+    project = tmp_path / "news-system"
+    project.mkdir()
+    (project / "topic_engine.py").write_text("call_llm('summarize topic')\n", encoding="utf-8")
+
+    assert main(["report", str(project), "--source", "news-system"]) == 0
+
+    assert (project / ".gpucall-migration" / "migration-report.json").exists()
+    assert not (tmp_path / "news-system-latest-gpucall-c-sandbox").exists()
+    assert not (tmp_path / "gpucall-c-tooling").exists()
 
 
 def test_migrate_canary_runs_command(tmp_path) -> None:
@@ -1580,12 +1617,18 @@ def test_migrate_cli_onboard_writes_contract_and_recipe_intake(tmp_path) -> None
 
     contract = json.loads((output / "workload-contract.json").read_text(encoding="utf-8"))
     intake = json.loads((output / "recipe-intake.json").read_text(encoding="utf-8"))
+    draft = json.loads((output / "recipe-draft.json").read_text(encoding="utf-8"))
     intake_bundle = json.loads((output / "recipe-intakes.json").read_text(encoding="utf-8"))
+    draft_bundle = json.loads((output / "recipe-drafts.json").read_text(encoding="utf-8"))
     assert contract["phase"] == "workload-contract"
     assert intake["phase"] == "deterministic-contract-intake"
     assert intake["sanitized_request"]["intent"] == "rank_text_items"
+    assert draft["phase"] == "draft"
+    assert draft["proposed_recipe"]["intent"] == "rank_text_items"
     assert intake_bundle["phase"] == "recipe-intake-bundle"
+    assert draft_bundle["phase"] == "recipe-draft-bundle"
     assert (output / "recipe-intakes" / "infer-rank-text-items.json").exists()
+    assert (output / "recipe-drafts" / "infer-rank-text-items.json").exists()
 
 
 def test_migrate_cli_onboard_yes_applies_patch(tmp_path) -> None:
@@ -1614,9 +1657,12 @@ def test_migrate_draft_contract_write_intake_handles_empty_workload_set(tmp_path
 
     contract = json.loads((output / "workload-contract.json").read_text(encoding="utf-8"))
     bundle = json.loads((output / "recipe-intakes.json").read_text(encoding="utf-8"))
+    draft_bundle = json.loads((output / "recipe-drafts.json").read_text(encoding="utf-8"))
     assert contract["workloads"] == []
     assert bundle["count"] == 0
+    assert draft_bundle["count"] == 0
     assert not (output / "recipe-intake.json").exists()
+    assert not (output / "recipe-draft.json").exists()
 
 
 def test_migrate_cli_onboard_accepts_existing_log_files(tmp_path) -> None:
@@ -2281,6 +2327,12 @@ def test_recipe_intakes_from_contract_preserves_all_materializable_workloads() -
     assert bundle["typed_blocker_type_counts"] == {"ADMIN_RECIPE_MISSING": 2, "CALLER_QUALITY_BASELINE_MISSING": 2}
     assert bundle["typed_blocker_owner_counts"] == {"admin": 2, "caller": 2}
     assert bundle["typed_blocker_handoff_counts"] == {"caller-c-kit": 2, "gpucall-recipe-admin": 2}
+
+    drafts = recipe_drafts_from_intakes(bundle)
+    assert drafts["phase"] == "recipe-draft-bundle"
+    assert drafts["count"] == 2
+    assert [item["proposed_recipe"]["intent"] for item in drafts["drafts"]] == ["rank_text_items", "understand_document_image"]
+    assert drafts["rejected"] == bundle["rejected"]
 
 
 def test_recipe_intakes_from_contract_types_baseline_rejects_for_caller() -> None:

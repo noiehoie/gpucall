@@ -5,6 +5,7 @@ import contextlib
 from datetime import UTC, datetime
 import hashlib
 import json
+import os
 from pathlib import Path
 import sys
 import types
@@ -925,6 +926,47 @@ def test_modal_stream_uses_explicit_deployed_remote_gen(monkeypatch) -> None:
     assert calls["function_name"] == "stream_inference_on_modal"
     assert calls["args"][1] == "infer"
     assert calls["kwargs"]["max_model_len"] == 100
+
+
+def test_modal_import_projects_gpucall_credentials_to_modal_env(monkeypatch) -> None:
+    calls: dict[str, object] = {}
+
+    class FakeFunction:
+        @staticmethod
+        def from_name(app_name: str, function_name: str):
+            calls["token_id"] = os.environ.get("MODAL_TOKEN_ID")
+            calls["token_secret"] = os.environ.get("MODAL_TOKEN_SECRET")
+            calls["environment"] = os.environ.get("MODAL_ENVIRONMENT")
+            return FakeFunction()
+
+        def spawn(self, *args, **kwargs):
+            class FakeInvocation:
+                def get(self, timeout: float):
+                    return "ok"
+
+            return FakeInvocation()
+
+    fake_modal = types.SimpleNamespace(
+        Function=FakeFunction,
+        enable_output=lambda **_: contextlib.nullcontext(),
+    )
+    monkeypatch.setitem(sys.modules, "modal", fake_modal)
+    monkeypatch.delenv("MODAL_TOKEN_ID", raising=False)
+    monkeypatch.delenv("MODAL_TOKEN_SECRET", raising=False)
+    monkeypatch.delenv("MODAL_ENVIRONMENT", raising=False)
+    monkeypatch.setattr(
+        "gpucall.credentials.load_credentials",
+        lambda: {"modal": {"token_id": "ak-test", "token_secret": "as-test", "environment": "main"}},
+    )
+
+    adapter = ModalAdapter(
+        name="modal",
+        app_name="gpucall-worker",
+        function_name="run_inference_on_modal",
+        max_model_len=100,
+    )
+    assert adapter._invoke(plan_payload_plan(), timeout=3, remote_id="modal-env") == "ok"
+    assert calls == {"token_id": "ak-test", "token_secret": "as-test", "environment": "main"}
 
 
 def test_modal_resource_exhausted_maps_to_capacity_error(monkeypatch) -> None:
@@ -2292,6 +2334,12 @@ def test_runpod_live_inventory_preserves_explicit_empty_first_result_key() -> No
     from gpucall.execution_surfaces.managed_endpoint import _runpod_inventory_rows
 
     assert _runpod_inventory_rows({"endpoints": [], "items": [{"id": "should-not-leak"}]}) == []
+
+
+def test_runpod_live_inventory_extracts_network_volume_rows() -> None:
+    from gpucall.execution_surfaces.managed_endpoint import _runpod_inventory_rows
+
+    assert _runpod_inventory_rows({"networkVolumes": [{"id": "vol-1"}]}) == [{"id": "vol-1"}]
 
 
 def test_runpod_vllm_live_inventory_follows_next_page(monkeypatch) -> None:

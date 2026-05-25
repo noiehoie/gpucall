@@ -11,6 +11,8 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+from gpucall_recipe_draft.core import draft_from_intake
+
 _SAFE_REQUEST_ID = re.compile(r"^[A-Za-z0-9_.-]+$")
 _SAFE_REMOTE_HOST = re.compile(r"^[A-Za-z0-9_.@%:+-]+$")
 
@@ -20,7 +22,10 @@ def build_submission_bundle(
     intake: dict[str, Any],
     draft: dict[str, Any] | None = None,
     source: str | None = None,
+    auto_draft: bool = True,
 ) -> dict[str, Any]:
+    if draft is None and auto_draft and _auto_draft_allowed(intake):
+        draft = draft_from_intake(intake)
     request_id = "rr-" + datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ") + "-" + uuid.uuid4().hex[:12]
     return {
         "schema_version": 1,
@@ -31,6 +36,15 @@ def build_submission_bundle(
         "intake": intake,
         "draft": draft,
     }
+
+
+def _auto_draft_allowed(intake: dict[str, Any]) -> bool:
+    phase = str(intake.get("phase") or "")
+    if phase == "deterministic-quality-feedback-intake":
+        return False
+    if phase in {"deterministic-intake", "deterministic-preflight-intake", "deterministic-contract-intake"}:
+        return True
+    return isinstance(intake.get("sanitized_request"), dict) and isinstance(intake.get("redaction_report"), dict)
 
 
 def submit_bundle(bundle: dict[str, Any], inbox_dir: str | Path) -> Path:

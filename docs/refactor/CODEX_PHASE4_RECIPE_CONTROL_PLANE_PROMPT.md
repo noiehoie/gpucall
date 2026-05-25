@@ -95,11 +95,6 @@ Expected implementation direction:
     itself
   - authoring proposal output cannot activate production routing
 
-Use multi-ai-code before implementation if available. Bound auxiliary AI
-processes; if they fail, hang, or drift outside this phase, stop them and
-continue with deterministic code inspection and tests. Use multi-ai-review
-before final if available, with the same bounded behavior.
-
 Do not edit:
 
 - `config/recipes/*`

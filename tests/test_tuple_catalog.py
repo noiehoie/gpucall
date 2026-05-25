@@ -79,8 +79,12 @@ def test_runpod_live_catalog_records_price_and_blocks_unavailable_stock(monkeypa
             calls.append(url)
             if url.endswith("/endpoint-1/health"):
                 return FakeResponse({"workers": {"ready": 0, "running": 0, "initializing": 0, "throttled": 1, "unhealthy": 0}})
+            if url.endswith("/endpoint-1/openai/v1/models"):
+                return FakeResponse({"data": [{"id": "Qwen/Qwen2.5-1.5B-Instruct"}]})
             if url.endswith("/endpoints"):
                 return FakeResponse([{"id": "endpoint-1", "currentPricePerSecond": 0.00042}])
+            if url.endswith("/networkvolumes"):
+                return FakeResponse([])
             raise AssertionError(url)
 
     fake_requests = __import__("types").SimpleNamespace(Session=lambda: FakeSession())
@@ -114,7 +118,12 @@ def test_runpod_live_catalog_records_price_and_blocks_unavailable_stock(monkeypa
     findings = evidence[tuple.name]["findings"]
     assert any(item.get("live_stock_state") == "unavailable" for item in findings)
     assert any(item.get("live_price_per_second") == 0.00042 for item in findings)
-    assert calls == ["https://rest.runpod.io/v1/endpoints", "https://api.runpod.ai/v2/endpoint-1/health"]
+    assert calls == [
+        "https://rest.runpod.io/v1/endpoints",
+        "https://api.runpod.ai/v2/endpoint-1/health",
+        "https://api.runpod.ai/v2/endpoint-1/openai/v1/models",
+        "https://rest.runpod.io/v1/networkvolumes",
+    ]
 
 
 def test_runpod_live_catalog_accepts_items_inventory_shape(monkeypatch) -> None:
@@ -188,6 +197,8 @@ def test_runpod_live_catalog_matches_endpoint_id_not_name(monkeypatch) -> None:
             calls.append(url)
             if url.endswith("/endpoints"):
                 return FakeResponse({"endpoints": [{"id": "different-endpoint", "name": "endpoint-1"}]})
+            if url.endswith("/networkvolumes"):
+                return FakeResponse([])
             raise AssertionError("endpoint health must not be queried when inventory id does not match")
 
     fake_requests = __import__("types").SimpleNamespace(Session=lambda: FakeSession())
@@ -218,7 +229,7 @@ def test_runpod_live_catalog_matches_endpoint_id_not_name(monkeypatch) -> None:
 
     assert evidence[tuple.name]["status"] == "blocked"
     assert evidence[tuple.name]["findings"][0]["field"] == "runpod_endpoint_inventory"
-    assert calls == ["https://rest.runpod.io/v1/endpoints"]
+    assert calls == ["https://rest.runpod.io/v1/endpoints", "https://rest.runpod.io/v1/networkvolumes"]
 
 
 def test_runpod_live_catalog_blocks_positive_workers_min(monkeypatch) -> None:
@@ -256,6 +267,8 @@ def test_runpod_live_catalog_blocks_positive_workers_min(monkeypatch) -> None:
                         ]
                     }
                 )
+            if url.endswith("/networkvolumes"):
+                return FakeResponse([])
             raise AssertionError(url)
 
     fake_requests = __import__("types").SimpleNamespace(Session=lambda: FakeSession())
@@ -290,7 +303,7 @@ def test_runpod_live_catalog_blocks_positive_workers_min(monkeypatch) -> None:
     billing_findings = [item for item in findings if item.get("field") == "runpod_serverless_billing_guard"]
     assert billing_findings
     assert {item["raw"]["live_reason"] for item in billing_findings} >= {"workers_min_positive", "active_pods_present"}
-    assert calls == ["https://rest.runpod.io/v1/endpoints"]
+    assert calls == ["https://rest.runpod.io/v1/endpoints", "https://rest.runpod.io/v1/networkvolumes"]
 
 
 def test_runpod_live_catalog_blocks_zero_workers_max(monkeypatch) -> None:
@@ -313,6 +326,8 @@ def test_runpod_live_catalog_blocks_zero_workers_max(monkeypatch) -> None:
             calls.append(url)
             if url.endswith("/endpoints"):
                 return FakeResponse({"endpoints": [{"id": "endpoint-1", "workersMin": 0, "workersMax": 0}]})
+            if url.endswith("/networkvolumes"):
+                return FakeResponse([])
             raise AssertionError(url)
 
     fake_requests = __import__("types").SimpleNamespace(Session=lambda: FakeSession())
@@ -345,7 +360,7 @@ def test_runpod_live_catalog_blocks_zero_workers_max(monkeypatch) -> None:
     assert evidence[tuple.name]["status"] == "blocked"
     billing_findings = [item for item in evidence[tuple.name]["findings"] if item.get("field") == "runpod_serverless_billing_guard"]
     assert [item["raw"]["live_reason"] for item in billing_findings] == ["workers_max_zero"]
-    assert calls == ["https://rest.runpod.io/v1/endpoints"]
+    assert calls == ["https://rest.runpod.io/v1/endpoints", "https://rest.runpod.io/v1/networkvolumes"]
 
 
 def test_runpod_live_catalog_allows_approved_standing_workers(monkeypatch) -> None:
@@ -382,6 +397,10 @@ def test_runpod_live_catalog_allows_approved_standing_workers(monkeypatch) -> No
                 )
             if url.endswith("/endpoint-1/health"):
                 return FakeResponse({"workers": {"ready": 1, "running": 0, "initializing": 0, "throttled": 0, "unhealthy": 0}})
+            if url.endswith("/endpoint-1/openai/v1/models"):
+                return FakeResponse({"data": [{"id": "Qwen/Qwen2.5-1.5B-Instruct"}]})
+            if url.endswith("/networkvolumes"):
+                return FakeResponse([])
             raise AssertionError(url)
 
     fake_requests = __import__("types").SimpleNamespace(Session=lambda: FakeSession())
@@ -434,7 +453,12 @@ def test_runpod_live_catalog_allows_approved_standing_workers(monkeypatch) -> No
             "raw": {"endpoint_id": "endpoint-1", "http_status": 200},
         }
     ]
-    assert calls == ["https://rest.runpod.io/v1/endpoints", "https://api.runpod.ai/v2/endpoint-1/health"]
+    assert calls == [
+        "https://rest.runpod.io/v1/endpoints",
+        "https://api.runpod.ai/v2/endpoint-1/health",
+        "https://api.runpod.ai/v2/endpoint-1/openai/v1/models",
+        "https://rest.runpod.io/v1/networkvolumes",
+    ]
 
 
 def test_runpod_json_or_error_wraps_invalid_success_json() -> None:

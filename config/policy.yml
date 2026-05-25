@@ -18,6 +18,27 @@ security:
     - split_learning
   confidential_allows_inline: true
   require_data_ref_sha256: true
+panopticon_remediation:
+  exclude_from_routing:
+    mode: auto
+  scale_workers_min_to_zero:
+    mode: approval_required
+  delete_endpoint:
+    mode: approval_required
+  delete_network_volume:
+    mode: approval_required
+provider_supply_provisioning:
+  create_runpod_serverless_endpoint:
+    mode: approval_required
+    default_workers_min: 0
+    default_workers_max: 1
+    max_workers_max: 3
+    allow_warm_workers: false
+    default_idle_timeout_seconds: 5
+    default_scaler_type: QUEUE_DELAY
+    default_scaler_value: 4
+    default_gpu_count: 1
+    default_container_disk_gb: 150
 tuples:
   max_data_classification: confidential
   allow: []

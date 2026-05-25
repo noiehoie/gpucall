@@ -8,6 +8,7 @@ import json
 import ast
 import re
 import time
+from datetime import datetime, timezone
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -719,6 +720,10 @@ def test_standard_config_routes_structured_vision_to_json_capable_model(tmp_path
     runpod_payload = yaml.safe_load(runpod_worker.read_text(encoding="utf-8"))
     runpod_payload["target"] = "runpod-endpoint-test"
     runpod_worker.write_text(yaml.safe_dump(runpod_payload, sort_keys=False), encoding="utf-8")
+    runpod_surface = root / "surfaces" / "runpod-vllm-ampere48-qwen2-5-vl-7b-instruct.yml"
+    runpod_surface_payload = yaml.safe_load(runpod_surface.read_text(encoding="utf-8"))
+    runpod_surface_payload["configured_price_observed_at"] = datetime.now(timezone.utc).isoformat()
+    runpod_surface.write_text(yaml.safe_dump(runpod_surface_payload, sort_keys=False), encoding="utf-8")
     config = load_config(root)
     compiler = GovernanceCompiler(policy=config.policy, recipes=config.recipes, tuples=config.tuples, models=config.models, engines=config.engines, registry=ObservedRegistry())
 
@@ -832,7 +837,31 @@ def test_validate_config_cli(tmp_path) -> None:
     )
 
     assert '"valid": true' in result.stdout
-    assert '"runtimes":' in result.stdout
+    assert '"summary":' in result.stdout
+    assert '"tuple_count":' not in result.stdout
+    assert '"omitted":' in result.stdout
+
+
+def test_validate_config_cli_verbose_lists_names(tmp_path) -> None:
+    root = copy_config(tmp_path)
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            str(Path(__file__).resolve().parents[1] / "gpucall" / "cli.py"),
+            "validate-config",
+            "--config-dir",
+            str(root),
+            "--verbose",
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+
+    assert '"valid": true' in result.stdout
+    assert '"runtimes": [' in result.stdout
+    assert '"tuples": [' in result.stdout
 
 
 def test_controlled_runtime_registry_is_loaded(tmp_path) -> None:
@@ -1275,6 +1304,7 @@ def test_runpod_endpoint_inventory_miss_exposes_machine_reason(monkeypatch) -> N
     from gpucall.execution_surfaces import managed_endpoint
 
     monkeypatch.setattr(managed_endpoint, "_runpod_endpoint_live_inventory_rows", lambda api_key, base_url: [])
+    monkeypatch.setattr(managed_endpoint, "_runpod_network_volume_live_inventory_rows", lambda api_key, base_url: [])
     tuple_spec = SimpleNamespace(
         name="runpod-vllm-a100-80gb-qwen2-5-7b-instruct-1m-524k",
         adapter="runpod-vllm-serverless",
@@ -1298,6 +1328,90 @@ def test_runpod_endpoint_inventory_miss_exposes_machine_reason(monkeypatch) -> N
     ]
 
 
+def test_runpod_network_volume_inventory_blocks_unattached_undeclared_storage(monkeypatch) -> None:
+    from gpucall.execution_surfaces import managed_endpoint
+
+    monkeypatch.setattr(managed_endpoint, "_runpod_endpoint_live_inventory_rows", lambda api_key, base_url: [])
+    monkeypatch.setattr(
+        managed_endpoint,
+        "_runpod_network_volume_live_inventory_rows",
+        lambda api_key, base_url: [
+            {"id": "le9b9gqqu6", "name": "news-llm-models", "dataCenterId": "US-NC-1", "size": 80}
+        ],
+    )
+    tuple_spec = SimpleNamespace(
+        name="runpod-vllm-a100-80gb-qwen2-5-7b-instruct-1m-524k",
+        adapter="runpod-vllm-serverless",
+        target="yum0u6a4khw7gi",
+        endpoint=None,
+        provider_params={},
+    )
+
+    findings = managed_endpoint.runpod_endpoint_catalog_findings([tuple_spec], {"runpod": {"api_key": "rk_test"}})
+
+    storage_finding = next(item for item in findings if item["dimension"] == "storage")
+    assert storage_finding["tuple"] == "runpod-network-volume-le9b9gqqu6"
+    assert storage_finding["severity"] == "error"
+    assert storage_finding["raw"]["resource_type"] == "network_volume"
+    assert storage_finding["raw"]["resource_id"] == "le9b9gqqu6"
+    assert storage_finding["raw"]["storage_size_gb"] == 80
+    assert storage_finding["raw"]["estimated_monthly_usd"] == 5.6
+    assert storage_finding["raw"]["attached_endpoint_count"] == 0
+    assert storage_finding["raw"]["declared_by_tuple_count"] == 0
+    assert storage_finding["raw"]["content_inventory_status"] == "missing_runpod_s3_credentials"
+    assert storage_finding["raw"]["live_reason"] == "persistent_storage_unattached_undeclared"
+
+
+def test_runpod_network_volume_inventory_marks_declared_or_attached_storage_info(monkeypatch) -> None:
+    from gpucall.execution_surfaces import managed_endpoint
+
+    monkeypatch.setattr(
+        managed_endpoint,
+        "_runpod_endpoint_live_inventory_rows",
+        lambda api_key, base_url: [{"id": "endpoint-1", "networkVolumeId": "vol-attached", "workersMin": 0, "workersMax": 0}],
+    )
+    monkeypatch.setattr(
+        managed_endpoint,
+        "_runpod_network_volume_live_inventory_rows",
+        lambda api_key, base_url: [
+            {"id": "vol-attached", "name": "attached", "dataCenterId": "US-NC-1", "size": 10},
+            {"id": "vol-declared", "name": "declared", "dataCenterId": "US-NC-1", "size": 20},
+        ],
+    )
+
+    class Response:
+        status_code = 200
+
+        def json(self) -> dict[str, object]:
+            return {"workers": {"ready": 1, "idle": 0, "running": 0, "inQueue": 0}}
+
+    class Session:
+        def get(self, url: str, **kwargs: object) -> Response:
+            if url.endswith("/health"):
+                return Response()
+            raise AssertionError(url)
+
+    monkeypatch.setattr(managed_endpoint, "requests_session", lambda: Session())
+    tuple_spec = SimpleNamespace(
+        name="runpod-vllm-a100",
+        adapter="runpod-vllm-serverless",
+        target="endpoint-1",
+        endpoint=None,
+        endpoint_contract=None,
+        provider_params={"persistent_resources": {"runpod_network_volumes": [{"id": "vol-declared"}]}},
+        standing_cost_per_second=None,
+        standing_cost_window_seconds=None,
+    )
+
+    findings = managed_endpoint.runpod_endpoint_catalog_findings([tuple_spec], {"runpod": {"api_key": "rk_test"}})
+
+    storage_findings = {item["raw"]["resource_id"]: item for item in findings if item["dimension"] == "storage"}
+    assert storage_findings["vol-attached"]["severity"] == "info"
+    assert storage_findings["vol-attached"]["raw"]["attached_endpoint_ids"] == ["endpoint-1"]
+    assert storage_findings["vol-declared"]["severity"] == "info"
+    assert storage_findings["vol-declared"]["raw"]["declared_by_tuples"] == ["runpod-vllm-a100"]
+
+
 def test_runpod_openai_models_probe_timeout_blocks_serving_readiness(monkeypatch) -> None:
     from gpucall.execution_surfaces import managed_endpoint
 
@@ -1306,6 +1420,7 @@ def test_runpod_openai_models_probe_timeout_blocks_serving_readiness(monkeypatch
         "_runpod_endpoint_live_inventory_rows",
         lambda api_key, base_url: [{"id": "30g7ze5wb2n3xw", "workersMin": 0, "workersMax": 1}],
     )
+    monkeypatch.setattr(managed_endpoint, "_runpod_network_volume_live_inventory_rows", lambda api_key, base_url: [])
 
     class Response:
         def __init__(self, status_code: int, payload: dict[str, object]) -> None:

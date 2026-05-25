@@ -445,6 +445,56 @@ def test_panopticon_preserves_raw_but_extracts_structured_details(tmp_path) -> N
     assert finding["raw"]["provider_private_payload"] == {"kept": True}
 
 
+def test_panopticon_accepts_storage_dimension_and_extracts_resource_details(tmp_path) -> None:
+    path = tmp_path / "provider-panopticon.json"
+    now = datetime.now(timezone.utc)
+    store_panopticon_evidence(
+        {
+            "runpod-network-volume-le9b9gqqu6": {
+                "tuple": "runpod-network-volume-le9b9gqqu6",
+                "adapter": "runpod",
+                "status": "blocked",
+                "checked": True,
+                "findings": [
+                    {
+                        "tuple": "runpod-network-volume-le9b9gqqu6",
+                        "adapter": "runpod",
+                        "dimension": "storage",
+                        "severity": "error",
+                        "reason": "unattached persistent storage",
+                        "raw": {
+                            "resource_type": "network_volume",
+                            "resource_id": "le9b9gqqu6",
+                            "resource_name": "news-llm-models",
+                            "data_center_id": "US-NC-1",
+                            "storage_size_gb": 80,
+                            "estimated_monthly_usd": 5.6,
+                            "attached_endpoint_count": 0,
+                            "attached_endpoint_ids": [],
+                            "declared_by_tuple_count": 0,
+                            "declared_by_tuples": [],
+                            "content_inventory_status": "missing_runpod_s3_credentials",
+                            "live_reason": "persistent_storage_unattached_undeclared",
+                        },
+                    }
+                ],
+            }
+        },
+        path,
+        now=now,
+    )
+
+    loaded = load_panopticon_evidence(path, now=now)
+    row = loaded["runpod-network-volume-le9b9gqqu6"]
+    finding = row["findings"][0]
+    assert row["dimensions"] == ["storage"]
+    assert finding["details"]["resource_type"] == "network_volume"
+    assert finding["details"]["resource_id"] == "le9b9gqqu6"
+    assert finding["details"]["storage_size_gb"] == 80
+    assert finding["details"]["estimated_monthly_usd"] == 5.6
+    assert finding["details"]["content_inventory_status"] == "missing_runpod_s3_credentials"
+
+
 def test_panopticon_normalizes_naive_datetimes_to_utc(tmp_path) -> None:
     path = tmp_path / "provider-panopticon.json"
     now = datetime(2026, 5, 19, 8, 0)

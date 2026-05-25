@@ -10,9 +10,11 @@ from typing import Any, Iterable
 from fastapi import FastAPI
 
 from gpucall.config import load_config
-from gpucall.credentials import load_credentials
+from gpucall.credentials import configured_credentials, load_credentials
+from gpucall.execution.registry import adapter_descriptor, vendor_family_for_adapter
 from gpucall.live_catalog_scope import live_catalog_scope
 from gpucall.panopticon import default_panopticon_path, load_panopticon_evidence, store_panopticon_evidence
+from gpucall.targeting import is_configured_target
 from gpucall.tuple_catalog import live_tuple_catalog_evidence
 
 
@@ -50,7 +52,12 @@ def refresh_panopticon(
     config = load_config(config_dir)
     scope = live_catalog_scope(config, config_dir)
     selected = _selected_scope(scope, tuple_names)
-    observed = live_tuple_catalog_evidence(selected, load_credentials()) if selected else {}
+    credentials = load_credentials()
+    configured = _configured_contracts_from_credentials(credentials)
+    configured.update(configured_credentials())
+    preflight = _provider_refresh_preflight(selected, configured)
+    probe_scope = {name: selected[name] for name in selected if name not in preflight["skipped_tuples"]}
+    observed = live_tuple_catalog_evidence(probe_scope, credentials) if probe_scope else {}
     path = panopticon_path or default_panopticon_path()
     if observed:
         store_panopticon_evidence(observed, path, ttl_seconds=ttl_seconds, now=now)
@@ -64,6 +71,7 @@ def refresh_panopticon(
         now=now,
         scope_tuple_count=len(scope),
         selected_tuple_count=len(selected),
+        preflight=preflight,
     )
 
 
@@ -154,6 +162,150 @@ def _selected_scope(scope: dict[str, Any], tuple_names: Iterable[str] | None) ->
     return {name: scope[name] for name in names}
 
 
+def _provider_refresh_preflight(selected: dict[str, Any], configured: set[str]) -> dict[str, Any]:
+    provider_counts: dict[str, int] = {}
+    skipped_tuples: set[str] = set()
+    credential_skipped_counts: dict[str, int] = {}
+    target_skipped_counts: dict[str, int] = {}
+    target_missing_fields: dict[str, set[str]] = {}
+    blockers: list[dict[str, Any]] = []
+    for tuple_name, tuple_spec in selected.items():
+        provider = vendor_family_for_adapter(str(getattr(tuple_spec, "adapter", "") or ""))
+        if provider == "local":
+            continue
+        provider_counts[provider] = provider_counts.get(provider, 0) + 1
+        missing = _missing_provider_contracts(provider, configured)
+        if missing:
+            skipped_tuples.add(tuple_name)
+            credential_skipped_counts[provider] = credential_skipped_counts.get(provider, 0) + 1
+            continue
+        missing_fields = _missing_provider_target_fields(tuple_spec)
+        if not missing_fields:
+            continue
+        skipped_tuples.add(tuple_name)
+        target_skipped_counts[provider] = target_skipped_counts.get(provider, 0) + 1
+        target_missing_fields.setdefault(provider, set()).update(missing_fields)
+
+    skipped_provider_counts: dict[str, int] = {}
+    for tuple_name in skipped_tuples:
+        provider = vendor_family_for_adapter(str(getattr(selected[tuple_name], "adapter", "") or ""))
+        skipped_provider_counts[provider] = skipped_provider_counts.get(provider, 0) + 1
+
+    for provider, count in sorted(credential_skipped_counts.items()):
+        missing = sorted(_missing_provider_contracts(provider, configured))
+        blockers.append(
+            {
+                "code": "PROVIDER_CREDENTIALS_MISSING",
+                "owner": "gpucall-admin",
+                "provider": provider,
+                "tuple_count": count,
+                "missing_contracts": missing,
+                "next_action": _provider_missing_credentials_next_action(provider),
+            }
+        )
+    for provider, count in sorted(target_skipped_counts.items()):
+        blockers.append(
+            {
+                "code": "PROVIDER_ENDPOINT_TARGET_MISSING",
+                "owner": "provider-ops",
+                "provider": provider,
+                "tuple_count": count,
+                "missing_fields": sorted(target_missing_fields.get(provider, set())),
+                "next_action": _provider_missing_target_next_action(provider),
+            }
+        )
+
+    probe_tuple_count = max(len(selected) - len(skipped_tuples), 0)
+    if blockers and probe_tuple_count == 0:
+        status = "blocked"
+    elif blockers:
+        status = "partial"
+    else:
+        status = "ok"
+
+    return {
+        "status": status,
+        "provider_counts": dict(sorted(provider_counts.items())),
+        "skipped_provider_counts": dict(sorted(skipped_provider_counts.items())),
+        "skipped_tuple_count": len(skipped_tuples),
+        "skipped_tuples": skipped_tuples,
+        "probe_tuple_count": probe_tuple_count,
+        "blockers": blockers,
+    }
+
+
+def _missing_provider_contracts(provider: str, configured: set[str]) -> set[str]:
+    if provider == "runpod":
+        return set() if "api_key:runpod" in configured else {"api_key:runpod"}
+    if provider == "modal":
+        return set() if {"token_pair:modal", "sdk_profile:modal"}.intersection(configured) else {"token_pair:modal"}
+    if provider == "hyperstack":
+        required = {"api_key:hyperstack", "ssh_key:hyperstack"}
+        return required.difference(configured)
+    if provider == "azure":
+        return set() if "cloud_subscription:azure" in configured else {"cloud_subscription:azure"}
+    if provider == "gcp":
+        return set() if "cloud_project:gcp" in configured else {"cloud_project:gcp"}
+    if provider == "scaleway":
+        return set() if "api_key:scaleway" in configured else {"api_key:scaleway"}
+    if provider == "ovhcloud":
+        return set() if "cloud_project:ovhcloud" in configured else {"cloud_project:ovhcloud"}
+    return set()
+
+
+def _missing_provider_target_fields(tuple_spec: Any) -> set[str]:
+    descriptor = adapter_descriptor(tuple_spec)
+    required = descriptor.required_auto_fields if descriptor is not None else {}
+    missing: set[str] = set()
+    for field in required:
+        value = getattr(tuple_spec, field, None)
+        if not is_configured_target(value):
+            missing.add(field)
+    return missing
+
+
+def _configured_contracts_from_credentials(credentials: dict[str, dict[str, str]]) -> set[str]:
+    configured: set[str] = set()
+    runpod = credentials.get("runpod", {})
+    if runpod.get("api_key"):
+        configured.add("api_key:runpod")
+    modal = credentials.get("modal", {})
+    if modal.get("token_id") and modal.get("token_secret"):
+        configured.add("token_pair:modal")
+    hyperstack = credentials.get("hyperstack", {})
+    if hyperstack.get("api_key"):
+        configured.add("api_key:hyperstack")
+    if hyperstack.get("ssh_key_path"):
+        configured.add("ssh_key:hyperstack")
+    if credentials.get("azure"):
+        configured.add("cloud_subscription:azure")
+    if credentials.get("gcp"):
+        configured.add("cloud_project:gcp")
+    if credentials.get("scaleway"):
+        configured.add("api_key:scaleway")
+    if credentials.get("ovhcloud"):
+        configured.add("cloud_project:ovhcloud")
+    return configured
+
+
+def _provider_missing_credentials_next_action(provider: str) -> str:
+    if provider == "runpod":
+        return "Run `gpucall configure runpod-serverless` or add providers.runpod.api_key to the gpucall credentials store."
+    if provider == "modal":
+        return "Run `gpucall configure modal` or add providers.modal.token_id/token_secret to the gpucall credentials store."
+    if provider == "hyperstack":
+        return "Run `gpucall configure hyperstack` or add providers.hyperstack api_key and ssh_key_path to the gpucall credentials store."
+    return f"Configure {provider} credentials in the gpucall credentials store before refreshing provider evidence."
+
+
+def _provider_missing_target_next_action(provider: str) -> str:
+    if provider == "runpod":
+        return "Run provider supply provisioning for RunPod, or set tuple target to a live RunPod endpoint before refreshing endpoint evidence."
+    if provider == "modal":
+        return "Deploy the Modal function and set tuple target to app:function before refreshing endpoint evidence."
+    return f"Provision {provider} supply and set required tuple target fields before refreshing endpoint evidence."
+
+
 def _report(
     *,
     phase: str,
@@ -164,6 +316,7 @@ def _report(
     now: datetime | None,
     scope_tuple_count: int | None = None,
     selected_tuple_count: int | None = None,
+    preflight: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     generated_at = (now or datetime.now(timezone.utc)).astimezone(timezone.utc).isoformat()
     status_counts: dict[str, int] = {}
@@ -197,6 +350,13 @@ def _report(
         report["scope_tuple_count"] = scope_tuple_count
     if selected_tuple_count is not None:
         report["selected_tuple_count"] = selected_tuple_count
+    if preflight is not None:
+        report["status"] = preflight["status"]
+        report["probe_tuple_count"] = preflight["probe_tuple_count"]
+        report["skipped_tuple_count"] = preflight["skipped_tuple_count"]
+        report["skipped_provider_counts"] = preflight["skipped_provider_counts"]
+        report["provider_counts"] = preflight["provider_counts"]
+        report["blockers"] = preflight["blockers"]
     return report
 
 

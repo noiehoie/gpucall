@@ -32,6 +32,126 @@ def test_refresh_panopticon_writes_strict_snapshot(tmp_path, monkeypatch) -> Non
     assert json.loads(path.read_text(encoding="utf-8"))["tuples"]["runpod-h100"]["adapter"] == "runpod-vllm-serverless"
 
 
+def test_refresh_panopticon_missing_provider_credentials_returns_bounded_blocker(tmp_path, monkeypatch) -> None:
+    path = tmp_path / "provider-panopticon.json"
+    tuple_spec = ExecutionTupleSpec(
+        name="runpod-h100",
+        adapter="runpod-vllm-serverless",
+        gpu="H100",
+        vram_gb=80,
+        max_model_len=8192,
+        cost_per_second=0.001,
+        target="rp-endpoint",
+    )
+    monkeypatch.setattr("gpucall.panopticon_service.load_config", lambda _config_dir: SimpleNamespace(tuples={"runpod-h100": tuple_spec}))
+    monkeypatch.setattr("gpucall.panopticon_service.load_credentials", lambda: {})
+    monkeypatch.setattr("gpucall.panopticon_service.configured_credentials", lambda: [])
+
+    def fail_live_tuple_catalog_evidence(_tuples, _credentials):
+        raise AssertionError("missing provider credentials must not call live provider probes")
+
+    monkeypatch.setattr("gpucall.panopticon_service.live_tuple_catalog_evidence", fail_live_tuple_catalog_evidence)
+
+    report = refresh_panopticon(config_dir=tmp_path, panopticon_path=path, tuple_names=["runpod-h100"])
+
+    assert report["phase"] == "provider-panopticon-refresh"
+    assert report["status"] == "blocked"
+    assert report["non_generation_probe_only"] is True
+    assert report["observed_tuple_count"] == 0
+    assert report["selected_tuple_count"] == 1
+    assert report["provider_counts"] == {"runpod": 1}
+    assert report["probe_tuple_count"] == 0
+    assert report["skipped_tuple_count"] == 1
+    assert report["skipped_provider_counts"] == {"runpod": 1}
+    assert report["snapshot"] == {}
+    assert not path.exists()
+    assert report["blockers"] == [
+        {
+            "code": "PROVIDER_CREDENTIALS_MISSING",
+            "owner": "gpucall-admin",
+            "provider": "runpod",
+            "tuple_count": 1,
+            "missing_contracts": ["api_key:runpod"],
+            "next_action": "Run `gpucall configure runpod-serverless` or add providers.runpod.api_key to the gpucall credentials store.",
+        }
+    ]
+
+
+def test_refresh_panopticon_configured_provider_missing_target_returns_bounded_blocker(tmp_path, monkeypatch) -> None:
+    path = tmp_path / "provider-panopticon.json"
+    tuple_spec = ExecutionTupleSpec(
+        name="runpod-h100",
+        adapter="runpod-vllm-serverless",
+        gpu="H100",
+        vram_gb=80,
+        max_model_len=8192,
+        cost_per_second=0.001,
+    )
+    monkeypatch.setattr("gpucall.panopticon_service.load_config", lambda _config_dir: SimpleNamespace(tuples={"runpod-h100": tuple_spec}))
+    monkeypatch.setattr("gpucall.panopticon_service.load_credentials", lambda: {"runpod": {"api_key": "test"}})
+    monkeypatch.setattr("gpucall.panopticon_service.configured_credentials", lambda: [])
+
+    def fail_live_tuple_catalog_evidence(_tuples, _credentials):
+        raise AssertionError("missing provider targets must not call live provider probes")
+
+    monkeypatch.setattr("gpucall.panopticon_service.live_tuple_catalog_evidence", fail_live_tuple_catalog_evidence)
+
+    report = refresh_panopticon(config_dir=tmp_path, panopticon_path=path, tuple_names=["runpod-h100"])
+
+    assert report["phase"] == "provider-panopticon-refresh"
+    assert report["status"] == "blocked"
+    assert report["observed_tuple_count"] == 0
+    assert report["provider_counts"] == {"runpod": 1}
+    assert report["probe_tuple_count"] == 0
+    assert report["skipped_tuple_count"] == 1
+    assert report["skipped_provider_counts"] == {"runpod": 1}
+    assert report["snapshot"] == {}
+    assert not path.exists()
+    assert report["blockers"] == [
+        {
+            "code": "PROVIDER_ENDPOINT_TARGET_MISSING",
+            "owner": "provider-ops",
+            "provider": "runpod",
+            "tuple_count": 1,
+            "missing_fields": ["target"],
+            "next_action": "Run provider supply provisioning for RunPod, or set tuple target to a live RunPod endpoint before refreshing endpoint evidence.",
+        }
+    ]
+
+
+def test_panopticon_app_refresh_missing_credentials_returns_bounded_blocker(tmp_path, monkeypatch) -> None:
+    path = tmp_path / "provider-panopticon.json"
+    tuple_spec = ExecutionTupleSpec(
+        name="runpod-h100",
+        adapter="runpod-vllm-serverless",
+        gpu="H100",
+        vram_gb=80,
+        max_model_len=8192,
+        cost_per_second=0.001,
+        target="rp-endpoint",
+    )
+    monkeypatch.setattr("gpucall.panopticon_service.load_config", lambda _config_dir: SimpleNamespace(tuples={"runpod-h100": tuple_spec}))
+    monkeypatch.setattr("gpucall.panopticon_service.load_credentials", lambda: {})
+    monkeypatch.setattr("gpucall.panopticon_service.configured_credentials", lambda: [])
+
+    def fail_live_tuple_catalog_evidence(_tuples, _credentials):
+        raise AssertionError("missing provider credentials must not call live provider probes")
+
+    monkeypatch.setattr("gpucall.panopticon_service.live_tuple_catalog_evidence", fail_live_tuple_catalog_evidence)
+    app = create_panopticon_app(config_dir=tmp_path, panopticon_path=path, refresh_interval_seconds=None)
+
+    with TestClient(app) as client:
+        refreshed = client.post("/v1/refresh")
+
+    assert refreshed.status_code == 200
+    body = refreshed.json()
+    assert body["status"] == "blocked"
+    assert body["observed_tuple_count"] == 0
+    assert body["probe_tuple_count"] == 0
+    assert body["skipped_tuple_count"] == 1
+    assert body["blockers"][0]["code"] == "PROVIDER_CREDENTIALS_MISSING"
+
+
 def test_snapshot_panopticon_does_not_call_live_probe(tmp_path, monkeypatch) -> None:
     path = tmp_path / "provider-panopticon.json"
     _patch_one_tuple_config(monkeypatch)
@@ -164,9 +284,11 @@ def _patch_one_tuple_config(monkeypatch) -> None:
         vram_gb=80,
         max_model_len=8192,
         cost_per_second=0.001,
+        target="rp-endpoint",
     )
     monkeypatch.setattr("gpucall.panopticon_service.load_config", lambda _config_dir: SimpleNamespace(tuples={"runpod-h100": tuple_spec}))
     monkeypatch.setattr("gpucall.panopticon_service.load_credentials", lambda: {"runpod": {"api_key": "test"}})
+    monkeypatch.setattr("gpucall.panopticon_service.configured_credentials", lambda: [])
 
     def fake_live_tuple_catalog_evidence(tuples, credentials):
         assert list(tuples) == ["runpod-h100"]

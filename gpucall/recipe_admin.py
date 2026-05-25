@@ -47,6 +47,12 @@ from gpucall.recipe_request_index import RecipeRequestIndex, default_recipe_requ
 from gpucall.readiness import build_readiness_report
 from gpucall.tuple_promotion import promote_candidate, promote_production_tuple
 from gpucall.routing import tuple_route_rejection_reason
+from gpucall.panopticon_provisioning import (
+    apply_provider_supply_provisioning_plan,
+    build_provider_supply_provisioning_plan,
+    dumps_provider_supply_provisioning_apply_result,
+    dumps_provider_supply_provisioning_plan,
+)
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -720,14 +726,466 @@ def _auto_promotion_report(
         config_dir=config_dir,
         work_dir=work_dir,
         validation_dir=validation_dir,
-        run_validation=automation.recipe_inbox_auto_billable_validation,
-        activate=automation.recipe_inbox_auto_activate_validated,
+        run_validation=automation.recipe_inbox_auto_billable_validation and not automation.recipe_inbox_auto_provision_supply,
+        activate=automation.recipe_inbox_auto_activate_validated and not automation.recipe_inbox_auto_provision_supply,
         force=force,
     )
+    supply = _auto_supply_provisioning_report(
+        report,
+        request_id=request_id,
+        automation=automation,
+        report_dir=report_dir,
+    )
+    if supply is not None:
+        report["supply_provisioning"] = supply
+    post_supply = _auto_post_supply_workflow_report(
+        report,
+        request_id=request_id,
+        automation=automation,
+        report_dir=report_dir,
+        active_config_dir=Path(config_dir).expanduser() if config_dir is not None else None,
+        validation_dir=validation_dir,
+        force=force,
+    )
+    if post_supply is not None:
+        report["post_supply_workflow"] = post_supply
     report_path = report_dir / f"{request_id}.promotion.json"
     report["auto_promotion_report_path"] = str(report_path)
     report_path.write_text(json.dumps(report, ensure_ascii=False, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     return report
+
+
+def _auto_supply_provisioning_report(
+    promotion: Mapping[str, Any],
+    *,
+    request_id: str,
+    automation: RecipeAdminAutomationConfig,
+    report_dir: Path,
+) -> dict[str, Any] | None:
+    if not automation.recipe_inbox_auto_provision_supply:
+        return None
+    config_dir = Path(str(promotion.get("promotion_config_dir") or "")).expanduser()
+    tuple_name = str(promotion.get("tuple") or "")
+    report: dict[str, Any] = {
+        "phase": "recipe-inbox-supply-provisioning",
+        "request_id": request_id,
+        "tuple": tuple_name,
+        "promotion_config_dir": str(config_dir) if str(config_dir) else None,
+        "provider_mutation_enabled": automation.recipe_inbox_auto_apply_supply,
+        "billable_generation_allowed": False,
+    }
+    if not tuple_name or not config_dir.exists():
+        report["decision"] = "SKIPPED_NO_PROMOTION_CONFIG"
+        return report
+    try:
+        candidate_root = _candidate_config_root(_mapping(promotion.get("candidate")).get("path"))
+        if candidate_root is not None:
+            plan = build_provider_supply_provisioning_plan(config_dir=candidate_root, candidate_name=tuple_name)
+            report["plan_source"] = "tuple_candidate_catalog"
+            report["plan_config_dir"] = str(candidate_root)
+        else:
+            plan = build_provider_supply_provisioning_plan(config_dir=config_dir, tuple_name=tuple_name)
+            report["plan_source"] = "promotion_config_tuple"
+            report["plan_config_dir"] = str(config_dir)
+    except Exception as exc:
+        report["decision"] = "PROVISIONING_PLAN_FAILED"
+        report["error"] = str(exc)
+        return report
+    plan_path = report_dir / f"{request_id}.supply-provisioning-plan.json"
+    plan_path.write_text(dumps_provider_supply_provisioning_plan(plan), encoding="utf-8")
+    report.update(
+        {
+            "plan_path": str(plan_path),
+            "plan_status": plan.status,
+            "plan_action_count": plan.action_count,
+            "plan_blockers": [dict(item) for item in plan.blockers],
+        }
+    )
+    apply_result = apply_provider_supply_provisioning_plan(plan, dry_run=not automation.recipe_inbox_auto_apply_supply)
+    apply_path = report_dir / f"{request_id}.supply-provisioning-apply.json"
+    apply_path.write_text(dumps_provider_supply_provisioning_apply_result(apply_result), encoding="utf-8")
+    report["apply_path"] = str(apply_path)
+    report["apply_dry_run"] = apply_result.dry_run
+    report["applied_count"] = apply_result.applied_count
+    report["failed_count"] = apply_result.failed_count
+    report["skipped_count"] = apply_result.skipped_count
+    if plan.status == "blocked":
+        report["decision"] = "PROVISIONING_BLOCKED"
+    elif plan.action_count == 0:
+        report["decision"] = "PROVISIONING_NOT_REQUIRED"
+    elif apply_result.failed_count:
+        report["decision"] = "PROVISIONING_APPLY_FAILED"
+    elif apply_result.dry_run:
+        report["decision"] = "PROVISIONING_PLANNED"
+    else:
+        report["decision"] = "PROVISIONING_APPLIED_PENDING_READINESS"
+    return report
+
+
+def _auto_post_supply_workflow_report(
+    promotion: Mapping[str, Any],
+    *,
+    request_id: str,
+    automation: RecipeAdminAutomationConfig,
+    report_dir: Path,
+    active_config_dir: Path | None,
+    validation_dir: str | Path | None,
+    force: bool,
+) -> dict[str, Any] | None:
+    supply = _mapping(promotion.get("supply_provisioning"))
+    if not supply:
+        return None
+    tuple_name = str(promotion.get("tuple") or "")
+    recipe_name = str(promotion.get("recipe") or "")
+    promotion_config_raw = str(promotion.get("promotion_config_dir") or "")
+    promotion_config_dir = Path(promotion_config_raw).expanduser() if promotion_config_raw else None
+    report: dict[str, Any] = {
+        "phase": "recipe-inbox-post-supply-workflow",
+        "request_id": request_id,
+        "tuple": tuple_name,
+        "recipe": recipe_name,
+        "promotion_config_dir": str(promotion_config_dir) if promotion_config_dir else None,
+        "billable_generation_allowed": automation.recipe_inbox_auto_billable_validation,
+        "validation_budget_usd": float(automation.recipe_inbox_auto_validation_budget_usd),
+        "checks": [],
+        "next_actions": [],
+    }
+    if not tuple_name or not recipe_name or promotion_config_dir is None or not promotion_config_dir.exists():
+        report["decision"] = "SKIPPED_NO_PROMOTION_CONFIG"
+        return _write_post_supply_report(report_dir, request_id, report)
+
+    supply_decision = str(supply.get("decision") or "")
+    report["supply_decision"] = supply_decision
+    if supply_decision == "PROVISIONING_PLANNED":
+        report["decision"] = "WAITING_FOR_PROVIDER_SUPPLY_APPLY"
+        report["next_actions"].append("enable recipe_inbox_auto_apply_supply or apply the generated supply provisioning plan")
+        return _write_post_supply_report(report_dir, request_id, report)
+    if supply_decision in {"PROVISIONING_BLOCKED", "PROVISIONING_APPLY_FAILED"}:
+        report["decision"] = supply_decision
+        report["next_actions"].append("resolve provider supply provisioning blockers before readiness or validation")
+        return _write_post_supply_report(report_dir, request_id, report)
+
+    patch_report = _materialize_supply_apply_patches(supply, config_dir=promotion_config_dir)
+    report["materialized_config_patches"] = patch_report
+    if patch_report.get("failed"):
+        report["decision"] = "CONFIG_PATCH_FAILED"
+        return _write_post_supply_report(report_dir, request_id, report)
+
+    if automation.recipe_inbox_auto_run_validate_config:
+        check = _run_admin_check([sys.executable, "-m", "gpucall.cli", "validate-config", "--config-dir", str(promotion_config_dir)])
+        report["checks"].append(check)
+        if check["returncode"] != 0:
+            report["decision"] = "VALIDATE_CONFIG_FAILED"
+            return _write_post_supply_report(report_dir, request_id, report)
+
+    readiness = _post_supply_readiness_report(
+        config_dir=promotion_config_dir,
+        recipe_name=recipe_name,
+        validation_dir=validation_dir,
+    )
+    readiness_path = report_dir / f"{request_id}.post-supply-readiness.json"
+    readiness_path.write_text(json.dumps(readiness, ensure_ascii=False, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    report["readiness_report_path"] = str(readiness_path)
+    report["readiness_status"] = readiness.get("status")
+    if readiness.get("status") == "failed":
+        report["decision"] = "PANOPTICON_REFRESH_FAILED"
+        report["next_actions"].append("refresh provider evidence after fixing the reported panopticon/readiness error")
+        return _write_post_supply_report(report_dir, request_id, report)
+
+    validation_gate = _post_supply_validation_gate(readiness, tuple_name=tuple_name)
+    report["validation_gate"] = validation_gate
+    if validation_gate["decision"] != "READY_FOR_BILLABLE_VALIDATION":
+        report["decision"] = validation_gate["decision"]
+        report["next_actions"].extend(validation_gate["next_actions"])
+        return _write_post_supply_report(report_dir, request_id, report)
+    if not automation.recipe_inbox_auto_billable_validation:
+        report["decision"] = "READY_FOR_BILLABLE_VALIDATION"
+        report["next_actions"].append("enable recipe_inbox_auto_billable_validation or run tuple-smoke with an explicit budget")
+        return _write_post_supply_report(report_dir, request_id, report)
+
+    mode = _validation_mode_from_recipe_file(promotion_config_dir, recipe_name)
+    validation = _run_admin_check(
+        [
+            sys.executable,
+            "-m",
+            "gpucall.cli",
+            "tuple-smoke",
+            tuple_name,
+            "--config-dir",
+            str(promotion_config_dir),
+            "--recipe",
+            recipe_name,
+            "--mode",
+            mode,
+            "--budget-usd",
+            str(float(automation.recipe_inbox_auto_validation_budget_usd)),
+            "--write-artifact",
+        ],
+        validation_dir=Path(validation_dir).expanduser() if validation_dir else None,
+        parse_json=True,
+    )
+    validation_path = report_dir / f"{request_id}.post-supply-validation.json"
+    validation_path.write_text(json.dumps(validation, ensure_ascii=False, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    report["validation_report_path"] = str(validation_path)
+    report["validation"] = validation
+    if validation.get("returncode") != 0 or validation.get("passed") is not True:
+        report["decision"] = "VALIDATION_FAILED"
+        report["next_actions"].append("inspect validation report, provider queue/capacity, and panopticon evidence")
+        return _write_post_supply_report(report_dir, request_id, report)
+    if not automation.recipe_inbox_auto_activate_validated:
+        report["decision"] = "VALIDATED_READY_TO_ACTIVATE"
+        report["next_actions"].append("enable recipe_inbox_auto_activate_validated to copy validated route into active routing config")
+        return _write_post_supply_report(report_dir, request_id, report)
+    activation = _activate_post_supply_config(
+        promotion_config_dir=promotion_config_dir,
+        active_config_dir=active_config_dir,
+        tuple_name=tuple_name,
+        recipe_name=recipe_name,
+        automation=automation,
+        report_dir=report_dir,
+        request_id=request_id,
+        force=force,
+    )
+    report["activation"] = activation
+    report["decision"] = activation.get("decision", "ACTIVATION_FAILED")
+    return _write_post_supply_report(report_dir, request_id, report)
+
+
+def _write_post_supply_report(report_dir: Path, request_id: str, report: dict[str, Any]) -> dict[str, Any]:
+    report_path = report_dir / f"{request_id}.post-supply-workflow.json"
+    report["post_supply_workflow_report_path"] = str(report_path)
+    report_path.write_text(json.dumps(report, ensure_ascii=False, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    return report
+
+
+def _post_supply_readiness_report(
+    *,
+    config_dir: Path,
+    recipe_name: str,
+    validation_dir: str | Path | None,
+) -> dict[str, Any]:
+    try:
+        report = build_readiness_report(config_dir=config_dir, recipe=recipe_name, validation_dir=validation_dir, live=True)
+    except Exception as exc:
+        return {
+            "schema_version": 1,
+            "phase": "post-supply-readiness",
+            "status": "failed",
+            "error": {"type": type(exc).__name__, "message": str(exc)},
+        }
+    return {"status": "ok", "readiness": report}
+
+
+def _post_supply_validation_gate(readiness: Mapping[str, Any], *, tuple_name: str) -> dict[str, Any]:
+    report = _mapping(readiness.get("readiness"))
+    recipes = report.get("recipes")
+    recipe_rows = recipes if isinstance(recipes, list) else []
+    next_actions: list[str] = []
+    for recipe in recipe_rows:
+        if not isinstance(recipe, Mapping):
+            continue
+        for row in recipe.get("live_ready_tuples", []) if isinstance(recipe.get("live_ready_tuples"), list) else []:
+            if isinstance(row, Mapping) and row.get("tuple") == tuple_name:
+                return {"decision": "ROUTE_ALREADY_VALIDATED", "next_actions": ["route already has accepted validation evidence"]}
+        for row in recipe.get("live_blocked_tuples", []) if isinstance(recipe.get("live_blocked_tuples"), list) else []:
+            if not isinstance(row, Mapping) or row.get("tuple") != tuple_name:
+                continue
+            reason = str(row.get("live_reason") or "")
+            if _route_validation_refresh_reason(reason):
+                return {"decision": "READY_FOR_BILLABLE_VALIDATION", "next_actions": []}
+            next_actions.append(f"resolve readiness blocker for {tuple_name}: {reason or 'unknown'}")
+    if not next_actions:
+        next_actions.append("refresh Panopticon evidence until the promoted tuple appears in readiness")
+    return {"decision": "WAITING_FOR_FRESH_READINESS", "next_actions": next_actions}
+
+
+def _existing_tuple_validation_gate(readiness: Mapping[str, Any], *, eligible_tuples: list[str]) -> dict[str, Any]:
+    report = _mapping(readiness.get("readiness"))
+    recipes = report.get("recipes")
+    recipe_rows = recipes if isinstance(recipes, list) else []
+    eligible_set = set(eligible_tuples)
+    next_actions: list[str] = []
+    for recipe in recipe_rows:
+        if not isinstance(recipe, Mapping):
+            continue
+        for row in recipe.get("live_ready_tuples", []) if isinstance(recipe.get("live_ready_tuples"), list) else []:
+            if isinstance(row, Mapping) and str(row.get("tuple") or "") in eligible_set:
+                return {"decision": "ROUTE_ALREADY_VALIDATED", "next_actions": ["route already has accepted validation evidence"]}
+        for row in recipe.get("live_blocked_tuples", []) if isinstance(recipe.get("live_blocked_tuples"), list) else []:
+            if not isinstance(row, Mapping):
+                continue
+            tuple_name = str(row.get("tuple") or "")
+            if tuple_name not in eligible_set:
+                continue
+            reason = str(row.get("live_reason") or "")
+            if _route_validation_refresh_reason(reason):
+                return {"decision": "READY_FOR_BILLABLE_VALIDATION", "next_actions": []}
+            next_actions.append(f"resolve readiness blocker for {tuple_name}: {reason or 'unknown'}")
+    if not next_actions:
+        next_actions.append("refresh Panopticon evidence until an eligible tuple appears in readiness")
+    return {"decision": "WAITING_FOR_FRESH_READINESS", "next_actions": next_actions}
+
+
+def _route_validation_refresh_reason(reason: str) -> bool:
+    return reason in {
+        "missing_route_validation_evidence",
+        "route_validation_rejected",
+        "validation_config_hash_mismatch",
+        "validation_commit_mismatch",
+    } or reason.startswith("latest_route_validation_failed")
+
+
+def _materialize_supply_apply_patches(supply: Mapping[str, Any], *, config_dir: Path) -> dict[str, Any]:
+    apply_path_raw = str(supply.get("apply_path") or "")
+    report: dict[str, Any] = {"apply_path": apply_path_raw or None, "applied": [], "failed": []}
+    if not apply_path_raw:
+        return report
+    try:
+        payload = json.loads(Path(apply_path_raw).read_text(encoding="utf-8"))
+    except Exception as exc:
+        report["failed"].append({"reason": f"failed to read apply result: {exc}"})
+        return report
+    results = payload.get("results")
+    if not isinstance(results, list):
+        return report
+    for result in results:
+        if not isinstance(result, Mapping):
+            continue
+        patches = result.get("materialized_config_patch")
+        if not isinstance(patches, list):
+            continue
+        for patch in patches:
+            try:
+                applied = _apply_materialized_config_patch(config_dir, _mapping(patch))
+                report["applied"].append(applied)
+            except Exception as exc:
+                report["failed"].append({"patch": patch, "reason": str(exc)})
+    return report
+
+
+def _apply_materialized_config_patch(config_dir: Path, patch: Mapping[str, Any]) -> dict[str, Any]:
+    if patch.get("kind") != "worker_target" or patch.get("json_pointer") != "/target":
+        raise ValueError("unsupported materialized config patch")
+    relative = Path(str(patch.get("config_dir_relative_path") or ""))
+    if relative.is_absolute() or ".." in relative.parts:
+        raise ValueError("unsafe materialized config patch path")
+    path = config_dir / relative
+    payload = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+    if not isinstance(payload, dict):
+        raise ValueError(f"config patch target is not a mapping: {path}")
+    payload["target"] = str(patch.get("value") or "")
+    path.write_text(yaml.safe_dump(payload, sort_keys=False), encoding="utf-8")
+    return {"path": str(path), "json_pointer": "/target", "value_written": bool(payload["target"])}
+
+
+def _validation_mode_from_recipe_file(config_dir: Path, recipe_name: str) -> str:
+    try:
+        recipe = yaml.safe_load((config_dir / "recipes" / f"{recipe_name}.yml").read_text(encoding="utf-8")) or {}
+    except OSError:
+        return "sync"
+    modes = recipe.get("allowed_modes") if isinstance(recipe, Mapping) else None
+    if isinstance(modes, list):
+        values = [str(mode) for mode in modes if str(mode)]
+        if "sync" in values:
+            return "sync"
+        if values:
+            return values[0]
+    return "sync"
+
+
+def _activate_post_supply_config(
+    *,
+    promotion_config_dir: Path,
+    active_config_dir: Path | None,
+    tuple_name: str,
+    recipe_name: str,
+    automation: RecipeAdminAutomationConfig,
+    report_dir: Path,
+    request_id: str,
+    force: bool,
+) -> dict[str, Any]:
+    report: dict[str, Any] = {"phase": "post-supply-activation", "checks": [], "activated": False}
+    if active_config_dir is None:
+        report["decision"] = "ACTIVATION_FAILED"
+        report["reason"] = "missing active config directory"
+        return report
+    staged = _stage_activation_config(active_config_dir, report_dir, request_id + ".post-supply")
+    copied = _copy_promotion_artifacts(
+        promotion_config_dir=promotion_config_dir,
+        target_config_dir=staged,
+        tuple_name=tuple_name,
+        recipe_name=recipe_name,
+        automation=automation,
+        force=True,
+    )
+    report["staged_activation_config_dir"] = str(staged)
+    report["staged_activation_paths"] = copied
+    if automation.recipe_inbox_auto_run_validate_config:
+        check = _run_admin_check([sys.executable, "-m", "gpucall.cli", "validate-config", "--config-dir", str(staged)])
+        report["checks"].append(check)
+        if check["returncode"] != 0:
+            report["decision"] = "VALIDATE_CONFIG_FAILED"
+            return report
+    if automation.recipe_inbox_auto_run_launch_check:
+        check = _run_admin_check([sys.executable, "-m", "gpucall.cli", "launch-check", "--profile", "static", "--config-dir", str(staged)])
+        report["checks"].append(check)
+        if check["returncode"] != 0:
+            report["decision"] = "LAUNCH_CHECK_FAILED"
+            return report
+    active_paths = _copy_promotion_artifacts(
+        promotion_config_dir=promotion_config_dir,
+        target_config_dir=active_config_dir,
+        tuple_name=tuple_name,
+        recipe_name=recipe_name,
+        automation=automation,
+        force=force,
+    )
+    report["activation_paths"] = active_paths
+    report["activated"] = True
+    report["decision"] = "ACTIVATED" if automation.recipe_inbox_auto_set_auto_select else "ACTIVATED_NO_AUTO_SELECT"
+    return report
+
+
+def _copy_promotion_artifacts(
+    *,
+    promotion_config_dir: Path,
+    target_config_dir: Path,
+    tuple_name: str,
+    recipe_name: str,
+    automation: RecipeAdminAutomationConfig,
+    force: bool,
+) -> dict[str, str]:
+    copied: dict[str, str] = {}
+    recipe_payload = yaml.safe_load((promotion_config_dir / "recipes" / f"{recipe_name}.yml").read_text(encoding="utf-8")) or {}
+    if not isinstance(recipe_payload, Mapping):
+        raise ValueError("promotion recipe YAML is not a mapping")
+    recipe_payload = dict(recipe_payload)
+    if automation.recipe_inbox_auto_set_auto_select:
+        recipe_payload["auto_select"] = True
+        if recipe_payload.get("quality_floor") == "draft":
+            recipe_payload["quality_floor"] = "standard"
+    recipe_path = _write_yaml_guarded(target_config_dir / "recipes" / f"{recipe_name}.yml", recipe_payload, force=force)
+    copied["recipe"] = str(recipe_path)
+    for directory, key in (("tuples", "tuple"), ("surfaces", "surface"), ("workers", "worker")):
+        source = promotion_config_dir / directory / f"{tuple_name}.yml"
+        if not source.exists():
+            continue
+        payload = yaml.safe_load(source.read_text(encoding="utf-8")) or {}
+        if not isinstance(payload, Mapping):
+            raise ValueError(f"promotion {directory} YAML is not a mapping")
+        destination = _write_yaml_guarded(target_config_dir / directory / f"{tuple_name}.yml", payload, force=force)
+        copied[key] = str(destination)
+    return copied
+
+
+def _candidate_config_root(path_value: Any) -> Path | None:
+    raw = str(path_value or "")
+    if not raw:
+        return None
+    path = Path(raw.split("#", 1)[0]).expanduser()
+    if path.name and path.parent.name == "candidate_sources":
+        return path.parent.parent
+    return None
 
 
 def _auto_existing_tuple_report(
@@ -768,6 +1226,29 @@ def _auto_existing_tuple_report(
     if not matched:
         if not automation.recipe_inbox_auto_billable_validation:
             report["decision"] = "READY_FOR_BILLABLE_VALIDATION"
+            report["next_actions"] = ["enable recipe_inbox_auto_billable_validation or run tuple-smoke with an explicit budget"]
+            _write_auto_existing_report(report_dir, request_id, report)
+            return report
+        readiness = _post_supply_readiness_report(
+            config_dir=Path(config_dir).expanduser(),
+            recipe_name=str(recipe["name"]),
+            validation_dir=validation_dir,
+        )
+        readiness_path = report_dir / f"{request_id}.existing-tuple-readiness.json"
+        readiness_path.write_text(json.dumps(readiness, ensure_ascii=False, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+        report["readiness_report_path"] = str(readiness_path)
+        report["readiness_status"] = readiness.get("status")
+        if readiness.get("status") == "failed":
+            report["decision"] = "PANOPTICON_REFRESH_FAILED"
+            report["next_actions"] = ["refresh provider evidence after fixing the reported panopticon/readiness error"]
+            _write_auto_existing_report(report_dir, request_id, report)
+            return report
+        validation_gate = _existing_tuple_validation_gate(readiness, eligible_tuples=eligible)
+        report["validation_gate"] = validation_gate
+        if validation_gate["decision"] != "READY_FOR_BILLABLE_VALIDATION":
+            report["decision"] = validation_gate["decision"]
+            report["next_actions"] = validation_gate["next_actions"]
+            _write_auto_existing_report(report_dir, request_id, report)
             return report
         attempts = []
         validation = None
@@ -778,6 +1259,7 @@ def _auto_existing_tuple_report(
                 recipe_name=str(recipe["name"]),
                 config_dir=Path(config_dir).expanduser(),
                 validation_dir=Path(validation_dir).expanduser() if validation_dir else None,
+                budget_usd=float(automation.recipe_inbox_auto_validation_budget_usd),
             )
             attempts.append({"tuple": tuple_name, "validation": validation})
             if validation.get("returncode") == 0 and validation.get("passed") is True:
@@ -883,7 +1365,22 @@ def _write_recipe_guarded(path: Path, payload: Mapping[str, Any], *, force: bool
     return path
 
 
-def _run_existing_tuple_validation(*, tuple_name: str, recipe_name: str, config_dir: Path, validation_dir: Path | None) -> dict[str, Any]:
+def _write_yaml_guarded(path: Path, payload: Mapping[str, Any], *, force: bool) -> Path:
+    if path.exists() and not force:
+        raise FileExistsError(f"refusing to overwrite existing file: {path}")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(to_yaml(payload), encoding="utf-8")
+    return path
+
+
+def _run_existing_tuple_validation(
+    *,
+    tuple_name: str,
+    recipe_name: str,
+    config_dir: Path,
+    validation_dir: Path | None,
+    budget_usd: float = 0.10,
+) -> dict[str, Any]:
     mode = "sync"
     try:
         recipe = load_config(config_dir).recipes.get(recipe_name)
@@ -905,7 +1402,7 @@ def _run_existing_tuple_validation(*, tuple_name: str, recipe_name: str, config_
             "--mode",
             mode,
             "--budget-usd",
-            "0.10",
+            str(float(budget_usd)),
             "--write-artifact",
         ],
         validation_dir=validation_dir,

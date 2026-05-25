@@ -628,7 +628,15 @@ def create_app(config_dir: Path | None = None) -> FastAPI:
         runtime.tenants[tenant_name] = tenant
         gateway_url = automation.api_key_bootstrap_gateway_url or str(http_request.base_url).rstrip("/")
         recipe_inbox = automation.api_key_bootstrap_recipe_inbox or ""
-        payload = _bootstrap_handoff_payload(tenant=tenant_name, token=token, gateway_url=gateway_url, recipe_inbox=recipe_inbox)
+        payload = _bootstrap_handoff_payload(
+            tenant=tenant_name,
+            token=token,
+            gateway_url=gateway_url,
+            recipe_inbox=recipe_inbox,
+            onboarding_prompt_url=automation.onboarding_prompt_url,
+            onboarding_manual_url=automation.onboarding_manual_url,
+            sdk_wheel_url=automation.caller_sdk_wheel_url,
+        )
         return JSONResponse(
             {
                 "tenant": tenant_name,

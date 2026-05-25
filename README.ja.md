@@ -101,7 +101,21 @@ LLM inference が許されるのは、deterministic routing が production tuple
 
 ## Quickstart
 
-初回導入では、まず operator setup journey を起動します。
+初回導入では、まず operator CLI をインストールします。
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/noiehoie/gpucall/main/install.sh | sh
+```
+
+checkout 済みの repository から導入する場合:
+
+```bash
+./install.sh
+```
+
+installer は dependency preflight を実行し、`uv` がなければ bootstrap し、
+`uv tool` 経由で provider extras 付きの `gpucall` CLI を入れ、次に実行すべき
+setup command を表示します。install 後に operator setup journey を起動します。
 
 ```bash
 gpucall setup
@@ -121,7 +135,10 @@ execution surfaces、object-store DataRefs、tenant handoff、recipe inbox
 automation、launch checks、external-system onboarding を案内します。低レイヤーコマンドである
 `gpucall init`、`gpucall configure`、`gpucall admin ...`、
 `gpucall validate-config`、`gpucall launch-check` は automation と debug
-用に残ります。`gpucall setup apply` は適用後チェックを表示し、`--yes`
+用に残ります。`gpucall setup status` は非対話で、現在の check と次コマンドだけを表示します。
+`gpucall validate-config` は既定で count/sample の bounded summary だけを表示し、
+全 catalog 名が必要なときだけ `gpucall validate-config --verbose` を使います。
+`gpucall setup apply` は適用後チェックを表示し、`--yes`
 指定時の interactive な `credentials.source: prompt` を拒否します。setup
 plan の文法は [docs/SETUP_PLAN.md](docs/SETUP_PLAN.md) にあります。
 

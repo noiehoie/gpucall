@@ -117,6 +117,70 @@ def recipe_intakes_from_contract(contract: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def recipe_draft_from_intake(intake: dict[str, Any]) -> dict[str, Any]:
+    from gpucall.recipe_materialize import canonical_recipe_from_artifact
+
+    recipe = canonical_recipe_from_artifact(intake)
+    sanitized = intake.get("sanitized_request") if isinstance(intake.get("sanitized_request"), dict) else {}
+    capabilities = [str(item) for item in recipe.get("required_model_capabilities") or sanitized.get("desired_capabilities") or []]
+    workload = intake.get("workload_contract") if isinstance(intake.get("workload_contract"), dict) else {}
+    draft = {
+        "schema_version": 1,
+        "phase": "draft",
+        "source": "deterministic_contract_intake",
+        "human_review_required": True,
+        "proposed_recipe": {
+            "recipe_schema_version": 3,
+            "name": recipe["name"],
+            "task": recipe["task"],
+            "intent": recipe["intent"],
+            "auto_select": False,
+            "data_classification": recipe["data_classification"],
+            "allowed_modes": list(recipe.get("allowed_modes") or []),
+            "required_model_capabilities": capabilities,
+            "context_budget_tokens": recipe["context_budget_tokens"],
+            "resource_class": recipe["resource_class"],
+            "latency_class": recipe["latency_class"],
+            "quality_floor": "draft",
+            "token_estimation_profile": recipe["token_estimation_profile"],
+            "allowed_mime_prefixes": list(recipe.get("allowed_mime_prefixes") or []),
+            "output_contract": recipe.get("output_contract") or sanitized.get("expected_output") or "plain_text",
+        },
+        "workload_contract": workload
+        or {
+            "required_capabilities": capabilities,
+            "context_budget_tokens": recipe["context_budget_tokens"],
+            "output_contract": recipe.get("output_contract") or sanitized.get("expected_output") or "plain_text",
+        },
+        "operator_notes": [
+            "This draft was produced deterministically from sanitized caller workload metadata.",
+            "Do not commit this draft directly; materialize it through gpucall-recipe-admin and run validation.",
+            "Provider, GPU, model, endpoint, tuple, price, and production promotion remain gpucall-admin/provider-ops responsibilities.",
+        ],
+    }
+    redaction_report = intake.get("redaction_report")
+    if isinstance(redaction_report, dict):
+        draft["redaction_report"] = dict(redaction_report)
+    return draft
+
+
+def recipe_drafts_from_intakes(bundle: dict[str, Any]) -> dict[str, Any]:
+    drafts: list[dict[str, Any]] = []
+    for intake in bundle.get("intakes", []) or []:
+        if isinstance(intake, dict):
+            drafts.append(recipe_draft_from_intake(intake))
+    return {
+        "schema_version": 1,
+        "phase": "recipe-draft-bundle",
+        "source": bundle.get("source"),
+        "primary_workload_id": bundle.get("primary_workload_id"),
+        "count": len(drafts),
+        "rejected_count": bundle.get("rejected_count", 0),
+        "drafts": drafts,
+        "rejected": bundle.get("rejected", []),
+    }
+
+
 def _draft_grammar_typed_blockers(draft_grammar: dict[str, Any], blockers: list[Any]) -> list[dict[str, str]]:
     typed = draft_grammar.get("typed_blockers") if isinstance(draft_grammar.get("typed_blockers"), list) else []
     rows = [dict(item) for item in typed if isinstance(item, dict)]
@@ -229,7 +293,7 @@ def main(argv: list[str] | None = None) -> int:
     onboard.add_argument("--env-file", type=Path, default=None, help="load KEY=VALUE lines before running the caller baseline --command")
     onboard.add_argument("--gateway-env-file", type=Path, default=None, help="load KEY=VALUE lines only for gpucall gateway readiness checks")
     args = parser.parse_args(argv)
-    output_dir = args.output_dir or (args.project / ".gpucall-migration")
+    output_dir = args.output_dir or default_migration_output_dir(args.project)
     if args.command == "assess":
         report = assess_project(args.project, source=args.source)
         _write_outputs(report, output_dir, "migration-report")
@@ -278,10 +342,17 @@ def main(argv: list[str] | None = None) -> int:
         )
         _write_outputs(report, output_dir, "workload-contract")
         if args.write_intake:
-            if report.get("workloads"):
-                intake = contract_to_recipe_intake(report)
+            recipe_intakes = recipe_intakes_from_contract(report)
+            primary_intakes = [item for item in recipe_intakes.get("intakes", []) or [] if isinstance(item, dict)]
+            if primary_intakes:
+                intake = primary_intakes[0]
                 _write_outputs(intake, output_dir, "recipe-intake")
-            _write_outputs(recipe_intakes_from_contract(report), output_dir, "recipe-intakes")
+                _write_outputs(recipe_draft_from_intake(intake), output_dir, "recipe-draft")
+            _write_outputs(recipe_intakes, output_dir, "recipe-intakes")
+            recipe_drafts = recipe_drafts_from_intakes(recipe_intakes)
+            _write_outputs(recipe_drafts, output_dir, "recipe-drafts")
+            _write_recipe_intake_files(recipe_intakes, output_dir / "recipe-intakes")
+            _write_recipe_draft_files(recipe_drafts, output_dir / "recipe-drafts")
         return 0
     if args.command == "compare":
         report = compare_project(
@@ -314,6 +385,8 @@ def main(argv: list[str] | None = None) -> int:
         contract_report = report.get("workload_contract")
         recipe_intake = report.get("recipe_intake")
         recipe_intakes = report.get("recipe_intakes")
+        recipe_draft = report.get("recipe_draft")
+        recipe_drafts = report.get("recipe_drafts")
         if isinstance(trace_report, dict):
             _write_outputs(trace_report, output_dir, "workload-trace")
         if isinstance(profile_report, dict):
@@ -322,14 +395,24 @@ def main(argv: list[str] | None = None) -> int:
             _write_outputs(contract_report, output_dir, "workload-contract")
         if isinstance(recipe_intake, dict):
             _write_outputs(recipe_intake, output_dir, "recipe-intake")
+        if isinstance(recipe_draft, dict):
+            _write_outputs(recipe_draft, output_dir, "recipe-draft")
         if isinstance(recipe_intakes, dict):
             _write_outputs(recipe_intakes, output_dir, "recipe-intakes")
             _write_recipe_intake_files(recipe_intakes, output_dir / "recipe-intakes")
+        if isinstance(recipe_drafts, dict):
+            _write_outputs(recipe_drafts, output_dir, "recipe-drafts")
+            _write_recipe_draft_files(recipe_drafts, output_dir / "recipe-drafts")
         gateway_readiness = report.get("gateway_readiness")
         if isinstance(gateway_readiness, dict) and gateway_readiness.get("ok") is False:
             return 2
         return 0
     raise AssertionError(args.command)
+
+
+def default_migration_output_dir(project: Path) -> Path:
+    """Return the only implicit caller-side output directory used by gpucall-migrate."""
+    return project / ".gpucall-migration"
 
 
 def assess_project(project: Path, *, source: str | None = None) -> dict[str, Any]:
@@ -886,8 +969,11 @@ def onboard_project(
         trace_report = traces[0] if len(traces) == 1 else merge_traces(traces, source=source, backend=backend)
     profile = workload_profile_from_assessment(assessment, traces=traces, source=source)
     contract = draft_workload_contract(profile, source=source)
-    recipe_intake = contract_to_recipe_intake(contract) if contract.get("workloads") else None
     recipe_intakes = recipe_intakes_from_contract(contract) if contract.get("workloads") else None
+    primary_intakes = [item for item in (recipe_intakes or {}).get("intakes", []) or [] if isinstance(item, dict)]
+    recipe_intake = primary_intakes[0] if primary_intakes else None
+    recipe_draft = recipe_draft_from_intake(recipe_intake) if isinstance(recipe_intake, dict) else None
+    recipe_drafts = recipe_drafts_from_intakes(recipe_intakes) if isinstance(recipe_intakes, dict) else None
     gateway_readiness = gateway_readiness_for_contract(contract, env_overlay=gateway_env_overlay) if contract.get("workloads") else {
         "schema_version": 1,
         "phase": "gateway-readiness",
@@ -919,6 +1005,8 @@ def onboard_project(
         "workload_contract": contract,
         "recipe_intake": recipe_intake,
         "recipe_intakes": recipe_intakes,
+        "recipe_draft": recipe_draft,
+        "recipe_drafts": recipe_drafts,
         "gateway_readiness": gateway_readiness,
         "ready_for_canary": _readiness_checked_ok(gateway_readiness),
         "next_actions": _onboard_next_actions(contract, trace_report, gateway_readiness),
@@ -2735,6 +2823,18 @@ def _write_recipe_intake_files(bundle: dict[str, Any], output_dir: Path) -> None
         intent = re.sub(r"[^a-z0-9-]+", "-", str(sanitized.get("intent") or "unknown").lower()).strip("-")
         path = output_dir / f"{task}-{intent}.json"
         path.write_text(json.dumps(intake, ensure_ascii=False, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+
+
+def _write_recipe_draft_files(bundle: dict[str, Any], output_dir: Path) -> None:
+    output_dir.mkdir(parents=True, exist_ok=True)
+    for draft in bundle.get("drafts", []) or []:
+        if not isinstance(draft, dict):
+            continue
+        proposed = draft.get("proposed_recipe") if isinstance(draft.get("proposed_recipe"), dict) else {}
+        task = re.sub(r"[^a-z0-9-]+", "-", str(proposed.get("task") or "workload").lower()).strip("-")
+        intent = re.sub(r"[^a-z0-9-]+", "-", str(proposed.get("intent") or "unknown").lower()).strip("-")
+        path = output_dir / f"{task}-{intent}.json"
+        path.write_text(json.dumps(draft, ensure_ascii=False, indent=2, sort_keys=True) + "\n", encoding="utf-8")
 
 
 def _markdown(report: dict[str, Any]) -> str:

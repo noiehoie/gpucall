@@ -450,12 +450,15 @@ def test_non_string_readiness_status_does_not_crash() -> None:
     assert result["category"] == "shipment_ready"
 
 
-def test_invalid_context_budget_is_rejected() -> None:
+def test_invalid_context_budget_is_classified() -> None:
     workload = _workload()
     workload["input_profile"] = {"context_budget_tokens": "131072 tokens"}
 
-    with pytest.raises(ValueError, match="context_budget_tokens"):
-        classify_workload_demand(workload, _readiness(_recipe()))
+    result = classify_workload_demand(workload, _readiness(_recipe()))
+
+    assert result["category"] == "provider_missing"
+    assert [blocker["reason"] for blocker in result["blockers"]] == ["invalid_workload_contract_context_budget_tokens"]
+    assert result["blockers"][0]["code"] == "CALLER_CONTRACT_INCOMPLETE"
 
 
 def test_build_report_reuses_readiness_for_duplicate_intents(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

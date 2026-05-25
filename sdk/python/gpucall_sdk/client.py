@@ -67,6 +67,8 @@ class GPUCallHTTPError(RuntimeError):
         self.code = code
         self.response_body = response_body or {}
         self.failure_artifact = failure_artifact
+        self.recipe_intake_submissions: list[str] = []
+        self.recipe_intake_error: str | None = None
 
     def to_preflight_intake(self, *, task: str | None = None, mode: str | None = None, intent: str | None = None) -> dict[str, Any]:
         from gpucall_recipe_draft.core import DraftInputs, intake_from_error
@@ -204,6 +206,10 @@ class GPUCallClient:
         transport: httpx.BaseTransport | None = None,
         auto_upload_threshold_bytes: int | None = None,
         redact_http_logs: bool = True,
+        recipe_inbox_dir: str | Path | None = None,
+        remote_recipe_inbox: str | None = None,
+        recipe_intake_source: str | None = None,
+        auto_submit_recipe_intake: bool | None = None,
     ) -> None:
         if redact_http_logs:
             _install_http_log_redaction()
@@ -216,6 +222,13 @@ class GPUCallClient:
             transport=transport,
         )
         self.auto_upload_threshold_bytes = _auto_upload_threshold_bytes(auto_upload_threshold_bytes)
+        self.recipe_inbox_dir, self.remote_recipe_inbox = _recipe_inbox_targets(recipe_inbox_dir, remote_recipe_inbox)
+        self.recipe_intake_source = recipe_intake_source or os.getenv("GPUCALL_RECIPE_INTAKE_SOURCE") or os.getenv("GPUCALL_SOURCE")
+        self.auto_submit_recipe_intake = (
+            bool(self.recipe_inbox_dir or self.remote_recipe_inbox)
+            if auto_submit_recipe_intake is None
+            else auto_submit_recipe_intake
+        )
         self.chat = _ChatResource(self)
 
     def __enter__(self) -> "GPUCallClient":
@@ -322,7 +335,11 @@ class GPUCallClient:
         except httpx.TimeoutException as exc:
             raise GPUCallColdStartTimeout("gpucall request timed out; this may be normal cold-start latency and is not a provider circuit-breaker signal", original=exc) from exc
         self._emit_warnings(response)
-        self._raise_for_status(response)
+        try:
+            self._raise_for_status(response)
+        except GPUCallHTTPError as exc:
+            self._maybe_submit_recipe_intake(exc, task=task, mode=mode, intent=intent)
+            raise
         data = response.json()
         if response.status_code == 202 and poll:
             return self.poll_job(data["job_id"], interval=poll_interval, timeout=poll_timeout)
@@ -497,6 +514,19 @@ class GPUCallClient:
         except httpx.HTTPStatusError as exc:
             _raise_typed_http_error(response, exc)
 
+    def _maybe_submit_recipe_intake(self, exc: GPUCallHTTPError, *, task: str, mode: str, intent: str | None) -> None:
+        if not self.auto_submit_recipe_intake:
+            return
+        _submit_recipe_intake_for_error(
+            exc,
+            task=task,
+            mode=mode,
+            intent=intent,
+            inbox_dir=self.recipe_inbox_dir,
+            remote_inbox=self.remote_recipe_inbox,
+            source=self.recipe_intake_source,
+        )
+
     def check_readiness(self, intent: str) -> dict[str, Any]:
         """Check shipment readiness for a specific intent."""
         response = self.client.get(f"/v2/readiness/intents/{intent}")
@@ -515,6 +545,10 @@ class AsyncGPUCallClient:
         transport: httpx.AsyncBaseTransport | None = None,
         auto_upload_threshold_bytes: int | None = None,
         redact_http_logs: bool = True,
+        recipe_inbox_dir: str | Path | None = None,
+        remote_recipe_inbox: str | None = None,
+        recipe_intake_source: str | None = None,
+        auto_submit_recipe_intake: bool | None = None,
     ) -> None:
         if redact_http_logs:
             _install_http_log_redaction()
@@ -527,6 +561,13 @@ class AsyncGPUCallClient:
             transport=transport,
         )
         self.auto_upload_threshold_bytes = _auto_upload_threshold_bytes(auto_upload_threshold_bytes)
+        self.recipe_inbox_dir, self.remote_recipe_inbox = _recipe_inbox_targets(recipe_inbox_dir, remote_recipe_inbox)
+        self.recipe_intake_source = recipe_intake_source or os.getenv("GPUCALL_RECIPE_INTAKE_SOURCE") or os.getenv("GPUCALL_SOURCE")
+        self.auto_submit_recipe_intake = (
+            bool(self.recipe_inbox_dir or self.remote_recipe_inbox)
+            if auto_submit_recipe_intake is None
+            else auto_submit_recipe_intake
+        )
         self.chat = _AsyncChatResource(self)
 
     async def __aenter__(self) -> "AsyncGPUCallClient":
@@ -607,7 +648,11 @@ class AsyncGPUCallClient:
         except httpx.TimeoutException as exc:
             raise GPUCallColdStartTimeout("gpucall request timed out; this may be normal cold-start latency and is not a provider circuit-breaker signal", original=exc) from exc
         _emit_warnings(response)
-        _raise_for_status(response)
+        try:
+            _raise_for_status(response)
+        except GPUCallHTTPError as exc:
+            self._maybe_submit_recipe_intake(exc, task=task, mode=mode, intent=intent)
+            raise
         data = response.json()
         if response.status_code == 202 and poll:
             return await self.poll_job(data["job_id"], interval=poll_interval, timeout=poll_timeout)
@@ -728,6 +773,19 @@ class AsyncGPUCallClient:
                 return job
             await _sleep(interval)
         raise GPUCallColdStartTimeout(f"job {job_id} did not finish within {timeout}s")
+
+    def _maybe_submit_recipe_intake(self, exc: GPUCallHTTPError, *, task: str, mode: str, intent: str | None) -> None:
+        if not self.auto_submit_recipe_intake:
+            return
+        _submit_recipe_intake_for_error(
+            exc,
+            task=task,
+            mode=mode,
+            intent=intent,
+            inbox_dir=self.recipe_inbox_dir,
+            remote_inbox=self.remote_recipe_inbox,
+            source=self.recipe_intake_source,
+        )
 
     async def _task_payload(
         self,
@@ -1357,6 +1415,58 @@ def _raise_for_status(response: httpx.Response) -> None:
         _raise_typed_http_error(response, exc)
 
 
+def _recipe_inbox_targets(
+    recipe_inbox_dir: str | Path | None,
+    remote_recipe_inbox: str | None,
+) -> tuple[str | None, str | None]:
+    inbox = str(recipe_inbox_dir).strip() if recipe_inbox_dir is not None else ""
+    remote = str(remote_recipe_inbox).strip() if remote_recipe_inbox is not None else ""
+    env_inbox = os.getenv("GPUCALL_RECIPE_INBOX", "").strip()
+    env_remote = os.getenv("GPUCALL_REMOTE_RECIPE_INBOX", "").strip()
+    if not inbox and not remote and env_remote:
+        remote = env_remote
+    if not inbox and not remote and env_inbox:
+        if ":/" in env_inbox and not env_inbox.startswith("/"):
+            remote = env_inbox
+        else:
+            inbox = env_inbox
+    return (inbox or None, remote or None)
+
+
+def _submit_recipe_intake_for_error(
+    exc: GPUCallHTTPError,
+    *,
+    task: str,
+    mode: str,
+    intent: str | None,
+    inbox_dir: str | None,
+    remote_inbox: str | None,
+    source: str | None,
+) -> None:
+    if not _recipe_intake_recommended(exc):
+        return
+    try:
+        from gpucall_recipe_draft.submit import build_submission_bundle, submit_bundle, submit_bundle_to_remote
+
+        intake = exc.to_preflight_intake(task=task, mode=mode, intent=intent)
+        bundle = build_submission_bundle(intake=intake, draft=None, source=source)
+        paths: list[str] = []
+        if inbox_dir:
+            paths.append(str(submit_bundle(bundle, inbox_dir)))
+        if remote_inbox:
+            paths.append(submit_bundle_to_remote(bundle, remote_inbox))
+        exc.recipe_intake_submissions = paths
+    except Exception as submit_exc:
+        exc.recipe_intake_error = str(submit_exc)
+
+
+def _recipe_intake_recommended(exc: GPUCallHTTPError) -> bool:
+    if exc.code in {"NO_AUTO_SELECTABLE_RECIPE", "REQUEST_EXCEEDS_RECIPE_CONTEXT"}:
+        return True
+    artifact = exc.failure_artifact if isinstance(exc.failure_artifact, dict) else {}
+    return artifact.get("recipe_request_recommended") is True
+
+
 def _raise_typed_http_error(response: httpx.Response, exc: httpx.HTTPStatusError) -> None:
     detail = None
     code = None
@@ -1379,7 +1489,7 @@ def _raise_typed_http_error(response: httpx.Response, exc: httpx.HTTPStatusError
         raise GPUCallJSONParseError(detail or "gpucall returned malformed JSON output", raw_text=raw_text) from exc
     error_class: type[GPUCallHTTPError] = GPUCallHTTPError
     detail_text = str(detail or "")
-    if code == "NO_AUTO_SELECTABLE_RECIPE":
+    if code in {"NO_AUTO_SELECTABLE_RECIPE", "REQUEST_EXCEEDS_RECIPE_CONTEXT"}:
         error_class = GPUCallNoRecipeError
     elif code == "NO_ELIGIBLE_TUPLE" or "NO_ELIGIBLE_TUPLE" in detail_text:
         error_class = GPUCallNoEligibleTupleError

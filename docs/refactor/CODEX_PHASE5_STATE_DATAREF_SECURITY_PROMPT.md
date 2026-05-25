@@ -84,11 +84,6 @@ Useful candidate improvements, subject to your pre-edit findings:
   duplication without hiding checks.
 - Add regression tests for any invariant you touch before or with the change.
 
-Use multi-ai-code before implementation if available. Bound auxiliary AI
-processes; if they fail, hang, or drift outside this phase, stop them and
-continue with deterministic code inspection and tests. Use multi-ai-review
-before final if available, with the same bounded behavior.
-
 Do not edit:
 
 - `config/recipes/*`

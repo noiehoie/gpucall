@@ -1,6 +1,12 @@
 # gpucall Setup Plan
 
-`gpucall setup` is the first-run operator journey for gpucall. It hides the
+Install the operator CLI before starting setup:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/noiehoie/gpucall/main/install.sh | sh
+```
+
+`gpucall setup` is the first-run operator journey after the CLI is installed. It hides the
 large internal config tree behind an operating profile, a checklist dashboard,
 and setup-as-code.
 
@@ -11,6 +17,12 @@ gpucall setup
 gpucall setup status
 gpucall setup next
 ```
+
+`gpucall setup status` is non-interactive: it prints required/recommended
+checks and the next setup commands, not the interactive section menu.
+`gpucall validate-config` defaults to a bounded count/sample summary; run
+`gpucall validate-config --verbose` only when full recipe/runtime/tuple/tenant
+name lists are needed.
 
 Use a setup plan when an operator or SRE wants deterministic, repeatable setup:
 
@@ -65,6 +77,8 @@ recipe_automation:
   auto_validate_existing_tuples: false
   auto_activate_existing_validated_recipe: false
   auto_promote_candidates: false
+  auto_provision_supply: false
+  auto_apply_supply: false
   auto_billable_validation: false
   auto_activate_validated: false
   auto_set_auto_select: false
@@ -115,8 +129,11 @@ credentials:
   source: official_cli
 ```
 
-Use the provider's official login profile. Modal uses `modal setup`; RunPod
-Flash uses `flash login`. gpucall does not store the provider secret in YAML.
+Use the provider's official login profile. This remains available for
+provider-specific tooling such as RunPod Flash `flash login`. For Modal,
+`gpucall_credentials` is preferred because Modal supports `MODAL_TOKEN_ID` and
+`MODAL_TOKEN_SECRET` environment variables, so Docker deployments do not need to
+mount `.modal.toml` into the gpucall config directory.
 
 ```yaml
 credentials:
@@ -161,8 +178,14 @@ providers:
   modal:
     enabled: true
     credentials:
-      source: official_cli
+      source: gpucall_credentials
 ```
+
+Modal token credentials are stored in the gpucall credentials store as
+`providers.modal.token_id` and `providers.modal.token_secret`, then projected to
+`MODAL_TOKEN_ID` and `MODAL_TOKEN_SECRET` at runtime. `MODAL_ENVIRONMENT` can be
+set from `providers.modal.environment` when needed. Legacy official CLI profile
+setup remains possible, but it is not the default production path.
 
 RunPod managed endpoint:
 
@@ -177,6 +200,23 @@ providers:
 
 RunPod API keys are credentials. Endpoint IDs are routing metadata and may live
 in config.
+
+RunPod provider account with no endpoint yet:
+
+```yaml
+providers:
+  runpod:
+    enabled: true
+    credentials:
+      source: gpucall_credentials
+```
+
+This is the normal first-install state when the operator has connected a RunPod
+account but gpucall has not provisioned any endpoint for a caller workload yet.
+Setup records the provider account and leaves endpoint creation to the
+recipe-draft -> admin review -> Provider Panopticon supply provisioning ->
+validation workflow. Existing endpoint registration remains available through
+`endpoint_id`.
 
 Hyperstack:
 
@@ -247,6 +287,8 @@ recipe_automation:
   auto_validate_existing_tuples: false
   auto_activate_existing_validated_recipe: false
   auto_promote_candidates: true
+  auto_provision_supply: true
+  auto_apply_supply: false
   auto_billable_validation: false
   auto_activate_validated: false
   auto_require_auto_select_safe: true
@@ -267,6 +309,11 @@ The chain is ordered and fail-closed:
   active routing when existing tuple validation succeeds.
 - `auto_promote_candidates`: prepare an isolated candidate tuple promotion
   workspace when the catalog has matching candidate contracts.
+- `auto_provision_supply`: after candidate promotion reaches endpoint or
+  validation readiness, generate the Provider Panopticon supply provisioning
+  plan from the isolated promotion workspace and record a dry-run apply result.
+- `auto_apply_supply`: run the provider supply apply step. This mutates the
+  provider account and remains false by default.
 - `auto_billable_validation`: run billable tuple validation from that isolated
   workspace.
 - `auto_activate_validated`: copy only successfully validated recipes/tuples
@@ -280,8 +327,9 @@ The chain is ordered and fail-closed:
 
 Each step requires the previous one. Setup plan validation rejects impossible
 chains such as billable validation without candidate promotion or existing tuple
-validation. The automation
-does not invent provider credentials, endpoint IDs, or provider targets.
+validation. The automation does not invent provider credentials, endpoint IDs,
+or provider targets. Supply apply and billable validation remain separately
+gated.
 
 ## Handoff Assets
 

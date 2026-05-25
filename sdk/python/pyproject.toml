@@ -20,9 +20,10 @@ dev = [
 
 [project.scripts]
 gpucall-recipe-draft = "gpucall_recipe_draft.cli:main"
+gpucall-migrate = "gpucall_migrate.cli:main"
 
 [tool.setuptools.packages.find]
-include = ["gpucall_sdk*", "gpucall_recipe_draft*"]
+include = ["gpucall_sdk*", "gpucall_recipe_draft*", "gpucall_migrate*"]
 
 [tool.setuptools.package-data]
 gpucall_sdk = ["openai_contract/*.json"]

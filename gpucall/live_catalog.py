@@ -14,6 +14,7 @@ LiveDimension = Literal[
     "endpoint",
     "credential",
     "cost",
+    "storage",
     "capacity",
     "health",
     "worker",

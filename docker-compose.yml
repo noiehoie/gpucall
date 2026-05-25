@@ -28,6 +28,9 @@ services:
       AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID:-}
       AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY:-}
       AWS_REGION: ${AWS_REGION:-}
+      MODAL_TOKEN_ID: ${MODAL_TOKEN_ID:-}
+      MODAL_TOKEN_SECRET: ${MODAL_TOKEN_SECRET:-}
+      MODAL_ENVIRONMENT: ${MODAL_ENVIRONMENT:-}
       GPUCALL_MODAL_APP: ${GPUCALL_MODAL_APP:-}
       GPUCALL_MODAL_FN: ${GPUCALL_MODAL_FN:-}
       GPUCALL_MODAL_STREAM_FN: ${GPUCALL_MODAL_STREAM_FN:-}
@@ -48,7 +51,6 @@ services:
       - ${GPUCALL_CONFIG_DIR:-./config}:/config
       - ${GPUCALL_STATE_DIR:-./state}:/state
       - ${GPUCALL_CACHE_DIR:-./cache}:/cache
-      - ${GPUCALL_MODAL_CONFIG_FILE:-/dev/null}:/config/.modal.toml:ro
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/healthz', timeout=2).read()"]
       interval: 30s

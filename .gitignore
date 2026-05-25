@@ -34,3 +34,5 @@ _tmp_*
 AUDIT_EVIDENCE.md
 0508fullaudit/
 0509githubfullaudit/
+tasks/*.md
+tasks/*.json

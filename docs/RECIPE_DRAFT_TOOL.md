@@ -232,6 +232,11 @@ The output is not production config. It is a review artifact for gpucall adminis
 
 The caller-side helper can submit sanitized intake and draft artifacts to a file-based inbox. This is not a gpucall API. The inbox can be a local shared directory, or an SSH-accessible directory controlled by the gpucall administrator.
 
+Recipe-request submissions auto-generate and attach a deterministic draft when
+the caller provides only recipe intake or preflight intake. The final submitted
+JSON must have a top-level `draft` object, not `null`. Quality feedback is a
+separate evidence path and must not create recipe drafts.
+
 Production deployments should not depend on a `root` submitter writing files
 that a different unprivileged watcher later reads. The recommended shape is a
 dedicated operator account or shared service group that owns the dropbox:
@@ -253,7 +258,6 @@ an equivalent restricted intake mechanism instead of relying on `root`.
 ```bash
 gpucall-recipe-draft submit \
   --intake intake.json \
-  --draft recipe-draft.json \
   --inbox-dir /path/to/gpucall-recipe-requests/inbox \
   --source example-caller-app
 ```
@@ -263,7 +267,6 @@ For remote submission:
 ```bash
 gpucall-recipe-draft submit \
   --intake intake.json \
-  --draft recipe-draft.json \
   --remote-inbox admin@gateway.example.internal:/opt/gpucall/state/recipe_requests/inbox \
   --source example-caller-app
 ```
@@ -491,7 +494,10 @@ recipe_inbox_auto_materialize: true
 recipe_inbox_auto_validate_existing_tuples: false
 recipe_inbox_auto_activate_existing_validated_recipe: false
 recipe_inbox_auto_promote_candidates: true
+recipe_inbox_auto_provision_supply: true
+recipe_inbox_auto_apply_supply: false
 recipe_inbox_auto_billable_validation: true
+recipe_inbox_auto_validation_budget_usd: 0.10
 recipe_inbox_auto_activate_validated: true
 recipe_inbox_auto_require_auto_select_safe: true
 recipe_inbox_auto_set_auto_select: false
@@ -503,6 +509,8 @@ recipe_inbox_promotion_work_dir: /opt/gpucall/state/recipe_requests/promotions
 The chain is ordered and fail-closed:
 
 - `recipe_inbox_auto_promote_candidates` requires `recipe_inbox_auto_materialize`.
+- `recipe_inbox_auto_provision_supply` requires `recipe_inbox_auto_promote_candidates`.
+- `recipe_inbox_auto_apply_supply` requires `recipe_inbox_auto_provision_supply`.
 - `recipe_inbox_auto_validate_existing_tuples` requires `recipe_inbox_auto_materialize`.
 - `recipe_inbox_auto_activate_existing_validated_recipe` requires existing tuple validation.
 - `recipe_inbox_auto_billable_validation` requires auto-promotion or existing tuple validation.
@@ -512,13 +520,16 @@ The chain is ordered and fail-closed:
 
 When enabled, `process-inbox` and `watch` reuse the same review and promotion
 pipeline as the manual commands. Candidate promotion materializes provider tuple,
-surface, and worker YAML into an isolated promotion workspace. Billable
-validation runs `gpucall tuple-smoke`. Activation copies only validated recipe
-and tuple config into the active config directory. If no candidate tuple exists,
-the report records `SKIPPED_NO_TUPLE_CANDIDATE` and does not invent a provider.
-If an existing production tuple already satisfies the materialized recipe,
-operators can separately allow existing-tuple validation and activation. That
-path writes a production recipe only after matching live validation evidence is
+surface, and worker YAML into an isolated promotion workspace, then writes a
+Provider Panopticon supply provisioning plan and dry-run apply report. Billable
+validation runs `gpucall tuple-smoke` only after non-generation readiness says
+the remaining blocker is route validation evidence. Activation copies only
+validated recipe and tuple config into the active config directory. If no
+candidate tuple exists, the report records `SKIPPED_NO_TUPLE_CANDIDATE` and
+does not invent a provider. If an existing production tuple already satisfies
+the materialized recipe, operators can separately allow existing-tuple validation
+and activation. That path refreshes readiness before billable validation and
+writes a production recipe only after matching live validation evidence is
 present or after billable validation succeeds. It can set `auto_select: true`
 only when `recipe_inbox_auto_set_auto_select` is enabled, and by default it
 requires the auto-select shadowing review to be safe.

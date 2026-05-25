@@ -5,7 +5,17 @@ import json
 from gpucall.release import ONBOARDING_MANUAL_URL, ONBOARDING_PROMPT_URL, SDK_WHEEL_URL
 
 
-def handoff_payload(*, tenant: str, token: str, gateway_url: str, recipe_inbox: str, quality_feedback_inbox: str | None = None) -> dict[str, str]:
+def handoff_payload(
+    *,
+    tenant: str,
+    token: str,
+    gateway_url: str,
+    recipe_inbox: str,
+    quality_feedback_inbox: str | None = None,
+    onboarding_prompt_url: str | None = None,
+    onboarding_manual_url: str | None = None,
+    sdk_wheel_url: str | None = None,
+) -> dict[str, str]:
     quality_inbox = quality_feedback_inbox or _default_quality_feedback_inbox(recipe_inbox)
     return {
         "GPUCALL_TENANT": tenant,
@@ -13,9 +23,9 @@ def handoff_payload(*, tenant: str, token: str, gateway_url: str, recipe_inbox: 
         "GPUCALL_API_KEY": token,
         "GPUCALL_RECIPE_INBOX": recipe_inbox,
         "GPUCALL_QUALITY_FEEDBACK_INBOX": quality_inbox,
-        "GPUCALL_ONBOARDING_PROMPT_URL": ONBOARDING_PROMPT_URL,
-        "GPUCALL_ONBOARDING_MANUAL_URL": ONBOARDING_MANUAL_URL,
-        "GPUCALL_SDK_WHEEL_URL": SDK_WHEEL_URL,
+        "GPUCALL_ONBOARDING_PROMPT_URL": onboarding_prompt_url or ONBOARDING_PROMPT_URL,
+        "GPUCALL_ONBOARDING_MANUAL_URL": onboarding_manual_url or ONBOARDING_MANUAL_URL,
+        "GPUCALL_SDK_WHEEL_URL": sdk_wheel_url or SDK_WHEEL_URL,
     }
 
 

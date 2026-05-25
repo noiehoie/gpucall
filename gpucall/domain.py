@@ -115,7 +115,10 @@ class RecipeAdminAutomationConfig(BaseModel):
     recipe_inbox_auto_validate_existing_tuples: bool = False
     recipe_inbox_auto_activate_existing_validated_recipe: bool = False
     recipe_inbox_auto_promote_candidates: bool = False
+    recipe_inbox_auto_provision_supply: bool = False
+    recipe_inbox_auto_apply_supply: bool = False
     recipe_inbox_auto_billable_validation: bool = False
+    recipe_inbox_auto_validation_budget_usd: NonNegativeFloat = 0.10
     recipe_inbox_auto_activate_validated: bool = False
     recipe_inbox_auto_require_auto_select_safe: bool = True
     recipe_inbox_auto_set_auto_select: bool = False
@@ -135,6 +138,10 @@ class RecipeAdminAutomationConfig(BaseModel):
     def validate_admin_automation_chain(self) -> "RecipeAdminAutomationConfig":
         if self.recipe_inbox_auto_promote_candidates and not self.recipe_inbox_auto_materialize:
             raise ValueError("recipe_inbox_auto_promote_candidates requires recipe_inbox_auto_materialize")
+        if self.recipe_inbox_auto_provision_supply and not self.recipe_inbox_auto_promote_candidates:
+            raise ValueError("recipe_inbox_auto_provision_supply requires recipe_inbox_auto_promote_candidates")
+        if self.recipe_inbox_auto_apply_supply and not self.recipe_inbox_auto_provision_supply:
+            raise ValueError("recipe_inbox_auto_apply_supply requires recipe_inbox_auto_provision_supply")
         if self.recipe_inbox_auto_validate_existing_tuples and not self.recipe_inbox_auto_materialize:
             raise ValueError("recipe_inbox_auto_validate_existing_tuples requires recipe_inbox_auto_materialize")
         if self.recipe_inbox_auto_activate_existing_validated_recipe and not self.recipe_inbox_auto_validate_existing_tuples:
@@ -429,6 +436,69 @@ class CostPolicy(BaseModel):
     require_fresh_price_for_budget: bool | None = None
 
 
+RemediationMode = Literal["auto", "approval_required", "disabled"]
+
+
+class PanopticonRemediationActionPolicy(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    mode: RemediationMode
+    require_no_inflight_jobs: bool = True
+    require_no_low_latency_sla: bool = True
+    stale_for_minutes: NonNegativeFloat | None = None
+    stale_for_days: NonNegativeFloat | None = None
+
+
+class PanopticonRemediationPolicy(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    exclude_from_routing: PanopticonRemediationActionPolicy = Field(
+        default_factory=lambda: PanopticonRemediationActionPolicy(mode="auto")
+    )
+    scale_workers_min_to_zero: PanopticonRemediationActionPolicy = Field(
+        default_factory=lambda: PanopticonRemediationActionPolicy(mode="approval_required", stale_for_minutes=30)
+    )
+    delete_endpoint: PanopticonRemediationActionPolicy = Field(
+        default_factory=lambda: PanopticonRemediationActionPolicy(mode="approval_required", stale_for_days=7)
+    )
+    delete_network_volume: PanopticonRemediationActionPolicy = Field(
+        default_factory=lambda: PanopticonRemediationActionPolicy(mode="approval_required", stale_for_days=14)
+    )
+
+
+class ProviderSupplyProvisioningActionPolicy(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    mode: RemediationMode = "approval_required"
+    default_workers_min: int = Field(default=0, ge=0)
+    default_workers_max: PositiveInt = 1
+    max_workers_max: PositiveInt = 3
+    allow_warm_workers: bool = False
+    default_idle_timeout_seconds: PositiveInt = 5
+    default_scaler_type: Literal["QUEUE_DELAY", "REQUEST_COUNT"] = "QUEUE_DELAY"
+    default_scaler_value: PositiveInt = 4
+    default_gpu_count: PositiveInt = 1
+    default_container_disk_gb: PositiveInt = 150
+
+    @model_validator(mode="after")
+    def validate_supply_policy(self) -> "ProviderSupplyProvisioningActionPolicy":
+        if self.default_workers_min > self.default_workers_max:
+            raise ValueError("default_workers_min must be <= default_workers_max")
+        if self.default_workers_max > self.max_workers_max:
+            raise ValueError("default_workers_max must be <= max_workers_max")
+        if self.default_workers_min > 0 and not self.allow_warm_workers:
+            raise ValueError("default_workers_min > 0 requires allow_warm_workers")
+        return self
+
+
+class ProviderSupplyProvisioningPolicy(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    create_runpod_serverless_endpoint: ProviderSupplyProvisioningActionPolicy = Field(
+        default_factory=ProviderSupplyProvisioningActionPolicy
+    )
+
+
 class Policy(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -442,6 +512,8 @@ class Policy(BaseModel):
     tuples: TuplePolicy
     cost_policy: CostPolicy = Field(default_factory=CostPolicy)
     security: SecurityPolicy = Field(default_factory=SecurityPolicy)
+    panopticon_remediation: PanopticonRemediationPolicy = Field(default_factory=PanopticonRemediationPolicy)
+    provider_supply_provisioning: ProviderSupplyProvisioningPolicy = Field(default_factory=ProviderSupplyProvisioningPolicy)
     immutable_audit: bool = True
 
 

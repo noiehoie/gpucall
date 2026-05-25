@@ -7,6 +7,9 @@ from gpucall.credential_registry import register_configured_probe, register_env_
 
 register_env_override("runpod", "api_key", "GPUCALL_RUNPOD_API_KEY")
 register_env_override("runpod", "endpoint_id", "GPUCALL_RUNPOD_ENDPOINT_ID")
+register_env_override("modal", "token_id", "MODAL_TOKEN_ID")
+register_env_override("modal", "token_secret", "MODAL_TOKEN_SECRET")
+register_env_override("modal", "environment", "MODAL_ENVIRONMENT")
 register_env_override("hyperstack", "api_key", "GPUCALL_HYPERSTACK_API_KEY")
 register_env_override("hyperstack", "ssh_key_path", "GPUCALL_HYPERSTACK_SSH_KEY_PATH")
 register_env_override("azure", "subscription_id", "AZURE_SUBSCRIPTION_ID")
@@ -25,6 +28,12 @@ register_env_override("auth", "api_keys", "GPUCALL_API_KEYS")
 @register_configured_probe("sdk_profile:modal")
 def _modal_token_exists(_creds: dict[str, dict[str, str]]) -> bool:
     return any(path.exists() for path in (Path.home() / ".modal.toml", Path.home() / ".config" / "modal" / "modal.toml"))
+
+
+@register_configured_probe("token_pair:modal")
+def _modal_token_pair_configured(creds: dict[str, dict[str, str]]) -> bool:
+    modal = creds.get("modal", {})
+    return bool(modal.get("token_id") and modal.get("token_secret"))
 
 
 @register_configured_probe("sdk_profile:runpod-flash")

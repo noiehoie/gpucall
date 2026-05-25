@@ -15,6 +15,7 @@ from gpucall.targeting import is_configured_target
 RUNPOD_API_BASE = "https://api.runpod.ai/v2"
 RUNPOD_REST_API_BASE = "https://rest.runpod.io/v1"
 RUNPOD_SERVERLESS_BILLING_GUARD_CHECK = "runpod_serverless_billing_guard"
+RUNPOD_NETWORK_VOLUME_PRICE_USD_PER_GB_MONTH = 0.07
 
 
 def requests_session():
@@ -104,6 +105,13 @@ def runpod_endpoint_catalog_findings(tuples: list[Any], credentials: dict[str, d
     api_key = credentials.get("runpod", {}).get("api_key")
     findings: list[dict[str, Any]] = []
     inventory_rows: list[dict[str, Any]] | None = None
+    inventory_error: TupleError | None = None
+    inventory_base_url = RUNPOD_REST_API_BASE
+    if api_key:
+        try:
+            inventory_rows = _runpod_endpoint_live_inventory_rows(api_key, inventory_base_url)
+        except TupleError as exc:
+            inventory_error = exc
     for tuple in tuples:
         if not api_key:
             findings.append(live_error(tuple, dimension="credential", reason="missing RunPod API key; cannot verify endpoint health"))
@@ -112,22 +120,18 @@ def runpod_endpoint_catalog_findings(tuples: list[Any], credentials: dict[str, d
             findings.append(live_error(tuple, dimension="endpoint", field="target", reason="RunPod endpoint target is not configured"))
             continue
         base_url = str(tuple.endpoint or RUNPOD_API_BASE).rstrip("/")
-        inventory_base_url = RUNPOD_REST_API_BASE
         health: dict[str, Any] | None = None
-        if inventory_rows is None:
-            try:
-                inventory_rows = _runpod_endpoint_live_inventory_rows(api_key, inventory_base_url)
-            except TupleError as exc:
-                findings.append(
-                    live_error(
-                        tuple,
-                        dimension="endpoint",
-                        field="runpod_endpoint_inventory",
-                        reason=str(exc),
-                        source=f"{inventory_base_url}/endpoints",
-                    )
+        if inventory_error is not None:
+            findings.append(
+                live_error(
+                    tuple,
+                    dimension="endpoint",
+                    field="runpod_endpoint_inventory",
+                    reason=str(inventory_error),
+                    source=f"{inventory_base_url}/endpoints",
                 )
-                continue
+            )
+            continue
         endpoint = _runpod_endpoint_live_inventory_row(tuple, api_key, inventory_base_url, rows=inventory_rows)
         if endpoint is None:
             findings.append(
@@ -193,7 +197,30 @@ def runpod_endpoint_catalog_findings(tuples: list[Any], credentials: dict[str, d
                     )
                 )
             else:
-                health = response.json() if hasattr(response, "json") else {}
+                try:
+                    health_payload = response.json() if hasattr(response, "json") else {}
+                except Exception as exc:
+                    findings.append(
+                        live_error(
+                            tuple,
+                            dimension="endpoint",
+                            field="target",
+                            reason=f"RunPod endpoint health returned invalid JSON: {exc}",
+                        )
+                    )
+                    continue
+                if not isinstance(health_payload, dict):
+                    findings.append(
+                        live_error(
+                            tuple,
+                            dimension="endpoint",
+                            field="target",
+                            reason="RunPod endpoint health JSON was not an object",
+                            raw={"payload_type": type(health_payload).__name__, "live_reason": "health_probe_invalid_json_shape"},
+                        )
+                    )
+                    continue
+                health = health_payload
                 findings.append(
                     live_info(
                         tuple,
@@ -249,7 +276,210 @@ def runpod_endpoint_catalog_findings(tuples: list[Any], credentials: dict[str, d
                     raw=price["raw"],
                 )
             )
+    if api_key and inventory_rows is not None:
+        findings.extend(
+            _runpod_network_volume_catalog_findings(
+                tuples,
+                api_key,
+                inventory_base_url,
+                endpoint_rows=inventory_rows,
+                credentials=credentials,
+            )
+        )
     return findings
+
+
+def _runpod_network_volume_catalog_findings(
+    tuples: list[Any],
+    api_key: str,
+    base_url: str,
+    *,
+    endpoint_rows: list[dict[str, Any]],
+    credentials: dict[str, dict[str, str]],
+) -> list[dict[str, Any]]:
+    source = f"{base_url}/networkvolumes"
+    try:
+        volume_rows = _runpod_network_volume_live_inventory_rows(api_key, base_url)
+    except TupleError as exc:
+        return [
+            {
+                "tuple": "runpod-network-volume-inventory",
+                "adapter": "runpod",
+                "dimension": "storage",
+                "severity": "error",
+                "field": "runpod_network_volume_inventory",
+                "reason": str(exc),
+                "source": source,
+                "raw": {"live_reason": "network_volume_inventory_failed"},
+            }
+        ]
+    declared_by_volume = _runpod_declared_network_volume_map(tuples)
+    content_inventory_status = _runpod_content_inventory_status(credentials)
+    findings: list[dict[str, Any]] = []
+    for volume in volume_rows:
+        volume_id = _runpod_network_volume_id(volume)
+        if not volume_id:
+            continue
+        attached_endpoint_ids = _runpod_attached_endpoint_ids(volume_id, endpoint_rows)
+        declared_tuples = sorted(declared_by_volume.get(volume_id, set()))
+        size_gb = _non_negative_int(_first_present_mapping_value(volume, ("size", "sizeGb", "size_gb")))
+        estimated_monthly = (
+            round(float(size_gb) * RUNPOD_NETWORK_VOLUME_PRICE_USD_PER_GB_MONTH, 6) if size_gb is not None else None
+        )
+        raw = {
+            "provider": "runpod",
+            "resource_type": "network_volume",
+            "resource_id": volume_id,
+            "resource_name": str(volume.get("name") or ""),
+            "data_center_id": str(volume.get("dataCenterId") or volume.get("data_center_id") or ""),
+            "storage_size_gb": size_gb,
+            "estimated_monthly_usd": estimated_monthly,
+            "attached_endpoint_count": len(attached_endpoint_ids),
+            "attached_endpoint_ids": attached_endpoint_ids,
+            "declared_by_tuple_count": len(declared_tuples),
+            "declared_by_tuples": declared_tuples,
+            "content_inventory_status": content_inventory_status,
+            "live_reason": "persistent_storage_unattached_undeclared"
+            if not attached_endpoint_ids and not declared_tuples
+            else "persistent_storage_declared_or_attached",
+        }
+        if not attached_endpoint_ids and not declared_tuples:
+            findings.append(
+                {
+                    "tuple": f"runpod-network-volume-{volume_id}",
+                    "adapter": "runpod",
+                    "dimension": "storage",
+                    "severity": "error",
+                    "field": "runpod_network_volume_inventory",
+                    "reason": "RunPod network volume is present but not attached to live endpoint inventory or declared by a production tuple",
+                    "source": source,
+                    "raw": raw,
+                }
+            )
+            continue
+        findings.append(
+            {
+                "tuple": f"runpod-network-volume-{volume_id}",
+                "adapter": "runpod",
+                "dimension": "storage",
+                "severity": "info",
+                "reason": "RunPod network volume is declared or attached",
+                "source": source,
+                "raw": raw,
+            }
+        )
+    return findings
+
+
+def _runpod_network_volume_id(volume: dict[str, Any]) -> str:
+    return _string_ref(_first_present_mapping_value(volume, ("id", "networkVolumeId", "network_volume_id")))
+
+
+def _runpod_attached_endpoint_ids(volume_id: str, endpoint_rows: list[dict[str, Any]]) -> list[str]:
+    attached: list[str] = []
+    for endpoint in endpoint_rows:
+        ids = _runpod_network_volume_refs_from_mapping(endpoint)
+        if volume_id not in ids:
+            continue
+        endpoint_id = _string_ref(_first_present_mapping_value(endpoint, ("id", "endpointId", "endpoint_id")))
+        if endpoint_id:
+            attached.append(endpoint_id)
+    return sorted(set(attached))
+
+
+def _runpod_declared_network_volume_map(tuples: list[Any]) -> dict[str, set[str]]:
+    declared: dict[str, set[str]] = {}
+    for tuple in tuples:
+        tuple_name = str(getattr(tuple, "name", "") or "")
+        for volume_id in sorted(_runpod_declared_network_volume_ids(tuple)):
+            declared.setdefault(volume_id, set()).add(tuple_name)
+    return declared
+
+
+def _runpod_declared_network_volume_ids(tuple: Any) -> set[str]:
+    params = getattr(tuple, "provider_params", None) or {}
+    if not isinstance(params, dict):
+        return set()
+    refs: set[str] = set()
+    refs.update(_runpod_network_volume_refs_from_mapping(params))
+    storage = params.get("model_storage")
+    if isinstance(storage, dict):
+        refs.update(_runpod_network_volume_refs_from_mapping(storage))
+    endpoint_runtime = params.get("endpoint_runtime")
+    if isinstance(endpoint_runtime, dict):
+        refs.update(_runpod_network_volume_refs_from_mapping(endpoint_runtime))
+    persistent = params.get("persistent_resources")
+    if isinstance(persistent, dict):
+        refs.update(_runpod_network_volume_refs_from_mapping(persistent))
+        for key in ("runpod_network_volumes", "network_volumes", "networkVolumes"):
+            refs.update(_runpod_network_volume_refs_from_sequence(persistent.get(key)))
+    return refs
+
+
+def _runpod_network_volume_refs_from_mapping(payload: dict[str, Any], *, include_id: bool = False) -> set[str]:
+    refs: set[str] = set()
+    keys = ["networkVolumeId", "network_volume_id", "network_volume", "volume_id"]
+    if include_id:
+        keys.append("id")
+    for key in keys:
+        value = payload.get(key)
+        ref = _string_ref(value)
+        if ref:
+            refs.add(ref)
+    for key in ("networkVolumeIds", "network_volume_ids", "volume_ids"):
+        refs.update(_runpod_network_volume_refs_from_sequence(payload.get(key)))
+    return refs
+
+
+def _first_present_mapping_value(payload: dict[str, Any], keys: tuple[str, ...]) -> Any:
+    for key in keys:
+        if key in payload and payload[key] is not None:
+            return payload[key]
+    return None
+
+
+def _string_ref(value: Any) -> str:
+    if value is None or isinstance(value, bool):
+        return ""
+    return str(value).strip()
+
+
+def _runpod_network_volume_refs_from_sequence(payload: Any) -> set[str]:
+    refs: set[str] = set()
+    if isinstance(payload, list):
+        for item in payload:
+            if isinstance(item, dict):
+                refs.update(_runpod_network_volume_refs_from_mapping(item, include_id=True))
+                continue
+            ref = _string_ref(item)
+            if ref:
+                refs.add(ref)
+        return refs
+    if isinstance(payload, dict):
+        return _runpod_network_volume_refs_from_mapping(payload, include_id=True)
+    ref = _string_ref(payload)
+    if ref:
+        refs.add(ref)
+    return refs
+
+
+def _runpod_content_inventory_status(credentials: dict[str, dict[str, str]]) -> str:
+    runpod = credentials.get("runpod", {})
+    credential_pairs = (
+        (runpod.get("s3_access_key_id"), runpod.get("s3_secret_access_key")),
+        (os.getenv("RUNPOD_S3_ACCESS_KEY_ID"), os.getenv("RUNPOD_S3_SECRET_ACCESS_KEY")),
+    )
+    if any(access and secret for access, secret in credential_pairs):
+        return "s3_credentials_available_not_listed_by_catalog_probe"
+    return "missing_runpod_s3_credentials"
+
+
+def _non_negative_int(value: Any) -> int | None:
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError):
+        return None
+    return parsed if parsed >= 0 else None
 
 
 def _runpod_openai_models_finding(tuple: Any, api_key: str, base_url: str) -> dict[str, Any]:
@@ -394,10 +624,47 @@ def _runpod_endpoint_live_inventory_rows(api_key: str, base_url: str) -> list[di
         ) from exc
 
 
+def _runpod_network_volume_live_inventory_rows(api_key: str, base_url: str) -> list[dict[str, Any]]:
+    try:
+        session = requests_session()
+        url = f"{base_url}/networkvolumes"
+        rows: list[dict[str, Any]] = []
+        seen_urls: set[str] = set()
+        while url:
+            if url in seen_urls:
+                raise TupleError("RunPod network volume inventory pagination loop", retryable=True, status_code=502)
+            if len(seen_urls) >= 100:
+                raise TupleError("RunPod network volume inventory pagination exceeded 100 pages", retryable=True, status_code=502)
+            seen_urls.add(url)
+            response = session.get(
+                url,
+                headers={"authorization": f"Bearer {api_key}", "accept": "application/json"},
+                timeout=10,
+            )
+            if response.status_code not in {200, 201, 202}:
+                raise TupleError(f"RunPod network volume inventory failed: {response.status_code}", retryable=True, status_code=502)
+            try:
+                payload = response.json()
+            except Exception as exc:
+                raise TupleError("RunPod network volume inventory invalid JSON response", retryable=True, status_code=502) from exc
+            rows.extend(_runpod_inventory_rows(payload))
+            url = _runpod_inventory_next_url(payload, current_url=url)
+        return rows
+    except TupleError:
+        raise
+    except Exception as exc:
+        raise TupleError(
+            f"RunPod network volume inventory lookup failed: {type(exc).__name__}: {exc}",
+            retryable=True,
+            status_code=502,
+            code="PROVIDER_UPSTREAM_UNAVAILABLE",
+        ) from exc
+
+
 def _runpod_inventory_rows(payload: object) -> list[dict[str, Any]]:
     if isinstance(payload, dict):
         raw = None
-        for key in ("endpoints", "data", "items", "results"):
+        for key in ("endpoints", "networkVolumes", "network_volumes", "volumes", "data", "items", "results"):
             if key in payload:
                 raw = payload[key]
                 break
@@ -405,7 +672,18 @@ def _runpod_inventory_rows(payload: object) -> list[dict[str, Any]]:
         raw = payload
     if not isinstance(raw, list):
         return []
-    return [row for row in raw if isinstance(row, dict)]
+    rows: list[dict[str, Any]] = []
+    for row in raw:
+        if isinstance(row, dict):
+            rows.append(row)
+            continue
+        raise TupleError(
+            "RunPod inventory row was not an object",
+            retryable=True,
+            status_code=502,
+            code="PROVIDER_UPSTREAM_UNAVAILABLE",
+        )
+    return rows
 
 
 def _runpod_inventory_next_url(payload: object, *, current_url: str) -> str:
@@ -451,13 +729,20 @@ def _runpod_ref_byte_limit(env_name: str, label: str) -> int:
 def _runpod_endpoint_live_inventory_row(tuple: Any, api_key: str, base_url: str, *, rows: list[dict[str, Any]] | None = None) -> dict[str, Any] | None:
     try:
         candidate_rows = rows if rows is not None else _runpod_endpoint_live_inventory_rows(api_key, base_url)
-        for row in candidate_rows:
-            endpoint_id = str(row.get("id") or row.get("endpointId") or row.get("endpoint_id") or "")
-            if endpoint_id != str(tuple.target):
-                continue
-            return row
-    except Exception:
-        return None
+    except TupleError:
+        raise
+    except Exception as exc:
+        raise TupleError(
+            f"RunPod endpoint inventory lookup failed: {type(exc).__name__}: {exc}",
+            retryable=True,
+            status_code=502,
+            code="PROVIDER_UPSTREAM_UNAVAILABLE",
+        ) from exc
+    for row in candidate_rows:
+        endpoint_id = _string_ref(_first_present_mapping_value(row, ("id", "endpointId", "endpoint_id")))
+        if endpoint_id != str(tuple.target):
+            continue
+        return row
     return None
 
 

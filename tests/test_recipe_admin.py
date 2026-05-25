@@ -14,6 +14,7 @@ from gpucall.execution.contracts import official_contract
 from gpucall.recipe_admin_files import move_submission
 from gpucall.recipe_admin import (
     _auto_existing_tuple_report,
+    _auto_promotion_report,
     _auto_select_shadowing,
     _config_hash,
     _git_commit,
@@ -34,6 +35,7 @@ from gpucall.tuple_promotion import _tuple_from_candidate, _validation_mode, _wr
 from gpucall.recipe_request_index import RecipeRequestIndex
 from gpucall.quality_feedback_index import QualityFeedbackIndex
 from gpucall.candidate_sources import load_tuple_candidate_payloads
+from gpucall.panopticon_provisioning import ProviderSupplyProvisioningApplyResult
 
 
 def test_admin_materializes_intake_to_canonical_recipe() -> None:
@@ -677,12 +679,28 @@ def test_admin_process_inbox_existing_tuple_validation_tries_next_eligible(tmp_p
     report_dir.mkdir()
     attempts = []
 
-    def fake_validation(*, tuple_name, recipe_name, config_dir, validation_dir):
+    def fake_readiness_report(*, config_dir, recipe, validation_dir, live=False, **kwargs):
+        assert live is True
+        return {
+            "recipes": [
+                {
+                    "recipe": recipe,
+                    "live_ready_tuples": [],
+                    "live_blocked_tuples": [
+                        {"tuple": "modal-a10g", "live_reason": "validation_config_hash_mismatch"},
+                        {"tuple": "modal-h200x4-qwen25-14b-1m", "live_reason": "validation_config_hash_mismatch"},
+                    ],
+                }
+            ]
+        }
+
+    def fake_validation(*, tuple_name, recipe_name, config_dir, validation_dir, budget_usd=0.10):
         attempts.append(tuple_name)
         if tuple_name == "modal-a10g":
             return {"returncode": 1, "passed": False, "stderr": "not eligible"}
         return {"returncode": 0, "passed": True, "artifact_path": f"/tmp/{tuple_name}.json"}
 
+    monkeypatch.setattr("gpucall.recipe_admin.build_readiness_report", fake_readiness_report)
     monkeypatch.setattr("gpucall.recipe_admin._run_existing_tuple_validation", fake_validation)
 
     activation = _auto_existing_tuple_report(
@@ -707,6 +725,108 @@ def test_admin_process_inbox_existing_tuple_validation_tries_next_eligible(tmp_p
     assert activation["decision"] == "VALIDATED_READY_TO_ACTIVATE"
     assert activation["matched_validation"][0]["tuple"] == "modal-h200x4-qwen25-14b-1m"
     assert [item["tuple"] for item in activation["validation_attempts"]] == attempts
+
+
+def test_existing_tuple_auto_validation_blocks_before_billable_when_readiness_is_stale(tmp_path, monkeypatch) -> None:
+    config_dir = tmp_path / "config"
+    shutil.copytree("gpucall/config_templates", config_dir)
+    report_dir = tmp_path / "reports"
+    report_dir.mkdir()
+    validation_calls = []
+
+    def fake_readiness_report(*, config_dir, recipe, validation_dir, live=False, **kwargs):
+        assert live is True
+        return {
+            "recipes": [
+                {
+                    "recipe": recipe,
+                    "live_ready_tuples": [],
+                    "live_blocked_tuples": [{"tuple": "runpod-vllm-h100-80gb-qwen2-5-7b-instruct", "live_reason": "models_probe_timeout"}],
+                }
+            ]
+        }
+
+    def fake_validation(**kwargs):
+        validation_calls.append(kwargs)
+        return {"returncode": 0, "passed": True}
+
+    monkeypatch.setattr("gpucall.recipe_admin.build_readiness_report", fake_readiness_report)
+    monkeypatch.setattr("gpucall.recipe_admin._run_existing_tuple_validation", fake_validation)
+
+    report = _auto_existing_tuple_report(
+        {
+            "canonical_recipe": {"name": "infer-summarize-text-draft"},
+            "eligible_tuples": ["runpod-vllm-h100-80gb-qwen2-5-7b-instruct"],
+            "live_validation": {"matched": []},
+        },
+        request_id="rr-stale",
+        automation=RecipeAdminAutomationConfig(
+            recipe_inbox_auto_materialize=True,
+            recipe_inbox_auto_validate_existing_tuples=True,
+            recipe_inbox_auto_billable_validation=True,
+            recipe_inbox_auto_validation_budget_usd=0.04,
+        ),
+        report_dir=report_dir,
+        config_dir=config_dir,
+        validation_dir=tmp_path / "tuple-validation",
+        force=False,
+    )
+
+    assert report["decision"] == "WAITING_FOR_FRESH_READINESS"
+    assert report["validation_gate"]["decision"] == "WAITING_FOR_FRESH_READINESS"
+    assert "models_probe_timeout" in report["next_actions"][0]
+    assert validation_calls == []
+    assert (report_dir / "rr-stale.existing-tuple-readiness.json").exists()
+
+
+def test_existing_tuple_auto_validation_uses_budget_after_validation_hash_mismatch_gate(tmp_path, monkeypatch) -> None:
+    config_dir = tmp_path / "config"
+    shutil.copytree("gpucall/config_templates", config_dir)
+    report_dir = tmp_path / "reports"
+    report_dir.mkdir()
+    validation_calls = []
+
+    def fake_readiness_report(*, config_dir, recipe, validation_dir, live=False, **kwargs):
+        assert live is True
+        return {
+            "recipes": [
+                {
+                    "recipe": recipe,
+                    "live_ready_tuples": [],
+                    "live_blocked_tuples": [{"tuple": "runpod-vllm-h100-80gb-qwen2-5-7b-instruct", "live_reason": "validation_config_hash_mismatch"}],
+                }
+            ]
+        }
+
+    def fake_validation(**kwargs):
+        validation_calls.append(kwargs)
+        return {"returncode": 0, "passed": True, "artifact_path": str(tmp_path / "validation-evidence.json")}
+
+    monkeypatch.setattr("gpucall.recipe_admin.build_readiness_report", fake_readiness_report)
+    monkeypatch.setattr("gpucall.recipe_admin._run_existing_tuple_validation", fake_validation)
+
+    report = _auto_existing_tuple_report(
+        {
+            "canonical_recipe": {"name": "infer-summarize-text-draft"},
+            "eligible_tuples": ["runpod-vllm-h100-80gb-qwen2-5-7b-instruct"],
+            "live_validation": {"matched": []},
+        },
+        request_id="rr-hash",
+        automation=RecipeAdminAutomationConfig(
+            recipe_inbox_auto_materialize=True,
+            recipe_inbox_auto_validate_existing_tuples=True,
+            recipe_inbox_auto_billable_validation=True,
+            recipe_inbox_auto_validation_budget_usd=0.04,
+        ),
+        report_dir=report_dir,
+        config_dir=config_dir,
+        validation_dir=tmp_path / "tuple-validation",
+        force=False,
+    )
+
+    assert report["decision"] == "VALIDATED_READY_TO_ACTIVATE"
+    assert report["validation_gate"]["decision"] == "READY_FOR_BILLABLE_VALIDATION"
+    assert validation_calls[0]["budget_usd"] == 0.04
 
 
 def test_admin_author_dry_run_bundle_redacts_prompt_text(tmp_path) -> None:
@@ -916,6 +1036,158 @@ def test_admin_process_inbox_can_auto_promote_long_text_candidate_without_valida
     assert "modal-h200x4-qwen25-14b-1m" in report["admin_review"]["eligible_tuples"]
     assert report["promotion"]["decision"] == "SKIPPED_NO_TUPLE_CANDIDATE"
     assert not (inbox / "reports" / "rr-rank.promotion.json").exists()
+
+
+def test_admin_auto_promotion_plans_provider_supply_for_endpointless_candidate(tmp_path) -> None:
+    config_dir = tmp_path / "config"
+    shutil.copytree("gpucall/config_templates", config_dir)
+    inbox = tmp_path / "inbox"
+    reports = inbox / "reports"
+    reports.mkdir(parents=True)
+    tuple_name = "runpod-vllm-ampere48-qwen2-5-vl-7b-instruct"
+    candidate = next(row for row in load_tuple_candidate_payloads(config_dir) if row["name"] == tuple_name)
+    recipe = yaml.safe_load((config_dir / "recipes" / "vision-image-standard.yml").read_text(encoding="utf-8"))
+    recipe["name"] = "vision-understand-document-image-draft"
+    recipe["auto_select"] = False
+    recipe["quality_floor"] = "draft"
+    automation = RecipeAdminAutomationConfig(
+        recipe_inbox_auto_materialize=True,
+        recipe_inbox_auto_promote_candidates=True,
+        recipe_inbox_auto_provision_supply=True,
+    )
+
+    report = _auto_promotion_report(
+        {
+            "canonical_recipe": recipe,
+            "tuple_candidate_matches": [{"name": tuple_name, "path": candidate["_path"]}],
+        },
+        request_id="rr-supply",
+        automation=automation,
+        inbox_dir=inbox,
+        report_dir=reports,
+        config_dir=config_dir,
+        validation_dir=None,
+        force=True,
+    )
+
+    supply = report["supply_provisioning"]
+    assert report["decision"] == "READY_FOR_ENDPOINT_CONFIGURATION"
+    assert supply["decision"] == "PROVISIONING_PLANNED"
+    assert supply["provider_mutation_enabled"] is False
+    assert supply["plan_source"] == "tuple_candidate_catalog"
+    assert supply["plan_action_count"] == 2
+    assert supply["apply_dry_run"] is True
+    assert report["post_supply_workflow"]["decision"] == "WAITING_FOR_PROVIDER_SUPPLY_APPLY"
+    assert (reports / "rr-supply.supply-provisioning-plan.json").exists()
+    assert (reports / "rr-supply.supply-provisioning-apply.json").exists()
+    assert (reports / "rr-supply.post-supply-workflow.json").exists()
+
+
+def test_admin_auto_supply_apply_triggers_readiness_and_billable_validation(tmp_path, monkeypatch) -> None:
+    config_dir = tmp_path / "config"
+    shutil.copytree("gpucall/config_templates", config_dir)
+    inbox = tmp_path / "inbox"
+    reports = inbox / "reports"
+    reports.mkdir(parents=True)
+    tuple_name = "runpod-vllm-ampere48-qwen2-5-vl-7b-instruct"
+    candidate = next(row for row in load_tuple_candidate_payloads(config_dir) if row["name"] == tuple_name)
+    recipe = yaml.safe_load((config_dir / "recipes" / "vision-image-standard.yml").read_text(encoding="utf-8"))
+    recipe["name"] = "vision-understand-document-image-draft"
+    recipe["auto_select"] = False
+    recipe["quality_floor"] = "draft"
+
+    def fake_apply(plan, *, dry_run=True, now=None, credentials=None):
+        assert dry_run is False
+        return ProviderSupplyProvisioningApplyResult(
+            generated_at="2026-05-23T00:00:00+00:00",
+            dry_run=False,
+            plan_action_count=plan.action_count,
+            applied_count=1,
+            skipped_count=0,
+            failed_count=0,
+            results=[
+                {
+                    "action_id": "endpoint-action",
+                    "action": "create_runpod_serverless_endpoint",
+                    "provider": "runpod",
+                    "resource_type": "endpoint",
+                    "resource_id": "endpoint-created",
+                    "tuple": tuple_name,
+                    "status": "applied",
+                    "response": {"id": "endpoint-created"},
+                    "materialized_config_patch": [
+                        {
+                            "kind": "worker_target",
+                            "config_dir_relative_path": f"workers/{tuple_name}.yml",
+                            "json_pointer": "/target",
+                            "value": "endpoint-created",
+                        }
+                    ],
+                }
+            ],
+        )
+
+    def fake_readiness_report(*, config_dir, recipe, validation_dir, live=False, **kwargs):
+        assert live is True
+        return {
+            "recipes": [
+                {
+                    "recipe": recipe,
+                    "live_ready_tuples": [],
+                    "live_blocked_tuples": [{"tuple": tuple_name, "live_reason": "missing_route_validation_evidence"}],
+                }
+            ]
+        }
+
+    commands = []
+
+    def fake_admin_check(command, *, validation_dir=None, parse_json=False):
+        commands.append(command)
+        if "tuple-smoke" in command:
+            return {
+                "command": command,
+                "returncode": 0,
+                "stdout": json.dumps({"passed": True, "artifact_path": str(tmp_path / "validation-evidence.json")}),
+                "stderr": "",
+                "artifact": {"passed": True, "artifact_path": str(tmp_path / "validation-evidence.json")},
+                "artifact_path": str(tmp_path / "validation-evidence.json"),
+                "passed": True,
+            }
+        return {"command": command, "returncode": 0, "stdout": "", "stderr": ""}
+
+    monkeypatch.setattr("gpucall.recipe_admin.apply_provider_supply_provisioning_plan", fake_apply)
+    monkeypatch.setattr("gpucall.recipe_admin.build_readiness_report", fake_readiness_report)
+    monkeypatch.setattr("gpucall.recipe_admin._run_admin_check", fake_admin_check)
+
+    report = _auto_promotion_report(
+        {
+            "canonical_recipe": recipe,
+            "tuple_candidate_matches": [{"name": tuple_name, "path": candidate["_path"]}],
+        },
+        request_id="rr-supply-apply",
+        automation=RecipeAdminAutomationConfig(
+            recipe_inbox_auto_materialize=True,
+            recipe_inbox_auto_promote_candidates=True,
+            recipe_inbox_auto_provision_supply=True,
+            recipe_inbox_auto_apply_supply=True,
+            recipe_inbox_auto_billable_validation=True,
+            recipe_inbox_auto_validation_budget_usd=0.07,
+        ),
+        inbox_dir=inbox,
+        report_dir=reports,
+        config_dir=config_dir,
+        validation_dir=tmp_path / "tuple-validation",
+        force=True,
+    )
+
+    workflow = report["post_supply_workflow"]
+    worker = yaml.safe_load((Path(report["promotion_config_dir"]) / "workers" / f"{tuple_name}.yml").read_text(encoding="utf-8"))
+    assert workflow["decision"] == "VALIDATED_READY_TO_ACTIVATE"
+    assert worker["target"] == "endpoint-created"
+    assert workflow["validation"]["passed"] is True
+    assert any("tuple-smoke" in command and "0.07" in command for command in commands)
+    assert (reports / "rr-supply-apply.post-supply-readiness.json").exists()
+    assert (reports / "rr-supply-apply.post-supply-validation.json").exists()
 
 
 def test_tuple_candidate_promotion_preserves_runtime_cost_estimates(tmp_path) -> None:

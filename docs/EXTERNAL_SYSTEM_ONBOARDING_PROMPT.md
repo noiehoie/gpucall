@@ -21,6 +21,16 @@ Important boundary for external-system agents:
 - Read only the raw onboarding documents above unless the operator explicitly
   provides a local gpucall checkout for reference.
 - Make code changes only in the external system being migrated.
+- Keep the caller workspace clean. The only implicit local output from
+  `gpucall-migrate` is the caller repo's `.gpucall-migration` directory.
+  Other writes must be operator-explicit: an operator-provided inbox, a neutral
+  `--output-dir`, or `$XDG_STATE_HOME/gpucall` / `$XDG_CACHE_HOME/gpucall` for
+  temporary operator E2E scratch.
+- Do not invent sibling worktrees, clones, latest-pointer files, or
+  provider-observer sandboxes next to the caller repo. Bad automation examples
+  include `gpucall-c-tooling`, `gpucall-panopticon-*`, `gpucall-c-kit-*`,
+  `news-system-*-sandbox`, `news-system-panopticon-e2e-*`, and
+  `news-system-latest-*`.
 - If `gpucall-migrate`, `gpucall-recipe-draft`, or `gpucall_sdk` are not
   already available in the external system's environment, do not fetch the
   gpucall gateway repository. Install only the caller SDK helper from the public
@@ -31,7 +41,7 @@ Important boundary for external-system agents:
 Caller SDK helper wheel:
 
 ```bash
-uv tool install https://github.com/noiehoie/gpucall/releases/download/v2.0.18/gpucall_sdk-2.0.18-py3-none-any.whl
+uv tool install <gpucall-sdk-wheel-url>
 gpucall-recipe-draft --help
 ```
 
@@ -45,7 +55,10 @@ deployment instruction:
   this system or tenant, or the literal placeholder
   `<use-trusted-bootstrap>` when the administrator has explicitly enabled
   trusted bootstrap for this system
-- `<admin-inbox>`: approved local or SSH inbox for sanitized recipe requests
+- `<recipe-request-admin-inbox>`: approved local or SSH inbox for sanitized
+  recipe requests
+- `<quality-feedback-admin-inbox>`: approved local or SSH inbox for sanitized
+  quality feedback
 - `<canary-command>`: smallest representative command for that system
 - `<gpucall-sdk-wheel-url>`: caller SDK helper wheel URL; default is
   `https://github.com/noiehoie/gpucall/releases/download/v2.0.18/gpucall_sdk-2.0.18-py3-none-any.whl`, or an operator-hosted
@@ -221,6 +234,18 @@ gpucall-migrate report . --source <system-name>
 gpucall-migrate onboard . --source <system-name>
 ```
 
+For full onboarding, run the deterministic baseline and contract chain. The
+`--write-intake` step must produce both `.gpucall-migration/recipe-intake.json`
+and `.gpucall-migration/recipe-draft.json`.
+
+```bash
+gpucall-migrate trace . --command "<caller baseline command>" --backend baseline --source <system-name>
+gpucall-migrate profile . --trace .gpucall-migration/workload-trace.json --source <system-name>
+gpucall-migrate draft-contract . --profile .gpucall-migration/workload-profile.json --write-intake --source <system-name>
+test -s .gpucall-migration/recipe-intake.json
+test -s .gpucall-migration/recipe-draft.json
+```
+
 If `gpucall-migrate` is unavailable, do not install the gateway package to get
 it. Treat it as optional and continue with `rg`-based inventory.
 
@@ -288,9 +313,14 @@ gpucall-recipe-draft preflight \
   --content-type text/plain \
   --bytes 8000 \
   --required-model-len 32768 \
-  --remote-inbox <admin-inbox> \
+  --remote-inbox <recipe-request-admin-inbox> \
   --source <system-name>
 ```
+
+The submitted recipe-request bundle must contain a top-level `draft` JSON
+object. `draft: null` is only an intake signal and is not sufficient recipe
+draft evidence. Quality feedback submissions are separate and must not create
+recipe drafts.
 
 If the tool supports only `--context-budget-tokens` instead of
 `--required-model-len`, use the available equivalent. Report the substitution.

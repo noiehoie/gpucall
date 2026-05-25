@@ -15,6 +15,7 @@ from gpucall_recipe_draft.core import (
     intake_from_quality_feedback,
 )
 from gpucall_recipe_draft.submit import build_submission_bundle, parse_remote_inbox, submit_bundle, submit_bundle_to_remote
+from gpucall_migrate.cli import main as migrate_main
 
 
 def test_intake_redacts_sensitive_payload_and_keeps_metadata() -> None:
@@ -237,6 +238,36 @@ def test_recipe_draft_cli_submit(tmp_path, capsys) -> None:
     assert json.loads(Path(output_path).read_text(encoding="utf-8"))["source"] == "caller"
 
 
+def test_recipe_draft_cli_submit_without_draft_auto_generates(tmp_path, capsys) -> None:
+    intake = tmp_path / "intake.json"
+    inbox = tmp_path / "inbox"
+    intake.write_text(
+        json.dumps(
+            {
+                "phase": "deterministic-preflight-intake",
+                "sanitized_request": {
+                    "task": "infer",
+                    "mode": "sync",
+                    "intent": "summarize_text",
+                    "classification": "confidential",
+                    "expected_output": "plain_text",
+                    "desired_capabilities": ["summarization"],
+                    "error": {"context": {"context_budget_tokens": 32768}},
+                },
+                "redaction_report": {"prompt_body_forwarded": False},
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    assert main(["submit", "--intake", str(intake), "--inbox-dir", str(inbox), "--source", "caller"]) == 0
+    submitted = Path(capsys.readouterr().out.strip())
+    data = json.loads(submitted.read_text(encoding="utf-8"))
+
+    assert data["draft"]["phase"] == "draft"
+    assert data["draft"]["proposed_recipe"]["intent"] == "summarize_text"
+
+
 def test_recipe_draft_cli_recipe_status_reads_report(tmp_path, capsys) -> None:
     request_id = "rr-test-recipe"
     reports = tmp_path / "inbox" / "reports"
@@ -270,6 +301,51 @@ def test_recipe_draft_cli_recipe_status_reads_report(tmp_path, capsys) -> None:
         "next_actions": ["run validation"],
         "warnings": [{"check": "tuple_fit", "reason": "validation required"}],
     }
+
+
+def test_sdk_migrate_cli_writes_prompt_required_artifacts(tmp_path) -> None:
+    project = tmp_path / "news-system"
+    project.mkdir()
+    (project / "topic_engine.py").write_text(
+        "def run():\n"
+        "    call_llm('RSS source_articles east_west_gap important news ranking')\n",
+        encoding="utf-8",
+    )
+
+    assert migrate_main(["assess", str(project), "--source", "news-system"]) == 0
+    assert migrate_main(["trace", str(project), "--command", "python -c 'print({\"ok\": True})'", "--backend", "baseline"]) == 0
+    assert migrate_main(["profile", str(project), "--trace", str(project / ".gpucall-migration" / "workload-trace.json")]) == 0
+    assert migrate_main(
+        [
+            "draft-contract",
+            str(project),
+            "--profile",
+            str(project / ".gpucall-migration" / "workload-profile.json"),
+            "--write-intake",
+        ]
+    ) == 0
+    assert migrate_main(["preflight", str(project), "--source", "news-system"]) == 0
+
+    migration = project / ".gpucall-migration"
+    for name in (
+        "assessment.json",
+        "workload-trace.json",
+        "workload-profile.json",
+        "workload-contract.json",
+        "recipe-intake.json",
+        "recipe-draft.json",
+        "recipe-intakes.json",
+        "recipe-drafts.json",
+        "preflight.json",
+    ):
+        assert (migration / name).exists()
+    contract = json.loads((migration / "workload-contract.json").read_text(encoding="utf-8"))
+    draft = json.loads((migration / "recipe-draft.json").read_text(encoding="utf-8"))
+    assert contract["phase"] == "workload-contract"
+    assert contract["workloads"][0]["intent"] == "rank_text_items"
+    assert contract["workloads"][0]["modes"] == ["async"]
+    assert draft["phase"] == "draft"
+    assert draft["proposed_recipe"]["intent"] == "rank_text_items"
 
 
 def test_recipe_draft_cli_quality_status_reads_report(tmp_path, capsys) -> None:
@@ -648,7 +724,11 @@ def test_preflight_normalizes_legacy_topic_ranking_intent() -> None:
     draft = draft_from_intake(intake)
 
     assert intake["sanitized_request"]["intent"] == "rank_text_items"
-    assert intake["sanitized_request"]["desired_capabilities"] == ["instruction_following", "reasoning"]
+    assert intake["sanitized_request"]["desired_capabilities"] == [
+        "instruction_following",
+        "reasoning",
+        "structured_output",
+    ]
     assert draft["proposed_recipe"]["name"] == "infer-rank-text-items-draft"
 
 
@@ -713,6 +793,8 @@ def test_recipe_draft_cli_intake_can_auto_submit(tmp_path, capsys) -> None:
     bundle = json.loads(submitted.read_text(encoding="utf-8"))
     assert bundle["source"] == "caller"
     assert bundle["intake"]["sanitized_request"]["intent"] == "summarize_text"
+    assert bundle["draft"]["phase"] == "draft"
+    assert bundle["draft"]["proposed_recipe"]["intent"] == "summarize_text"
 
 
 def test_recipe_draft_cli_quality_can_auto_submit(tmp_path, capsys) -> None:
@@ -754,6 +836,43 @@ def test_recipe_draft_cli_quality_can_auto_submit(tmp_path, capsys) -> None:
     submitted = Path(captured.err.strip())
 
     assert submitted.exists()
-    intake = json.loads(submitted.read_text(encoding="utf-8"))["intake"]
+    bundle = json.loads(submitted.read_text(encoding="utf-8"))
+    intake = bundle["intake"]
     assert intake["phase"] == "deterministic-quality-feedback-intake"
     assert intake["sanitized_request"]["quality_feedback"]["kind"] == "insufficient_ocr"
+    assert bundle["draft"] is None
+
+
+def test_recipe_draft_cli_preflight_auto_submit_includes_draft(tmp_path, capsys) -> None:
+    inbox = tmp_path / "inbox"
+
+    assert (
+        main(
+            [
+                "preflight",
+                "--task",
+                "infer",
+                "--mode",
+                "sync",
+                "--intent",
+                "translate_text",
+                "--content-type",
+                "text/plain",
+                "--context-budget-tokens",
+                "32768",
+                "--inbox-dir",
+                str(inbox),
+                "--source",
+                "caller",
+            ]
+        )
+        == 0
+    )
+    captured = capsys.readouterr()
+    submitted = Path(captured.err.strip())
+
+    assert submitted.exists()
+    bundle = json.loads(submitted.read_text(encoding="utf-8"))
+    assert bundle["intake"]["phase"] == "deterministic-preflight-intake"
+    assert bundle["draft"]["phase"] == "draft"
+    assert bundle["draft"]["proposed_recipe"]["intent"] == "translate_text"

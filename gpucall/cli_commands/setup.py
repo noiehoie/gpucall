@@ -16,7 +16,8 @@ from gpucall.admin_automation import admin_automation_summary, configure_admin_a
 from gpucall.config import ConfigError, default_config_dir, load_admin_automation, load_config, load_object_store
 from gpucall.credentials import configured_credentials, credentials_path, load_credentials, save_credentials
 from gpucall.domain import ApiKeyHandoffMode
-from gpucall.handoff import handoff_payload
+from gpucall.handoff import _default_quality_feedback_inbox
+from gpucall.handoff_package import caller_ai_onboarding_prompt, build_handoff_contract, write_handoff_package
 from gpucall.release import ONBOARDING_MANUAL_URL, ONBOARDING_PROMPT_URL, SDK_WHEEL_URL
 
 
@@ -79,7 +80,10 @@ class SetupRecipeAutomation(BaseModel):
     auto_validate_existing_tuples: bool = False
     auto_activate_existing_validated_recipe: bool = False
     auto_promote_candidates: bool = False
+    auto_provision_supply: bool = False
+    auto_apply_supply: bool = False
     auto_billable_validation: bool = False
+    auto_validation_budget_usd: float = 0.10
     auto_activate_validated: bool = False
     auto_require_auto_select_safe: bool = True
     auto_set_auto_select: bool = False
@@ -91,6 +95,10 @@ class SetupRecipeAutomation(BaseModel):
     def validate_recipe_automation_chain(self) -> "SetupRecipeAutomation":
         if self.auto_promote_candidates and not self.auto_materialize:
             raise ValueError("auto_promote_candidates requires auto_materialize")
+        if self.auto_provision_supply and not self.auto_promote_candidates:
+            raise ValueError("auto_provision_supply requires auto_promote_candidates")
+        if self.auto_apply_supply and not self.auto_provision_supply:
+            raise ValueError("auto_apply_supply requires auto_provision_supply")
         if self.auto_validate_existing_tuples and not self.auto_materialize:
             raise ValueError("auto_validate_existing_tuples requires auto_materialize")
         if self.auto_activate_existing_validated_recipe and not self.auto_validate_existing_tuples:
@@ -153,10 +161,6 @@ class SetupPlan(BaseModel):
                 continue
             if provider.credentials is None:
                 raise ValueError(f"provider {name} requires credentials.source")
-            if name == "modal" and provider.credentials.source != "official_cli":
-                raise ValueError("modal requires credentials.source: official_cli")
-            if name == "runpod" and not provider.endpoint_id:
-                raise ValueError("runpod requires endpoint_id")
             if name == "hyperstack" and not provider.ssh_key_path and provider.credentials.source == "prompt":
                 raise ValueError("hyperstack prompt setup requires ssh_key_path")
         if self.object_store is not None:
@@ -187,15 +191,16 @@ Common commands:
   gpucall setup apply --file gpucall.setup.yml --dry-run
   gpucall setup apply --file gpucall.setup.yml --yes
   gpucall setup export-handoff-prompt --system-name example-system
+  gpucall setup export-handoff-package --system-name example-system --output-dir handoff/example-system
 """,
     )
     parser.add_argument(
         "action",
         nargs="?",
         metavar="action",
-        choices=["status", "next", "section", "apply", "export-handoff-prompt"],
+        choices=["status", "next", "section", "apply", "export-handoff-prompt", "export-handoff-package"],
         default=None,
-        help="status, next, section, apply, or export-handoff-prompt",
+        help="status, next, section, apply, export-handoff-prompt, or export-handoff-package",
     )
     parser.add_argument(
         "section_name",
@@ -210,6 +215,7 @@ Common commands:
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--yes", action="store_true")
     parser.add_argument("--system-name", default=None)
+    parser.add_argument("--output-dir", type=Path, default=None)
     return parser
 
 
@@ -241,6 +247,13 @@ def run_setup_command(args: argparse.Namespace) -> None:
         if not args.system_name:
             raise SystemExit("setup export-handoff-prompt requires --system-name")
         print(export_handoff_prompt(args.config_dir, args.system_name))
+        return
+    if action == "export-handoff-package":
+        if not args.system_name:
+            raise SystemExit("setup export-handoff-package requires --system-name")
+        if args.output_dir is None:
+            raise SystemExit("setup export-handoff-package requires --output-dir")
+        print(yaml.safe_dump(export_handoff_package(args.config_dir, args.system_name, args.output_dir), sort_keys=False))
         return
     raise SystemExit(f"unknown setup action: {action}")
 
@@ -289,7 +302,7 @@ def interactive_setup(config_dir: Path, *, profile: str | None = None) -> None:
         _write_setup_profile(config_dir, selected_profile)
     while True:
         print()
-        print(setup_status_text(config_dir, profile=selected_profile))
+        print(setup_status_text(config_dir, profile=selected_profile, include_menu=True))
         try:
             raw = input("\nSelect section, b for back, q to quit: ").strip().lower()
         except EOFError:
@@ -312,14 +325,20 @@ def interactive_setup(config_dir: Path, *, profile: str | None = None) -> None:
             return
 
 
-def setup_status_text(config_dir: Path, *, profile: str | None = None) -> str:
+def setup_status_text(config_dir: Path, *, profile: str | None = None, include_menu: bool = False) -> str:
     status = _setup_status(config_dir, profile=profile)
     required = "\n".join(f"  [{item['state']}] {item['label']}" for item in status["required"])
     recommended = "\n".join(f"  [{item['state']}] {item['label']}" for item in status["recommended"])
-    return (
+    text = (
         f"Profile: {status['profile']}\n\n"
         f"Required:\n{required}\n\n"
-        f"Recommended:\n{recommended}\n\n"
+        f"Recommended:\n{recommended}"
+    )
+    if not include_menu:
+        return text + "\n\nRun:\n  gpucall setup next\n  gpucall setup section <section>"
+    return (
+        text
+        + "\n\n"
         "Choose section:\n\n"
         "  1. Operating profile\n"
         "  2. Gateway URL and caller auth\n"
@@ -415,7 +434,10 @@ def setup_section_text(config_dir: Path, section: str, *, profile: str | None = 
             f"Auto validate existing tuples: {automation['recipe_inbox_auto_validate_existing_tuples']}\n"
             f"Auto activate existing validated recipes: {automation['recipe_inbox_auto_activate_existing_validated_recipe']}\n"
             f"Auto prepare tuple promotion workspace: {automation['recipe_inbox_auto_promote_candidates']}\n"
+            f"Auto plan provider supply: {automation['recipe_inbox_auto_provision_supply']}\n"
+            f"Auto apply provider supply: {automation['recipe_inbox_auto_apply_supply']}\n"
             f"Auto run billable validation: {automation['recipe_inbox_auto_billable_validation']}\n"
+            f"Auto validation budget USD: {automation['recipe_inbox_auto_validation_budget_usd']}\n"
             f"Auto activate validated tuples: {automation['recipe_inbox_auto_activate_validated']}\n"
             f"Auto set recipe auto_select: {automation['recipe_inbox_auto_set_auto_select']}\n"
             f"Promotion work dir: {automation['recipe_inbox_promotion_work_dir'] or '<default inbox/promotions>'}\n\n"
@@ -464,41 +486,18 @@ def apply_setup_plan(config_dir: Path, plan_path: Path, *, dry_run: bool, yes: b
     _apply_providers(config_dir, plan)
     _apply_object_store(config_dir, plan)
     _apply_tenant_onboarding(config_dir, plan)
+    _maybe_create_local_inboxes(plan.tenant_onboarding.recipe_inbox)
     _write_setup_state(config_dir, plan)
     post_checks = _post_apply_checks(config_dir, plan)
     return report + "\nApplied setup plan.\n\n" + post_checks + "\n\n" + setup_status_text(config_dir, profile=plan.profile)
 
 
 def export_handoff_prompt(config_dir: Path, system_name: str) -> str:
-    automation = load_admin_automation(config_dir)
-    gateway_url = automation.api_key_bootstrap_gateway_url or "<GPUCALL_BASE_URL>"
-    recipe_inbox = automation.api_key_bootstrap_recipe_inbox or "<GPUCALL_RECIPE_INBOX>"
-    onboarding_prompt_url = automation.onboarding_prompt_url or ONBOARDING_PROMPT_URL
-    onboarding_manual_url = automation.onboarding_manual_url or ONBOARDING_MANUAL_URL
-    sdk_wheel_url = automation.caller_sdk_wheel_url or SDK_WHEEL_URL
-    return f"""You are adapting this system to gpucall.
+    return caller_ai_onboarding_prompt(build_handoff_contract(config_dir, system_name, require_concrete=False))
 
-System name: {system_name}
 
-Use the gpucall onboarding documents:
-  {onboarding_prompt_url}
-  {onboarding_manual_url}
-
-Gateway:
-  GPUCALL_BASE_URL={gateway_url}
-  Bootstrap endpoint={gateway_url}/v2/bootstrap/tenant-key
-  Recipe inbox={recipe_inbox}
-  SDK helper wheel={sdk_wheel_url}
-
-Rules:
-  - Do not clone, install, modify, or vendor the gpucall gateway repository.
-  - Work only in this external system's repository.
-  - Obtain a tenant key through trusted bootstrap if enabled.
-  - Do not ask for provider credentials.
-  - Do not choose providers, GPUs, models, recipes, or tuples in application code.
-  - Submit preflight intake for unknown workloads before live canary.
-  - Final status must be Go or No-Go; skipped canary is No-Go.
-"""
+def export_handoff_package(config_dir: Path, system_name: str, output_dir: Path) -> dict[str, Any]:
+    return write_handoff_package(config_dir, system_name, output_dir)
 
 
 def _setup_status(config_dir: Path, *, profile: str | None) -> dict[str, Any]:
@@ -521,7 +520,7 @@ def _setup_status(config_dir: Path, *, profile: str | None) -> dict[str, Any]:
     else:
         providers = {
             "local": "ok" if "local-echo" in config.tuples else "missing",
-            "modal": "ok" if "sdk_profile:modal" in configured else "missing",
+            "modal": "ok" if {"token_pair:modal", "sdk_profile:modal"}.intersection(configured) else "missing",
             "runpod": "ok" if "api_key:runpod" in configured else "missing",
             "hyperstack": "ok" if {"api_key:hyperstack", "ssh_key:hyperstack"}.issubset(configured) else "missing",
         }
@@ -685,8 +684,11 @@ def _planned_changes(config_dir: Path, plan: SetupPlan) -> list[str]:
         changes.append(str(config_dir / "admin.yml") + " recipe_automation")
     if plan.handoff_assets != SetupHandoffAssets():
         changes.append(str(config_dir / "admin.yml") + " handoff_assets")
-    if plan.providers.get("runpod", SetupProvider()).enabled:
+    runpod = plan.providers.get("runpod", SetupProvider())
+    if runpod.enabled and runpod.endpoint_id:
         changes.append(str(config_dir / "surfaces" / "runpod-vllm-serverless.yml"))
+    elif runpod.enabled:
+        changes.append("provider account: runpod (endpoint provisioning pending)")
     credential_targets: list[str] = []
     if plan.gateway.caller_auth.mode == "generated_gateway_key":
         credential_targets.append("auth")
@@ -715,6 +717,8 @@ def _setup_plan_warnings(config_dir: Path, plan: SetupPlan) -> list[str]:
             missing = sorted(required.difference(configured))
             if missing:
                 warnings.append(f"{name} credentials.source=gpucall_credentials but missing: {', '.join(missing)}")
+        if name == "runpod" and not provider.endpoint_id:
+            warnings.append("runpod endpoint_id omitted; provider account will be connected, endpoint provisioning remains pending")
     if plan.object_store and plan.object_store.credentials and plan.object_store.credentials.source == "gpucall_credentials":
         if "object_store:s3" not in configured:
             warnings.append("object_store credentials.source=gpucall_credentials but object_store:s3 is missing")
@@ -779,6 +783,14 @@ def _apply_providers(config_dir: Path, plan: SetupPlan) -> None:
         if provider.credentials.source == "prompt":
             if name == "runpod":
                 save_credentials("runpod", {"api_key": getpass.getpass("RunPod API key: ").strip()})
+            if name == "modal":
+                token_id = input("Modal token ID: ").strip()
+                token_secret = getpass.getpass("Modal token secret: ").strip()
+                environment = input("Modal environment (optional, default main): ").strip()
+                values = {"token_id": token_id, "token_secret": token_secret}
+                if environment:
+                    values["environment"] = environment
+                save_credentials("modal", values)
             if name == "hyperstack":
                 save_credentials("hyperstack", {"api_key": getpass.getpass("Hyperstack API key: ").strip(), "ssh_key_path": provider.ssh_key_path or ""})
         if name == "runpod" and provider.endpoint_id:
@@ -817,7 +829,10 @@ def _apply_tenant_onboarding(config_dir: Path, plan: SetupPlan) -> None:
         recipe_inbox_auto_validate_existing_tuples=plan.recipe_automation.auto_validate_existing_tuples,
         recipe_inbox_auto_activate_existing_validated_recipe=plan.recipe_automation.auto_activate_existing_validated_recipe,
         recipe_inbox_auto_promote_candidates=plan.recipe_automation.auto_promote_candidates,
+        recipe_inbox_auto_provision_supply=plan.recipe_automation.auto_provision_supply,
+        recipe_inbox_auto_apply_supply=plan.recipe_automation.auto_apply_supply,
         recipe_inbox_auto_billable_validation=plan.recipe_automation.auto_billable_validation,
+        recipe_inbox_auto_validation_budget_usd=plan.recipe_automation.auto_validation_budget_usd,
         recipe_inbox_auto_activate_validated=plan.recipe_automation.auto_activate_validated,
         recipe_inbox_auto_require_auto_select_safe=plan.recipe_automation.auto_require_auto_select_safe,
         recipe_inbox_auto_set_auto_select=plan.recipe_automation.auto_set_auto_select,
@@ -829,6 +844,30 @@ def _apply_tenant_onboarding(config_dir: Path, plan: SetupPlan) -> None:
         caller_sdk_wheel_url=plan.handoff_assets.caller_sdk_wheel_url,
         clear_bootstrap_allowlist=plan.tenant_onboarding.mode is not ApiKeyHandoffMode.TRUSTED_BOOTSTRAP,
     )
+
+
+def _maybe_create_local_inboxes(recipe_inbox: str | None) -> None:
+    recipe_path = _local_path_from_inbox_spec(recipe_inbox)
+    if recipe_path is None:
+        return
+    quality_path = Path(_default_quality_feedback_inbox(str(recipe_path)))
+    for path in (recipe_path, quality_path):
+        path.mkdir(parents=True, exist_ok=True)
+        path.chmod(0o700)
+
+
+def _local_path_from_inbox_spec(value: str | None) -> Path | None:
+    if not value:
+        return None
+    text = value.strip()
+    if text.startswith("file://"):
+        return Path(text[7:]).expanduser()
+    if "@" in text.split(":", 1)[0]:
+        return None
+    if ":" in text and not text.startswith("/"):
+        return None
+    path = Path(text).expanduser()
+    return path if path.is_absolute() else None
 
 
 def _write_setup_state(config_dir: Path, plan: SetupPlan) -> None:
@@ -900,7 +939,7 @@ def _provider_contracts(name: str) -> set[str]:
     if name == "hyperstack":
         return {"api_key:hyperstack", "ssh_key:hyperstack"}
     if name == "modal":
-        return {"sdk_profile:modal"}
+        return {"token_pair:modal"}
     return set()
 
 

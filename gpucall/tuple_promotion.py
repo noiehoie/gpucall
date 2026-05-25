@@ -56,7 +56,7 @@ def promote_production_tuple(
     recipe_path = _write_yaml_guarded(promotion_config / "recipes" / f"{recipe['name']}.yml", recipe, force=force)
     tuple_path = _write_yaml_guarded(promotion_config / "tuples" / f"{tuple['name']}.yml", tuple, force=force)
     surface_path, worker_path = _write_split_tuple(promotion_config, tuple, force=force)
-    validation_mode = _validation_mode(recipe["name"], promotion_config)
+    validation_mode = _validation_mode_from_recipe_payload(recipe)
     promotion_report: dict[str, Any] = {
         "schema_version": 1,
         "phase": "tuple-candidate-promotion",
@@ -356,6 +356,17 @@ def _validation_mode(recipe: str, config_dir: Path) -> str:
     return recipe_spec.allowed_modes[0].value
 
 
+def _validation_mode_from_recipe_payload(recipe: Mapping[str, Any]) -> str:
+    modes = recipe.get("allowed_modes")
+    if isinstance(modes, list):
+        values = [str(mode) for mode in modes if str(mode)]
+        if "sync" in values:
+            return "sync"
+        if values:
+            return values[0]
+    return "sync"
+
+
 def _run_tuple_validation(
     tuple: str,
     recipe: str,
@@ -385,13 +396,6 @@ def _run_tuple_validation(
     credentials = config_dir / "credentials.yml"
     if credentials.exists() and not env.get("GPUCALL_CREDENTIALS"):
         env["GPUCALL_CREDENTIALS"] = str(credentials)
-    modal_config = config_dir / ".modal.toml"
-    if not env.get("MODAL_CONFIG_PATH"):
-        explicit_modal = env.get("GPUCALL_MODAL_CONFIG_FILE")
-        if explicit_modal:
-            env["MODAL_CONFIG_PATH"] = explicit_modal
-        elif modal_config.exists() and modal_config.stat().st_size > 0:
-            env["MODAL_CONFIG_PATH"] = str(modal_config)
     if validation_dir is not None:
         state_dir = Path(validation_dir).expanduser().parent
         env["GPUCALL_STATE_DIR"] = str(state_dir)

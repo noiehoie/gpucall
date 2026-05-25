@@ -77,6 +77,68 @@ directly in the provider endpoint inventory. When RunPod credentials are
 configured, live audit also rejects unmanaged RunPod endpoints with warm workers
 even when no active gpucall tuple points at that endpoint.
 
+Provider Panopticon remediation is policy-driven. The gateway can always exclude
+blocked tuples from routing, but provider-side changes are generated as an
+explicit plan before any mutation:
+
+```yaml
+panopticon_remediation:
+  exclude_from_routing:
+    mode: auto
+  scale_workers_min_to_zero:
+    mode: approval_required
+  delete_endpoint:
+    mode: approval_required
+  delete_network_volume:
+    mode: approval_required
+```
+
+`gpucall panopticon plan` emits a strict JSON remediation plan from the current
+snapshot. `gpucall panopticon apply <plan.json>` is a dry-run unless `--yes` is
+provided. In v2, the only supported provider mutation is RunPod Serverless
+`workersMin -> 0`; endpoint and network-volume deletion can appear in the plan
+but is not executed by apply.
+
+Provider supply provisioning is a separate plan/apply surface. It creates the
+missing provider-side supply for a reviewed tuple or tuple candidate; it does
+not run generation smoke and it does not silently activate production routing.
+
+```bash
+gpucall panopticon provision-plan \
+  --config-dir config \
+  --tuple runpod-vllm-ampere48-qwen2-5-vl-7b-instruct \
+  --output-json supply-plan.json
+
+gpucall panopticon provision-apply supply-plan.json          # dry-run
+gpucall panopticon provision-apply supply-plan.json --yes    # provider mutation
+```
+
+`provision-plan` accepts either `--tuple`, `--candidate`, or
+`--review-json`. Review JSON is the `gpucall-recipe-admin review` output; when
+no candidate is named, the first `tuple_candidate_matches` entry is selected.
+If `--template-id` is supplied, the plan creates only the RunPod endpoint. If no
+template id is supplied, the plan first creates a private RunPod Serverless
+template from the tuple image and worker environment, then creates the endpoint
+from that returned template id. The endpoint request defaults to `workersMin:
+0`, `workersMax: 1`, `computeType: GPU`, and the RunPod REST `gpuTypeIds`
+derived from the tuple GPU family. Warm workers are blocked unless the
+`provider_supply_provisioning` policy explicitly permits them:
+
+```yaml
+provider_supply_provisioning:
+  create_runpod_serverless_endpoint:
+    mode: approval_required
+    default_workers_min: 0
+    default_workers_max: 1
+    max_workers_max: 3
+    allow_warm_workers: false
+```
+
+After a successful endpoint create, `provision-apply` returns a materialized
+config patch for the worker `target`. Operators should apply that patch only
+after `/health`, `/models`, Panopticon readiness, and validation evidence pass
+for the exact tuple.
+
 For OpenAI-compatible LLM traffic, prefer `runpod-vllm-*`. Use
 `runpod-native-*` when a gpucall worker must fetch DataRefs, return
 `gpucall-tuple-result`, or implement behavior that the official worker-vLLM

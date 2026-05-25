@@ -5,13 +5,16 @@ try:
 except ModuleNotFoundError:
     CAPABILITY_BY_INTENT: dict[str, tuple[str, ...]] = {
         "answer_question_about_image": ("visual_question_answering", "instruction_following"),
+        "author_recipe": ("instruction_following",),
         "caption_image": ("image_captioning",),
         "convert_document": ("document_conversion",),
         "extra_large_context_text_inference": ("instruction_following",),
         "extract_json": ("structured_output",),
         "fine_tune_lora": ("lora_training",),
         "large_context_text_inference": ("instruction_following",),
-        "rank_text_items": ("instruction_following", "reasoning"),
+        "pairwise_match": ("instruction_following", "reasoning", "structured_output"),
+        "rank_text_items": ("instruction_following", "reasoning", "structured_output"),
+        "rss_semantic_match": ("instruction_following", "reasoning", "structured_output"),
         "short_text_inference": ("instruction_following",),
         "smoke_test": ("instruction_following",),
         "split_infer_activation": ("split_inference",),
@@ -28,6 +31,13 @@ except ModuleNotFoundError:
     }
 
     INTENT_ALIASES: dict[str, str] = {
+        "article_match": "rss_semantic_match",
+        "pair_match": "pairwise_match",
+        "pairwise_similarity": "pairwise_match",
+        "rss_match": "rss_semantic_match",
+        "semantic_match": "rss_semantic_match",
+        "semantic_rss_match": "rss_semantic_match",
+        "short_pairwise_similarity": "pairwise_match",
         "topic_ranking": "rank_text_items",
         "rank_topics": "rank_text_items",
     }
