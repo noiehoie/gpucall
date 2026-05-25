@@ -15,10 +15,15 @@ from gpucall.config import load_config
 from gpucall.credentials import load_credentials
 from gpucall.domain import ExecutionTupleSpec, Policy, RemediationMode
 from gpucall.execution_surfaces.managed_endpoint import RUNPOD_REST_API_BASE, json_or_error, requests_session
+from gpucall.provider_contracts import CLOUD_PROVIDER_FAMILIES
 from gpucall.targeting import is_configured_target
 from gpucall.tuple_promotion import _tuple_from_candidate
 
 
+SUPPORTED_SUPPLY_PROVISIONING_PROVIDERS = ("runpod",)
+UNSUPPORTED_SUPPLY_PROVISIONING_PROVIDERS = tuple(
+    provider for provider in CLOUD_PROVIDER_FAMILIES if provider not in SUPPORTED_SUPPLY_PROVISIONING_PROVIDERS
+)
 SupplyProvisioningActionName = Literal["create_runpod_template", "create_runpod_serverless_endpoint"]
 SupplyProvisioningResourceType = Literal["template", "endpoint"]
 SupplyProvisioningProvider = Literal["runpod"]

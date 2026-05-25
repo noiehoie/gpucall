@@ -1,6 +1,6 @@
 # Codex CLI Phase 1: Release Gates / Production No-Go Diagnostics
 
-Worktree: `/Users/tamotsu/Projects/gpucall`
+Worktree: `<gpucall-checkout>`
 Branch: `codex/rc-audit-product-static-conditional-go`
 
 This is an implementation phase, but it is intentionally narrow. Improve

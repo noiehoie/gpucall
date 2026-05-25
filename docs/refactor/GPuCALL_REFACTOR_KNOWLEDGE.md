@@ -39,17 +39,17 @@ Use this file as the detailed background map after the short packets are read.
 The agreed external-system hardening loop is:
 
 ```text
-news-system production canary
+example-caller production canary
   -> classify observed failure
   -> fix generic gpucall contract, usually YAML first
   -> validate locally and on production gateway
   -> rerun external canary
 ```
 
-`news-system` is a valuable first canary because it exercises many GPU workload
+`example-caller` is a valuable first canary because it exercises many GPU workload
 shapes, including text, vision, DataRef, long-running, and production scheduling
 paths. It is not the owner of gpucall's product contract. Do not introduce
-`news-system`-specific behavior, newspaper-specific assumptions, local macmini
+`example-caller`-specific behavior, newspaper-specific assumptions, local caller-host
 paths, OCR-only shortcuts, or caller-specific branches into gpucall.
 
 When the canary fails, prefer the least product-distorting fix surface:
@@ -70,7 +70,7 @@ Every canary-driven change must pass the product-philosophy check:
 - OpenAI entrance semantics remain separated from governance semantics
 - provider differences remain contained behind provider egress contracts
 - DataRef, budget, tenant, validation, and audit guarantees are not weakened
-- the change benefits at least one non-`news-system` external caller class, or
+- the change benefits at least one non-`example-caller` external caller class, or
   it belongs in caller-side integration instead of gpucall
 
 The larger product ambition is to make gpucall a broadly useful, honest,
@@ -85,7 +85,7 @@ for one workload.
 The line-level index is stored locally at:
 
 ```text
-/Users/tamotsu/Projects/gpucall/.state/refactor_knowledge/gpucall_refactor_knowledge.sqlite
+<gpucall-checkout>/.state/refactor_knowledge/gpucall_refactor_knowledge.sqlite
 ```
 
 Indexed scope:

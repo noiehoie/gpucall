@@ -25,13 +25,13 @@ tenant_onboarding:
 handoff_assets:
   onboarding_prompt_url: https://assets.example/docs/prompt.md
   onboarding_manual_url: https://assets.example/docs/manual.md
-  caller_sdk_wheel_url: https://assets.example/sdk/gpucall_sdk-2.0.18-py3-none-any.whl
+  caller_sdk_wheel_url: https://assets.example/sdk/gpucall_sdk-2.0.19-py3-none-any.whl
 """.lstrip(),
         encoding="utf-8",
     )
     apply_setup_plan(config_dir, plan, dry_run=False, yes=True)
 
-    package = build_handoff_package(config_dir, "news-system")
+    package = build_handoff_package(config_dir, "example-caller")
 
     assert package["phase"] == "gpucall-caller-handoff-package"
     assert package["checklist"]["prompt_quality"]["go"] is True
@@ -73,12 +73,12 @@ tenant_onboarding:
     - 10.0.0.42/32
   recipe_inbox: {recipe_inbox}
 handoff_assets:
-  caller_sdk_wheel_url: https://assets.example/TODO/gpucall_sdk-2.0.18-py3-none-any.whl
+  caller_sdk_wheel_url: https://assets.example/TODO/gpucall_sdk-2.0.19-py3-none-any.whl
 """.lstrip(),
         encoding="utf-8",
     )
     apply_setup_plan(config_dir, plan, dry_run=False, yes=True)
-    package = build_handoff_package(config_dir, "news-system")
+    package = build_handoff_package(config_dir, "example-caller")
 
     assert package["checklist"]["prompt_quality"]["go"] is True
     assert package["checklist"]["human_readme_quality"]["go"] is True
@@ -109,9 +109,9 @@ tenant_onboarding:
         encoding="utf-8",
     )
     apply_setup_plan(config_dir, plan, dry_run=False, yes=True)
-    output = tmp_path / "handoff" / "news-system"
+    output = tmp_path / "handoff" / "example-caller"
 
-    report = write_handoff_package(config_dir, "news-system", output)
+    report = write_handoff_package(config_dir, "example-caller", output)
 
     assert report["files"] == [
         "CALLER_ENGINEER_README.md",
@@ -155,7 +155,7 @@ tenant_onboarding:
         encoding="utf-8",
     )
     apply_setup_plan(config_dir, plan, dry_run=False, yes=True)
-    output = tmp_path / "handoff" / "news-system"
+    output = tmp_path / "handoff" / "example-caller"
     monkeypatch.setattr(
         sys,
         "argv",
@@ -166,7 +166,7 @@ tenant_onboarding:
             "--config-dir",
             str(config_dir),
             "--system-name",
-            "news-system",
+            "example-caller",
             "--output-dir",
             str(output),
         ],

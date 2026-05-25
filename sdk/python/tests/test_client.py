@@ -512,7 +512,7 @@ def test_contract_drift_failure_auto_submits_sanitized_recipe_intake(tmp_path) -
         "http://gpucall.test",
         transport=httpx.MockTransport(handler),
         recipe_inbox_dir=inbox,
-        recipe_intake_source="news-system",
+        recipe_intake_source="example-caller",
     )
 
     with pytest.raises(GPUCallNoRecipeError) as exc_info:
@@ -521,7 +521,7 @@ def test_contract_drift_failure_auto_submits_sanitized_recipe_intake(tmp_path) -
     submissions = exc_info.value.recipe_intake_submissions
     assert len(submissions) == 1
     bundle = json.loads(Path(submissions[0]).read_text(encoding="utf-8"))
-    assert bundle["source"] == "news-system"
+    assert bundle["source"] == "example-caller"
     sanitized = bundle["intake"]["sanitized_request"]
     assert sanitized["task"] == "infer"
     assert sanitized["intent"] == "summarize_text"

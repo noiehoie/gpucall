@@ -109,7 +109,7 @@ sanitized caller intake
 
 ## External Canary Discipline
 
-`news-system` is the first representative external canary, not a
+`example-caller` is the first representative external canary, not a
 product-specific contract owner. It is useful because its GPU workload shape is
 broad. It must not become a hidden gpucall requirement.
 
@@ -118,7 +118,7 @@ broad. It must not become a hidden gpucall requirement.
 The following exchange is a product-level constraint, not a casual observation:
 
 ```text
-Q: Did it take 7h 55m 33s of agent work before the news-system pipeline could
+Q: Did it take 7h 55m 33s of agent work before the example-caller pipeline could
    complete against gpucall without errors?
 A: Yes.
 
@@ -143,25 +143,25 @@ Implication:
 Normalized work classes:
 
 - A: gpucall runtime plus baseline recipe/catalog defects discovered during the
-  news-system canary. Treat the known A set as fixed after the audit/product
+  example-caller canary. Treat the known A set as fixed after the audit/product
   hardening work.
 - B: external-system adaptation work that becomes visible only when a real
   caller tries to migrate.
 - C: the deterministic onboarding / workload contract kit. C must compress B
   from hand-driven agent work into a mostly deterministic product workflow.
 
-The C validation baseline is not the current news-system production tree. It is
-the pre-gpucall worktree on macmini at:
+The C validation baseline is not the current example-caller production tree. It is
+the pre-gpucall worktree on caller-host at:
 
-- Reference baseline: `/Users/admin/Developer/news-system-pre-gpucall`
-- C onboarding sandbox: `/Users/admin/Developer/news-system-c-onboarding`
+- Reference baseline: `<caller-host>/path/to/pre-gpucall-caller`
+- C onboarding sandbox: `<caller-host>/path/to/caller-onboarding`
 - Baseline commit: `73cbbd1` (`fix: unload Ollama model after pipeline on
   fallback path`)
 
 These trees must be used to test whether C can onboard a first-time external
 system without relying on the already-modified production checkout.
 
-When a `news-system` canary exposes a failure, classify and fix it through
+When a `example-caller` canary exposes a failure, classify and fix it through
 generic gpucall contracts before touching runtime logic:
 
 1. caller request / SDK / OpenAI-compatible usage
@@ -174,17 +174,17 @@ generic gpucall contracts before touching runtime logic:
 Before accepting any change, answer:
 
 - Does this preserve deterministic routing and fail-closed behavior?
-- Does this avoid `news-system`-specific names, newspaper concepts, file paths,
+- Does this avoid `example-caller`-specific names, newspaper concepts, file paths,
   OCR shortcuts, or caller-specific branches?
 - Is the fix expressed as a reusable contract rather than a one-off exception?
-- Which non-`news-system` external caller class benefits from this change?
+- Which non-`example-caller` external caller class benefits from this change?
 - If no other caller benefits, should the change stay in the caller-side
   integration instead of gpucall?
 
 Product ambition matters. Canary pressure must sharpen gpucall into a generally
 useful GPU governance router capable of a stable, lightweight v3 with TEE,
 sovereignty, KMS, and encrypted artifact guarantees. It must not distort the
-gateway into a `news-system` adapter.
+gateway into a `example-caller` adapter.
 
 ## Required Work Protocol
 

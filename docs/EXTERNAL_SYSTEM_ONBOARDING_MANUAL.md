@@ -39,7 +39,7 @@ External systems do not need to clone the gpucall gateway repository. The
 caller-side helper is distributed as the SDK wheel:
 
 ```bash
-uv tool install https://github.com/noiehoie/gpucall/releases/download/v2.0.18/gpucall_sdk-2.0.18-py3-none-any.whl
+uv tool install https://github.com/noiehoie/gpucall/releases/download/v2.0.19/gpucall_sdk-2.0.19-py3-none-any.whl
 gpucall-recipe-draft --help
 ```
 
@@ -64,8 +64,8 @@ or `$XDG_CACHE_HOME/gpucall`.
 
 Onboarding automation must not invent sibling clones, latest-pointer files, or
 observer sandboxes next to the caller repo. Names such as `gpucall-c-tooling`,
-`gpucall-panopticon-*`, `gpucall-c-kit-*`, `news-system-*-sandbox`,
-`news-system-panopticon-e2e-*`, and `news-system-latest-*` are not product
+`gpucall-panopticon-*`, `gpucall-c-kit-*`, `example-caller-*-sandbox`,
+`example-caller-panopticon-e2e-*`, and `example-caller-latest-*` are not product
 artifacts. If an operator E2E needs an isolated sandbox, create it under XDG
 gpucall state/cache and remove it after preserving a bounded manifest.
 

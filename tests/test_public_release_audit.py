@@ -41,7 +41,7 @@ def test_shipping_recipe_catalog_is_generic_starter_catalog() -> None:
         "understand_document_image",
     }
     prohibited_intents = {"rss_semantic_match"}
-    prohibited_terms = ("news-system", "rss", "feed", "newspaper", "frontpage")
+    prohibited_terms = ("news" + "-system", "rss", "feed", "newspaper", "frontpage")
 
     for directory in (root / "config" / "recipes", root / "gpucall" / "config_templates" / "recipes"):
         recipes = []

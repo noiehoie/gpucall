@@ -29,8 +29,8 @@ Important boundary for external-system agents:
 - Do not invent sibling worktrees, clones, latest-pointer files, or
   provider-observer sandboxes next to the caller repo. Bad automation examples
   include `gpucall-c-tooling`, `gpucall-panopticon-*`, `gpucall-c-kit-*`,
-  `news-system-*-sandbox`, `news-system-panopticon-e2e-*`, and
-  `news-system-latest-*`.
+  `example-caller-*-sandbox`, `example-caller-panopticon-e2e-*`, and
+  `example-caller-latest-*`.
 - If `gpucall-migrate`, `gpucall-recipe-draft`, or `gpucall_sdk` are not
   already available in the external system's environment, do not fetch the
   gpucall gateway repository. Install only the caller SDK helper from the public
@@ -61,7 +61,7 @@ deployment instruction:
   quality feedback
 - `<canary-command>`: smallest representative command for that system
 - `<gpucall-sdk-wheel-url>`: caller SDK helper wheel URL; default is
-  `https://github.com/noiehoie/gpucall/releases/download/v2.0.18/gpucall_sdk-2.0.18-py3-none-any.whl`, or an operator-hosted
+  `https://github.com/noiehoie/gpucall/releases/download/v2.0.19/gpucall_sdk-2.0.19-py3-none-any.whl`, or an operator-hosted
   mirror for the installed environment
 
 Strict acceptance rule:

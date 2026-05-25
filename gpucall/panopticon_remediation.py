@@ -13,8 +13,13 @@ from gpucall.credentials import load_credentials
 from gpucall.domain import PanopticonRemediationActionPolicy, PanopticonRemediationPolicy, Policy, RemediationMode
 from gpucall.execution_surfaces.managed_endpoint import RUNPOD_REST_API_BASE, json_or_error, requests_session
 from gpucall.panopticon import default_panopticon_path, load_panopticon_evidence
+from gpucall.provider_contracts import CLOUD_PROVIDER_FAMILIES
 
 
+SUPPORTED_PROVIDER_MUTATION_REMEDIATION_PROVIDERS = ("runpod",)
+UNSUPPORTED_PROVIDER_MUTATION_REMEDIATION_PROVIDERS = tuple(
+    provider for provider in CLOUD_PROVIDER_FAMILIES if provider not in SUPPORTED_PROVIDER_MUTATION_REMEDIATION_PROVIDERS
+)
 RemediationActionName = Literal[
     "exclude_from_routing",
     "scale_workers_min_to_zero",

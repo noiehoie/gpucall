@@ -89,5 +89,5 @@ This is the C workstream:
 - B is hand-driven external-system adaptation work.
 - C compresses B into a deterministic product workflow.
 
-The validation target for C is the pre-gpucall news-system worktree on macmini,
+The validation target for C is the pre-gpucall example-caller worktree on caller-host,
 not the already migrated production checkout.

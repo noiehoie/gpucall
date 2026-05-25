@@ -7,7 +7,7 @@ def test_rss_semantic_match_detection():
     assessment = {
         "findings": [
             {
-                "path": "src/news_system.py",
+                "path": "src/example_caller.py",
                 "symbol": "fetch_rss_and_match",
                 "detail": "semantic match for feeds",
                 "kind": "function"

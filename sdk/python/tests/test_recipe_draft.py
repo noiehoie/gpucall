@@ -304,7 +304,7 @@ def test_recipe_draft_cli_recipe_status_reads_report(tmp_path, capsys) -> None:
 
 
 def test_sdk_migrate_cli_writes_prompt_required_artifacts(tmp_path) -> None:
-    project = tmp_path / "news-system"
+    project = tmp_path / "example-caller"
     project.mkdir()
     (project / "topic_engine.py").write_text(
         "def run():\n"
@@ -312,7 +312,7 @@ def test_sdk_migrate_cli_writes_prompt_required_artifacts(tmp_path) -> None:
         encoding="utf-8",
     )
 
-    assert migrate_main(["assess", str(project), "--source", "news-system"]) == 0
+    assert migrate_main(["assess", str(project), "--source", "example-caller"]) == 0
     assert migrate_main(["trace", str(project), "--command", "python -c 'print({\"ok\": True})'", "--backend", "baseline"]) == 0
     assert migrate_main(["profile", str(project), "--trace", str(project / ".gpucall-migration" / "workload-trace.json")]) == 0
     assert migrate_main(
@@ -324,7 +324,7 @@ def test_sdk_migrate_cli_writes_prompt_required_artifacts(tmp_path) -> None:
             "--write-intake",
         ]
     ) == 0
-    assert migrate_main(["preflight", str(project), "--source", "news-system"]) == 0
+    assert migrate_main(["preflight", str(project), "--source", "example-caller"]) == 0
 
     migration = project / ".gpucall-migration"
     for name in (

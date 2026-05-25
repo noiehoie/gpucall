@@ -324,6 +324,8 @@ def _line_kind(line: str) -> str | None:
         return "hosted_ai_direct"
     if any(token in lower for token in ("ollama", "local model", "local-model")):
         return "local_model_path"
+    if any(token in lower for token in ("call_llm", " llm", "language model")):
+        return "llm_path"
     if any(token in lower for token in ("vision", "ocr", "image analysis", "画像", "画像解析")):
         return "vision_path"
     if "embedding" in lower:
@@ -347,7 +349,7 @@ def _classify_workload(
     text = json.dumps({"source": source, "assessment": assessment, "traces": traces}, ensure_ascii=False).lower()
     if any(token in text for token in ("vision", "ocr", "image", "画像")):
         return "vision", "understand_document_image", "async", 32768
-    if source == "news-system" or any(token in text for token in ("news", "rss", "article", "topic", "rank", "記事")):
+    if any(token in text for token in ("news", "rss", "article", "topic", "rank", "記事")):
         return "infer", "rank_text_items", "async", 131072
     return "infer", "summarize_text", "sync", 32768
 

@@ -1,7 +1,7 @@
 # gpucall Senior Code Audit
 
 Date: 2026-05-15 JST
-Scope: `/Users/tamotsu/Projects/gpucall` current worktree on `main`
+Scope: `<gpucall-checkout>` current worktree on `main`
 Verdict: **P1 runtime safety issues patched in this pass; remaining production hardening is tracked as P2/P3 backlog**
 
 This is a replacement for the first draft. The first draft was too broad and included weakly classified findings. This version keeps only findings with a concrete failure mode, code citation, and remediation path.
@@ -26,13 +26,13 @@ The table below is authoritative for current status. The original finding table 
 | P1-12 | P1 | Fixed | `tests/test_app.py` copies `tests/fixtures/config` instead of mutable operator `config/`; fixture README documents intent. `tests/test_app.py` now passes with dirty repo config. |
 | P2-08 | P2 | Backlog | `validate-config` still emits full tuple names. Current command remains valid; bounded summary should be a follow-up CLI contract change. |
 | P2-09 | P2 | Fixed | FastAPI app version now reads `gpucall.__version__`, aligned with `pyproject.toml` at `2.0.9`. |
-| P2-17 | P2 | Fixed | Python SDK is bumped to `2.0.18`, `gpucall.release` and public install docs reference `gpucall_sdk-2.0.18`, TypeScript source package metadata is aligned, and `tests/test_public_release_audit.py::test_sdk_release_urls_match_python_sdk_version` now fails stale wheel URLs. |
+| P2-17 | P2 | Fixed | Python SDK is bumped to `2.0.19`, `gpucall.release` and public install docs reference `gpucall_sdk-2.0.19`, TypeScript source package metadata is aligned, and `tests/test_public_release_audit.py::test_sdk_release_urls_match_python_sdk_version` now fails stale wheel URLs. |
 | P2-21 | P2 | Accepted Risk | Local DataRef worker now requires gateway-presigned refs and a host allowlist and rejects private/reserved resolved IPs. The local worker still does not pin the actual httpx connection to the validated IP; full DNS-rebinding pinning is backlog because it needs a custom transport without breaking TLS/SNI. |
 | P3-04 | P3 | Fixed | `.gitignore` now ignores `.state/` and `.cache/`. |
 | P3-05 | P3 | Fixed | TypeScript SDK dependency management now has `pnpm-lock.yaml`; the stale npm `package-lock.json` has been removed and `pnpm install --frozen-lockfile && pnpm exec tsc -p tsconfig.json` passes. |
 | RB-01 | Release blocker | Fixed | `tests/test_config.py` no longer depends on dirty active `config/` recipe `auto_select` for long-route assertions; temp copies explicitly enable the required fixture recipes. `tests/test_worker_io.py` was updated for hardened DataRef fetch mocks. Full pytest: `522 passed, 1 skipped`. |
 | RB-02 | Release blocker | Fixed | `doctor --live-tuple-catalog` now returns bounded failure without provider credentials instead of entering live provider catalog/network paths. Regression: `test_doctor_supports_live_tuple_catalog_flag_without_credentials`; full pytest: `522 passed, 1 skipped`. |
-| SDK-01 | Release blocker | Fixed | Python SDK `2.0.18` forwards `idempotency_key` through sync/async infer, vision, and chat completions; default request timeout is now 600s and callers can override per request with `request_timeout`. Regressions: `tests/test_sdk.py` and `sdk/python/tests/test_client.py`. |
+| SDK-01 | Release blocker | Fixed | Python SDK `2.0.19` forwards `idempotency_key` through sync/async infer, vision, and chat completions; default request timeout is now 600s and callers can override per request with `request_timeout`. Regressions: `tests/test_sdk.py` and `sdk/python/tests/test_client.py`. |
 
 ## 2026-05-15 Remediation Update
 
@@ -114,7 +114,7 @@ EXIT:0
 
 ## 2026-05-16 SDK Canary Contract Update
 
-news-system canary reported `GPUCallColdStartTimeout` after 121.1s before the
+example-caller canary reported `GPUCallColdStartTimeout` after 121.1s before the
 gateway returned a response. The SDK source now closes that caller-side gap:
 
 - Python SDK version: `2.0.16`.
@@ -131,7 +131,7 @@ EXIT:0
 ```
 
 ```text
-cd sdk/python && XDG_CACHE_HOME=/Users/tamotsu/Projects/gpucall/.cache uv run pytest tests/test_client.py -q
+cd sdk/python && XDG_CACHE_HOME=<gpucall-checkout>/.cache uv run pytest tests/test_client.py -q
 30 passed in 0.03s
 EXIT:0
 ```
@@ -148,7 +148,7 @@ EXIT:0
 ```
 
 ```text
-cd sdk/python && XDG_CACHE_HOME=/Users/tamotsu/Projects/gpucall/.cache uv build --wheel
+cd sdk/python && XDG_CACHE_HOME=<gpucall-checkout>/.cache uv build --wheel
 Successfully built dist/gpucall_sdk-2.0.16-py3-none-any.whl
 SHA256: 22a5812d9079d7cf05bf2c9bb808dda7ddcfd3ff4b51b6b96fe78212d2991569
 EXIT:0
@@ -347,17 +347,17 @@ tuple_live_validation: required=16 missing=16 gateway_live=0
 ## Commands Run
 
 ```text
-env XDG_CACHE_HOME=/Users/tamotsu/Projects/gpucall/.cache GPUCALL_STATE_DIR=/private/tmp/gpucall-import-sideeffect-20260515-1816 uv run python -c '... import gpucall.cli ...'
-env XDG_CACHE_HOME=/Users/tamotsu/Projects/gpucall/.cache GPUCALL_STATE_DIR=/Users/tamotsu/Projects/gpucall/.state/audit-route-coverage uv run python -c '... load_config(Path("config")) ...'
-env XDG_CACHE_HOME=/Users/tamotsu/Projects/gpucall/.cache uv run python -c '... fetch_data_ref_bytes(fake s3 ref) ...'
-env XDG_CACHE_HOME=/Users/tamotsu/Projects/gpucall/.cache uv run python -c '... run_dataref_openai_request(mock metadata URL) ...'
-env XDG_CACHE_HOME=/Users/tamotsu/Projects/gpucall/.cache GPUCALL_STATE_DIR=/Users/tamotsu/Projects/gpucall/.state/audit-pytest-maxfail uv run pytest tests/test_app.py -q --maxfail=5
-env XDG_CACHE_HOME=/Users/tamotsu/Projects/gpucall/.cache GPUCALL_STATE_DIR=/Users/tamotsu/Projects/gpucall/.state/final-validate-x uv run gpucall validate-config --config-dir config
-env XDG_CACHE_HOME=/Users/tamotsu/Projects/gpucall/.cache GPUCALL_STATE_DIR=/Users/tamotsu/Projects/gpucall/.state/launch-check-x uv run gpucall launch-check --profile static --config-dir config
-env XDG_CACHE_HOME=/Users/tamotsu/Projects/gpucall/.cache uv run python -m compileall -q gpucall sdk/python/gpucall_sdk sdk/python/gpucall_recipe_draft
+env XDG_CACHE_HOME=<gpucall-checkout>/.cache GPUCALL_STATE_DIR=/private/tmp/gpucall-import-sideeffect-20260515-1816 uv run python -c '... import gpucall.cli ...'
+env XDG_CACHE_HOME=<gpucall-checkout>/.cache GPUCALL_STATE_DIR=<gpucall-checkout>/.state/audit-route-coverage uv run python -c '... load_config(Path("config")) ...'
+env XDG_CACHE_HOME=<gpucall-checkout>/.cache uv run python -c '... fetch_data_ref_bytes(fake s3 ref) ...'
+env XDG_CACHE_HOME=<gpucall-checkout>/.cache uv run python -c '... run_dataref_openai_request(mock metadata URL) ...'
+env XDG_CACHE_HOME=<gpucall-checkout>/.cache GPUCALL_STATE_DIR=<gpucall-checkout>/.state/audit-pytest-maxfail uv run pytest tests/test_app.py -q --maxfail=5
+env XDG_CACHE_HOME=<gpucall-checkout>/.cache GPUCALL_STATE_DIR=<gpucall-checkout>/.state/final-validate-x uv run gpucall validate-config --config-dir config
+env XDG_CACHE_HOME=<gpucall-checkout>/.cache GPUCALL_STATE_DIR=<gpucall-checkout>/.state/launch-check-x uv run gpucall launch-check --profile static --config-dir config
+env XDG_CACHE_HOME=<gpucall-checkout>/.cache uv run python -m compileall -q gpucall sdk/python/gpucall_sdk sdk/python/gpucall_recipe_draft
 npm run build
 npm audit --audit-level=moderate
-XDG_CACHE_HOME=/Users/tamotsu/Projects/gpucall/.cache uv export --format requirements-txt --all-extras --no-hashes --output-file /private/tmp/gpucall-audit-requirements.txt
+XDG_CACHE_HOME=<gpucall-checkout>/.cache uv export --format requirements-txt --all-extras --no-hashes --output-file /private/tmp/gpucall-audit-requirements.txt
 pip-audit -r /private/tmp/gpucall-audit-requirements.txt
 ```
 
@@ -490,7 +490,7 @@ Static/local checks reconfirmed:
 
 ```text
 pwd
-/Users/tamotsu/Projects/gpucall
+<gpucall-checkout>
 
 git branch --show-current
 main

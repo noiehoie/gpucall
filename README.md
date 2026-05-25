@@ -269,13 +269,13 @@ gpucall-owned scratch space under `$XDG_STATE_HOME/gpucall` or
 `$XDG_CACHE_HOME/gpucall`. Onboarding automation must not invent sibling
 worktrees, clones, latest-pointer files, or provider-observer sandboxes next to
 the caller repo, such as
-`gpucall-c-tooling`, `gpucall-panopticon-*`, `news-system-*-sandbox`, or
-`news-system-latest-*`.
+`gpucall-c-tooling`, `gpucall-panopticon-*`, `example-caller-*-sandbox`, or
+`example-caller-latest-*`.
 
 If the caller-side helper is not installed, install only the SDK helper wheel:
 
 ```bash
-uv tool install https://github.com/noiehoie/gpucall/releases/download/v2.0.18/gpucall_sdk-2.0.18-py3-none-any.whl
+uv tool install https://github.com/noiehoie/gpucall/releases/download/v2.0.19/gpucall_sdk-2.0.19-py3-none-any.whl
 gpucall-recipe-draft --help
 ```
 

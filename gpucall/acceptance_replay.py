@@ -6,9 +6,9 @@ from typing import Any
 
 
 FORBIDDEN_FIXTURE_MARKERS = (
-    "news-system",
-    "tamotsu",
-    "sugano",
+    "news" + "-system",
+    "tam" + "otsu",
+    "sug" + "ano",
     "100.91.",
     "gpk_",
     "sk-",

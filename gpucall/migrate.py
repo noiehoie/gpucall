@@ -1061,7 +1061,7 @@ def _apply_migration_patch(project: Path, rows: list[dict[str, Any]], *, source:
         )
         updated = updated.replace("anthropic.Anthropic(", "AnthropicCompat(")
         updated = updated.replace("anthropic.AsyncAnthropic(", "AsyncAnthropicCompat(")
-        updated = _rewrite_news_style_local_gateway_calls(updated)
+        updated = _rewrite_common_local_gateway_calls(updated)
         updated = _rewrite_hosted_anthropic_gateway_calls(updated)
         updated = _rewrite_openai_compatible_httpx_calls(updated)
         updated = _disable_hosted_fallback(updated)
@@ -1164,7 +1164,7 @@ def _rewrite_openai_compatible_httpx_calls(text: str) -> str:
     return updated
 
 
-def _rewrite_news_style_local_gateway_calls(text: str) -> str:
+def _rewrite_common_local_gateway_calls(text: str) -> str:
     updated = text
     text_hook = (
         "    payload = {\n"
@@ -1224,8 +1224,8 @@ def _rewrite_news_style_local_gateway_calls(text: str) -> str:
 def _rewrite_hosted_anthropic_gateway_calls(text: str) -> str:
     updated = text
     updated = re.sub(
-        r'if backend == "anthropic" and not os\.environ\.get\("NEWS_ANTHROPIC_API_KEY", ""\):',
-        'if backend == "anthropic" and not os.environ.get("NEWS_ANTHROPIC_API_KEY", "") and not gpucall_should_use_gateway():',
+        r'(if backend == "anthropic" and not os\.environ\.get\("[A-Z0-9_]*ANTHROPIC_API_KEY", ""\))(?! and not gpucall_should_use_gateway\(\)):',
+        r'\1 and not gpucall_should_use_gateway():',
         updated,
     )
     text_hook = "    from src.util.claude_cli import call_claude_p\n"
@@ -1251,28 +1251,7 @@ def _rewrite_hosted_anthropic_gateway_calls(text: str) -> str:
         skip_if_contains="gpucall_infer_text(",
     )
 
-    vision_hook = '    api_key = os.environ.get("NEWS_ANTHROPIC_API_KEY", "")\n'
-    vision_replacement = (
-        "    if gpucall_should_use_gateway():\n"
-        "        return gpucall_vision_file(\n"
-        "            image_path,\n"
-        "            prompt=user_message,\n"
-        "            system_prompt=system_prompt,\n"
-        "            intent=\"understand_document_image\",\n"
-        "            model=model,\n"
-        "            max_tokens=max_tokens,\n"
-        "            timeout=timeout,\n"
-        "        )\n"
-        "\n"
-        '    api_key = os.environ.get("NEWS_ANTHROPIC_API_KEY", "")\n'
-    )
-    updated = _replace_in_named_function(
-        updated,
-        "_call_anthropic_vision",
-        vision_hook,
-        vision_replacement,
-        skip_if_contains="gpucall_vision_file(",
-    )
+    updated = _insert_gateway_before_anthropic_vision_api_key(updated)
 
     cli_hook = "    if _API_KEY:\n"
     cli_replacement = (
@@ -1305,6 +1284,46 @@ def _rewrite_hosted_anthropic_gateway_calls(text: str) -> str:
     ) and import_line not in updated:
         updated = _insert_after_future_imports(updated, import_line)
     return updated
+
+
+def _insert_gateway_before_anthropic_vision_api_key(text: str) -> str:
+    lines = text.splitlines(keepends=True)
+    start: int | None = None
+    for index, line in enumerate(lines):
+        if line.startswith("def _call_anthropic_vision("):
+            start = index
+            break
+    if start is None:
+        return text
+    end = len(lines)
+    for index in range(start + 1, len(lines)):
+        if lines[index].startswith("def ") or lines[index].startswith("class "):
+            end = index
+            break
+    block = "".join(lines[start:end])
+    if "gpucall_vision_file(" in block:
+        return text
+    for index in range(start, end):
+        match = re.match(r'(\s*)api_key = os\.environ\.get\("[A-Z0-9_]*ANTHROPIC_API_KEY", ""\)\n$', lines[index])
+        if not match:
+            continue
+        indent = match.group(1)
+        gateway_call = (
+            f"{indent}if gpucall_should_use_gateway():\n"
+            f"{indent}    return gpucall_vision_file(\n"
+            f"{indent}        image_path,\n"
+            f"{indent}        prompt=user_message,\n"
+            f"{indent}        system_prompt=system_prompt,\n"
+            f"{indent}        intent=\"understand_document_image\",\n"
+            f"{indent}        model=model,\n"
+            f"{indent}        max_tokens=max_tokens,\n"
+            f"{indent}        timeout=timeout,\n"
+            f"{indent}    )\n"
+            "\n"
+        )
+        lines.insert(index, gateway_call)
+        return "".join(lines)
+    return text
 
 
 def _replace_in_named_function(

@@ -63,8 +63,8 @@ def test_migrate_preflight_overdeclares_rss_semantic_match(tmp_path) -> None:
     project.mkdir()
     (project / "rss_match.py").write_text("def run():\n    call_llm('semantic RSS match')\n", encoding="utf-8")
 
-    report = assess_project(project, source="news-system")
-    requests = build_preflight_requests(report, source="news-system")
+    report = assess_project(project, source="example-caller")
+    requests = build_preflight_requests(report, source="example-caller")
 
     assert requests[0]["task"] == "infer"
     assert requests[0]["intent"] == "rss_semantic_match"
@@ -78,8 +78,8 @@ def test_migrate_preflight_overdeclares_pairwise_match(tmp_path) -> None:
     project.mkdir()
     (project / "matcher.py").write_text("def run():\n    call_llm('pairwise similarity')\n", encoding="utf-8")
 
-    report = assess_project(project, source="news-system")
-    requests = build_preflight_requests(report, source="news-system")
+    report = assess_project(project, source="example-caller")
+    requests = build_preflight_requests(report, source="example-caller")
 
     assert requests[0]["task"] == "infer"
     assert requests[0]["intent"] == "pairwise_match"
@@ -96,8 +96,8 @@ def test_migrate_preflight_prefers_integrated_news_analysis_over_rss_word(tmp_pa
         encoding="utf-8",
     )
 
-    report = assess_project(project, source="news-system")
-    requests = build_preflight_requests(report, source="news-system")
+    report = assess_project(project, source="example-caller")
+    requests = build_preflight_requests(report, source="example-caller")
 
     assert requests[0]["task"] == "infer"
     assert requests[0]["intent"] == "rank_text_items"
@@ -110,8 +110,8 @@ def test_migrate_preflight_overdeclares_document_vision_as_async(tmp_path) -> No
     project.mkdir()
     (project / "overseas_vision.py").write_text("def run():\n    call_llm_vision(image_path, prompt='extract frontpage articles')\n", encoding="utf-8")
 
-    report = assess_project(project, source="news-system")
-    requests = build_preflight_requests(report, source="news-system")
+    report = assess_project(project, source="example-caller")
+    requests = build_preflight_requests(report, source="example-caller")
 
     assert requests[0]["task"] == "vision"
     assert requests[0]["intent"] == "understand_document_image"
@@ -135,38 +135,38 @@ def test_migrate_cli_writes_reports(tmp_path) -> None:
 
 
 def test_migrate_cli_does_not_blacklist_explicit_output_dir_names(tmp_path) -> None:
-    project = tmp_path / "news-system"
-    explicit = tmp_path / "news-system-latest-gpucall-c-sandbox"
+    project = tmp_path / "example-caller"
+    explicit = tmp_path / "example-caller-latest-gpucall-c-sandbox"
     project.mkdir()
     (project / "topic_engine.py").write_text("call_llm('summarize topic')\n", encoding="utf-8")
 
-    assert main(["report", str(project), "--source", "news-system", "--output-dir", str(explicit)]) == 0
+    assert main(["report", str(project), "--source", "example-caller", "--output-dir", str(explicit)]) == 0
 
     assert (explicit / "migration-report.json").exists()
 
 
 def test_migrate_cli_allows_xdg_gpucall_scratch_output(tmp_path, monkeypatch) -> None:
-    project = tmp_path / "news-system"
+    project = tmp_path / "example-caller"
     state_home = tmp_path / "xdg-state"
-    output = state_home / "gpucall" / "e2e" / "news-system-panopticon-e2e-20260521T002543Z"
+    output = state_home / "gpucall" / "e2e" / "example-caller-panopticon-e2e-20260521T002543Z"
     project.mkdir()
     (project / "topic_engine.py").write_text("call_llm('summarize topic')\n", encoding="utf-8")
     monkeypatch.setenv("XDG_STATE_HOME", str(state_home))
 
-    assert main(["report", str(project), "--source", "news-system", "--output-dir", str(output)]) == 0
+    assert main(["report", str(project), "--source", "example-caller", "--output-dir", str(output)]) == 0
 
     assert (output / "migration-report.json").exists()
 
 
 def test_migrate_cli_default_output_stays_inside_caller_repo(tmp_path) -> None:
-    project = tmp_path / "news-system"
+    project = tmp_path / "example-caller"
     project.mkdir()
     (project / "topic_engine.py").write_text("call_llm('summarize topic')\n", encoding="utf-8")
 
-    assert main(["report", str(project), "--source", "news-system"]) == 0
+    assert main(["report", str(project), "--source", "example-caller"]) == 0
 
     assert (project / ".gpucall-migration" / "migration-report.json").exists()
-    assert not (tmp_path / "news-system-latest-gpucall-c-sandbox").exists()
+    assert not (tmp_path / "example-caller-latest-gpucall-c-sandbox").exists()
     assert not (tmp_path / "gpucall-c-tooling").exists()
 
 
@@ -326,7 +326,7 @@ def test_migrate_patch_routes_text_and_vision_through_correct_helpers(tmp_path) 
         encoding="utf-8",
     )
 
-    patch_suggestions(project, source="news-system", apply=True)
+    patch_suggestions(project, source="example-caller", apply=True)
 
     text = source.read_text(encoding="utf-8")
     text_function = text.split("def _call_local_vision", 1)[0]
@@ -348,7 +348,7 @@ def test_migrate_patch_routes_hosted_anthropic_wrappers_through_gateway(tmp_path
         "    from src.util.claude_cli import call_claude_p\n"
         "    return call_claude_p(user_message, system_prompt=system_prompt, model=model, timeout=timeout, max_tokens=max_tokens)\n\n"
         "def _call_anthropic_vision(user_message, image_path, system_prompt, model, timeout, max_tokens):\n"
-        "    api_key = os.environ.get(\"NEWS_ANTHROPIC_API_KEY\", \"\")\n"
+        "    api_key = os.environ.get(\"CALLER_ANTHROPIC_API_KEY\", \"\")\n"
         "    return api_key\n",
         encoding="utf-8",
     )
@@ -382,7 +382,7 @@ def test_migrate_patch_bypasses_anthropic_key_gate_when_gateway_is_configured(tm
         "import os\n\n"
         "def fallback():\n"
         "    backend = os.environ.get(\"LLM_BACKEND\", \"anthropic\").lower()\n"
-        "    if backend == \"anthropic\" and not os.environ.get(\"NEWS_ANTHROPIC_API_KEY\", \"\"):\n"
+        "    if backend == \"anthropic\" and not os.environ.get(\"CALLER_ANTHROPIC_API_KEY\", \"\"):\n"
         "        return None\n"
         "    return call_llm_vision('x')\n",
         encoding="utf-8",
@@ -622,8 +622,8 @@ def test_migrate_preflight_routes_editorial_summary_to_summarize(tmp_path) -> No
         encoding="utf-8",
     )
 
-    report = assess_project(project, source="news-system")
-    requests = build_preflight_requests(report, source="news-system")
+    report = assess_project(project, source="example-caller")
+    requests = build_preflight_requests(report, source="example-caller")
 
     assert requests[0]["task"] == "infer"
     assert requests[0]["intent"] == "summarize_text"

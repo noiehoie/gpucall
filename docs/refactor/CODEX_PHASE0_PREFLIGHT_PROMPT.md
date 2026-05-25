@@ -1,6 +1,6 @@
 # Codex CLI Phase 0: Refactor Preflight
 
-You are working in `/Users/tamotsu/Projects/gpucall` on branch
+You are working in `<gpucall-checkout>` on branch
 `codex/rc-audit-product-static-conditional-go`.
 
 This is not a one-shot refactor. Do not attempt broad implementation in this

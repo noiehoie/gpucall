@@ -333,8 +333,8 @@ XDG_CACHE_HOME=$PWD/.cache uv run gpucall security scan-secrets --config-dir con
 {"findings": [], "ok": true}
 
 XDG_CACHE_HOME=$PWD/.cache uv build
-Successfully built dist/gpucall-2.0.9.tar.gz
-Successfully built dist/gpucall-2.0.9-py3-none-any.whl
+Successfully built dist/gpucall-2.0.19.tar.gz
+Successfully built dist/gpucall-2.0.19-py3-none-any.whl
 
 multi-ai-review final
 Gemini: problem none

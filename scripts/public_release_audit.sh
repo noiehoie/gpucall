@@ -19,6 +19,9 @@ uv run gpucall security scan-secrets
 echo "== tracked private artifact grep =="
 scripts/check_product_contamination.sh
 
+echo "== provider parity guard =="
+uv run python scripts/check_provider_parity.py
+
 echo "== tracked sensitive path grep =="
 if git ls-files | rg '(^|/)(0508fullaudit|0509githubfullaudit|admin/|known_hosts$|id_rsa$|id_ed25519$|.*\.pem$|.*\.key$|.*secret.*|AGENTS\.md$|RESTART_HANDOFF\.md$)|(^|/)\.env$'
 then

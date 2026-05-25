@@ -18,6 +18,7 @@ from gpucall.credentials import configured_credentials, credentials_path, load_c
 from gpucall.domain import ApiKeyHandoffMode
 from gpucall.handoff import _default_quality_feedback_inbox
 from gpucall.handoff_package import caller_ai_onboarding_prompt, build_handoff_contract, write_handoff_package
+from gpucall.provider_contracts import CLOUD_PROVIDER_FAMILIES, PROVIDER_SETUP_CONTRACTS
 from gpucall.release import ONBOARDING_MANUAL_URL, ONBOARDING_PROMPT_URL, SDK_WHEEL_URL
 
 
@@ -154,14 +155,15 @@ class SetupPlan(BaseModel):
     @model_validator(mode="after")
     def validate_plan(self) -> "SetupPlan":
         for name in self.providers:
-            if name not in {"modal", "runpod", "hyperstack"}:
+            if name not in PROVIDER_SETUP_CONTRACTS:
                 raise ValueError(f"unsupported provider in setup plan: {name}")
         for name, provider in self.providers.items():
             if not provider.enabled:
                 continue
             if provider.credentials is None:
                 raise ValueError(f"provider {name} requires credentials.source")
-            if name == "hyperstack" and not provider.ssh_key_path and provider.credentials.source == "prompt":
+            contract = PROVIDER_SETUP_CONTRACTS[name]
+            if contract.prompt_requires_ssh_key and not provider.ssh_key_path and provider.credentials.source == "prompt":
                 raise ValueError("hyperstack prompt setup requires ssh_key_path")
         if self.object_store is not None:
             if not self.object_store.provider:
@@ -381,14 +383,16 @@ def setup_section_text(config_dir: Path, section: str, *, profile: str | None = 
         )
     if section == "providers":
         providers = status["providers"]
+        provider_lines = "\n".join(
+            f"  [{providers[name]}] {contract.setup_label}"
+            for name, contract in PROVIDER_SETUP_CONTRACTS.items()
+        )
         return (
             "GPU execution surfaces\n\n"
             "gpucall needs at least one execution surface.\n\n"
             "Configured:\n"
             f"  [{providers['local']}] Local smoke runtime\n"
-            f"  [{providers['modal']}] Modal serverless GPU\n"
-            f"  [{providers['runpod']}] RunPod managed endpoint\n"
-            f"  [{providers['hyperstack']}] Hyperstack VM\n\n"
+            f"{provider_lines}\n\n"
             "Choose action:\n"
             "  1. Configure Modal\n"
             "  2. Configure RunPod\n"
@@ -516,15 +520,16 @@ def _setup_status(config_dir: Path, *, profile: str | None) -> dict[str, Any]:
     gateway_url = automation["trusted_bootstrap"]["gateway_url"]
     gateway_auth = "ok" if ("gateway_auth:api_keys" in configured or "auth" in creds and creds["auth"].get("api_keys")) else "missing"
     if config is None:
-        providers = {"local": "missing", "modal": "missing", "runpod": "missing", "hyperstack": "missing"}
+        providers = {"local": "missing", **{name: "missing" for name in CLOUD_PROVIDER_FAMILIES}}
     else:
         providers = {
             "local": "ok" if "local-echo" in config.tuples else "missing",
-            "modal": "ok" if {"token_pair:modal", "sdk_profile:modal"}.intersection(configured) else "missing",
-            "runpod": "ok" if "api_key:runpod" in configured else "missing",
-            "hyperstack": "ok" if {"api_key:hyperstack", "ssh_key:hyperstack"}.issubset(configured) else "missing",
+            **{
+                name: "ok" if contract.configured_by(configured) else "missing"
+                for name, contract in PROVIDER_SETUP_CONTRACTS.items()
+            },
         }
-    cloud_provider_count = sum(1 for name in ("modal", "runpod", "hyperstack") if providers[name] == "ok")
+    cloud_provider_count = sum(1 for name in CLOUD_PROVIDER_FAMILIES if providers[name] == "ok")
     provider_state = "ok" if cloud_provider_count else ("partial" if providers["local"] == "ok" else "missing")
     object_store = load_object_store(config_dir) if config_exists else None
     object_store_state = "ok" if object_store else "missing"
@@ -556,7 +561,11 @@ def _setup_status(config_dir: Path, *, profile: str | None) -> dict[str, Any]:
 
 
 def _provider_label(providers: dict[str, str]) -> str:
-    configured = [name for name in ("Modal", "RunPod", "Hyperstack") if providers[name.lower()] == "ok"]
+    configured = [
+        contract.display_name
+        for name, contract in PROVIDER_SETUP_CONTRACTS.items()
+        if providers[name] == "ok"
+    ]
     if configured:
         return f"GPU execution surfaces: {', '.join(configured)} configured"
     if providers["local"] == "ok":
@@ -708,17 +717,20 @@ def _setup_plan_warnings(config_dir: Path, plan: SetupPlan) -> list[str]:
     for name, provider in sorted(plan.providers.items()):
         if not provider.enabled or provider.credentials is None:
             continue
+        contract = PROVIDER_SETUP_CONTRACTS[name]
         if provider.credentials.source == "official_cli":
-            cli = "modal" if name == "modal" else "flash"
-            if shutil.which(cli) is None:
+            cli = contract.official_cli
+            if cli is None:
+                warnings.append(f"{name} does not define official CLI credential discovery; use prompt or gpucall_credentials")
+            elif shutil.which(cli) is None:
                 warnings.append(f"{name} uses official CLI credentials, but {cli!r} is not on PATH")
         if provider.credentials.source == "gpucall_credentials":
             required = _provider_contracts(name)
             missing = sorted(required.difference(configured))
             if missing:
                 warnings.append(f"{name} credentials.source=gpucall_credentials but missing: {', '.join(missing)}")
-        if name == "runpod" and not provider.endpoint_id:
-            warnings.append("runpod endpoint_id omitted; provider account will be connected, endpoint provisioning remains pending")
+        if contract.endpoint_id_supported and not provider.endpoint_id and contract.endpoint_pending_warning:
+            warnings.append(contract.endpoint_pending_warning)
     if plan.object_store and plan.object_store.credentials and plan.object_store.credentials.source == "gpucall_credentials":
         if "object_store:s3" not in configured:
             warnings.append("object_store credentials.source=gpucall_credentials but object_store:s3 is missing")
@@ -934,13 +946,8 @@ def _update_yaml(path: Path, updates: dict[str, object]) -> None:
 
 
 def _provider_contracts(name: str) -> set[str]:
-    if name == "runpod":
-        return {"api_key:runpod"}
-    if name == "hyperstack":
-        return {"api_key:hyperstack", "ssh_key:hyperstack"}
-    if name == "modal":
-        return {"token_pair:modal"}
-    return set()
+    contract = PROVIDER_SETUP_CONTRACTS.get(name)
+    return set(contract.gpucall_credentials_required) if contract is not None else set()
 
 
 def _confirm(message: str) -> bool:
