@@ -119,11 +119,17 @@ gpucall-migrate --help
 gpucall-recipe-draft --help
 ```
 
-6. Run deterministic migration assessment and baseline tracing from inside the caller repository:
+6. Run deterministic migration assessment and baseline tracing from inside the caller repository.
+   First identify the smallest representative baseline command from the caller
+   repository. Do not run a broad production job. Record the selected command
+   in `.gpucall-migration/baseline-command.txt`, then use that exact command
+   in the trace step.
 
 ```bash
 gpucall-migrate assess . --source {system_name}
-gpucall-migrate trace . --command "<caller baseline command>" --backend baseline
+mkdir -p .gpucall-migration
+printf '%s\n' "$CALLER_BASELINE_COMMAND" > .gpucall-migration/baseline-command.txt
+gpucall-migrate trace . --command "$CALLER_BASELINE_COMMAND" --backend baseline
 gpucall-migrate profile . --trace .gpucall-migration/workload-trace.json
 gpucall-migrate draft-contract . --profile .gpucall-migration/workload-profile.json --write-intake
 gpucall-migrate preflight . --source {system_name}
@@ -268,6 +274,8 @@ def prompt_quality_blockers(prompt: str, contract: dict[str, Any]) -> list[str]:
     placeholder_tokens = ("<GPUCALL_", "{{", "}}")
     if any(token in prompt for token in placeholder_tokens):
         blockers.append("prompt_contains_placeholder")
+    if "<caller baseline command>" in prompt:
+        blockers.append("prompt_contains_baseline_command_placeholder")
     if _prompt_contains_unresolved_marker(prompt):
         blockers.append("prompt_contains_unresolved_marker")
     for value in _required_handoff_values(contract):
