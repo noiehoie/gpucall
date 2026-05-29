@@ -72,7 +72,9 @@ def test_installed_product_acceptance_cli_outputs_json(tmp_path, monkeypatch, ca
     )
 
     main()
-    payload = json.loads(capsys.readouterr().out)
+    captured = capsys.readouterr()
+    payload = json.loads(captured.out)
 
     assert payload["passed"] is True
+    assert "DeprecationWarning" not in captured.err
     assert json.loads(output.read_text(encoding="utf-8"))["passed"] is True

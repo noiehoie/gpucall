@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 import tempfile
+import warnings
 from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
@@ -50,6 +51,20 @@ def dumps_installed_product_acceptance(report: dict[str, Any]) -> str:
     return json.dumps(report, ensure_ascii=False, indent=2, sort_keys=True) + "\n"
 
 
+@contextmanager
+def _quiet_test_client(app: Any) -> Iterator[Any]:
+    with warnings.catch_warnings():
+        warnings.filterwarnings(
+            "ignore",
+            message=r"Using `httpx` with `starlette\.testclient` is deprecated.*",
+            category=Warning,
+        )
+        from fastapi.testclient import TestClient
+
+        with TestClient(app) as client:
+            yield client
+
+
 def _run_installed_product_acceptance(root: Path) -> dict[str, Any]:
     root = root.resolve()
     operator_root = root / "operator"
@@ -93,8 +108,6 @@ def _run_installed_product_acceptance(root: Path) -> dict[str, Any]:
 
 
 def _phase_a_router_bringup(*, operator_root: Path, xdg_config: Path, xdg_state: Path) -> dict[str, Any]:
-    from fastapi.testclient import TestClient
-
     from gpucall.cli import build_launch_report
 
     config_dir = xdg_config / "gpucall"
@@ -117,7 +130,7 @@ tenant_onboarding:
 recipe_automation:
   auto_materialize: true
 handoff_assets:
-  caller_sdk_wheel_url: https://assets.example/sdk/gpucall_sdk-2.0.21-py3-none-any.whl
+  caller_sdk_wheel_url: https://assets.example/sdk/gpucall_sdk-2.0.22-py3-none-any.whl
 external_systems:
   - name: example-caller
     expected_workloads: [infer, vision]
@@ -130,7 +143,7 @@ launch:
     quality_inbox = xdg_state / "gpucall" / "quality_feedback" / "inbox"
     panopticon_path = xdg_state / "gpucall" / "catalog" / "provider-panopticon.json"
     store_panopticon_evidence({}, panopticon_path)
-    with TestClient(create_app(config_dir)) as client:
+    with _quiet_test_client(create_app(config_dir)) as client:
         readyz = client.get("/readyz")
     launch_report = build_launch_report(config_dir, profile="static")
     handoff_write = write_handoff_package(config_dir, "example-caller", operator_root / "handoff" / "example-caller")
