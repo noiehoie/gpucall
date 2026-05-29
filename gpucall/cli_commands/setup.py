@@ -222,6 +222,11 @@ Common commands:
     parser.add_argument("--yes", action="store_true")
     parser.add_argument("--system-name", default=None)
     parser.add_argument("--output-dir", type=Path, default=None)
+    parser.add_argument(
+        "--allow-placeholders",
+        action="store_true",
+        help="allow template placeholders in export-handoff-prompt output; default requires concrete handoff values",
+    )
     return parser
 
 
@@ -255,7 +260,7 @@ def run_setup_command(args: argparse.Namespace) -> None:
     if action == "export-handoff-prompt":
         if not args.system_name:
             raise SystemExit("setup export-handoff-prompt requires --system-name")
-        print(export_handoff_prompt(args.config_dir, args.system_name))
+        print(export_handoff_prompt(args.config_dir, args.system_name, require_concrete=not args.allow_placeholders))
         return
     if action == "export-handoff-package":
         if not args.system_name:
@@ -645,8 +650,17 @@ def apply_setup_plan(config_dir: Path, plan_path: Path, *, dry_run: bool, yes: b
     return report + "\nApplied setup plan.\n\n" + post_checks + "\n\n" + setup_status_text(config_dir, profile=plan.profile)
 
 
-def export_handoff_prompt(config_dir: Path, system_name: str) -> str:
-    return caller_ai_onboarding_prompt(build_handoff_contract(config_dir, system_name, require_concrete=False))
+def export_handoff_prompt(config_dir: Path, system_name: str, *, require_concrete: bool = True) -> str:
+    try:
+        contract = build_handoff_contract(config_dir, system_name, require_concrete=require_concrete)
+    except ValueError as exc:
+        raise SystemExit(
+            str(exc)
+            + "\nRun `gpucall setup starter-plan --profile internal-team --provider runpod --output gpucall.setup.yml`, "
+            "`gpucall setup apply --file gpucall.setup.yml --dry-run`, then apply a concrete gateway, trusted-bootstrap, and recipe-inbox setup. "
+            "Use --allow-placeholders only when you intentionally want a template."
+        ) from exc
+    return caller_ai_onboarding_prompt(contract)
 
 
 def export_handoff_package(config_dir: Path, system_name: str, output_dir: Path) -> dict[str, Any]:

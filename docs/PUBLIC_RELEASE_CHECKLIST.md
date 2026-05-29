@@ -22,8 +22,8 @@ uv run gpucall release-check --config-dir config --output-dir "$XDG_STATE_HOME/g
 git ls-files | rg '(^|/)(0508fullaudit|0509githubfullaudit|admin/|\.env$|known_hosts|id_rsa|id_ed25519|.*\.pem$|.*\.key$|.*secret.*|AGENTS\.md|RESTART_HANDOFF\.md)$'
 scripts/check_product_contamination.sh
 uv run python scripts/check_provider_parity.py
-uv tool run --from https://github.com/noiehoie/gpucall/releases/download/v2.0.25/gpucall_sdk-2.0.25-py3-none-any.whl gpucall-recipe-draft --help
-curl -fsSLO https://github.com/noiehoie/gpucall/releases/download/v2.0.25/SHA256SUMS
+uv tool run --from https://github.com/noiehoie/gpucall/releases/download/v2.0.26/gpucall_sdk-2.0.26-py3-none-any.whl gpucall-recipe-draft --help
+curl -fsSLO https://github.com/noiehoie/gpucall/releases/download/v2.0.26/SHA256SUMS
 ```
 
 The product-contamination and private-artifact commands must

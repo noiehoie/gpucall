@@ -113,6 +113,52 @@ def test_setup_sections_cover_recipe_inbox_and_external_prompt(tmp_path, monkeyp
     assert "without embedding any API key" in external
 
 
+def test_setup_export_handoff_prompt_requires_concrete_values_by_default(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("GPUCALL_CREDENTIALS", str(tmp_path / "credentials.yml"))
+    monkeypatch.setattr(
+        "sys.argv",
+        [
+            "gpucall",
+            "setup",
+            "export-handoff-prompt",
+            "--config-dir",
+            str(tmp_path / "config"),
+            "--system-name",
+            "example-caller",
+        ],
+    )
+
+    with pytest.raises(SystemExit) as exc:
+        main()
+
+    assert exc.value.code != 0
+    assert "handoff package requires concrete values" in str(exc.value)
+    assert "--allow-placeholders" in str(exc.value)
+
+
+def test_setup_export_handoff_prompt_can_intentionally_emit_template(tmp_path, monkeypatch, capsys) -> None:
+    monkeypatch.setenv("GPUCALL_CREDENTIALS", str(tmp_path / "credentials.yml"))
+    monkeypatch.setattr(
+        "sys.argv",
+        [
+            "gpucall",
+            "setup",
+            "export-handoff-prompt",
+            "--config-dir",
+            str(tmp_path / "config"),
+            "--system-name",
+            "example-caller",
+            "--allow-placeholders",
+        ],
+    )
+
+    main()
+    output = capsys.readouterr().out
+
+    assert "GPUCALL_BASE_URL: `<GPUCALL_BASE_URL>`" in output
+    assert "example-caller" in output
+
+
 def test_setup_plan_dry_run_does_not_write_files(tmp_path, monkeypatch) -> None:
     monkeypatch.setenv("GPUCALL_CREDENTIALS", str(tmp_path / "credentials.yml"))
     config_dir = tmp_path / "config"
