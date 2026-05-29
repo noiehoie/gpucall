@@ -6,7 +6,7 @@ common:
   min_billable_seconds: 0
   billing_granularity_seconds: 0
   configured_price_source: https://modal.com/pricing
-  configured_price_observed_at: '2026-05-11T00:00:00+00:00'
+  configured_price_observed_at: '2026-05-29T00:00:00+00:00'
   configured_price_ttl_seconds: 604800
 gpus:
 - ref: T4

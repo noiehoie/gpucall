@@ -98,6 +98,7 @@ tenant_onboarding:
 
 def test_setup_plan_apply_writes_admin_object_store_and_generated_gateway_key(tmp_path, monkeypatch) -> None:
     monkeypatch.setenv("GPUCALL_CREDENTIALS", str(tmp_path / "credentials.yml"))
+    save_credentials("runpod", {"api_key": "rk_test"})
     config_dir = tmp_path / "config"
     plan = tmp_path / "gpucall.setup.yml"
     plan.write_text(
@@ -156,6 +157,7 @@ launch:
     object_store = load_object_store(config_dir)
     credentials = load_credentials()
     surface = (config_dir / "surfaces" / "runpod-vllm-serverless.yml").read_text(encoding="utf-8")
+    worker = (config_dir / "workers" / "runpod-vllm-serverless.yml").read_text(encoding="utf-8")
 
     assert "Applied setup plan." in report
     assert "Post-apply checks:" in report
@@ -180,6 +182,8 @@ launch:
     assert object_store.bucket == "gpucall-data"
     assert credentials["auth"]["api_keys"].startswith("gpk_")
     assert "target: rp-xxxxxxxxxxxx" in surface
+    assert "target: rp-xxxxxxxxxxxx" in worker
+    assert "RunPod managed endpoint ready" in report
     assert "profile: internal-team" in (config_dir / "setup.yml").read_text(encoding="utf-8")
 
 
@@ -214,10 +218,14 @@ recipe_automation:
 
     report = apply_setup_plan(config_dir, plan, dry_run=False, yes=True)
     assert "Applied setup plan." in report
-    assert "RunPod configured" in report
+    assert "RunPod account connected; endpoint provisioning pending" in report
     surface = (config_dir / "surfaces" / "runpod-vllm-serverless.yml").read_text(encoding="utf-8")
     assert "target:" not in surface
     assert "endpoint: null" in surface
+
+    providers = setup_section_text(config_dir, "providers")
+    assert "[partial] RunPod account connected; endpoint provisioning pending" in providers
+    assert "[ok] RunPod managed endpoint" not in providers
 
 
 def test_setup_plan_accepts_modal_gpucall_credentials_without_cli_profile(tmp_path, monkeypatch) -> None:

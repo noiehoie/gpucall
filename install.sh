@@ -53,6 +53,7 @@ Environment:
   GPUCALL_REPO_ARCHIVE_BASE Repository archive base URL.
   GPUCALL_UV_INSTALL_URL    uv installer URL.
   GPUCALL_ALLOW_ROOT=1      Allow running as root. Not recommended.
+  XDG_BIN_HOME              Preferred user binary directory for uv/gpucall.
 EOF
 }
 
@@ -123,8 +124,25 @@ case "$arch_name" in
 esac
 
 xdg_config_home="${XDG_CONFIG_HOME:-$home_dir/.config}"
+xdg_data_home="${XDG_DATA_HOME:-$home_dir/.local/share}"
 xdg_state_home="${XDG_STATE_HOME:-$home_dir/.local/state}"
 xdg_cache_home="${XDG_CACHE_HOME:-$home_dir/.cache}"
+if [ -n "${XDG_BIN_HOME:-}" ]; then
+  user_bin_dir="$XDG_BIN_HOME"
+elif [ -n "${XDG_DATA_HOME:-}" ]; then
+  user_bin_dir="$(dirname -- "$xdg_data_home")/bin"
+else
+  user_bin_dir="$home_dir/.local/bin"
+fi
+
+prepend_path() {
+  path_dir="$1"
+  [ -n "$path_dir" ] || return
+  case ":$PATH:" in
+    *":$path_dir:"*) ;;
+    *) PATH="$path_dir:$PATH" ;;
+  esac
+}
 
 check_parent_writable() {
   target_dir="$1"
@@ -139,6 +157,7 @@ check_parent_writable() {
 }
 
 check_parent_writable "$xdg_config_home"
+check_parent_writable "$xdg_data_home"
 check_parent_writable "$xdg_state_home"
 check_parent_writable "$xdg_cache_home"
 
@@ -147,14 +166,16 @@ log "  os: $os_name"
 log "  arch: $arch_name"
 log "  user: $(id 2>/dev/null || printf 'unknown')"
 log "  xdg_config_home: $xdg_config_home"
+log "  xdg_data_home: $xdg_data_home"
 log "  xdg_state_home: $xdg_state_home"
 log "  xdg_cache_home: $xdg_cache_home"
+log "  user_bin_dir: $user_bin_dir"
 
 if have uv; then
   uv_cmd=$(command -v uv)
   log "  uv: $uv_cmd"
 else
-  uv_cmd="$home_dir/.local/bin/uv"
+  uv_cmd="$user_bin_dir/uv"
   if [ "$bootstrap_uv" = "1" ]; then
     have curl || die "curl is required to bootstrap uv"
     log "  uv: missing; installer will bootstrap uv from $uv_install_url"
@@ -182,8 +203,8 @@ else
 fi
 
 case ":$PATH:" in
-  *":$home_dir/.local/bin:"*) ;;
-  *) warn "$home_dir/.local/bin is not on PATH; add it before running gpucall from a new shell" ;;
+  *":$user_bin_dir:"*) ;;
+  *) warn "$user_bin_dir is not on PATH; add it before running gpucall from a new shell" ;;
 esac
 
 if [ -z "$package_spec" ]; then
@@ -228,26 +249,36 @@ if [ "$dry_run" = "1" ]; then
   exit 0
 fi
 
-mkdir -p "$xdg_config_home" "$xdg_state_home" "$xdg_cache_home"
+mkdir -p "$xdg_config_home" "$xdg_data_home" "$xdg_state_home" "$xdg_cache_home"
 
 if ! have uv; then
   log "$program: installing uv"
   curl -fsSL "$uv_install_url" | sh
-  export PATH="$home_dir/.local/bin:$home_dir/.cargo/bin:$PATH"
+  prepend_path "$user_bin_dir"
+  prepend_path "$home_dir/.local/bin"
+  prepend_path "$home_dir/.cargo/bin"
+  export PATH
 fi
 
-have uv || die "uv install did not put uv on PATH"
+if ! have uv && [ -x "$uv_cmd" ]; then
+  prepend_path "$(dirname -- "$uv_cmd")"
+  export PATH
+fi
+
+have uv || die "uv install did not put uv on PATH; expected uv at $uv_cmd or another PATH entry"
 uv_cmd=$(command -v uv)
 
 log "$program: installing gpucall"
 "$uv_cmd" tool install --force "$package_spec"
 
-export PATH="$home_dir/.local/bin:$PATH"
+prepend_path "$user_bin_dir"
+prepend_path "$home_dir/.local/bin"
+export PATH
 if have gpucall; then
   log "$program: installed $(command -v gpucall)"
 else
   warn "gpucall was installed by uv but is not on PATH"
-  warn "try: export PATH=\"$home_dir/.local/bin:\$PATH\""
+  warn "try: export PATH=\"$user_bin_dir:\$PATH\""
 fi
 
 log "$program: next commands"

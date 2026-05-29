@@ -383,9 +383,10 @@ def setup_section_text(config_dir: Path, section: str, *, profile: str | None = 
         )
     if section == "providers":
         providers = status["providers"]
+        provider_labels = status["provider_labels"]
         provider_lines = "\n".join(
-            f"  [{providers[name]}] {contract.setup_label}"
-            for name, contract in PROVIDER_SETUP_CONTRACTS.items()
+            f"  [{providers[name]}] {provider_labels[name]}"
+            for name in PROVIDER_SETUP_CONTRACTS
         )
         return (
             "GPU execution surfaces\n\n"
@@ -529,8 +530,10 @@ def _setup_status(config_dir: Path, *, profile: str | None) -> dict[str, Any]:
                 for name, contract in PROVIDER_SETUP_CONTRACTS.items()
             },
         }
+    providers, provider_labels = _provider_display_state(config, providers)
     cloud_provider_count = sum(1 for name in CLOUD_PROVIDER_FAMILIES if providers[name] == "ok")
-    provider_state = "ok" if cloud_provider_count else ("partial" if providers["local"] == "ok" else "missing")
+    cloud_pending_count = sum(1 for name in CLOUD_PROVIDER_FAMILIES if providers[name] == "partial")
+    provider_state = "ok" if cloud_provider_count else ("partial" if cloud_pending_count or providers["local"] == "ok" else "missing")
     object_store = load_object_store(config_dir) if config_exists else None
     object_store_state = "ok" if object_store else "missing"
     handoff_state = "ok" if automation["api_key_handoff_mode"] != "manual" else "missing"
@@ -539,7 +542,7 @@ def _setup_status(config_dir: Path, *, profile: str | None) -> dict[str, Any]:
     required = [
         {"state": "ok" if config_exists and config_error is None else "missing", "label": "config initialized", "section": "profile"},
         {"state": "ok" if gateway_url and gateway_auth == "ok" else "missing", "label": "gateway URL and caller auth", "section": "gateway"},
-        {"state": provider_state, "label": _provider_label(providers), "section": "providers"},
+        {"state": provider_state, "label": _provider_label(providers, provider_labels), "section": "providers"},
         {"state": object_store_state, "label": "object store / DataRef storage", "section": "object-store"},
         {"state": handoff_state, "label": "tenant API key handoff", "section": "tenant-handoff"},
         {"state": recipe_inbox_state, "label": "recipe request inbox", "section": "tenant-handoff"},
@@ -554,20 +557,66 @@ def _setup_status(config_dir: Path, *, profile: str | None) -> dict[str, Any]:
         "required": required,
         "recommended": recommended,
         "providers": providers,
+        "provider_labels": provider_labels,
         "object_store_state": object_store_state,
         "gateway_url": gateway_url,
         "gateway_auth_state": gateway_auth,
     }
 
 
-def _provider_label(providers: dict[str, str]) -> str:
-    configured = [
-        contract.display_name
+def _provider_display_state(config: Any | None, raw_providers: dict[str, str]) -> tuple[dict[str, str], dict[str, str]]:
+    providers = dict(raw_providers)
+    labels = {
+        name: (f"{contract.display_name} configured" if providers.get(name) == "ok" else contract.setup_label)
         for name, contract in PROVIDER_SETUP_CONTRACTS.items()
+    }
+    if providers.get("runpod") == "ok" and not _runpod_endpoint_ready(config):
+        providers["runpod"] = "partial"
+        labels["runpod"] = "RunPod account connected; endpoint provisioning pending"
+    elif providers.get("runpod") == "ok":
+        labels["runpod"] = "RunPod managed endpoint ready"
+    return providers, labels
+
+
+def _runpod_endpoint_ready(config: Any | None) -> bool:
+    if config is None:
+        return False
+    return any(
+        (tuple_spec.account_ref == "runpod" or tuple_spec.adapter.startswith("runpod"))
+        and _concrete_endpoint_target(tuple_spec.target)
+        for tuple_spec in config.tuples.values()
+    )
+
+
+def _concrete_endpoint_target(target: str | None) -> bool:
+    if not target:
+        return False
+    normalized = str(target).strip()
+    if not normalized:
+        return False
+    return "PLACEHOLDER" not in normalized.upper()
+
+
+def _provider_label(providers: dict[str, str], provider_labels: dict[str, str]) -> str:
+    ready = [
+        provider_labels[name]
+        for name in PROVIDER_SETUP_CONTRACTS
         if providers[name] == "ok"
     ]
-    if configured:
-        return f"GPU execution surfaces: {', '.join(configured)} configured"
+    pending = [
+        provider_labels[name]
+        for name in PROVIDER_SETUP_CONTRACTS
+        if providers[name] == "partial"
+    ]
+    if ready and pending:
+        return f"GPU execution surfaces: {', '.join(ready)}; {'; '.join(pending)}"
+    if ready:
+        return f"GPU execution surfaces: {', '.join(ready)}"
+    if pending:
+        prefix = "GPU execution surfaces"
+        if providers["local"] == "ok":
+            prefix += ": local smoke only"
+        return prefix + "; " + "; ".join(pending)
     if providers["local"] == "ok":
         return "GPU execution surfaces: local smoke only, cloud provider missing"
     return "GPU execution surfaces"
@@ -696,6 +745,7 @@ def _planned_changes(config_dir: Path, plan: SetupPlan) -> list[str]:
     runpod = plan.providers.get("runpod", SetupProvider())
     if runpod.enabled and runpod.endpoint_id:
         changes.append(str(config_dir / "surfaces" / "runpod-vllm-serverless.yml"))
+        changes.append(str(config_dir / "workers" / "runpod-vllm-serverless.yml"))
     elif runpod.enabled:
         changes.append("provider account: runpod (endpoint provisioning pending)")
     credential_targets: list[str] = []
@@ -807,6 +857,7 @@ def _apply_providers(config_dir: Path, plan: SetupPlan) -> None:
                 save_credentials("hyperstack", {"api_key": getpass.getpass("Hyperstack API key: ").strip(), "ssh_key_path": provider.ssh_key_path or ""})
         if name == "runpod" and provider.endpoint_id:
             _update_yaml(config_dir / "surfaces" / "runpod-vllm-serverless.yml", {"target": provider.endpoint_id})
+            _update_yaml(config_dir / "workers" / "runpod-vllm-serverless.yml", {"target": provider.endpoint_id})
 
 
 def _apply_object_store(config_dir: Path, plan: SetupPlan) -> None:

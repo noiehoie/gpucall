@@ -776,7 +776,8 @@ def test_template_config_routes_structured_vision_to_json_capable_model() -> Non
 
     plan = compiler.compile(request)
 
-    assert plan.tuple_chain[0] == "modal-vision-catalog-rtx-pro-6000-qwen2-5-vl-7b-instruct"
+    assert plan.tuple_chain[0] == "modal-vision-catalog-l40s-qwen2-5-vl-7b-instruct"
+    assert "modal-vision-catalog-rtx-pro-6000-qwen2-5-vl-7b-instruct" in plan.tuple_chain
     assert "modal-vision-catalog-rtx-pro-6000-qwen2-5-vl-32b-instruct" in plan.tuple_chain
     assert "modal-vision-catalog-b200-qwen2-5-vl-7b-instruct" in plan.tuple_chain
     assert "modal-vision-catalog-b200-qwen2-5-vl-32b-instruct" in plan.tuple_chain

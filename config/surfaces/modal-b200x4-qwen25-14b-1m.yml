@@ -8,7 +8,7 @@ vram_gb: 720
 max_model_len: 1010000
 cost_per_second: 0.006944
 configured_price_source: https://modal.com/pricing
-configured_price_observed_at: '2026-05-19T00:00:00+00:00'
+configured_price_observed_at: '2026-05-29T00:00:00+00:00'
 configured_price_ttl_seconds: 604800
 stock_state: configured
 expected_cold_start_seconds: 600

@@ -37,6 +37,8 @@ def test_install_script_has_preflight_and_non_mutating_modes() -> None:
         "dependency preflight",
         "docker compose",
         "XDG_CONFIG_HOME",
+        "XDG_DATA_HOME",
+        "XDG_BIN_HOME",
         "GPUCALL_PACKAGE_SPEC",
     ):
         assert expected in text
@@ -59,6 +61,70 @@ def test_install_script_dry_run_from_checkout_does_not_install() -> None:
     assert "gpucall install: dry-run" in output
     assert "gpucall[providers] @ file://" in output
     assert "next: gpucall setup" in output
+
+
+def test_install_script_bootstraps_uv_from_xdg_data_bin(tmp_path) -> None:
+    fake_bin = tmp_path / "fake-bin"
+    fake_bin.mkdir()
+    fake_curl = fake_bin / "curl"
+    fake_curl.write_text(
+        """#!/usr/bin/env sh
+set -eu
+cat <<'UV_INSTALLER'
+#!/usr/bin/env sh
+set -eu
+bin_dir="$(dirname -- "${XDG_DATA_HOME:-$HOME/.local/share}")/bin"
+mkdir -p "$bin_dir"
+cat > "$bin_dir/uv" <<'UV'
+#!/usr/bin/env sh
+set -eu
+if [ "${1:-}" = "tool" ] && [ "${2:-}" = "install" ]; then
+  bin_dir="$(dirname -- "${XDG_DATA_HOME:-$HOME/.local/share}")/bin"
+  mkdir -p "$bin_dir"
+  cat > "$bin_dir/gpucall" <<'GPUCALL'
+#!/usr/bin/env sh
+printf 'fake gpucall\\n'
+GPUCALL
+  chmod 755 "$bin_dir/gpucall"
+  exit 0
+fi
+exit 2
+UV
+chmod 755 "$bin_dir/uv"
+UV_INSTALLER
+""",
+        encoding="utf-8",
+    )
+    fake_curl.chmod(0o755)
+
+    home = tmp_path / "home"
+    xdg_root = tmp_path / "xdg"
+    for path in (home, xdg_root / "config", xdg_root / "share", xdg_root / "state", xdg_root / "cache"):
+        path.mkdir(parents=True)
+    env = {
+        "HOME": str(home),
+        "PATH": f"{fake_bin}:/usr/bin:/bin:/usr/sbin:/sbin",
+        "GPUCALL_ALLOW_ROOT": "1",
+        "XDG_CONFIG_HOME": str(xdg_root / "config"),
+        "XDG_DATA_HOME": str(xdg_root / "share"),
+        "XDG_STATE_HOME": str(xdg_root / "state"),
+        "XDG_CACHE_HOME": str(xdg_root / "cache"),
+    }
+
+    result = subprocess.run(
+        ["sh", str(INSTALL_SH), "--package-spec", "gpucall-test"],
+        cwd=ROOT,
+        env=env,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        check=True,
+    )
+    output = result.stdout + result.stderr
+
+    assert "user_bin_dir: " + str(xdg_root / "bin") in output
+    assert "uv install did not put uv on PATH" not in output
+    assert f"gpucall install: installed {xdg_root / 'bin' / 'gpucall'}" in output
 
 
 def test_readmes_start_with_installer_not_setup_binary() -> None:

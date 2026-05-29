@@ -8,7 +8,7 @@ vram_gb: 180
 max_model_len: 32768
 cost_per_second: 0.001737
 configured_price_source: https://modal.com/pricing + model_overhead_rank_adjustment
-configured_price_observed_at: '2026-05-12T00:00:00+00:00'
+configured_price_observed_at: '2026-05-29T00:00:00+00:00'
 configured_price_ttl_seconds: 604800
 stock_state: configured
 billing_granularity_seconds: 0
