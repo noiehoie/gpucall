@@ -508,7 +508,7 @@ def test_trusted_bootstrap_issues_tenant_key_without_existing_auth(tmp_path, mon
                 "api_key_bootstrap_allowed_hosts: [testclient]",
                 "api_key_bootstrap_gateway_url: http://gpucall.internal:18088",
                 "api_key_bootstrap_recipe_inbox: admin@gpucall.internal:/opt/gpucall/state/recipe_requests/inbox",
-                "caller_sdk_wheel_url: http://assets.gpucall.internal/gpucall_sdk-2.0.20-py3-none-any.whl",
+                "caller_sdk_wheel_url: http://assets.gpucall.internal/gpucall_sdk-2.0.21-py3-none-any.whl",
             ]
         )
         + "\n",
@@ -526,7 +526,7 @@ def test_trusted_bootstrap_issues_tenant_key_without_existing_auth(tmp_path, mon
     assert issued["handoff"]["GPUCALL_BASE_URL"] == "http://gpucall.internal:18088"
     assert issued["handoff"]["GPUCALL_RECIPE_INBOX"] == "admin@gpucall.internal:/opt/gpucall/state/recipe_requests/inbox"
     assert issued["handoff"]["GPUCALL_QUALITY_FEEDBACK_INBOX"] == "admin@gpucall.internal:/opt/gpucall/state/quality_feedback/inbox"
-    assert issued["handoff"]["GPUCALL_SDK_WHEEL_URL"] == "http://assets.gpucall.internal/gpucall_sdk-2.0.20-py3-none-any.whl"
+    assert issued["handoff"]["GPUCALL_SDK_WHEEL_URL"] == "http://assets.gpucall.internal/gpucall_sdk-2.0.21-py3-none-any.whl"
     assert "api_key" not in second.text
     assert second.status_code == 409
 

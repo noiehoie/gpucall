@@ -9,7 +9,6 @@ from pathlib import Path
 from typing import Any, Iterator
 
 import yaml
-from fastapi.testclient import TestClient
 
 from gpucall.app import create_app
 from gpucall.blocker_taxonomy import typed_intake_blocker
@@ -94,6 +93,8 @@ def _run_installed_product_acceptance(root: Path) -> dict[str, Any]:
 
 
 def _phase_a_router_bringup(*, operator_root: Path, xdg_config: Path, xdg_state: Path) -> dict[str, Any]:
+    from fastapi.testclient import TestClient
+
     from gpucall.cli import build_launch_report
 
     config_dir = xdg_config / "gpucall"
@@ -116,7 +117,7 @@ tenant_onboarding:
 recipe_automation:
   auto_materialize: true
 handoff_assets:
-  caller_sdk_wheel_url: https://assets.example/sdk/gpucall_sdk-2.0.20-py3-none-any.whl
+  caller_sdk_wheel_url: https://assets.example/sdk/gpucall_sdk-2.0.21-py3-none-any.whl
 external_systems:
   - name: example-caller
     expected_workloads: [infer, vision]
