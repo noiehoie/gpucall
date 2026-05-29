@@ -44,7 +44,7 @@ def route_validation_key(tuple_name: str, recipe_name: str, mode: str) -> RouteV
 
 
 def route_validation_required_for_tuple(tuple: ExecutionTupleSpec) -> bool:
-    if is_local_execution_tuple(tuple):
+    if is_local_execution_tuple(tuple) and tuple.adapter in {"echo", "local", "local-echo"}:
         return False
     return is_production_route_candidate(tuple)
 

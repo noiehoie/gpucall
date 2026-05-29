@@ -293,7 +293,7 @@ the caller repo, such as
 If the caller-side helper is not installed, install only the SDK helper wheel:
 
 ```bash
-uv tool install https://github.com/noiehoie/gpucall/releases/download/v2.0.27/gpucall_sdk-2.0.27-py3-none-any.whl
+uv tool install https://github.com/noiehoie/gpucall/releases/download/v2.0.28/gpucall_sdk-2.0.28-py3-none-any.whl
 gpucall-recipe-draft --help
 ```
 

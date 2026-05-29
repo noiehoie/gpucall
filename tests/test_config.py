@@ -972,6 +972,34 @@ def test_readiness_cli(tmp_path) -> None:
     assert recipe["allowed_modes"]
 
 
+def test_local_author_ollama_requires_route_validation_evidence(tmp_path) -> None:
+    from gpucall.validation_evidence import route_validation_required_for_tuple
+
+    config = load_config(copy_config(tmp_path))
+
+    assert route_validation_required_for_tuple(config.tuples["local-echo"]) is False
+    assert route_validation_required_for_tuple(config.tuples["local-author-ollama"]) is True
+
+
+def test_readiness_blocks_local_author_ollama_without_validation(tmp_path, monkeypatch) -> None:
+    from gpucall.readiness import build_readiness_report
+
+    root = copy_config(tmp_path)
+    state = tmp_path / "state"
+    artifact_dir = state / "tuple-validation"
+    artifact_dir.mkdir(parents=True)
+    monkeypatch.setenv("GPUCALL_STATE_DIR", str(state))
+    monkeypatch.setattr("gpucall.readiness.load_credentials", lambda: {})
+
+    report = build_readiness_report(config_dir=root, intent="translate_text", validation_dir=artifact_dir)
+    recipe = next(item for item in report["recipes"] if item["recipe"] == "infer-translate-text-draft")
+
+    assert not any(item["tuple"] == "local-author-ollama" for item in recipe["live_ready_tuples"])
+    blocked = next(item for item in recipe["live_blocked_tuples"] if item["tuple"] == "local-author-ollama")
+    assert blocked["route_validation_required"] is True
+    assert blocked["live_reason"] == "missing_route_validation_evidence"
+
+
 def test_readiness_reports_live_catalog_blocked_tuple(tmp_path, monkeypatch) -> None:
     from gpucall.readiness import build_readiness_report
 
