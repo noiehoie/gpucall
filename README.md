@@ -130,6 +130,24 @@ gpucall setup status
 gpucall setup next
 ```
 
+If you are new, start with a local trial. It does not need provider
+credentials, endpoint IDs, object storage, tenant handoff, or billable
+generation:
+
+```bash
+gpucall setup starter-plan --profile local-trial
+gpucall setup apply --file gpucall.setup.yml --dry-run
+gpucall setup apply --file gpucall.setup.yml --yes
+```
+
+After the local trial passes, create a cloud provider plan:
+
+```bash
+gpucall setup starter-plan --profile internal-team --provider runpod --output gpucall.setup.yml
+gpucall setup apply --file gpucall.setup.yml --dry-run
+gpucall setup apply --file gpucall.setup.yml
+```
+
 For setup-as-code:
 
 ```bash
@@ -275,7 +293,7 @@ the caller repo, such as
 If the caller-side helper is not installed, install only the SDK helper wheel:
 
 ```bash
-uv tool install https://github.com/noiehoie/gpucall/releases/download/v2.0.22/gpucall_sdk-2.0.22-py3-none-any.whl
+uv tool install https://github.com/noiehoie/gpucall/releases/download/v2.0.23/gpucall_sdk-2.0.23-py3-none-any.whl
 gpucall-recipe-draft --help
 ```
 

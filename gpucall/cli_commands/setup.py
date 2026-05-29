@@ -13,7 +13,7 @@ import yaml
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
 
 from gpucall.admin_automation import admin_automation_summary, configure_admin_automation
-from gpucall.config import ConfigError, default_config_dir, load_admin_automation, load_config, load_object_store
+from gpucall.config import ConfigError, default_config_dir, default_state_dir, load_admin_automation, load_config, load_object_store
 from gpucall.credentials import configured_credentials, credentials_path, load_credentials, save_credentials
 from gpucall.domain import ApiKeyHandoffMode
 from gpucall.handoff import _default_quality_feedback_inbox
@@ -189,6 +189,8 @@ Common commands:
   gpucall setup
   gpucall setup status
   gpucall setup next
+  gpucall setup starter-plan --profile local-trial
+  gpucall setup starter-plan --profile internal-team --provider runpod
   gpucall setup section providers
   gpucall setup apply --file gpucall.setup.yml --dry-run
   gpucall setup apply --file gpucall.setup.yml --yes
@@ -200,9 +202,9 @@ Common commands:
         "action",
         nargs="?",
         metavar="action",
-        choices=["status", "next", "section", "apply", "export-handoff-prompt", "export-handoff-package"],
+        choices=["status", "next", "section", "starter-plan", "apply", "export-handoff-prompt", "export-handoff-package"],
         default=None,
-        help="status, next, section, apply, export-handoff-prompt, or export-handoff-package",
+        help="status, next, section, starter-plan, apply, export-handoff-prompt, or export-handoff-package",
     )
     parser.add_argument(
         "section_name",
@@ -214,6 +216,8 @@ Common commands:
     parser.add_argument("--config-dir", type=Path, default=default_config_dir())
     parser.add_argument("--file", type=Path, default=None)
     parser.add_argument("--profile", choices=["local-trial", "internal-team", "production-multitenant", "hardened-regulated"], default=None)
+    parser.add_argument("--provider", choices=["none", "modal", "runpod", "hyperstack"], default=None)
+    parser.add_argument("--output", type=Path, default=None)
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--yes", action="store_true")
     parser.add_argument("--system-name", default=None)
@@ -239,6 +243,9 @@ def run_setup_command(args: argparse.Namespace) -> None:
         if args.section_name is None:
             raise SystemExit("setup section requires a section name")
         print(setup_section_text(args.config_dir, args.section_name, profile=args.profile))
+        return
+    if action == "starter-plan":
+        print(write_starter_plan(args.output, profile=args.profile, provider=args.provider))
         return
     if action == "apply":
         if args.file is None:
@@ -267,9 +274,27 @@ def setup_dashboard(config_dir: Path, *, profile: str | None = None) -> None:
 gpucall is a deterministic GPU governance gateway.
 It sits between your internal systems and leased GPU execution surfaces.
 
-Before creating config files, choose the operating shape you want.
+Start with one path. If you are unsure, choose local-trial first; it verifies
+the install without provider credentials or billable generation.
 
-What are you setting up?
+Fast path:
+
+  1. Create a starter plan:
+     gpucall setup starter-plan --profile local-trial
+
+  2. Review what it will change:
+     gpucall setup apply --file gpucall.setup.yml --dry-run
+
+  3. Apply it:
+     gpucall setup apply --file gpucall.setup.yml --yes
+
+Cloud path after local trial:
+
+  gpucall setup starter-plan --profile internal-team --provider runpod --output gpucall.setup.yml
+  gpucall setup apply --file gpucall.setup.yml --dry-run
+  gpucall setup apply --file gpucall.setup.yml
+
+Profiles:
 
   1. Local trial
      Try gpucall on one machine with a local/smoke runtime.
@@ -337,7 +362,14 @@ def setup_status_text(config_dir: Path, *, profile: str | None = None, include_m
         f"Recommended:\n{recommended}"
     )
     if not include_menu:
-        return text + "\n\nRun:\n  gpucall setup next\n  gpucall setup section <section>"
+        return (
+            text
+            + "\n\nNext command:\n  gpucall setup next\n\n"
+            "If you have not created a setup plan yet:\n"
+            "  gpucall setup starter-plan --profile local-trial\n"
+            "  gpucall setup apply --file gpucall.setup.yml --dry-run\n"
+            "  gpucall setup apply --file gpucall.setup.yml --yes"
+        )
     return (
         text
         + "\n\n"
@@ -357,6 +389,16 @@ def setup_status_text(config_dir: Path, *, profile: str | None = None, include_m
 
 def setup_next_text(config_dir: Path, *, profile: str | None = None) -> str:
     status = _setup_status(config_dir, profile=profile)
+    if status["profile"] == "unselected" and status["required"] and status["required"][0]["state"] == "missing":
+        return (
+            "Next required step: choose a starter plan\n\n"
+            "Run:\n"
+            "  gpucall setup starter-plan --profile local-trial\n"
+            "  gpucall setup apply --file gpucall.setup.yml --dry-run\n"
+            "  gpucall setup apply --file gpucall.setup.yml --yes\n\n"
+            "After local trial, switch to a cloud provider plan:\n"
+            "  gpucall setup starter-plan --profile internal-team --provider runpod --output gpucall.setup.yml"
+        )
     for item in status["required"]:
         if item["state"] in {"missing", "partial", "warn"}:
             return f"Next required step: {item['label']}\n\nRun:\n  gpucall setup section {item['section']}"
@@ -368,18 +410,27 @@ def setup_section_text(config_dir: Path, section: str, *, profile: str | None = 
     if section == "profile":
         return (
             "Operating profile\n\n"
-            "  1. local-trial\n"
-            "  2. internal-team\n"
-            "  3. production-multitenant\n"
-            "  4. hardened-regulated\n\n"
-            "Use setup plan YAML or --profile to make this persistent."
+            "Start here if you are unsure:\n"
+            "  gpucall setup starter-plan --profile local-trial\n"
+            "  gpucall setup apply --file gpucall.setup.yml --dry-run\n"
+            "  gpucall setup apply --file gpucall.setup.yml --yes\n\n"
+            "Profiles:\n"
+            "  1. local-trial             no provider credentials, no external callers\n"
+            "  2. internal-team           one trusted internal gateway\n"
+            "  3. production-multitenant  strict budgets, DataRefs, launch gates\n"
+            "  4. hardened-regulated      strict auth and audit evidence\n\n"
+            "For cloud setup after the trial:\n"
+            "  gpucall setup starter-plan --profile internal-team --provider runpod --output gpucall.setup.yml"
         )
     if section == "gateway":
         return (
             "Gateway URL and caller auth\n\n"
             f"Current gateway URL: {status['gateway_url'] or '<unset>'}\n"
             f"Gateway auth: {status['gateway_auth_state']}\n\n"
-            "For setup-as-code, set gateway.base_url and gateway.caller_auth in gpucall.setup.yml."
+            "For local trial, you can skip this until an external caller needs to connect.\n"
+            "For a real gateway, set gateway.base_url and gateway.caller_auth in gpucall.setup.yml.\n\n"
+            "Beginner path:\n"
+            "  gpucall setup starter-plan --profile internal-team --provider runpod --output gpucall.setup.yml"
         )
     if section == "providers":
         providers = status["providers"]
@@ -390,17 +441,17 @@ def setup_section_text(config_dir: Path, section: str, *, profile: str | None = 
         )
         return (
             "GPU execution surfaces\n\n"
-            "gpucall needs at least one execution surface.\n\n"
+            "A local trial uses the bundled local smoke runtime.\n"
+            "A real gateway also needs one cloud provider account.\n\n"
             "Configured:\n"
             f"  [{providers['local']}] Local smoke runtime\n"
             f"{provider_lines}\n\n"
-            "Choose action:\n"
-            "  1. Configure Modal\n"
-            "  2. Configure RunPod\n"
-            "  3. Configure Hyperstack\n"
-            "  4. Register controlled runtime / local GPU endpoint\n"
-            "  5. Back to setup overview\n"
-            "  q. Quit"
+            "Fast choices:\n"
+            "  Local trial: gpucall setup starter-plan --profile local-trial\n"
+            "  RunPod:      gpucall setup starter-plan --profile internal-team --provider runpod --output gpucall.setup.yml\n"
+            "  Modal:       gpucall setup starter-plan --profile internal-team --provider modal --output gpucall.setup.yml\n"
+            "  Hyperstack:  gpucall setup starter-plan --profile internal-team --provider hyperstack --output gpucall.setup.yml\n\n"
+            "Advanced: Register controlled runtime / local GPU endpoint with gpucall runtime add-openai or add-ollama."
         )
     if section == "object-store":
         return (
@@ -471,6 +522,103 @@ def setup_section_text(config_dir: Path, section: str, *, profile: str | None = 
     raise SystemExit(f"unknown setup section: {section}")
 
 
+def write_starter_plan(output: Path | None, *, profile: str | None, provider: str | None) -> str:
+    selected_profile = profile or "local-trial"
+    selected_provider = provider or ("none" if selected_profile == "local-trial" else "runpod")
+    if selected_profile == "local-trial" and selected_provider != "none":
+        raise SystemExit("local-trial starter plan does not use a cloud provider; omit --provider or use --provider none")
+    if selected_profile != "local-trial" and selected_provider == "none":
+        raise SystemExit(f"{selected_profile} starter plan requires --provider modal, runpod, or hyperstack")
+    path = output or Path("gpucall.setup.yml")
+    if path.exists():
+        raise SystemExit(f"{path} already exists; pass --output with a new path or remove the existing file")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    text = _starter_plan_text(selected_profile, selected_provider)
+    path.write_text(text, encoding="utf-8")
+    return (
+        f"Wrote starter setup plan: {path}\n\n"
+        "Next:\n"
+        f"  gpucall setup apply --file {path} --dry-run\n"
+        f"  gpucall setup apply --file {path}"
+        + (" --yes" if selected_profile == "local-trial" else "")
+    )
+
+
+def _starter_plan_text(profile: str, provider: str) -> str:
+    if profile == "local-trial":
+        return """# gpucall starter setup plan
+# Use this first if you are new. It does not need provider credentials,
+# endpoint IDs, object storage, tenant handoff, or billable generation.
+setup_schema_version: 1
+profile: local-trial
+launch:
+  run_static_check: true
+"""
+    recipe_inbox = default_state_dir() / "recipe_requests" / "inbox"
+    lines = [
+        "# gpucall starter setup plan",
+        "# Edit gateway.base_url before exposing the gateway to another machine.",
+        "# Provider credentials are prompted at apply time and are stored outside this YAML.",
+        "setup_schema_version: 1",
+        f"profile: {profile}",
+        "gateway:",
+        "  base_url: http://127.0.0.1:18088",
+        "  caller_auth:",
+        "    mode: generated_gateway_key",
+        "providers:",
+    ]
+    if provider == "runpod":
+        lines.extend(
+            [
+                "  runpod:",
+                "    enabled: true",
+                "    credentials:",
+                "      source: prompt",
+                "    # endpoint_id is optional on first install.",
+                "    # gpucall will show endpoint provisioning pending until supply is created.",
+            ]
+        )
+    elif provider == "modal":
+        lines.extend(
+            [
+                "  modal:",
+                "    enabled: true",
+                "    credentials:",
+                "      source: prompt",
+            ]
+        )
+    elif provider == "hyperstack":
+        lines.extend(
+            [
+                "  hyperstack:",
+                "    enabled: true",
+                "    credentials:",
+                "      source: prompt",
+                "    ssh_key_path: ~/.ssh/gpucall_hyperstack_ed25519",
+            ]
+        )
+    else:
+        raise SystemExit(f"unsupported starter provider: {provider}")
+    lines.extend(
+        [
+            "tenant_onboarding:",
+            "  mode: trusted_bootstrap",
+            "  allowed_hosts:",
+            "    - localhost",
+            f"  recipe_inbox: {recipe_inbox}",
+            "recipe_automation:",
+            "  auto_materialize: true",
+            "  auto_promote_candidates: true",
+            "  auto_provision_supply: true",
+            "  auto_apply_supply: false",
+            "launch:",
+            "  run_static_check: true",
+            "",
+        ]
+    )
+    return "\n".join(lines)
+
+
 def apply_setup_plan(config_dir: Path, plan_path: Path, *, dry_run: bool, yes: bool) -> str:
     plan = _load_setup_plan(plan_path)
     changes = _planned_changes(config_dir, plan)
@@ -539,19 +687,34 @@ def _setup_status(config_dir: Path, *, profile: str | None) -> dict[str, Any]:
     handoff_state = "ok" if automation["api_key_handoff_mode"] != "manual" else "missing"
     recipe_inbox_state = "ok" if automation["trusted_bootstrap"]["recipe_inbox"] else "missing"
     launch_state = "ok" if config is not None and config_error is None else "missing"
-    required = [
-        {"state": "ok" if config_exists and config_error is None else "missing", "label": "config initialized", "section": "profile"},
-        {"state": "ok" if gateway_url and gateway_auth == "ok" else "missing", "label": "gateway URL and caller auth", "section": "gateway"},
-        {"state": provider_state, "label": _provider_label(providers, provider_labels), "section": "providers"},
-        {"state": object_store_state, "label": "object store / DataRef storage", "section": "object-store"},
-        {"state": handoff_state, "label": "tenant API key handoff", "section": "tenant-handoff"},
-        {"state": recipe_inbox_state, "label": "recipe request inbox", "section": "tenant-handoff"},
-        {"state": launch_state, "label": "launch check readiness", "section": "launch"},
-    ]
-    recommended = [
-        {"state": "ok" if automation["recipe_inbox_auto_materialize"] else "warn", "label": "recipe inbox auto-materialize policy reviewed"},
-        {"state": "ok" if gateway_url else "warn", "label": "external-system onboarding prompt has concrete gateway URL"},
-    ]
+    config_item = {"state": "ok" if config_exists and config_error is None else "missing", "label": "config initialized", "section": "profile"}
+    gateway_item = {"state": "ok" if gateway_url and gateway_auth == "ok" else "missing", "label": "gateway URL and caller auth", "section": "gateway"}
+    provider_item = {"state": provider_state, "label": _provider_label(providers, provider_labels), "section": "providers"}
+    object_store_item = {"state": object_store_state, "label": "object store / DataRef storage", "section": "object-store"}
+    handoff_item = {"state": handoff_state, "label": "tenant API key handoff", "section": "tenant-handoff"}
+    recipe_inbox_item = {"state": recipe_inbox_state, "label": "recipe request inbox", "section": "recipe-inbox"}
+    launch_item = {"state": launch_state, "label": "launch check readiness", "section": "launch"}
+    if selected_profile == "local-trial":
+        required = [config_item, provider_item, launch_item]
+        recommended = [
+            {**gateway_item, "label": "gateway URL and caller auth before external callers"},
+            {**object_store_item, "label": "object store / DataRef storage before file or image workflows"},
+            {**handoff_item, "label": "tenant API key handoff before external callers"},
+            {**recipe_inbox_item, "label": "recipe request inbox before external callers"},
+        ]
+    elif selected_profile == "internal-team":
+        required = [config_item, gateway_item, provider_item, handoff_item, recipe_inbox_item, launch_item]
+        recommended = [
+            {**object_store_item, "label": "object store / DataRef storage before file or image workflows"},
+            {"state": "ok" if automation["recipe_inbox_auto_materialize"] else "warn", "label": "recipe inbox auto-materialize policy reviewed"},
+            {"state": "ok" if gateway_url else "warn", "label": "external-system onboarding prompt has concrete gateway URL"},
+        ]
+    else:
+        required = [config_item, gateway_item, provider_item, object_store_item, handoff_item, recipe_inbox_item, launch_item]
+        recommended = [
+            {"state": "ok" if automation["recipe_inbox_auto_materialize"] else "warn", "label": "recipe inbox auto-materialize policy reviewed"},
+            {"state": "ok" if gateway_url else "warn", "label": "external-system onboarding prompt has concrete gateway URL"},
+        ]
     return {
         "profile": selected_profile,
         "required": required,

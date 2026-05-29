@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-from gpucall.cli_commands.setup import apply_setup_plan, export_handoff_prompt, setup_next_text, setup_section_text, setup_status_text
+from gpucall.cli_commands.setup import apply_setup_plan, export_handoff_prompt, setup_next_text, setup_section_text, setup_status_text, write_starter_plan
 from gpucall.config import load_admin_automation, load_object_store
 from gpucall.credentials import load_credentials, save_credentials
 from gpucall.domain import ApiKeyHandoffMode
@@ -20,6 +20,7 @@ def test_setup_status_starts_from_operator_dashboard(tmp_path, monkeypatch) -> N
     assert "GPU execution surfaces" in text
     assert "Choose section" not in text
     assert "gpucall setup next" in text
+    assert "gpucall setup starter-plan --profile local-trial" in text
 
 
 def test_setup_status_can_render_interactive_menu(tmp_path, monkeypatch) -> None:
@@ -34,8 +35,8 @@ def test_setup_next_points_to_first_missing_section(tmp_path, monkeypatch) -> No
     monkeypatch.setenv("GPUCALL_CREDENTIALS", str(tmp_path / "credentials.yml"))
     text = setup_next_text(tmp_path / "config")
 
-    assert "Next required step: config initialized" in text
-    assert "gpucall setup section profile" in text
+    assert "Next required step: choose a starter plan" in text
+    assert "gpucall setup starter-plan --profile local-trial" in text
 
 
 def test_setup_section_providers_is_dashboard_not_linear_wizard(tmp_path, monkeypatch) -> None:
@@ -43,10 +44,45 @@ def test_setup_section_providers_is_dashboard_not_linear_wizard(tmp_path, monkey
     text = setup_section_text(tmp_path / "config", "providers")
 
     assert "GPU execution surfaces" in text
-    assert "Configure Modal" in text
-    assert "Configure RunPod" in text
+    assert "--provider modal" in text
+    assert "--provider runpod" in text
     assert "Register controlled runtime" in text
-    assert "Back to setup overview" in text
+    assert "local-trial" in text
+
+
+def test_setup_starter_plan_makes_local_trial_unambiguous(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("GPUCALL_CREDENTIALS", str(tmp_path / "credentials.yml"))
+    config_dir = tmp_path / "config"
+    plan = tmp_path / "gpucall.setup.yml"
+
+    report = write_starter_plan(plan, profile="local-trial", provider=None)
+    dry_run = apply_setup_plan(config_dir, plan, dry_run=True, yes=True)
+    applied = apply_setup_plan(config_dir, plan, dry_run=False, yes=True)
+    next_text = setup_next_text(config_dir)
+
+    assert "Wrote starter setup plan" in report
+    assert "providers:" not in plan.read_text(encoding="utf-8")
+    assert "Setup plan: local-trial" in dry_run
+    assert "Applied setup plan." in applied
+    assert "All required setup checks are satisfied" in next_text
+    assert "gateway URL and caller auth before external callers" in setup_status_text(config_dir)
+
+
+def test_setup_starter_plan_cloud_path_is_copy_pasteable(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("GPUCALL_CREDENTIALS", str(tmp_path / "credentials.yml"))
+    plan = tmp_path / "gpucall.setup.yml"
+
+    report = write_starter_plan(plan, profile="internal-team", provider="runpod")
+    text = plan.read_text(encoding="utf-8")
+    dry_run = apply_setup_plan(tmp_path / "config", plan, dry_run=True, yes=False)
+
+    assert "gpucall setup apply --file" in report
+    assert "profile: internal-team" in text
+    assert "runpod:" in text
+    assert "source: prompt" in text
+    assert "endpoint_id is optional on first install" in text
+    assert "trusted_bootstrap" in text
+    assert "provider account: runpod (endpoint provisioning pending)" in dry_run
 
 
 def test_setup_sections_cover_recipe_inbox_and_external_prompt(tmp_path, monkeypatch) -> None:

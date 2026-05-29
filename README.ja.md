@@ -123,6 +123,23 @@ gpucall setup status
 gpucall setup next
 ```
 
+初見の場合は local trial から始めます。provider credentials、endpoint ID、
+object storage、tenant handoff、billable generation は不要です。
+
+```bash
+gpucall setup starter-plan --profile local-trial
+gpucall setup apply --file gpucall.setup.yml --dry-run
+gpucall setup apply --file gpucall.setup.yml --yes
+```
+
+local trial が通った後に cloud provider 用 plan を作ります。
+
+```bash
+gpucall setup starter-plan --profile internal-team --provider runpod --output gpucall.setup.yml
+gpucall setup apply --file gpucall.setup.yml --dry-run
+gpucall setup apply --file gpucall.setup.yml
+```
+
 setup-as-code で導入する場合:
 
 ```bash
@@ -239,7 +256,7 @@ https://raw.githubusercontent.com/noiehoie/gpucall/main/docs/EXTERNAL_SYSTEM_ONB
 呼び出し側補助ツールが未導入の場合は、SDK helper wheel だけを導入します。
 
 ```bash
-uv tool install https://github.com/noiehoie/gpucall/releases/download/v2.0.22/gpucall_sdk-2.0.22-py3-none-any.whl
+uv tool install https://github.com/noiehoie/gpucall/releases/download/v2.0.23/gpucall_sdk-2.0.23-py3-none-any.whl
 gpucall-recipe-draft --help
 ```
 

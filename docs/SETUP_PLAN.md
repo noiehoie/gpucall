@@ -18,6 +18,24 @@ gpucall setup status
 gpucall setup next
 ```
 
+For a first install, start with a local trial plan. It verifies the product
+without provider credentials, endpoint IDs, object storage, tenant handoff, or
+billable generation:
+
+```bash
+gpucall setup starter-plan --profile local-trial
+gpucall setup apply --file gpucall.setup.yml --dry-run
+gpucall setup apply --file gpucall.setup.yml --yes
+```
+
+After local trial, generate a cloud provider starter plan:
+
+```bash
+gpucall setup starter-plan --profile internal-team --provider runpod --output gpucall.setup.yml
+gpucall setup apply --file gpucall.setup.yml --dry-run
+gpucall setup apply --file gpucall.setup.yml
+```
+
 `gpucall setup status` is non-interactive: it prints required/recommended
 checks and the next setup commands, not the interactive section menu.
 `gpucall validate-config` defaults to a bounded count/sample summary; run
@@ -87,7 +105,7 @@ recipe_automation:
 handoff_assets:
   onboarding_prompt_url: https://assets.example/gpucall/EXTERNAL_SYSTEM_ONBOARDING_PROMPT.md
   onboarding_manual_url: https://assets.example/gpucall/EXTERNAL_SYSTEM_ONBOARDING_MANUAL.md
-  caller_sdk_wheel_url: https://assets.example/gpucall/gpucall_sdk-2.0.22-py3-none-any.whl
+  caller_sdk_wheel_url: https://assets.example/gpucall/gpucall_sdk-2.0.23-py3-none-any.whl
 
 external_systems:
   - name: example-system
@@ -340,7 +358,7 @@ deployments can point handoff prompts at operator-hosted copies instead:
 handoff_assets:
   onboarding_prompt_url: https://assets.example/gpucall/EXTERNAL_SYSTEM_ONBOARDING_PROMPT.md
   onboarding_manual_url: https://assets.example/gpucall/EXTERNAL_SYSTEM_ONBOARDING_MANUAL.md
-  caller_sdk_wheel_url: https://assets.example/gpucall/gpucall_sdk-2.0.22-py3-none-any.whl
+  caller_sdk_wheel_url: https://assets.example/gpucall/gpucall_sdk-2.0.23-py3-none-any.whl
 ```
 
 `gpucall setup export-handoff-prompt` uses these values when present. This
