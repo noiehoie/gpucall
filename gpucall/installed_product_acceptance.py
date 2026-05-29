@@ -116,7 +116,7 @@ tenant_onboarding:
 recipe_automation:
   auto_materialize: true
 handoff_assets:
-  caller_sdk_wheel_url: https://assets.example/sdk/gpucall_sdk-2.0.19-py3-none-any.whl
+  caller_sdk_wheel_url: https://assets.example/sdk/gpucall_sdk-2.0.20-py3-none-any.whl
 external_systems:
   - name: example-caller
     expected_workloads: [infer, vision]
