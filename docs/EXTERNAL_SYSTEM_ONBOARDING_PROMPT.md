@@ -61,7 +61,7 @@ deployment instruction:
   quality feedback
 - `<canary-command>`: smallest representative command for that system
 - `<gpucall-sdk-wheel-url>`: caller SDK helper wheel URL; default is
-  `https://github.com/noiehoie/gpucall/releases/download/v2.0.24/gpucall_sdk-2.0.24-py3-none-any.whl`, or an operator-hosted
+  `https://github.com/noiehoie/gpucall/releases/download/v2.0.25/gpucall_sdk-2.0.25-py3-none-any.whl`, or an operator-hosted
   mirror for the installed environment
 
 Strict acceptance rule:

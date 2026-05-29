@@ -73,13 +73,14 @@ set -eu
 cat <<'UV_INSTALLER'
 #!/usr/bin/env sh
 set -eu
-bin_dir="$(dirname -- "${XDG_DATA_HOME:-$HOME/.local/share}")/bin"
+[ "${INSTALLER_NO_MODIFY_PATH:-}" = "1" ] || exit 91
+bin_dir="${UV_INSTALL_DIR:-$(dirname -- "${XDG_DATA_HOME:-$HOME/.local/share}")/bin}"
 mkdir -p "$bin_dir"
 cat > "$bin_dir/uv" <<'UV'
 #!/usr/bin/env sh
 set -eu
 if [ "${1:-}" = "tool" ] && [ "${2:-}" = "install" ]; then
-  bin_dir="$(dirname -- "${XDG_DATA_HOME:-$HOME/.local/share}")/bin"
+  bin_dir="${UV_INSTALL_DIR:-$(dirname -- "${XDG_DATA_HOME:-$HOME/.local/share}")/bin}"
   mkdir -p "$bin_dir"
   cat > "$bin_dir/gpucall" <<'GPUCALL'
 #!/usr/bin/env sh
@@ -125,6 +126,8 @@ UV_INSTALLER
     assert "user_bin_dir: " + str(xdg_root / "bin") in output
     assert "uv install did not put uv on PATH" not in output
     assert f"gpucall install: installed {xdg_root / 'bin' / 'gpucall'}" in output
+    assert not (home / ".profile").exists()
+    assert not (home / ".zshrc").exists()
 
 
 def test_readmes_start_with_installer_not_setup_binary() -> None:

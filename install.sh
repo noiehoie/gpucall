@@ -242,7 +242,7 @@ if [ "$dry_run" = "1" ]; then
   if have uv; then
     log "  would run: $(command -v uv) tool install --force \"$package_spec\""
   else
-    log "  would run: curl -fsSL \"$uv_install_url\" | sh"
+    log "  would run: curl -fsSL \"$uv_install_url\" | UV_INSTALL_DIR=\"$user_bin_dir\" INSTALLER_NO_MODIFY_PATH=1 sh"
     log "  would run: $uv_cmd tool install --force \"$package_spec\""
   fi
   log "  next: gpucall setup"
@@ -253,7 +253,7 @@ mkdir -p "$xdg_config_home" "$xdg_data_home" "$xdg_state_home" "$xdg_cache_home"
 
 if ! have uv; then
   log "$program: installing uv"
-  curl -fsSL "$uv_install_url" | sh
+  curl -fsSL "$uv_install_url" | UV_INSTALL_DIR="$user_bin_dir" INSTALLER_NO_MODIFY_PATH=1 sh
   prepend_path "$user_bin_dir"
   prepend_path "$home_dir/.local/bin"
   prepend_path "$home_dir/.cargo/bin"
