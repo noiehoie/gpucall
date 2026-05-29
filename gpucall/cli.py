@@ -31,6 +31,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if __package__ in (None, ""):
     sys.path.insert(0, str(PROJECT_ROOT))
 
+from gpucall import __version__
 from gpucall.app import build_runtime, create_app, plan_with_worker_refs, worker_readable_request
 from gpucall.admin_automation import admin_automation_summary, configure_admin_automation
 from gpucall.catalog import SQLiteCapabilityCatalog, dumps_snapshot
@@ -86,6 +87,7 @@ def _positive_int(value: str) -> int:
 
 def main() -> None:
     parser = argparse.ArgumentParser(prog="gpucall")
+    parser.add_argument("--version", action="version", version=f"%(prog)s {__version__}")
     sub = parser.add_subparsers(dest="command", required=True)
     serve = sub.add_parser("serve")
     serve.add_argument("--config-dir", type=Path, default=default_config_dir())

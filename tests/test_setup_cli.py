@@ -5,6 +5,8 @@ from pathlib import Path
 
 import pytest
 
+from gpucall import __version__
+from gpucall.cli import main
 from gpucall.cli_commands.setup import apply_setup_plan, export_handoff_prompt, setup_next_text, setup_section_text, setup_status_text, write_starter_plan
 from gpucall.config import load_admin_automation, load_object_store
 from gpucall.credentials import load_credentials, save_credentials
@@ -39,6 +41,16 @@ def test_setup_next_points_to_first_missing_section(tmp_path, monkeypatch) -> No
     assert "gpucall setup starter-plan --profile local-trial" in text
 
 
+def test_cli_version_is_available(monkeypatch, capsys) -> None:
+    monkeypatch.setattr("sys.argv", ["gpucall", "--version"])
+
+    with pytest.raises(SystemExit) as exc:
+        main()
+
+    assert exc.value.code == 0
+    assert f"gpucall {__version__}" in capsys.readouterr().out
+
+
 def test_setup_section_providers_is_dashboard_not_linear_wizard(tmp_path, monkeypatch) -> None:
     monkeypatch.setenv("GPUCALL_CREDENTIALS", str(tmp_path / "credentials.yml"))
     text = setup_section_text(tmp_path / "config", "providers")
@@ -65,7 +77,10 @@ def test_setup_starter_plan_makes_local_trial_unambiguous(tmp_path, monkeypatch)
     assert "Setup plan: local-trial" in dry_run
     assert "Applied setup plan." in applied
     assert "All required setup checks are satisfied" in next_text
-    assert "gateway URL and caller auth before external callers" in setup_status_text(config_dir)
+    status = setup_status_text(config_dir)
+    assert "[ok] GPU execution surfaces: local smoke runtime" in status
+    assert "cloud provider before external callers" in status
+    assert "gateway URL and caller auth before external callers" in status
 
 
 def test_setup_starter_plan_cloud_path_is_copy_pasteable(tmp_path, monkeypatch) -> None:

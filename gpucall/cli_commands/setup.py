@@ -690,14 +690,20 @@ def _setup_status(config_dir: Path, *, profile: str | None) -> dict[str, Any]:
     config_item = {"state": "ok" if config_exists and config_error is None else "missing", "label": "config initialized", "section": "profile"}
     gateway_item = {"state": "ok" if gateway_url and gateway_auth == "ok" else "missing", "label": "gateway URL and caller auth", "section": "gateway"}
     provider_item = {"state": provider_state, "label": _provider_label(providers, provider_labels), "section": "providers"}
+    local_provider_item = {
+        "state": "ok" if providers["local"] == "ok" else "missing",
+        "label": "GPU execution surfaces: local smoke runtime",
+        "section": "providers",
+    }
     object_store_item = {"state": object_store_state, "label": "object store / DataRef storage", "section": "object-store"}
     handoff_item = {"state": handoff_state, "label": "tenant API key handoff", "section": "tenant-handoff"}
     recipe_inbox_item = {"state": recipe_inbox_state, "label": "recipe request inbox", "section": "recipe-inbox"}
     launch_item = {"state": launch_state, "label": "launch check readiness", "section": "launch"}
     if selected_profile == "local-trial":
-        required = [config_item, provider_item, launch_item]
+        required = [config_item, local_provider_item, launch_item]
         recommended = [
             {**gateway_item, "label": "gateway URL and caller auth before external callers"},
+            {**provider_item, "label": "cloud provider before external callers"},
             {**object_store_item, "label": "object store / DataRef storage before file or image workflows"},
             {**handoff_item, "label": "tenant API key handoff before external callers"},
             {**recipe_inbox_item, "label": "recipe request inbox before external callers"},
