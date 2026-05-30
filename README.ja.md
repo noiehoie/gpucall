@@ -132,10 +132,10 @@ gpucall setup apply --file gpucall.setup.yml --dry-run
 gpucall setup apply --file gpucall.setup.yml --yes
 ```
 
-local trial が通った後に cloud provider 用 plan を作ります。
+local trial が通った後に Modal happy-path cloud plan を作ります。
 
 ```bash
-gpucall setup starter-plan --profile internal-team --provider runpod --output gpucall.setup.yml
+gpucall setup starter-plan --profile internal-team --provider modal --output gpucall.setup.yml
 gpucall setup apply --file gpucall.setup.yml --dry-run
 gpucall setup apply --file gpucall.setup.yml
 ```
