@@ -2,8 +2,10 @@ from __future__ import annotations
 
 import argparse
 import getpass
+import os
 import secrets
 import shutil
+import subprocess
 import sys
 from importlib.resources import files
 from pathlib import Path
@@ -52,6 +54,7 @@ class SetupProvider(BaseModel):
     credentials: SetupCredentials | None = None
     endpoint_id: str | None = None
     ssh_key_path: str | None = None
+    deploy_worker: bool = False
 
 
 class SetupObjectStore(BaseModel):
@@ -165,6 +168,8 @@ class SetupPlan(BaseModel):
             contract = PROVIDER_SETUP_CONTRACTS[name]
             if contract.prompt_requires_ssh_key and not provider.ssh_key_path and provider.credentials.source == "prompt":
                 raise ValueError("hyperstack prompt setup requires ssh_key_path")
+            if provider.deploy_worker and name != "modal":
+                raise ValueError("deploy_worker is supported only for modal")
         if self.object_store is not None:
             if not self.object_store.provider:
                 raise ValueError("object_store requires provider")
@@ -190,7 +195,7 @@ Common commands:
   gpucall setup status
   gpucall setup next
   gpucall setup starter-plan --profile local-trial
-  gpucall setup starter-plan --profile internal-team --provider runpod
+  gpucall setup starter-plan --profile internal-team --provider modal
   gpucall setup section providers
   gpucall setup apply --file gpucall.setup.yml --dry-run
   gpucall setup apply --file gpucall.setup.yml --yes
@@ -295,7 +300,7 @@ Fast path:
 
 Cloud path after local trial:
 
-  gpucall setup starter-plan --profile internal-team --provider runpod --output gpucall.setup.yml
+  gpucall setup starter-plan --profile internal-team --provider modal --output gpucall.setup.yml
   gpucall setup apply --file gpucall.setup.yml --dry-run
   gpucall setup apply --file gpucall.setup.yml
 
@@ -401,8 +406,8 @@ def setup_next_text(config_dir: Path, *, profile: str | None = None) -> str:
             "  gpucall setup starter-plan --profile local-trial\n"
             "  gpucall setup apply --file gpucall.setup.yml --dry-run\n"
             "  gpucall setup apply --file gpucall.setup.yml --yes\n\n"
-            "After local trial, switch to a cloud provider plan:\n"
-            "  gpucall setup starter-plan --profile internal-team --provider runpod --output gpucall.setup.yml"
+            "After local trial, switch to the Modal happy-path cloud plan:\n"
+            "  gpucall setup starter-plan --profile internal-team --provider modal --output gpucall.setup.yml"
         )
     for item in status["required"]:
         if item["state"] in {"missing", "partial", "warn"}:
@@ -425,7 +430,7 @@ def setup_section_text(config_dir: Path, section: str, *, profile: str | None = 
             "  3. production-multitenant  strict budgets, DataRefs, launch gates\n"
             "  4. hardened-regulated      strict auth and audit evidence\n\n"
             "For cloud setup after the trial:\n"
-            "  gpucall setup starter-plan --profile internal-team --provider runpod --output gpucall.setup.yml"
+            "  gpucall setup starter-plan --profile internal-team --provider modal --output gpucall.setup.yml"
         )
     if section == "gateway":
         return (
@@ -529,7 +534,7 @@ def setup_section_text(config_dir: Path, section: str, *, profile: str | None = 
 
 def write_starter_plan(output: Path | None, *, profile: str | None, provider: str | None) -> str:
     selected_profile = profile or "local-trial"
-    selected_provider = provider or ("none" if selected_profile == "local-trial" else "runpod")
+    selected_provider = provider or ("none" if selected_profile == "local-trial" else "modal")
     if selected_profile == "local-trial" and selected_provider != "none":
         raise SystemExit("local-trial starter plan does not use a cloud provider; omit --provider or use --provider none")
     if selected_profile != "local-trial" and selected_provider == "none":
@@ -590,6 +595,8 @@ launch:
                 "    enabled: true",
                 "    credentials:",
                 "      source: prompt",
+                "    # Deploy the bundled gpucall Modal worker during setup apply.",
+                "    deploy_worker: true",
             ]
         )
     elif provider == "hyperstack":
@@ -604,6 +611,31 @@ launch:
         )
     else:
         raise SystemExit(f"unsupported starter provider: {provider}")
+    if provider == "modal":
+        automation_lines = [
+            "recipe_automation:",
+            "  auto_materialize: true",
+            "  auto_validate_existing_tuples: true",
+            "  auto_activate_existing_validated_recipe: true",
+            "  auto_promote_candidates: true",
+            "  auto_provision_supply: true",
+            "  auto_apply_supply: false",
+            "  auto_billable_validation: true",
+            "  auto_validation_budget_usd: 0.10",
+            "  auto_activate_validated: true",
+            "  auto_require_auto_select_safe: false",
+            "  auto_set_auto_select: true",
+            "  auto_run_validate_config: true",
+            "  auto_run_launch_check: true",
+        ]
+    else:
+        automation_lines = [
+            "recipe_automation:",
+            "  auto_materialize: true",
+            "  auto_promote_candidates: true",
+            "  auto_provision_supply: true",
+            "  auto_apply_supply: false",
+        ]
     lines.extend(
         [
             "tenant_onboarding:",
@@ -611,11 +643,7 @@ launch:
             "  allowed_hosts:",
             "    - localhost",
             f"  recipe_inbox: {recipe_inbox}",
-            "recipe_automation:",
-            "  auto_materialize: true",
-            "  auto_promote_candidates: true",
-            "  auto_provision_supply: true",
-            "  auto_apply_supply: false",
+            *automation_lines,
             "launch:",
             "  run_static_check: true",
             "",
@@ -641,13 +669,14 @@ def apply_setup_plan(config_dir: Path, plan_path: Path, *, dry_run: bool, yes: b
         return report + "\nAborted."
     _ensure_config_initialized(config_dir)
     _apply_gateway(config_dir, plan)
-    _apply_providers(config_dir, plan)
+    provider_results = _apply_providers(config_dir, plan)
     _apply_object_store(config_dir, plan)
     _apply_tenant_onboarding(config_dir, plan)
     _maybe_create_local_inboxes(plan.tenant_onboarding.recipe_inbox)
     _write_setup_state(config_dir, plan)
     post_checks = _post_apply_checks(config_dir, plan)
-    return report + "\nApplied setup plan.\n\n" + post_checks + "\n\n" + setup_status_text(config_dir, profile=plan.profile)
+    provider_text = ("\n\nProvider setup actions:\n" + "\n".join(f"  {item}" for item in provider_results)) if provider_results else ""
+    return report + "\nApplied setup plan." + provider_text + "\n\n" + post_checks + "\n\n" + setup_status_text(config_dir, profile=plan.profile)
 
 
 def export_handoff_prompt(config_dir: Path, system_name: str, *, require_concrete: bool = True) -> str:
@@ -931,6 +960,9 @@ def _planned_changes(config_dir: Path, plan: SetupPlan) -> list[str]:
         changes.append(str(config_dir / "workers" / "runpod-vllm-serverless.yml"))
     elif runpod.enabled:
         changes.append("provider account: runpod (endpoint provisioning pending)")
+    modal = plan.providers.get("modal", SetupProvider())
+    if modal.enabled and modal.deploy_worker:
+        changes.append("provider worker deployment: modal gpucall-worker-json")
     credential_targets: list[str] = []
     if plan.gateway.caller_auth.mode == "generated_gateway_key":
         credential_targets.append("auth")
@@ -1021,7 +1053,8 @@ def _apply_gateway(config_dir: Path, plan: SetupPlan) -> None:
         save_credentials("auth", {"api_keys": token})
 
 
-def _apply_providers(config_dir: Path, plan: SetupPlan) -> None:
+def _apply_providers(config_dir: Path, plan: SetupPlan) -> list[str]:
+    results: list[str] = []
     for name, provider in plan.providers.items():
         if not provider.enabled or provider.credentials is None:
             continue
@@ -1038,9 +1071,40 @@ def _apply_providers(config_dir: Path, plan: SetupPlan) -> None:
                 save_credentials("modal", values)
             if name == "hyperstack":
                 save_credentials("hyperstack", {"api_key": getpass.getpass("Hyperstack API key: ").strip(), "ssh_key_path": provider.ssh_key_path or ""})
+        if name == "modal" and provider.deploy_worker:
+            results.append(_deploy_modal_worker())
         if name == "runpod" and provider.endpoint_id:
             _update_yaml(config_dir / "surfaces" / "runpod-vllm-serverless.yml", {"target": provider.endpoint_id})
             _update_yaml(config_dir / "workers" / "runpod-vllm-serverless.yml", {"target": provider.endpoint_id})
+    return results
+
+
+def _deploy_modal_worker() -> str:
+    credentials = load_credentials().get("modal", {})
+    env = dict(os.environ)
+    token_id = str(credentials.get("token_id") or "").strip()
+    token_secret = str(credentials.get("token_secret") or "").strip()
+    environment = str(credentials.get("environment") or "").strip()
+    if token_id and token_secret:
+        env["MODAL_TOKEN_ID"] = token_id
+        env["MODAL_TOKEN_SECRET"] = token_secret
+    if environment:
+        env["MODAL_ENVIRONMENT"] = environment
+    command = [sys.executable, "-m", "modal", "deploy", "gpucall.worker_contracts.modal"]
+    completed = subprocess.run(command, capture_output=True, text=True, env=env, check=False, timeout=1800)
+    if completed.returncode != 0:
+        raise SystemExit("Modal worker deploy failed: " + _safe_subprocess_tail(completed.stderr or completed.stdout))
+    return "[ok] Modal worker deployed: gpucall-worker-json"
+
+
+def _safe_subprocess_tail(text: str, *, limit: int = 1200) -> str:
+    redacted = text
+    modal_credentials = load_credentials().get("modal", {})
+    for value in (modal_credentials.get("token_secret"), modal_credentials.get("token_id")):
+        secret = str(value or "").strip()
+        if secret:
+            redacted = redacted.replace(secret, "<redacted>")
+    return redacted.strip()[-limit:] or "no output"
 
 
 def _apply_object_store(config_dir: Path, plan: SetupPlan) -> None:

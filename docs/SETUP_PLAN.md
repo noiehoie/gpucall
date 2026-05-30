@@ -28,10 +28,10 @@ gpucall setup apply --file gpucall.setup.yml --dry-run
 gpucall setup apply --file gpucall.setup.yml --yes
 ```
 
-After local trial, generate a cloud provider starter plan:
+After local trial, generate the Modal happy-path cloud starter plan:
 
 ```bash
-gpucall setup starter-plan --profile internal-team --provider runpod --output gpucall.setup.yml
+gpucall setup starter-plan --profile internal-team --provider modal --output gpucall.setup.yml
 gpucall setup apply --file gpucall.setup.yml --dry-run
 gpucall setup apply --file gpucall.setup.yml
 ```
@@ -64,13 +64,11 @@ providers:
   modal:
     enabled: true
     credentials:
-      source: official_cli
+      source: gpucall_credentials
+    deploy_worker: true
 
   runpod:
-    enabled: true
-    credentials:
-      source: gpucall_credentials
-    endpoint_id: rp-xxxxxxxxxxxx
+    enabled: false
 
   hyperstack:
     enabled: false
@@ -92,20 +90,24 @@ tenant_onboarding:
 
 recipe_automation:
   auto_materialize: true
-  auto_validate_existing_tuples: false
-  auto_activate_existing_validated_recipe: false
-  auto_promote_candidates: false
-  auto_provision_supply: false
+  auto_validate_existing_tuples: true
+  auto_activate_existing_validated_recipe: true
+  auto_promote_candidates: true
+  auto_provision_supply: true
   auto_apply_supply: false
-  auto_billable_validation: false
-  auto_activate_validated: false
-  auto_set_auto_select: false
+  auto_billable_validation: true
+  auto_validation_budget_usd: 0.10
+  auto_activate_validated: true
+  auto_require_auto_select_safe: false
+  auto_set_auto_select: true
+  auto_run_validate_config: true
+  auto_run_launch_check: true
   promotion_work_dir: /opt/gpucall/state/recipe_requests/promotions
 
 handoff_assets:
   onboarding_prompt_url: https://assets.example/gpucall/EXTERNAL_SYSTEM_ONBOARDING_PROMPT.md
   onboarding_manual_url: https://assets.example/gpucall/EXTERNAL_SYSTEM_ONBOARDING_MANUAL.md
-  caller_sdk_wheel_url: https://assets.example/gpucall/gpucall_sdk-2.0.28-py3-none-any.whl
+  caller_sdk_wheel_url: https://assets.example/gpucall/gpucall_sdk-2.0.29-py3-none-any.whl
 
 external_systems:
   - name: example-system
@@ -197,6 +199,7 @@ providers:
     enabled: true
     credentials:
       source: gpucall_credentials
+    deploy_worker: true
 ```
 
 Modal token credentials are stored in the gpucall credentials store as
@@ -204,6 +207,13 @@ Modal token credentials are stored in the gpucall credentials store as
 `MODAL_TOKEN_ID` and `MODAL_TOKEN_SECRET` at runtime. `MODAL_ENVIRONMENT` can be
 set from `providers.modal.environment` when needed. Legacy official CLI profile
 setup remains possible, but it is not the default production path.
+
+`deploy_worker: true` deploys the bundled `gpucall-worker-json` Modal app during
+`gpucall setup apply`. That makes the shipped Modal function-runtime tuples
+real provider targets before caller intake is processed. The Modal starter plan
+then lets the admin inbox loop materialize sanitized caller intake, refresh
+Provider Panopticon readiness, run a budgeted tuple smoke, and activate only
+after route validation evidence passes.
 
 RunPod managed endpoint:
 
@@ -358,7 +368,7 @@ deployments can point handoff prompts at operator-hosted copies instead:
 handoff_assets:
   onboarding_prompt_url: https://assets.example/gpucall/EXTERNAL_SYSTEM_ONBOARDING_PROMPT.md
   onboarding_manual_url: https://assets.example/gpucall/EXTERNAL_SYSTEM_ONBOARDING_MANUAL.md
-  caller_sdk_wheel_url: https://assets.example/gpucall/gpucall_sdk-2.0.28-py3-none-any.whl
+  caller_sdk_wheel_url: https://assets.example/gpucall/gpucall_sdk-2.0.29-py3-none-any.whl
 ```
 
 `gpucall setup export-handoff-prompt` uses these values when present. This

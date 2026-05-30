@@ -727,6 +727,58 @@ def test_admin_process_inbox_existing_tuple_validation_tries_next_eligible(tmp_p
     assert [item["tuple"] for item in activation["validation_attempts"]] == attempts
 
 
+def test_existing_tuple_auto_validation_uses_only_readiness_ready_tuples(tmp_path, monkeypatch) -> None:
+    config_dir = tmp_path / "config"
+    shutil.copytree("gpucall/config_templates", config_dir)
+    report_dir = tmp_path / "reports"
+    report_dir.mkdir()
+    attempts = []
+
+    def fake_readiness_report(*, config_dir, recipe, validation_dir, live=False, **kwargs):
+        assert live is True
+        return {
+            "recipes": [
+                {
+                    "recipe": recipe,
+                    "live_ready_tuples": [],
+                    "live_blocked_tuples": [
+                        {"tuple": "hyperstack-a100-nvlinkx1-qwen2-5-7b-instruct", "live_reason": "ssh_remote_cidr_not_configured"},
+                        {"tuple": "modal-a10g", "live_reason": "missing_route_validation_evidence"},
+                    ],
+                }
+            ]
+        }
+
+    def fake_validation(**kwargs):
+        attempts.append(kwargs["tuple_name"])
+        return {"returncode": 0, "passed": True, "artifact_path": str(tmp_path / "modal-validation.json")}
+
+    monkeypatch.setattr("gpucall.recipe_admin.build_readiness_report", fake_readiness_report)
+    monkeypatch.setattr("gpucall.recipe_admin._run_existing_tuple_validation", fake_validation)
+
+    activation = _auto_existing_tuple_report(
+        {
+            "canonical_recipe": {"name": "infer-translate-text-draft"},
+            "eligible_tuples": ["hyperstack-a100-nvlinkx1-qwen2-5-7b-instruct", "modal-a10g"],
+            "live_validation": {"matched": []},
+        },
+        request_id="rr-modal-happy",
+        automation=RecipeAdminAutomationConfig(
+            recipe_inbox_auto_materialize=True,
+            recipe_inbox_auto_validate_existing_tuples=True,
+            recipe_inbox_auto_billable_validation=True,
+        ),
+        report_dir=report_dir,
+        config_dir=config_dir,
+        validation_dir=tmp_path / "tuple-validation",
+        force=False,
+    )
+
+    assert attempts == ["modal-a10g"]
+    assert activation["validation_gate"]["ready_tuples"] == ["modal-a10g"]
+    assert activation["decision"] == "VALIDATED_READY_TO_ACTIVATE"
+
+
 def test_existing_tuple_auto_validation_blocks_before_billable_when_readiness_is_stale(tmp_path, monkeypatch) -> None:
     config_dir = tmp_path / "config"
     shutil.copytree("gpucall/config_templates", config_dir)

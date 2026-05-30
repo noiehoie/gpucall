@@ -83,6 +83,18 @@ def test_provision_plan_can_select_candidate_from_recipe_admin_review(tmp_path) 
     assert plan.actions[0].request["templateId"] == "tm8l7oonfc"
 
 
+def test_modal_function_runtime_supply_provisioning_is_noop_when_target_is_configured() -> None:
+    plan = build_provider_supply_provisioning_plan(
+        config_dir=CONFIG_DIR,
+        tuple_name="modal-a10g",
+        now=NOW,
+    )
+
+    assert plan.status == "no_actions"
+    assert plan.action_count == 0
+    assert plan.blockers == []
+
+
 def test_warm_workers_are_blocked_by_default_policy() -> None:
     plan = build_provider_supply_provisioning_plan(
         config_dir=CONFIG_DIR,

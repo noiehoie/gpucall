@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import types
 from pathlib import Path
 
 import pytest
@@ -98,6 +99,61 @@ def test_setup_starter_plan_cloud_path_is_copy_pasteable(tmp_path, monkeypatch) 
     assert "endpoint_id is optional on first install" in text
     assert "trusted_bootstrap" in text
     assert "provider account: runpod (endpoint provisioning pending)" in dry_run
+
+
+def test_setup_starter_plan_modal_is_oob_happy_path(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("GPUCALL_CREDENTIALS", str(tmp_path / "credentials.yml"))
+    plan = tmp_path / "gpucall.setup.yml"
+
+    report = write_starter_plan(plan, profile="internal-team", provider="modal")
+    text = plan.read_text(encoding="utf-8")
+    dry_run = apply_setup_plan(tmp_path / "config", plan, dry_run=True, yes=False)
+
+    assert "gpucall setup apply --file" in report
+    assert "modal:" in text
+    assert "deploy_worker: true" in text
+    assert "auto_validate_existing_tuples: true" in text
+    assert "auto_activate_existing_validated_recipe: true" in text
+    assert "auto_billable_validation: true" in text
+    assert "auto_activate_validated: true" in text
+    assert "auto_set_auto_select: true" in text
+    assert "auto_run_launch_check: true" in text
+    assert "provider worker deployment: modal gpucall-worker-json" in dry_run
+
+
+def test_setup_plan_modal_deploy_worker_uses_gpucall_credentials(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("GPUCALL_CREDENTIALS", str(tmp_path / "credentials.yml"))
+    save_credentials("modal", {"token_id": "ak-test", "token_secret": "as-test", "environment": "main"})
+    calls = []
+
+    def fake_run(command, *, capture_output, text, env, check, timeout):
+        calls.append({"command": command, "env": env, "timeout": timeout})
+        return types.SimpleNamespace(returncode=0, stdout="deployed", stderr="")
+
+    monkeypatch.setattr("gpucall.cli_commands.setup.subprocess.run", fake_run)
+    config_dir = tmp_path / "config"
+    plan = tmp_path / "gpucall.setup.yml"
+    plan.write_text(
+        """
+setup_schema_version: 1
+profile: internal-team
+providers:
+  modal:
+    enabled: true
+    credentials:
+      source: gpucall_credentials
+    deploy_worker: true
+""".lstrip(),
+        encoding="utf-8",
+    )
+
+    report = apply_setup_plan(config_dir, plan, dry_run=False, yes=True)
+
+    assert "[ok] Modal worker deployed: gpucall-worker-json" in report
+    assert calls[0]["command"][-3:] == ["modal", "deploy", "gpucall.worker_contracts.modal"]
+    assert calls[0]["env"]["MODAL_TOKEN_ID"] == "ak-test"
+    assert calls[0]["env"]["MODAL_TOKEN_SECRET"] == "as-test"
+    assert calls[0]["env"]["MODAL_ENVIRONMENT"] == "main"
 
 
 def test_setup_sections_cover_recipe_inbox_and_external_prompt(tmp_path, monkeypatch) -> None:

@@ -140,10 +140,10 @@ gpucall setup apply --file gpucall.setup.yml --dry-run
 gpucall setup apply --file gpucall.setup.yml --yes
 ```
 
-After the local trial passes, create a cloud provider plan:
+After the local trial passes, create the Modal happy-path cloud plan:
 
 ```bash
-gpucall setup starter-plan --profile internal-team --provider runpod --output gpucall.setup.yml
+gpucall setup starter-plan --profile internal-team --provider modal --output gpucall.setup.yml
 gpucall setup apply --file gpucall.setup.yml --dry-run
 gpucall setup apply --file gpucall.setup.yml
 ```
@@ -293,7 +293,7 @@ the caller repo, such as
 If the caller-side helper is not installed, install only the SDK helper wheel:
 
 ```bash
-uv tool install https://github.com/noiehoie/gpucall/releases/download/v2.0.28/gpucall_sdk-2.0.28-py3-none-any.whl
+uv tool install https://github.com/noiehoie/gpucall/releases/download/v2.0.29/gpucall_sdk-2.0.29-py3-none-any.whl
 gpucall-recipe-draft --help
 ```
 
@@ -367,26 +367,33 @@ gpucall-recipe-admin watch --inbox-dir /path/to/inbox --output-dir config/recipe
 ```
 
 For a persistent operator host, the same route can be opened by config instead
-of a per-command flag. This remains disabled by default:
+of a per-command flag. Raw defaults remain disabled; the Modal starter plan
+enables the bounded happy path explicitly:
 
 ```yaml
 # config/admin.yml
 recipe_inbox_auto_materialize: true
 recipe_inbox_auto_validate_existing_tuples: true
+recipe_inbox_auto_activate_existing_validated_recipe: true
 recipe_inbox_auto_promote_candidates: true
 recipe_inbox_auto_provision_supply: true
 recipe_inbox_auto_apply_supply: false
-recipe_inbox_auto_billable_validation: false
+recipe_inbox_auto_billable_validation: true
 recipe_inbox_auto_validation_budget_usd: 0.10
-recipe_inbox_auto_activate_validated: false
+recipe_inbox_auto_activate_validated: true
+recipe_inbox_auto_require_auto_select_safe: false
+recipe_inbox_auto_set_auto_select: true
+recipe_inbox_auto_run_launch_check: true
 ```
 
 With that file present, `gpucall-recipe-admin watch` and `process-inbox` can
 materialize sanitized caller submissions without `--accept-all`, prepare
 candidate promotion workspaces, and write Provider Panopticon supply
-provisioning plans. Provider mutation, billable smoke validation, and production
-activation remain separate explicit gates because they can spend provider money
-or mutate active routing.
+provisioning plans. Modal function-runtime tuples with configured targets do
+not need provider supply creation; they proceed through live readiness,
+budgeted tuple validation, and activation. RunPod and Hyperstack remain
+fail-closed unless their provider-specific supply and validation gates are
+configured explicitly.
 
 Inbox processing preserves the original submitted JSON as the audit source of
 truth under `inbox/processed` or `inbox/failed`. It also maintains a SQLite WAL

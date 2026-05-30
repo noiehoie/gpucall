@@ -20,7 +20,7 @@ from gpucall.targeting import is_configured_target
 from gpucall.tuple_promotion import _tuple_from_candidate
 
 
-SUPPORTED_SUPPLY_PROVISIONING_PROVIDERS = ("runpod",)
+SUPPORTED_SUPPLY_PROVISIONING_PROVIDERS = ("modal", "runpod")
 UNSUPPORTED_SUPPLY_PROVISIONING_PROVIDERS = tuple(
     provider for provider in CLOUD_PROVIDER_FAMILIES if provider not in SUPPORTED_SUPPLY_PROVISIONING_PROVIDERS
 )
@@ -196,6 +196,17 @@ def build_provider_supply_provisioning_plan(
         review_path=Path(review_path).expanduser() if review_path is not None else None,
     )
     payload = source.payload
+    if payload.get("adapter") == "modal" and payload.get("execution_surface") == "function_runtime":
+        if not is_configured_target(payload.get("target")):
+            blockers.append(
+                {
+                    "tuple": source.tuple_name,
+                    "reason": "modal function runtime tuple is missing a deployed function target",
+                    "adapter": payload.get("adapter"),
+                    "execution_surface": payload.get("execution_surface"),
+                }
+            )
+        return _plan(root, config.policy, generated_at, actions, blockers)
     if payload.get("adapter") != "runpod-vllm-serverless" or payload.get("execution_surface") != "managed_endpoint":
         blockers.append(
             {

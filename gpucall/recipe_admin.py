@@ -1004,6 +1004,7 @@ def _existing_tuple_validation_gate(readiness: Mapping[str, Any], *, eligible_tu
     recipes = report.get("recipes")
     recipe_rows = recipes if isinstance(recipes, list) else []
     eligible_set = set(eligible_tuples)
+    ready_tuples: list[str] = []
     next_actions: list[str] = []
     for recipe in recipe_rows:
         if not isinstance(recipe, Mapping):
@@ -1019,8 +1020,12 @@ def _existing_tuple_validation_gate(readiness: Mapping[str, Any], *, eligible_tu
                 continue
             reason = str(row.get("live_reason") or "")
             if _route_validation_refresh_reason(reason):
-                return {"decision": "READY_FOR_BILLABLE_VALIDATION", "next_actions": []}
+                if tuple_name not in ready_tuples:
+                    ready_tuples.append(tuple_name)
+                continue
             next_actions.append(f"resolve readiness blocker for {tuple_name}: {reason or 'unknown'}")
+    if ready_tuples:
+        return {"decision": "READY_FOR_BILLABLE_VALIDATION", "next_actions": [], "ready_tuples": ready_tuples}
     if not next_actions:
         next_actions.append("refresh Panopticon evidence until an eligible tuple appears in readiness")
     return {"decision": "WAITING_FOR_FRESH_READINESS", "next_actions": next_actions}
@@ -1250,10 +1255,13 @@ def _auto_existing_tuple_report(
             report["next_actions"] = validation_gate["next_actions"]
             _write_auto_existing_report(report_dir, request_id, report)
             return report
+        ready_tuples = validation_gate.get("ready_tuples") if isinstance(validation_gate.get("ready_tuples"), list) else []
+        ready_set = {str(item) for item in ready_tuples if str(item)}
+        validation_targets = [tuple_name for tuple_name in eligible if not ready_set or tuple_name in ready_set]
         attempts = []
         validation = None
         matched_tuple = None
-        for tuple_name in eligible:
+        for tuple_name in validation_targets:
             validation = _run_existing_tuple_validation(
                 tuple_name=tuple_name,
                 recipe_name=str(recipe["name"]),
