@@ -60,7 +60,8 @@ def test_install_script_dry_run_from_checkout_does_not_install() -> None:
     assert "gpucall install: dependency preflight" in output
     assert "gpucall install: dry-run" in output
     assert "gpucall[providers] @ file://" in output
-    assert "next: gpucall setup" in output
+    assert "gpucall setup starter-plan --profile local-trial" in output
+    assert "Modal credentials and cloud happy path" in output
 
 
 def test_install_script_bootstraps_uv_from_xdg_data_bin(tmp_path) -> None:

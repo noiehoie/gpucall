@@ -140,6 +140,26 @@ gpucall setup apply --file gpucall.setup.yml --dry-run
 gpucall setup apply --file gpucall.setup.yml
 ```
 
+Modal apply step では Modal token ID と token secret を入力します。値は
+repository YAML ではなく gpucall credentials store に保存され、同時に bundled
+`gpucall-worker-json` Modal worker、gateway caller auth、recipe inbox、
+bounded demand-to-supply automation が作成されます。まだ cloud GPU provider
+契約がない operator には、`gpucall setup next` が Modal を案内します。
+provider credentials がなければ cloud routing は有効化されず、fail-closed のままです。
+
+caller-side onboarding を setup 時に準備したい場合は、apply 前に setup plan
+へ external system を追加します。
+
+```yaml
+external_systems:
+  - name: example-system
+    expected_workloads: [infer, vision]
+```
+
+`external_systems` がある場合、`gpucall setup apply` は concrete な handoff
+package を `$XDG_DATA_HOME/gpucall/handoffs/<system-name>/` に書きます。
+その `caller-ai-onboarding-prompt.md` を caller 側 coding AI CLI に渡します。
+
 setup-as-code で導入する場合:
 
 ```bash
@@ -256,7 +276,7 @@ https://raw.githubusercontent.com/noiehoie/gpucall/main/docs/EXTERNAL_SYSTEM_ONB
 呼び出し側補助ツールが未導入の場合は、SDK helper wheel だけを導入します。
 
 ```bash
-uv tool install https://github.com/noiehoie/gpucall/releases/download/v2.0.29/gpucall_sdk-2.0.29-py3-none-any.whl
+uv tool install https://github.com/noiehoie/gpucall/releases/download/v2.0.30/gpucall_sdk-2.0.30-py3-none-any.whl
 gpucall-recipe-draft --help
 ```
 

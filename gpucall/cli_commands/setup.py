@@ -412,6 +412,17 @@ def setup_next_text(config_dir: Path, *, profile: str | None = None) -> str:
     for item in status["required"]:
         if item["state"] in {"missing", "partial", "warn"}:
             return f"Next required step: {item['label']}\n\nRun:\n  gpucall setup section {item['section']}"
+    if status["profile"] == "local-trial":
+        blockers = [item for item in status["recommended"] if item["state"] in {"missing", "partial", "warn"}]
+        if blockers:
+            return _local_trial_cloud_next_text()
+    if status["profile"] == "internal-team":
+        return (
+            "Now you are good to go for an internal gateway setup.\n\n"
+            "Next, generate a caller handoff package for each external system:\n"
+            "  gpucall setup export-handoff-package --system-name <external-system> --output-dir \"$XDG_DATA_HOME/gpucall/handoffs/<external-system>\"\n\n"
+            "Then start or restart the gateway and hand the generated caller-ai-onboarding-prompt.md to the caller-side AI CLI."
+        )
     return "All required setup checks are satisfied.\n\nRun:\n  gpucall launch-check --profile static"
 
 
@@ -440,7 +451,7 @@ def setup_section_text(config_dir: Path, section: str, *, profile: str | None = 
             "For local trial, you can skip this until an external caller needs to connect.\n"
             "For a real gateway, set gateway.base_url and gateway.caller_auth in gpucall.setup.yml.\n\n"
             "Beginner path:\n"
-            "  gpucall setup starter-plan --profile internal-team --provider runpod --output gpucall.setup.yml"
+            "  gpucall setup starter-plan --profile internal-team --provider modal --output gpucall.setup.yml"
         )
     if section == "providers":
         providers = status["providers"]
@@ -458,9 +469,11 @@ def setup_section_text(config_dir: Path, section: str, *, profile: str | None = 
             f"{provider_lines}\n\n"
             "Fast choices:\n"
             "  Local trial: gpucall setup starter-plan --profile local-trial\n"
-            "  RunPod:      gpucall setup starter-plan --profile internal-team --provider runpod --output gpucall.setup.yml\n"
-            "  Modal:       gpucall setup starter-plan --profile internal-team --provider modal --output gpucall.setup.yml\n"
+            "  Modal happy path: gpucall setup starter-plan --profile internal-team --provider modal --output gpucall.setup.yml\n"
+            "  RunPod advanced:  gpucall setup starter-plan --profile internal-team --provider runpod --output gpucall.setup.yml\n"
             "  Hyperstack:  gpucall setup starter-plan --profile internal-team --provider hyperstack --output gpucall.setup.yml\n\n"
+            "If you do not yet have any cloud GPU provider account, create a Modal account and token first.\n"
+            "Without provider credentials, gpucall will keep cloud routing fail-closed.\n\n"
             "Advanced: Register controlled runtime / local GPU endpoint with gpucall runtime add-openai or add-ollama."
         )
     if section == "object-store":
@@ -545,13 +558,26 @@ def write_starter_plan(output: Path | None, *, profile: str | None, provider: st
     path.parent.mkdir(parents=True, exist_ok=True)
     text = _starter_plan_text(selected_profile, selected_provider)
     path.write_text(text, encoding="utf-8")
-    return (
-        f"Wrote starter setup plan: {path}\n\n"
-        "Next:\n"
-        f"  gpucall setup apply --file {path} --dry-run\n"
-        f"  gpucall setup apply --file {path}"
-        + (" --yes" if selected_profile == "local-trial" else "")
+    next_lines = [f"Wrote starter setup plan: {path}"]
+    if selected_provider == "modal":
+        next_lines.extend(
+            [
+                "",
+                "Before apply:",
+                "  - keep your Modal token ID and token secret ready",
+                "  - edit gateway.base_url if callers will connect from another machine",
+                "  - optionally add external_systems to generate caller handoff packages automatically",
+            ]
+        )
+    next_lines.extend(
+        [
+            "",
+            "Next:",
+            f"  gpucall setup apply --file {path} --dry-run",
+            f"  gpucall setup apply --file {path}" + (" --yes" if selected_profile == "local-trial" else ""),
+        ]
     )
+    return "\n".join(next_lines)
 
 
 def _starter_plan_text(profile: str, provider: str) -> str:
@@ -646,6 +672,10 @@ launch:
             *automation_lines,
             "launch:",
             "  run_static_check: true",
+            "# Optional: uncomment to generate caller handoff packages during setup apply.",
+            "# external_systems:",
+            "#   - name: example-system",
+            "#     expected_workloads: [infer]",
             "",
         ]
     )
@@ -674,9 +704,12 @@ def apply_setup_plan(config_dir: Path, plan_path: Path, *, dry_run: bool, yes: b
     _apply_tenant_onboarding(config_dir, plan)
     _maybe_create_local_inboxes(plan.tenant_onboarding.recipe_inbox)
     _write_setup_state(config_dir, plan)
+    handoff_results = _write_external_system_handoff_packages(config_dir, plan)
     post_checks = _post_apply_checks(config_dir, plan)
     provider_text = ("\n\nProvider setup actions:\n" + "\n".join(f"  {item}" for item in provider_results)) if provider_results else ""
-    return report + "\nApplied setup plan." + provider_text + "\n\n" + post_checks + "\n\n" + setup_status_text(config_dir, profile=plan.profile)
+    handoff_text = ("\n\nCaller handoff packages:\n" + "\n".join(f"  {item}" for item in handoff_results)) if handoff_results else ""
+    completion_text = _setup_completion_text(config_dir, plan, handoff_results=handoff_results)
+    return report + "\nApplied setup plan." + provider_text + handoff_text + "\n\n" + post_checks + "\n\n" + setup_status_text(config_dir, profile=plan.profile) + "\n\n" + completion_text
 
 
 def export_handoff_prompt(config_dir: Path, system_name: str, *, require_concrete: bool = True) -> str:
@@ -685,7 +718,7 @@ def export_handoff_prompt(config_dir: Path, system_name: str, *, require_concret
     except ValueError as exc:
         raise SystemExit(
             str(exc)
-            + "\nRun `gpucall setup starter-plan --profile internal-team --provider runpod --output gpucall.setup.yml`, "
+            + "\nRun `gpucall setup starter-plan --profile internal-team --provider modal --output gpucall.setup.yml`, "
             "`gpucall setup apply --file gpucall.setup.yml --dry-run`, then apply a concrete gateway, trusted-bootstrap, and recipe-inbox setup. "
             "Use --allow-placeholders only when you intentionally want a template."
         ) from exc
@@ -774,6 +807,23 @@ def _setup_status(config_dir: Path, *, profile: str | None) -> dict[str, Any]:
         "gateway_url": gateway_url,
         "gateway_auth_state": gateway_auth,
     }
+
+
+def _local_trial_cloud_next_text() -> str:
+    return (
+        "Local trial is complete.\n\n"
+        "To use gpucall with external systems, configure a cloud provider next.\n"
+        "Recommended happy path: Modal.\n\n"
+        "If you already have a Modal account and token, run:\n"
+        "  gpucall setup starter-plan --profile internal-team --provider modal --output gpucall.setup.yml\n"
+        "  gpucall setup apply --file gpucall.setup.yml --dry-run\n"
+        "  gpucall setup apply --file gpucall.setup.yml\n\n"
+        "The apply step prompts for Modal token ID and token secret, stores them in the gpucall credentials store,\n"
+        "deploys the bundled gpucall Modal worker, creates gateway caller auth, creates the recipe inbox,\n"
+        "and enables the bounded demand-to-supply automation.\n\n"
+        "If you do not yet have any cloud GPU provider account, create a Modal account and token first.\n"
+        "Without provider credentials, gpucall will not start cloud routing; it remains fail-closed."
+    )
 
 
 def _provider_display_state(config: Any | None, raw_providers: dict[str, str]) -> tuple[dict[str, str], dict[str, str]]:
@@ -1191,6 +1241,73 @@ def _write_setup_state(config_dir: Path, plan: SetupPlan) -> None:
         "launch": plan.launch.model_dump(mode="json"),
     }
     (config_dir / "setup.yml").write_text(yaml.safe_dump(payload, sort_keys=False), encoding="utf-8")
+
+
+def _write_external_system_handoff_packages(config_dir: Path, plan: SetupPlan) -> list[str]:
+    if not plan.external_systems:
+        return []
+    results: list[str] = []
+    root = _default_handoff_root()
+    for system in plan.external_systems:
+        output_dir = root / _safe_handoff_dir_name(system.name)
+        report = write_handoff_package(config_dir, system.name, output_dir)
+        results.append(f"[ok] {system.name}: {report['output_dir']}")
+    return results
+
+
+def _setup_completion_text(config_dir: Path, plan: SetupPlan, *, handoff_results: list[str]) -> str:
+    status = _setup_status(config_dir, profile=plan.profile)
+    missing_required = [item for item in status["required"] if item["state"] in {"missing", "partial", "warn"}]
+    if missing_required:
+        return (
+            "Setup was applied, but this profile is not ready yet.\n\n"
+            "Next, run:\n"
+            "  gpucall setup next"
+        )
+    if plan.profile == "local-trial":
+        return (
+            "Local trial is complete.\n\n"
+            "Next, configure the Modal happy path for external systems:\n"
+            "  gpucall setup starter-plan --profile internal-team --provider modal --output gpucall.setup.yml\n"
+            "  gpucall setup apply --file gpucall.setup.yml --dry-run\n"
+            "  gpucall setup apply --file gpucall.setup.yml"
+        )
+    if plan.profile == "internal-team":
+        if handoff_results:
+            return (
+                "Now you are good to go.\n\n"
+                "Next, start or restart the gpucall gateway, then give the generated caller-ai-onboarding-prompt.md\n"
+                "to the external system's coding AI CLI."
+            )
+        return (
+            "Now you are good to go for an internal gateway setup.\n\n"
+            "Next, generate a caller handoff package for each external system:\n"
+            "  gpucall setup export-handoff-package --system-name <external-system> --output-dir \"$XDG_DATA_HOME/gpucall/handoffs/<external-system>\"\n\n"
+            "Then start or restart the gpucall gateway and hand the generated caller-ai-onboarding-prompt.md to the caller-side AI CLI."
+        )
+    return (
+        "All required setup checks are satisfied.\n\n"
+        "Next, run:\n"
+        "  gpucall launch-check --profile static"
+    )
+
+
+def _default_handoff_root() -> Path:
+    explicit = os.getenv("GPUCALL_HANDOFF_DIR")
+    if explicit:
+        return Path(explicit).expanduser()
+    xdg = os.getenv("XDG_DATA_HOME")
+    if xdg:
+        return Path(xdg).expanduser() / "gpucall" / "handoffs"
+    return Path.home() / ".local" / "share" / "gpucall" / "handoffs"
+
+
+def _safe_handoff_dir_name(name: str) -> str:
+    safe = "".join(ch if ch.isalnum() or ch in {"-", "_", "."} else "-" for ch in name.strip())
+    safe = safe.strip(".-")
+    if not safe:
+        raise SystemExit("external system name cannot be empty after path sanitization")
+    return safe
 
 
 def _post_apply_checks(config_dir: Path, plan: SetupPlan) -> str:

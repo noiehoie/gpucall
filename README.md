@@ -148,6 +148,28 @@ gpucall setup apply --file gpucall.setup.yml --dry-run
 gpucall setup apply --file gpucall.setup.yml
 ```
 
+The Modal apply step prompts for the Modal token ID and token secret, stores
+them in the gpucall credentials store outside repository YAML, deploys the
+bundled `gpucall-worker-json` Modal worker, creates gateway caller auth, creates
+the recipe inbox, and enables bounded demand-to-supply automation. If the
+operator has not signed up for a cloud GPU provider yet, `gpucall setup next`
+points them to Modal before cloud routing is enabled. Without provider
+credentials, gpucall remains fail-closed.
+
+To prepare caller-side onboarding during setup, add external systems to the
+setup plan before applying it:
+
+```yaml
+external_systems:
+  - name: example-system
+    expected_workloads: [infer, vision]
+```
+
+When `external_systems` is present, `gpucall setup apply` writes a concrete
+handoff package under `$XDG_DATA_HOME/gpucall/handoffs/<system-name>/`.
+Give that package's `caller-ai-onboarding-prompt.md` to the caller-side coding
+AI CLI.
+
 For setup-as-code:
 
 ```bash
@@ -293,7 +315,7 @@ the caller repo, such as
 If the caller-side helper is not installed, install only the SDK helper wheel:
 
 ```bash
-uv tool install https://github.com/noiehoie/gpucall/releases/download/v2.0.29/gpucall_sdk-2.0.29-py3-none-any.whl
+uv tool install https://github.com/noiehoie/gpucall/releases/download/v2.0.30/gpucall_sdk-2.0.30-py3-none-any.whl
 gpucall-recipe-draft --help
 ```
 

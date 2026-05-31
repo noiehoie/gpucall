@@ -36,6 +36,27 @@ gpucall setup apply --file gpucall.setup.yml --dry-run
 gpucall setup apply --file gpucall.setup.yml
 ```
 
+The Modal apply step prompts for Modal token credentials, stores them in the
+gpucall credentials store outside repository YAML, deploys the bundled
+`gpucall-worker-json` Modal worker, creates gateway caller auth, creates the
+recipe inbox, and enables bounded demand-to-supply automation. If no cloud GPU
+provider account is available yet, `gpucall setup next` points the operator to
+Modal before cloud routing is enabled. Without provider credentials, cloud
+routing remains fail-closed.
+
+Add `external_systems` before applying the cloud plan when you want setup to
+write caller handoff packages immediately:
+
+```yaml
+external_systems:
+  - name: example-system
+    expected_workloads: [infer, vision]
+```
+
+Generated packages are written under
+`$XDG_DATA_HOME/gpucall/handoffs/<system-name>/` and include the concrete
+`caller-ai-onboarding-prompt.md` for the caller-side coding AI CLI.
+
 `gpucall setup status` is non-interactive: it prints required/recommended
 checks and the next setup commands, not the interactive section menu.
 `gpucall validate-config` defaults to a bounded count/sample summary; run
@@ -107,7 +128,7 @@ recipe_automation:
 handoff_assets:
   onboarding_prompt_url: https://assets.example/gpucall/EXTERNAL_SYSTEM_ONBOARDING_PROMPT.md
   onboarding_manual_url: https://assets.example/gpucall/EXTERNAL_SYSTEM_ONBOARDING_MANUAL.md
-  caller_sdk_wheel_url: https://assets.example/gpucall/gpucall_sdk-2.0.29-py3-none-any.whl
+  caller_sdk_wheel_url: https://assets.example/gpucall/gpucall_sdk-2.0.30-py3-none-any.whl
 
 external_systems:
   - name: example-system
@@ -368,7 +389,7 @@ deployments can point handoff prompts at operator-hosted copies instead:
 handoff_assets:
   onboarding_prompt_url: https://assets.example/gpucall/EXTERNAL_SYSTEM_ONBOARDING_PROMPT.md
   onboarding_manual_url: https://assets.example/gpucall/EXTERNAL_SYSTEM_ONBOARDING_MANUAL.md
-  caller_sdk_wheel_url: https://assets.example/gpucall/gpucall_sdk-2.0.29-py3-none-any.whl
+  caller_sdk_wheel_url: https://assets.example/gpucall/gpucall_sdk-2.0.30-py3-none-any.whl
 ```
 
 `gpucall setup export-handoff-prompt` uses these values when present. This

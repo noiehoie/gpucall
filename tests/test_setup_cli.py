@@ -77,7 +77,9 @@ def test_setup_starter_plan_makes_local_trial_unambiguous(tmp_path, monkeypatch)
     assert "providers:" not in plan.read_text(encoding="utf-8")
     assert "Setup plan: local-trial" in dry_run
     assert "Applied setup plan." in applied
-    assert "All required setup checks are satisfied" in next_text
+    assert "Local trial is complete." in next_text
+    assert "--provider modal" in next_text
+    assert "Modal token ID and token secret" in next_text
     status = setup_status_text(config_dir)
     assert "[ok] GPU execution surfaces: local smoke runtime" in status
     assert "cloud provider before external callers" in status
@@ -169,6 +171,26 @@ def test_setup_sections_cover_recipe_inbox_and_external_prompt(tmp_path, monkeyp
     assert "without embedding any API key" in external
 
 
+def test_setup_next_and_provider_section_guide_modal_after_local_trial(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("GPUCALL_CREDENTIALS", str(tmp_path / "credentials.yml"))
+    config_dir = tmp_path / "config"
+    plan = tmp_path / "gpucall.setup.yml"
+    write_starter_plan(plan, profile="local-trial", provider=None)
+    apply_setup_plan(config_dir, plan, dry_run=False, yes=True)
+
+    next_text = setup_next_text(config_dir)
+    providers = setup_section_text(config_dir, "providers")
+    gateway = setup_section_text(config_dir, "gateway")
+
+    assert "Local trial is complete." in next_text
+    assert "Recommended happy path: Modal." in next_text
+    assert "gpucall setup apply --file gpucall.setup.yml" in next_text
+    assert "Without provider credentials" in next_text
+    assert providers.index("Modal happy path") < providers.index("RunPod advanced")
+    assert "create a Modal account and token first" in providers
+    assert "--provider modal" in gateway
+
+
 def test_setup_export_handoff_prompt_requires_concrete_values_by_default(tmp_path, monkeypatch) -> None:
     monkeypatch.setenv("GPUCALL_CREDENTIALS", str(tmp_path / "credentials.yml"))
     monkeypatch.setattr(
@@ -251,6 +273,7 @@ tenant_onboarding:
 
 def test_setup_plan_apply_writes_admin_object_store_and_generated_gateway_key(tmp_path, monkeypatch) -> None:
     monkeypatch.setenv("GPUCALL_CREDENTIALS", str(tmp_path / "credentials.yml"))
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "data"))
     save_credentials("runpod", {"api_key": "rk_test"})
     config_dir = tmp_path / "config"
     plan = tmp_path / "gpucall.setup.yml"
@@ -338,6 +361,59 @@ launch:
     assert "target: rp-xxxxxxxxxxxx" in worker
     assert "RunPod managed endpoint ready" in report
     assert "profile: internal-team" in (config_dir / "setup.yml").read_text(encoding="utf-8")
+    handoff_dir = tmp_path / "data" / "gpucall" / "handoffs" / "example-system"
+    assert (handoff_dir / "caller-ai-onboarding-prompt.md").exists()
+    assert "Caller handoff packages:" in report
+    assert "example-system" in report
+
+
+def test_setup_plan_auto_writes_external_system_handoff_package(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("GPUCALL_CREDENTIALS", str(tmp_path / "credentials.yml"))
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "data"))
+    save_credentials("modal", {"token_id": "ak-test", "token_secret": "as-test"})
+    monkeypatch.setattr(
+        "gpucall.cli_commands.setup._deploy_modal_worker",
+        lambda: "[ok] Modal worker deployed: gpucall-worker-json",
+    )
+    config_dir = tmp_path / "config"
+    recipe_inbox = tmp_path / "state" / "recipe_requests" / "inbox"
+    plan = tmp_path / "gpucall.setup.yml"
+    plan.write_text(
+        f"""
+setup_schema_version: 1
+profile: internal-team
+gateway:
+  base_url: https://gpucall.example.internal
+  caller_auth:
+    mode: generated_gateway_key
+providers:
+  modal:
+    enabled: true
+    credentials:
+      source: gpucall_credentials
+    deploy_worker: true
+tenant_onboarding:
+  mode: trusted_bootstrap
+  allowed_hosts:
+    - caller.example.internal
+  recipe_inbox: {recipe_inbox}
+external_systems:
+  - name: example/system
+    expected_workloads: [infer]
+""".lstrip(),
+        encoding="utf-8",
+    )
+
+    report = apply_setup_plan(config_dir, plan, dry_run=False, yes=True)
+
+    handoff_dir = tmp_path / "data" / "gpucall" / "handoffs" / "example-system"
+    prompt = handoff_dir / "caller-ai-onboarding-prompt.md"
+    assert prompt.exists()
+    assert oct(handoff_dir.stat().st_mode & 0o777) == "0o700"
+    assert "Caller handoff packages:" in report
+    assert "[ok] example/system:" in report
+    assert "Now you are good to go." in report
+    assert "caller-ai-onboarding-prompt.md" in report
 
 
 def test_setup_plan_accepts_runpod_credentials_without_endpoint_for_first_install(tmp_path, monkeypatch) -> None:

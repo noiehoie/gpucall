@@ -245,7 +245,12 @@ if [ "$dry_run" = "1" ]; then
     log "  would run: curl -fsSL \"$uv_install_url\" | UV_INSTALL_DIR=\"$user_bin_dir\" INSTALLER_NO_MODIFY_PATH=1 sh"
     log "  would run: $uv_cmd tool install --force \"$package_spec\""
   fi
-  log "  next: gpucall setup"
+  log "  next:"
+  log "    gpucall setup"
+  log "    gpucall setup starter-plan --profile local-trial"
+  log "    gpucall setup apply --file gpucall.setup.yml --dry-run"
+  log "    gpucall setup apply --file gpucall.setup.yml --yes"
+  log "  after local trial, gpucall setup next will guide you to the Modal credentials and cloud happy path"
   exit 0
 fi
 
@@ -283,5 +288,8 @@ fi
 
 log "$program: next commands"
 log "  gpucall setup"
-log "  gpucall setup status"
-log "  gpucall setup next"
+log "  gpucall setup starter-plan --profile local-trial"
+log "  gpucall setup apply --file gpucall.setup.yml --dry-run"
+log "  gpucall setup apply --file gpucall.setup.yml --yes"
+log ""
+log "After local trial, gpucall setup next will guide you to the Modal credentials and cloud happy path."
