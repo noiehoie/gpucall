@@ -114,6 +114,34 @@ def test_public_repo_uses_canonical_release_checklist_only() -> None:
     assert (root / "docs" / "PUBLIC_RELEASE_CHECKLIST.md").exists()
 
 
+def test_oob_user_experience_spec_is_release_guarded() -> None:
+    root = Path(__file__).resolve().parents[1]
+    if not (root / ".git").exists():
+        pytest.skip("public release tracked-file audit requires a git checkout")
+
+    spec_path = root / "docs" / "OOB_USER_EXPERIENCE_PRODUCT_SPEC.md"
+    subprocess.run(["git", "ls-files", "--error-unmatch", str(spec_path.relative_to(root))], cwd=root, check=True)
+
+    text = spec_path.read_text(encoding="utf-8")
+    required_sections = (
+        "## Default Freshness TTL Policy",
+        "## Service Mode Decision Table",
+        "## Provider Registry And Credential Boundary",
+        "## Setup-Scoped Modal Mutation Consent",
+        "## Admin Automation Synthetic Dry-Run",
+        "## Caller Auth Lifecycle",
+        "## OOB Test Matrix",
+    )
+    for section in required_sections:
+        assert section in text
+
+    assert "The standard handoff package must not contain a raw caller API key" in text
+    assert "The handoff package may include the caller API key" not in text
+
+    checklist = (root / "docs" / "PUBLIC_RELEASE_CHECKLIST.md").read_text(encoding="utf-8")
+    assert "git ls-files --error-unmatch docs/OOB_USER_EXPERIENCE_PRODUCT_SPEC.md" in checklist
+
+
 def test_sdk_release_urls_match_python_sdk_version() -> None:
     root = Path(__file__).resolve().parents[1]
     sdk_project = tomllib.loads((root / "sdk" / "python" / "pyproject.toml").read_text(encoding="utf-8"))

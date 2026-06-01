@@ -8,10 +8,23 @@ import pytest
 
 from gpucall import __version__
 from gpucall.cli import main
-from gpucall.cli_commands.setup import apply_setup_plan, export_handoff_prompt, setup_next_text, setup_section_text, setup_status_text, write_starter_plan
+from gpucall.cli_commands.setup import (
+    _load_setup_plan,
+    _modal_deploy_plan_hash,
+    _start_admin_automation_service,
+    _start_panopticon_background_service,
+    apply_setup_plan,
+    export_handoff_prompt,
+    setup_next_text,
+    setup_section_text,
+    setup_status_text,
+    write_starter_plan,
+)
 from gpucall.config import load_admin_automation, load_object_store
 from gpucall.credentials import load_credentials, save_credentials
 from gpucall.domain import ApiKeyHandoffMode
+from gpucall.panopticon import store_panopticon_evidence
+from gpucall.provider_registry import load_provider_registry
 
 
 def test_setup_status_starts_from_operator_dashboard(tmp_path, monkeypatch) -> None:
@@ -65,6 +78,7 @@ def test_setup_section_providers_is_dashboard_not_linear_wizard(tmp_path, monkey
 
 def test_setup_starter_plan_makes_local_trial_unambiguous(tmp_path, monkeypatch) -> None:
     monkeypatch.setenv("GPUCALL_CREDENTIALS", str(tmp_path / "credentials.yml"))
+    monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path / "state"))
     config_dir = tmp_path / "config"
     plan = tmp_path / "gpucall.setup.yml"
 
@@ -77,10 +91,16 @@ def test_setup_starter_plan_makes_local_trial_unambiguous(tmp_path, monkeypatch)
     assert "providers:" not in plan.read_text(encoding="utf-8")
     assert "Setup plan: local-trial" in dry_run
     assert "Applied setup plan." in applied
+    assert "Admin automation synthetic dry-run:" in applied
+    assert (tmp_path / "state" / "gpucall" / "catalog" / "provider-panopticon.json").exists()
+    assert (tmp_path / "state" / "gpucall" / "setup" / "control-plane-state.json").exists()
     assert "Local trial is complete." in next_text
     assert "--provider modal" in next_text
     assert "Modal token ID and token secret" in next_text
     status = setup_status_text(config_dir)
+    assert "OOB readiness: local-trial-ready" in status
+    assert "Panopticon: service-initialized" in status
+    assert "TTL defaults: hot=300s price=3600s contract=86400s validation=604800s" in status
     assert "[ok] GPU execution surfaces: local smoke runtime" in status
     assert "cloud provider before external callers" in status
     assert "gateway URL and caller auth before external callers" in status
@@ -121,6 +141,8 @@ def test_setup_starter_plan_modal_is_oob_happy_path(tmp_path, monkeypatch) -> No
     assert "auto_set_auto_select: true" in text
     assert "auto_run_launch_check: true" in text
     assert "provider worker deployment: modal gpucall-worker-json" in dry_run
+    assert "modal deploy requires provider-mutation consent plan_hash=" in dry_run
+    assert "--yes alone is not provider mutation consent" in dry_run
 
 
 def test_setup_plan_modal_deploy_worker_uses_gpucall_credentials(tmp_path, monkeypatch) -> None:
@@ -149,13 +171,20 @@ providers:
         encoding="utf-8",
     )
 
-    report = apply_setup_plan(config_dir, plan, dry_run=False, yes=True)
+    setup_plan = _load_setup_plan(plan)
+    report = apply_setup_plan(config_dir, plan, dry_run=False, yes=True, accept_plan_hash=_modal_deploy_plan_hash(setup_plan))
+    registry = load_provider_registry()
+    modal_record = registry["providers"]["modal"]
 
     assert "[ok] Modal worker deployed: gpucall-worker-json" in report
     assert calls[0]["command"][-3:] == ["modal", "deploy", "gpucall.worker_contracts.modal"]
     assert calls[0]["env"]["MODAL_TOKEN_ID"] == "ak-test"
     assert calls[0]["env"]["MODAL_TOKEN_SECRET"] == "as-test"
     assert calls[0]["env"]["MODAL_ENVIRONMENT"] == "main"
+    assert modal_record["metadata"]["deployment_id"].startswith("modal:gpucall:gpucall-worker-json:")
+    assert modal_record["metadata"]["ownership_tag"].startswith("gpucall-setup-")
+    assert Path(modal_record["metadata"]["cleanup_manifest_path"]).exists()
+    assert "environment" not in load_credentials()["modal"]
 
 
 def test_setup_sections_cover_recipe_inbox_and_external_prompt(tmp_path, monkeypatch) -> None:
@@ -328,7 +357,8 @@ launch:
         encoding="utf-8",
     )
 
-    report = apply_setup_plan(config_dir, plan, dry_run=False, yes=True)
+    setup_plan = _load_setup_plan(plan)
+    report = apply_setup_plan(config_dir, plan, dry_run=False, yes=True, accept_plan_hash=_modal_deploy_plan_hash(setup_plan))
     automation = load_admin_automation(config_dir)
     object_store = load_object_store(config_dir)
     credentials = load_credentials()
@@ -404,7 +434,8 @@ external_systems:
         encoding="utf-8",
     )
 
-    report = apply_setup_plan(config_dir, plan, dry_run=False, yes=True)
+    setup_plan = _load_setup_plan(plan)
+    report = apply_setup_plan(config_dir, plan, dry_run=False, yes=True, accept_plan_hash=_modal_deploy_plan_hash(setup_plan))
 
     handoff_dir = tmp_path / "data" / "gpucall" / "handoffs" / "example-system"
     prompt = handoff_dir / "caller-ai-onboarding-prompt.md"
@@ -412,8 +443,209 @@ external_systems:
     assert oct(handoff_dir.stat().st_mode & 0o777) == "0o700"
     assert "Caller handoff packages:" in report
     assert "[ok] example/system:" in report
-    assert "Now you are good to go." in report
+    assert "Setup is onboarding-ready-provisional." in report
+    assert "Panopticon bootstrap refresh:" in report
     assert "caller-ai-onboarding-prompt.md" in report
+
+
+def test_setup_internal_team_reaches_onboarding_ready_with_fresh_panopticon_evidence(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("GPUCALL_CREDENTIALS", str(tmp_path / "credentials.yml"))
+    monkeypatch.setenv("GPUCALL_SETUP_LIVE_PROVIDER_PROBES", "1")
+    save_credentials("modal", {"token_id": "ak-test", "token_secret": "as-test"})
+
+    def fake_refresh(*, config_dir, panopticon_path, **kwargs):
+        store_panopticon_evidence(
+            {
+                "modal-a10g": {
+                    "tuple": "modal-a10g",
+                    "adapter": "modal",
+                    "status": "live_revalidated",
+                    "checked": True,
+                    "findings": [
+                        {
+                            "tuple": "modal-a10g",
+                            "adapter": "modal",
+                            "dimension": "health",
+                            "severity": "info",
+                            "source": "modal",
+                        }
+                    ],
+                }
+            },
+            panopticon_path,
+        )
+        return {"phase": "provider-panopticon-refresh", "preflight": {"status": "ok"}, "observed_count": 1, "snapshot_count": 1}
+
+    monkeypatch.setattr("gpucall.cli_commands.setup.refresh_panopticon", fake_refresh)
+    monkeypatch.setattr(
+        "gpucall.cli_commands.setup._start_panopticon_background_service",
+        lambda config_dir, plan: {"status": "service-running", "health_url": "http://127.0.0.1:18090/healthz", "pid": 1234},
+    )
+    monkeypatch.setattr(
+        "gpucall.cli_commands.setup._start_admin_automation_service",
+        lambda config_dir, plan: {"status": "service-running", "inbox_dir": str(tmp_path / "state" / "recipe_requests" / "inbox")},
+    )
+    config_dir = tmp_path / "config"
+    recipe_inbox = tmp_path / "state" / "recipe_requests" / "inbox"
+    plan = tmp_path / "gpucall.setup.yml"
+    plan.write_text(
+        f"""
+setup_schema_version: 1
+profile: internal-team
+gateway:
+  base_url: https://gpucall.example.internal
+  caller_auth:
+    mode: generated_gateway_key
+providers:
+  modal:
+    enabled: true
+    credentials:
+      source: gpucall_credentials
+tenant_onboarding:
+  mode: trusted_bootstrap
+  allowed_hosts:
+    - caller.example.internal
+  recipe_inbox: {recipe_inbox}
+recipe_automation:
+  auto_materialize: true
+""".lstrip(),
+        encoding="utf-8",
+    )
+
+    report = apply_setup_plan(config_dir, plan, dry_run=False, yes=True)
+
+    assert "OOB readiness: onboarding-ready" in report
+    assert "Panopticon: service-running" in report
+    assert "Admin automation: service-running" in report
+    assert "Panopticon evidence: evidence-fresh" in report
+
+
+def test_setup_compose_service_mode_is_bounded_without_compose_file(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("GPUCALL_SETUP_START_SERVICES", "1")
+    monkeypatch.setenv("GPUCALL_SETUP_SERVICE_MODE", "docker-compose-service")
+    monkeypatch.delenv("GPUCALL_SETUP_COMPOSE_FILE", raising=False)
+    monkeypatch.setattr("shutil.which", lambda name: "/usr/bin/docker" if name == "docker" else None)
+    save_credentials("modal", {"token_id": "ak-test", "token_secret": "as-test"})
+    plan = tmp_path / "gpucall.setup.yml"
+    plan.write_text(
+        """
+setup_schema_version: 1
+profile: internal-team
+providers:
+  modal:
+    enabled: true
+    credentials:
+      source: gpucall_credentials
+recipe_automation:
+  auto_materialize: true
+tenant_onboarding:
+  recipe_inbox: /tmp/gpucall-recipe-inbox
+""".lstrip(),
+        encoding="utf-8",
+    )
+
+    setup_plan = _load_setup_plan(plan)
+    panopticon = _start_panopticon_background_service(tmp_path / "config", setup_plan)
+    admin = _start_admin_automation_service(tmp_path / "config", setup_plan)
+
+    assert panopticon["status"] == "service-initialized"
+    assert panopticon["service_mode"] == "docker-compose-service"
+    assert "GPUCALL_SETUP_COMPOSE_FILE" in panopticon["reason"]
+    assert admin["status"] == "service-initialized"
+    assert admin["service_mode"] == "docker-compose-service"
+    assert "GPUCALL_SETUP_COMPOSE_FILE" in admin["reason"]
+
+
+def test_admin_automation_service_disabled_is_not_onboarding_ready(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("GPUCALL_CREDENTIALS", str(tmp_path / "credentials.yml"))
+    monkeypatch.setenv("GPUCALL_SETUP_LIVE_PROVIDER_PROBES", "1")
+    save_credentials("modal", {"token_id": "ak-test", "token_secret": "as-test"})
+
+    def fake_refresh(*, config_dir, panopticon_path, **kwargs):
+        store_panopticon_evidence(
+            {
+                "modal-a10g": {
+                    "tuple": "modal-a10g",
+                    "adapter": "modal",
+                    "status": "live_revalidated",
+                    "checked": True,
+                    "findings": [
+                        {
+                            "tuple": "modal-a10g",
+                            "adapter": "modal",
+                            "dimension": "health",
+                            "severity": "info",
+                            "source": "modal",
+                        }
+                    ],
+                }
+            },
+            panopticon_path,
+        )
+        return {"phase": "provider-panopticon-refresh", "preflight": {"status": "ok"}, "observed_count": 1, "snapshot_count": 1}
+
+    monkeypatch.setattr("gpucall.cli_commands.setup.refresh_panopticon", fake_refresh)
+    monkeypatch.setattr(
+        "gpucall.cli_commands.setup._start_panopticon_background_service",
+        lambda config_dir, plan: {"status": "service-running", "health_url": "http://127.0.0.1:18090/healthz", "pid": 1234},
+    )
+    config_dir = tmp_path / "config"
+    recipe_inbox = tmp_path / "state" / "recipe_requests" / "inbox"
+    plan = tmp_path / "gpucall.setup.yml"
+    plan.write_text(
+        f"""
+setup_schema_version: 1
+profile: internal-team
+gateway:
+  base_url: https://gpucall.example.internal
+  caller_auth:
+    mode: generated_gateway_key
+providers:
+  modal:
+    enabled: true
+    credentials:
+      source: gpucall_credentials
+tenant_onboarding:
+  mode: trusted_bootstrap
+  allowed_hosts:
+    - caller.example.internal
+  recipe_inbox: {recipe_inbox}
+recipe_automation:
+  auto_materialize: true
+""".lstrip(),
+        encoding="utf-8",
+    )
+
+    report = apply_setup_plan(config_dir, plan, dry_run=False, yes=True)
+
+    assert "OOB readiness: onboarding-ready-provisional" in report
+    assert "Panopticon: service-running" in report
+    assert "Admin automation: service-initialized" in report
+
+
+def test_setup_plan_yes_alone_does_not_consent_to_modal_provider_mutation(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("GPUCALL_CREDENTIALS", str(tmp_path / "credentials.yml"))
+    save_credentials("modal", {"token_id": "ak-test", "token_secret": "as-test"})
+    plan = tmp_path / "gpucall.setup.yml"
+    plan.write_text(
+        """
+setup_schema_version: 1
+profile: internal-team
+providers:
+  modal:
+    enabled: true
+    credentials:
+      source: gpucall_credentials
+    deploy_worker: true
+""".lstrip(),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(SystemExit) as exc:
+        apply_setup_plan(tmp_path / "config", plan, dry_run=False, yes=True)
+
+    assert "requires explicit provider-mutation consent" in str(exc.value)
+    assert "--yes alone is not consent" in str(exc.value)
 
 
 def test_setup_plan_accepts_runpod_credentials_without_endpoint_for_first_install(tmp_path, monkeypatch) -> None:
@@ -483,6 +715,34 @@ providers:
     report = apply_setup_plan(config_dir, plan, dry_run=False, yes=True)
     assert "Applied setup plan." in report
     assert "Modal configured" in report
+
+
+def test_setup_plan_keeps_hyperstack_ssh_path_out_of_credentials(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("GPUCALL_CREDENTIALS", str(tmp_path / "credentials.yml"))
+    save_credentials("hyperstack", {"api_key": "hs-test"})
+    config_dir = tmp_path / "config"
+    plan = tmp_path / "gpucall.setup.yml"
+    plan.write_text(
+        """
+setup_schema_version: 1
+profile: internal-team
+providers:
+  hyperstack:
+    enabled: true
+    credentials:
+      source: gpucall_credentials
+    ssh_key_path: ~/.ssh/gpucall_hyperstack_ed25519
+""".lstrip(),
+        encoding="utf-8",
+    )
+
+    report = apply_setup_plan(config_dir, plan, dry_run=False, yes=True)
+    credentials = load_credentials()
+    registry = load_provider_registry()
+
+    assert "Applied setup plan." in report
+    assert credentials["hyperstack"] == {"api_key": "hs-test"}
+    assert registry["providers"]["hyperstack"]["metadata"]["ssh_key_path"] == "~/.ssh/gpucall_hyperstack_ed25519"
 
 
 def test_setup_plan_rejects_invalid_recipe_automation_chain(tmp_path) -> None:

@@ -2,30 +2,55 @@ from __future__ import annotations
 
 import argparse
 import getpass
+import hashlib
+import json
 import os
+import plistlib
 import secrets
+import shlex
 import shutil
+import socket
 import subprocess
 import sys
+import time
+from datetime import datetime, timezone
 from importlib.resources import files
 from pathlib import Path
 from typing import Any, Literal
+from urllib.error import URLError
+from urllib.request import urlopen
 
 import yaml
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
 
-from gpucall.admin_automation import admin_automation_summary, configure_admin_automation
+from gpucall.admin_automation import (
+    ADMIN_SYNTHETIC_DRY_RUN_TTL_SECONDS,
+    admin_automation_summary,
+    configure_admin_automation,
+    run_admin_automation_synthetic_dry_run,
+)
+from gpucall.caller_auth_registry import caller_auth_status_summary, record_caller_auth
 from gpucall.config import ConfigError, default_config_dir, default_state_dir, load_admin_automation, load_config, load_object_store
 from gpucall.credentials import configured_credentials, credentials_path, load_credentials, save_credentials
 from gpucall.domain import ApiKeyHandoffMode
 from gpucall.handoff import _default_quality_feedback_inbox
 from gpucall.handoff_package import caller_ai_onboarding_prompt, build_handoff_contract, write_handoff_package
+from gpucall.panopticon import PANOPTICON_TTL_BY_DIMENSION, PANOPTICON_SCHEMA_VERSION, default_panopticon_path
+from gpucall.panopticon_service import refresh_panopticon
+from gpucall.provider_registry import (
+    load_provider_registry,
+    provider_registry_configured_contracts,
+    provider_registry_path,
+    provider_registry_snapshot_hash,
+    save_provider_metadata,
+)
 from gpucall.provider_contracts import CLOUD_PROVIDER_FAMILIES, PROVIDER_SETUP_CONTRACTS
-from gpucall.release import ONBOARDING_MANUAL_URL, ONBOARDING_PROMPT_URL, SDK_WHEEL_URL
+from gpucall.release import GITHUB_RELEASE_TAG, ONBOARDING_MANUAL_URL, ONBOARDING_PROMPT_URL, SDK_WHEEL_URL
 
 
 SetupProfile = Literal["local-trial", "internal-team", "production-multitenant", "hardened-regulated"]
 CredentialSource = Literal["official_cli", "prompt", "gpucall_credentials"]
+PROVIDER_MUTATION_CONSENT_TTL_SECONDS = 3600
 
 
 class SetupCredentials(BaseModel):
@@ -225,6 +250,11 @@ Common commands:
     parser.add_argument("--output", type=Path, default=None)
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--yes", action="store_true")
+    parser.add_argument(
+        "--accept-plan-hash",
+        default=None,
+        help="accept the exact provider-mutation plan hash printed by setup apply --dry-run",
+    )
     parser.add_argument("--system-name", default=None)
     parser.add_argument("--output-dir", type=Path, default=None)
     parser.add_argument(
@@ -260,7 +290,7 @@ def run_setup_command(args: argparse.Namespace) -> None:
     if action == "apply":
         if args.file is None:
             raise SystemExit("setup apply requires --file")
-        print(apply_setup_plan(args.config_dir, args.file, dry_run=args.dry_run, yes=args.yes))
+        print(apply_setup_plan(args.config_dir, args.file, dry_run=args.dry_run, yes=args.yes, accept_plan_hash=args.accept_plan_hash))
         return
     if action == "export-handoff-prompt":
         if not args.system_name:
@@ -366,10 +396,22 @@ def setup_status_text(config_dir: Path, *, profile: str | None = None, include_m
     status = _setup_status(config_dir, profile=profile)
     required = "\n".join(f"  [{item['state']}] {item['label']}" for item in status["required"])
     recommended = "\n".join(f"  [{item['state']}] {item['label']}" for item in status["recommended"])
+    control_plane = status["control_plane"]
+    caller_auth = status["caller_auth"]
+    caller_auth_line = _caller_auth_status_line(caller_auth)
     text = (
         f"Profile: {status['profile']}\n\n"
+        f"OOB readiness: {status['oob_readiness']}\n\n"
         f"Required:\n{required}\n\n"
-        f"Recommended:\n{recommended}"
+        f"Recommended:\n{recommended}\n\n"
+        "Control-plane:\n"
+        f"  Panopticon: {control_plane['panopticon_service_state']} ({control_plane['panopticon_service_mode']})\n"
+        f"  Panopticon evidence: {control_plane['panopticon_evidence_state']} ({control_plane['panopticon_path']})\n"
+        f"  Admin automation: {control_plane['admin_automation_service_state']} ({control_plane['admin_automation_service_mode']})\n"
+        f"  Admin synthetic dry-run: {control_plane['admin_synthetic_state']}\n"
+        f"  Caller auth lifecycle: {caller_auth_line}\n"
+        f"  TTL defaults: hot={PANOPTICON_TTL_BY_DIMENSION['health']}s price={PANOPTICON_TTL_BY_DIMENSION['price']}s "
+        f"contract={PANOPTICON_TTL_BY_DIMENSION['contract']}s validation=604800s"
     )
     if not include_menu:
         return (
@@ -417,6 +459,16 @@ def setup_next_text(config_dir: Path, *, profile: str | None = None) -> str:
         if blockers:
             return _local_trial_cloud_next_text()
     if status["profile"] == "internal-team":
+        if status["oob_readiness"] == "onboarding-ready-provisional":
+            return (
+                "Next required step: verify runtime services and caller reachability\n\n"
+                "Current state: onboarding-ready-provisional.\n\n"
+                "Run:\n"
+                "  gpucall setup status\n"
+                "  gpucall panopticon snapshot\n"
+                "  gpucall setup export-handoff-package --system-name <external-system> --output-dir \"$XDG_DATA_HOME/gpucall/handoffs/<external-system>\"\n\n"
+                "Production routing still requires fresh Panopticon evidence and accepted route validation evidence."
+            )
         return (
             "Now you are good to go for an internal gateway setup.\n\n"
             "Next, generate a caller handoff package for each external system:\n"
@@ -682,7 +734,7 @@ launch:
     return "\n".join(lines)
 
 
-def apply_setup_plan(config_dir: Path, plan_path: Path, *, dry_run: bool, yes: bool) -> str:
+def apply_setup_plan(config_dir: Path, plan_path: Path, *, dry_run: bool, yes: bool, accept_plan_hash: str | None = None) -> str:
     plan = _load_setup_plan(plan_path)
     changes = _planned_changes(config_dir, plan)
     warnings = _setup_plan_warnings(config_dir, plan)
@@ -695,21 +747,55 @@ def apply_setup_plan(config_dir: Path, plan_path: Path, *, dry_run: bool, yes: b
             "setup apply --yes cannot use credentials.source: prompt "
             f"({', '.join(prompt_targets)}). Use credentials.source: gpucall_credentials for unattended apply."
         )
+    _assert_provider_mutation_consent(plan, yes=yes, accept_plan_hash=accept_plan_hash)
     if not yes and not _confirm("Apply setup plan?"):
         return report + "\nAborted."
     _ensure_config_initialized(config_dir)
+    _ensure_oob_control_plane_initialized(config_dir, plan)
+    consent_artifact = _write_modal_deploy_consent_artifact(plan)
     _apply_gateway(config_dir, plan)
-    provider_results = _apply_providers(config_dir, plan)
+    provider_results = _apply_providers(config_dir, plan, modal_plan_hash=str(consent_artifact.get("plan_hash")) if consent_artifact else None)
+    if consent_artifact is not None:
+        _write_modal_cleanup_manifest(consent_artifact)
     _apply_object_store(config_dir, plan)
     _apply_tenant_onboarding(config_dir, plan)
     _maybe_create_local_inboxes(plan.tenant_onboarding.recipe_inbox)
+    synthetic_result = run_admin_automation_synthetic_dry_run(plan.tenant_onboarding.recipe_inbox, config_dir=config_dir)
+    panopticon_bootstrap = _run_panopticon_bootstrap_refresh(config_dir, plan)
+    panopticon_service = _start_panopticon_background_service(config_dir, plan)
+    admin_service = _start_admin_automation_service(config_dir, plan)
+    _update_oob_control_plane_state(
+        config_dir,
+        plan,
+        synthetic_result=synthetic_result,
+        panopticon_bootstrap=panopticon_bootstrap,
+        panopticon_service=panopticon_service,
+        admin_service=admin_service,
+    )
     _write_setup_state(config_dir, plan)
     handoff_results = _write_external_system_handoff_packages(config_dir, plan)
     post_checks = _post_apply_checks(config_dir, plan)
     provider_text = ("\n\nProvider setup actions:\n" + "\n".join(f"  {item}" for item in provider_results)) if provider_results else ""
+    panopticon_text = _panopticon_bootstrap_report_text(panopticon_bootstrap)
+    synthetic_text = _synthetic_dry_run_report_text(synthetic_result)
+    admin_service_text = _admin_automation_service_report_text(admin_service)
     handoff_text = ("\n\nCaller handoff packages:\n" + "\n".join(f"  {item}" for item in handoff_results)) if handoff_results else ""
     completion_text = _setup_completion_text(config_dir, plan, handoff_results=handoff_results)
-    return report + "\nApplied setup plan." + provider_text + handoff_text + "\n\n" + post_checks + "\n\n" + setup_status_text(config_dir, profile=plan.profile) + "\n\n" + completion_text
+    return (
+        report
+        + "\nApplied setup plan."
+        + provider_text
+        + panopticon_text
+        + synthetic_text
+        + admin_service_text
+        + handoff_text
+        + "\n\n"
+        + post_checks
+        + "\n\n"
+        + setup_status_text(config_dir, profile=plan.profile)
+        + "\n\n"
+        + completion_text
+    )
 
 
 def export_handoff_prompt(config_dir: Path, system_name: str, *, require_concrete: bool = True) -> str:
@@ -743,6 +829,7 @@ def _setup_status(config_dir: Path, *, profile: str | None) -> dict[str, Any]:
             config_error = str(exc)
     automation = admin_automation_summary(config_dir)
     gateway_url = automation["trusted_bootstrap"]["gateway_url"]
+    configured.update(provider_registry_configured_contracts())
     gateway_auth = "ok" if ("gateway_auth:api_keys" in configured or "auth" in creds and creds["auth"].get("api_keys")) else "missing"
     if config is None:
         providers = {"local": "missing", **{name: "missing" for name in CLOUD_PROVIDER_FAMILIES}}
@@ -762,7 +849,11 @@ def _setup_status(config_dir: Path, *, profile: str | None) -> dict[str, Any]:
     object_store_state = "ok" if object_store else "missing"
     handoff_state = "ok" if automation["api_key_handoff_mode"] != "manual" else "missing"
     recipe_inbox_state = "ok" if automation["trusted_bootstrap"]["recipe_inbox"] else "missing"
+    synthetic = automation["synthetic_dry_run"]
+    admin_synthetic_state = "ok" if synthetic.get("fresh") is True and synthetic.get("status") == "processed" else "missing"
     launch_state = "ok" if config is not None and config_error is None else "missing"
+    control_plane = _control_plane_status(config_dir, profile=selected_profile, admin_synthetic_state=admin_synthetic_state)
+    caller_auth = caller_auth_status_summary()
     config_item = {"state": "ok" if config_exists and config_error is None else "missing", "label": "config initialized", "section": "profile"}
     gateway_item = {"state": "ok" if gateway_url and gateway_auth == "ok" else "missing", "label": "gateway URL and caller auth", "section": "gateway"}
     provider_item = {"state": provider_state, "label": _provider_label(providers, provider_labels), "section": "providers"}
@@ -774,6 +865,21 @@ def _setup_status(config_dir: Path, *, profile: str | None) -> dict[str, Any]:
     object_store_item = {"state": object_store_state, "label": "object store / DataRef storage", "section": "object-store"}
     handoff_item = {"state": handoff_state, "label": "tenant API key handoff", "section": "tenant-handoff"}
     recipe_inbox_item = {"state": recipe_inbox_state, "label": "recipe request inbox", "section": "recipe-inbox"}
+    synthetic_item = {
+        "state": admin_synthetic_state,
+        "label": "admin automation synthetic intake dry-run",
+        "section": "recipe-inbox",
+    }
+    panopticon_service_item = {
+        "state": control_plane["panopticon_service_state"],
+        "label": "Panopticon service lifecycle",
+        "section": "launch",
+    }
+    admin_service_item = {
+        "state": control_plane["admin_automation_service_state"],
+        "label": "admin automation service lifecycle",
+        "section": "recipe-inbox",
+    }
     launch_item = {"state": launch_state, "label": "launch check readiness", "section": "launch"}
     if selected_profile == "local-trial":
         required = [config_item, local_provider_item, launch_item]
@@ -785,27 +891,31 @@ def _setup_status(config_dir: Path, *, profile: str | None) -> dict[str, Any]:
             {**recipe_inbox_item, "label": "recipe request inbox before external callers"},
         ]
     elif selected_profile == "internal-team":
-        required = [config_item, gateway_item, provider_item, handoff_item, recipe_inbox_item, launch_item]
+        required = [config_item, gateway_item, provider_item, handoff_item, recipe_inbox_item, synthetic_item, panopticon_service_item, admin_service_item, launch_item]
         recommended = [
             {**object_store_item, "label": "object store / DataRef storage before file or image workflows"},
             {"state": "ok" if automation["recipe_inbox_auto_materialize"] else "warn", "label": "recipe inbox auto-materialize policy reviewed"},
             {"state": "ok" if gateway_url else "warn", "label": "external-system onboarding prompt has concrete gateway URL"},
         ]
     else:
-        required = [config_item, gateway_item, provider_item, object_store_item, handoff_item, recipe_inbox_item, launch_item]
+        required = [config_item, gateway_item, provider_item, object_store_item, handoff_item, recipe_inbox_item, synthetic_item, panopticon_service_item, admin_service_item, launch_item]
         recommended = [
             {"state": "ok" if automation["recipe_inbox_auto_materialize"] else "warn", "label": "recipe inbox auto-materialize policy reviewed"},
             {"state": "ok" if gateway_url else "warn", "label": "external-system onboarding prompt has concrete gateway URL"},
         ]
+    oob_readiness = _oob_readiness_for(selected_profile, required, control_plane)
     return {
         "profile": selected_profile,
         "required": required,
         "recommended": recommended,
+        "oob_readiness": oob_readiness,
+        "control_plane": control_plane,
         "providers": providers,
         "provider_labels": provider_labels,
         "object_store_state": object_store_state,
         "gateway_url": gateway_url,
         "gateway_auth_state": gateway_auth,
+        "caller_auth": caller_auth,
     }
 
 
@@ -824,6 +934,78 @@ def _local_trial_cloud_next_text() -> str:
         "If you do not yet have any cloud GPU provider account, create a Modal account and token first.\n"
         "Without provider credentials, gpucall will not start cloud routing; it remains fail-closed."
     )
+
+
+def _control_plane_status(config_dir: Path, *, profile: str, admin_synthetic_state: str) -> dict[str, str]:
+    panopticon_path = default_panopticon_path()
+    service_mode = _service_mode_for(profile)
+    state = _load_control_plane_state()
+    if panopticon_path.exists():
+        panopticon_service_state = str(state.get("panopticon_service_state") or "service-initialized")
+        panopticon_evidence_state = "evidence-missing" if _panopticon_snapshot_empty(panopticon_path) else "evidence-fresh"
+    else:
+        panopticon_service_state = "service-uninitialized"
+        panopticon_evidence_state = "evidence-missing"
+    return {
+        "config_dir": str(config_dir),
+        "panopticon_path": str(panopticon_path),
+        "panopticon_service_mode": str(state.get("panopticon_service_mode") or service_mode),
+        "panopticon_service_state": panopticon_service_state,
+        "panopticon_evidence_state": panopticon_evidence_state,
+        "admin_automation_service_mode": str(state.get("admin_automation_service_mode") or service_mode),
+        "admin_automation_service_state": str(state.get("admin_automation_service_state") or "service-uninitialized"),
+        "admin_synthetic_state": admin_synthetic_state,
+    }
+
+
+def _load_control_plane_state() -> dict[str, object]:
+    path = default_state_dir() / "setup" / "control-plane-state.json"
+    if not path.exists():
+        return {}
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {}
+    return payload if isinstance(payload, dict) else {}
+
+
+def _service_mode_for(profile: str) -> str:
+    explicit = os.getenv("GPUCALL_SETUP_SERVICE_MODE")
+    if explicit:
+        return explicit
+    if os.getenv("CI"):
+        return "foreground-dry-run"
+    if profile == "local-trial":
+        return "foreground-status-probe"
+    if sys.platform == "darwin":
+        return "launchd-user-agent"
+    if sys.platform.startswith("linux"):
+        return "systemd-user-service" if shutil.which("systemctl") else "foreground-command"
+    return "foreground-command"
+
+
+def _panopticon_snapshot_empty(path: Path) -> bool:
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return True
+    tuples = payload.get("tuples") if isinstance(payload, dict) else None
+    return not bool(tuples)
+
+
+def _oob_readiness_for(profile: str, required: list[dict[str, str]], control_plane: dict[str, str]) -> str:
+    if any(item["state"] in {"missing", "partial", "warn", "service-error", "service-uninitialized"} for item in required):
+        return "onboarding-blocked" if profile != "local-trial" else "provider-selection-required"
+    if profile == "local-trial":
+        return "local-trial-ready"
+    if (
+        control_plane["panopticon_service_state"] == "service-running"
+        and control_plane["panopticon_evidence_state"] == "evidence-fresh"
+        and control_plane["admin_automation_service_state"] == "service-running"
+        and control_plane["admin_synthetic_state"] == "ok"
+    ):
+        return "onboarding-ready"
+    return "onboarding-ready-provisional"
 
 
 def _provider_display_state(config: Any | None, raw_providers: dict[str, str]) -> tuple[dict[str, str], dict[str, str]]:
@@ -857,6 +1039,20 @@ def _concrete_endpoint_target(target: str | None) -> bool:
     if not normalized:
         return False
     return "PLACEHOLDER" not in normalized.upper()
+
+
+def _caller_auth_status_line(summary: dict[str, Any]) -> str:
+    if summary.get("state") != "ok":
+        return "missing"
+    records = summary.get("records")
+    if not isinstance(records, list) or not records:
+        return "missing"
+    first = records[0] if isinstance(records[0], dict) else {}
+    fingerprint = str(first.get("fingerprint") or "<unknown>")
+    age = first.get("age_seconds")
+    age_text = f"{age}s" if isinstance(age, int) else "unknown-age"
+    expires = first.get("expires_at") or "non-expiring-policy"
+    return f"ok count={summary.get('count')} fingerprint={fingerprint} age={age_text} expires={expires}"
 
 
 def _provider_label(providers: dict[str, str], provider_labels: dict[str, str]) -> str:
@@ -995,7 +1191,14 @@ def _validation_error_summary(exc: ValidationError) -> str:
 
 
 def _planned_changes(config_dir: Path, plan: SetupPlan) -> list[str]:
-    changes = [str(config_dir / "setup.yml"), str(config_dir / "admin.yml")]
+    changes = [
+        str(config_dir / "setup.yml"),
+        str(config_dir / "admin.yml"),
+        str(default_state_dir() / "setup" / "control-plane-state.json"),
+        str(provider_registry_path()),
+        str(default_panopticon_path()),
+        str(default_state_dir() / "setup" / "admin-automation-synthetic-dry-run.json"),
+    ]
     if not (config_dir / "policy.yml").exists():
         changes.append(f"{config_dir}/*")
     if plan.object_store is not None:
@@ -1013,6 +1216,8 @@ def _planned_changes(config_dir: Path, plan: SetupPlan) -> list[str]:
     modal = plan.providers.get("modal", SetupProvider())
     if modal.enabled and modal.deploy_worker:
         changes.append("provider worker deployment: modal gpucall-worker-json")
+        changes.append(str(_provider_mutation_consent_path(_modal_deploy_plan_hash(plan) or "unknown")))
+        changes.append(str(_modal_cleanup_manifest_path(_modal_deploy_plan_hash(plan) or "unknown")))
     credential_targets: list[str] = []
     if plan.gateway.caller_auth.mode == "generated_gateway_key":
         credential_targets.append("auth")
@@ -1029,6 +1234,7 @@ def _planned_changes(config_dir: Path, plan: SetupPlan) -> list[str]:
 def _setup_plan_warnings(config_dir: Path, plan: SetupPlan) -> list[str]:
     warnings: list[str] = []
     configured = set(configured_credentials())
+    configured.update(provider_registry_configured_contracts())
     for name, provider in sorted(plan.providers.items()):
         if not provider.enabled or provider.credentials is None:
             continue
@@ -1062,14 +1268,150 @@ def _setup_plan_prompt_targets(plan: SetupPlan) -> list[str]:
     return targets
 
 
+def _assert_provider_mutation_consent(plan: SetupPlan, *, yes: bool, accept_plan_hash: str | None) -> None:
+    expected = _modal_deploy_plan_hash(plan)
+    if expected is None:
+        return
+    if accept_plan_hash == expected:
+        return
+    if yes:
+        raise SystemExit(
+            "Modal worker deploy requires explicit provider-mutation consent. "
+            f"Run `gpucall setup apply --file <plan> --dry-run`, review the plan, then re-run with --accept-plan-hash {expected}. "
+            "--yes alone is not consent for provider mutation."
+        )
+    print(
+        "\nModal worker deployment will create or update a provider-side resource.\n"
+        f"Consent plan hash: {expected}\n"
+        "Type the exact plan hash to allow this provider mutation, or press Enter to abort."
+    )
+    try:
+        raw = input("Modal deploy plan hash: ").strip()
+    except EOFError as exc:
+        raise SystemExit(f"Modal worker deploy requires --accept-plan-hash {expected}") from exc
+    if raw != expected:
+        raise SystemExit(f"Modal worker deploy was not accepted; expected --accept-plan-hash {expected}")
+
+
+def _modal_deploy_plan_hash(plan: SetupPlan) -> str | None:
+    payload = _modal_deploy_plan_payload(plan)
+    if payload is None:
+        return None
+    digest = hashlib.sha256(json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")).hexdigest()
+    return digest[:16]
+
+
+def _modal_deploy_plan_payload(plan: SetupPlan) -> dict[str, object] | None:
+    provider = plan.providers.get("modal")
+    if provider is None or not provider.enabled or not provider.deploy_worker:
+        return None
+    route_setup_config_hash = hashlib.sha256(
+        json.dumps(plan.model_dump(mode="json"), sort_keys=True, separators=(",", ":")).encode("utf-8")
+    ).hexdigest()[:16]
+    dry_run_basis = {
+        "provider": "modal",
+        "action": "deploy_worker",
+        "profile": plan.profile,
+        "gateway_base_url": plan.gateway.base_url,
+        "worker_package_version": GITHUB_RELEASE_TAG,
+    }
+    dry_run_result_id = "modal-dry-run-" + hashlib.sha256(
+        json.dumps(dry_run_basis, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    ).hexdigest()[:16]
+    payload = {
+        "action": "deploy_worker",
+        "provider": "modal",
+        "target": {
+            "app": "gpucall",
+            "function": "gpucall-worker-json",
+            "environment": "credential-store-or-modal-default",
+        },
+        "worker": {
+            "module": "gpucall.worker_contracts.modal",
+            "package": "gpucall",
+            "package_version": GITHUB_RELEASE_TAG,
+            "package_hash": _modal_worker_package_hash(),
+        },
+        "setup": {
+            "profile": plan.profile,
+            "gateway_base_url": plan.gateway.base_url,
+            "credential_source": provider.credentials.source if provider.credentials else None,
+            "route_setup_config_hash": route_setup_config_hash,
+        },
+        "provider_registry_snapshot_hash": provider_registry_snapshot_hash(),
+        "dry_run_result_id": dry_run_result_id,
+        "estimated_cost_class": "provider-controlled-worker-deploy-no-generation",
+    }
+    return payload
+
+
+def _modal_deploy_consent_artifact(plan: SetupPlan) -> dict[str, object] | None:
+    payload = _modal_deploy_plan_payload(plan)
+    plan_hash = _modal_deploy_plan_hash(plan)
+    if payload is None or plan_hash is None:
+        return None
+    now = datetime.now(timezone.utc)
+    cleanup_manifest = _modal_cleanup_manifest_path(plan_hash)
+    return {
+        "schema_version": 1,
+        "phase": "setup-provider-mutation-consent",
+        "provider": "modal",
+        "action": "deploy_worker",
+        "target": payload["target"],
+        "worker": payload["worker"],
+        "provider_registry_snapshot_hash": payload["provider_registry_snapshot_hash"],
+        "route_setup_config_hash": payload["setup"]["route_setup_config_hash"],
+        "dry_run_result_id": payload["dry_run_result_id"],
+        "plan_hash": plan_hash,
+        "estimated_cost_class": payload["estimated_cost_class"],
+        "created_at": now.isoformat(),
+        "expires_at": datetime.fromtimestamp(now.timestamp() + PROVIDER_MUTATION_CONSENT_TTL_SECONDS, timezone.utc).isoformat(),
+        "ownership_tag": _modal_ownership_tag(plan_hash),
+        "cleanup_manifest_path": str(cleanup_manifest),
+    }
+
+
+def _write_modal_deploy_consent_artifact(plan: SetupPlan) -> dict[str, object] | None:
+    artifact = _modal_deploy_consent_artifact(plan)
+    if artifact is None:
+        return None
+    artifact = {**artifact, "accepted_at": datetime.now(timezone.utc).isoformat()}
+    _write_json_file(_provider_mutation_consent_path(str(artifact["plan_hash"])), artifact, mode=0o600)
+    return artifact
+
+
+def _provider_mutation_consent_path(plan_hash: str) -> Path:
+    return default_state_dir() / "setup" / "provider-mutation-consents" / f"modal-deploy-{plan_hash}.json"
+
+
+def _modal_cleanup_manifest_path(plan_hash: str) -> Path:
+    return default_state_dir() / "setup" / "cleanup-manifests" / f"modal-deploy-{plan_hash}.json"
+
+
+def _modal_ownership_tag(plan_hash: str) -> str:
+    return f"gpucall-setup-{plan_hash}"
+
+
+def _modal_worker_package_hash() -> str:
+    path = Path(str(files("gpucall").joinpath("worker_contracts", "modal.py")))
+    try:
+        data = path.read_bytes()
+    except OSError:
+        data = b"gpucall.worker_contracts.modal"
+    return hashlib.sha256(data).hexdigest()[:16]
+
+
 def _setup_apply_report(plan: SetupPlan, changes: list[str], warnings: list[str], *, dry_run: bool) -> str:
     checks = ["[ok] setup schema valid"]
     if plan.tenant_onboarding.mode is ApiKeyHandoffMode.TRUSTED_BOOTSTRAP:
         checks.append("[ok] trusted bootstrap has allowlist")
     if plan.object_store is not None:
         checks.append("[ok] object store config has bucket")
+    modal_hash = _modal_deploy_plan_hash(plan)
+    if modal_hash is not None:
+        checks.append(f"[warn] modal deploy requires provider-mutation consent plan_hash={modal_hash}")
     checks.extend(f"[warn] {warning}" for warning in warnings)
-    return (
+    text = (
         f"Setup plan: {plan.profile}\n\n"
         "Will update:\n"
         + "\n".join(f"  - {item}" for item in changes)
@@ -1079,6 +1421,18 @@ def _setup_apply_report(plan: SetupPlan, changes: list[str], warnings: list[str]
         "Checks:\n"
         + "\n".join(f"  {item}" for item in checks)
     )
+    if modal_hash is not None:
+        artifact = _modal_deploy_consent_artifact(plan)
+        dry_run_id = artifact.get("dry_run_result_id") if artifact else "<unknown>"
+        text += (
+            "\n\nProvider mutation consent:\n"
+            "  Modal worker deployment is a provider-side mutation.\n"
+            f"  Dry-run result id: {dry_run_id}\n"
+            f"  Cleanup manifest: {_modal_cleanup_manifest_path(modal_hash)}\n"
+            f"  Re-run apply with: --accept-plan-hash {modal_hash}\n"
+            "  --yes alone is not provider mutation consent."
+        )
+    return text
 
 
 def _ensure_config_initialized(config_dir: Path) -> None:
@@ -1097,13 +1451,67 @@ def _ensure_config_initialized(config_dir: Path) -> None:
             shutil.copyfile(path, target)
 
 
+def _ensure_oob_control_plane_initialized(config_dir: Path, plan: SetupPlan) -> None:
+    state_dir = default_state_dir()
+    for path in (
+        state_dir,
+        state_dir / "catalog",
+        state_dir / "setup",
+        state_dir / "setup" / "provider-mutation-consents",
+        state_dir / "setup" / "cleanup-manifests",
+        state_dir / "recipe_requests",
+        state_dir / "quality_feedback",
+    ):
+        path.mkdir(parents=True, exist_ok=True)
+    if not provider_registry_path().exists():
+        _write_json_file(
+            provider_registry_path(),
+            {
+                "schema_version": 1,
+                "updated_at": datetime.now(timezone.utc).isoformat(),
+                "providers": {},
+            },
+            mode=0o600,
+        )
+    panopticon_path = default_panopticon_path()
+    if not panopticon_path.exists():
+        _write_json_file(
+            panopticon_path,
+            {
+                "schema_version": PANOPTICON_SCHEMA_VERSION,
+                "updated_at": datetime.now(timezone.utc).isoformat(),
+                "tuples": {},
+            },
+            mode=0o600,
+        )
+    service_state = {
+        "schema_version": 1,
+        "profile": plan.profile,
+        "config_dir": str(config_dir),
+        "panopticon_path": str(panopticon_path),
+        "panopticon_service_mode": _service_mode_for(plan.profile),
+        "panopticon_service_state": "service-initialized",
+        "admin_automation_service_mode": _service_mode_for(plan.profile),
+        "admin_automation_service_state": "service-initialized",
+        "admin_synthetic_dry_run_ttl_seconds": ADMIN_SYNTHETIC_DRY_RUN_TTL_SECONDS,
+        "updated_at": datetime.now(timezone.utc).isoformat(),
+    }
+    _write_json_file(state_dir / "setup" / "control-plane-state.json", service_state, mode=0o600)
+
+
 def _apply_gateway(config_dir: Path, plan: SetupPlan) -> None:
     if plan.gateway.caller_auth.mode == "generated_gateway_key":
         token = "gpk_" + secrets.token_urlsafe(32)
         save_credentials("auth", {"api_keys": token})
+        record_caller_auth(
+            "default",
+            scope="gateway",
+            token=token,
+            non_expiring_policy_reason="setup-generated default gateway key; rotate or replace with tenant-scoped keys before broad production use",
+        )
 
 
-def _apply_providers(config_dir: Path, plan: SetupPlan) -> list[str]:
+def _apply_providers(config_dir: Path, plan: SetupPlan, *, modal_plan_hash: str | None = None) -> list[str]:
     results: list[str] = []
     for name, provider in plan.providers.items():
         if not provider.enabled or provider.credentials is None:
@@ -1115,26 +1523,65 @@ def _apply_providers(config_dir: Path, plan: SetupPlan) -> list[str]:
                 token_id = input("Modal token ID: ").strip()
                 token_secret = getpass.getpass("Modal token secret: ").strip()
                 environment = input("Modal environment (optional, default main): ").strip()
-                values = {"token_id": token_id, "token_secret": token_secret}
-                if environment:
-                    values["environment"] = environment
-                save_credentials("modal", values)
+                save_credentials("modal", {"token_id": token_id, "token_secret": token_secret})
+                save_provider_metadata("modal", {"environment": environment or "main"}, state="credential-configured")
             if name == "hyperstack":
-                save_credentials("hyperstack", {"api_key": getpass.getpass("Hyperstack API key: ").strip(), "ssh_key_path": provider.ssh_key_path or ""})
+                save_credentials("hyperstack", {"api_key": getpass.getpass("Hyperstack API key: ").strip()})
+                save_provider_metadata("hyperstack", {"ssh_key_path": provider.ssh_key_path or ""}, state="provider-configured")
+        elif provider.credentials.source == "gpucall_credentials":
+            if name == "modal":
+                modal_credentials = load_credentials().get("modal", {})
+                environment = modal_credentials.get("environment") or _provider_registry_metadata("modal").get("environment") or "main"
+                save_provider_metadata("modal", {"environment": environment}, state="credential-configured")
+                if "environment" in modal_credentials:
+                    save_credentials(
+                        "modal",
+                        {
+                            "token_id": str(modal_credentials.get("token_id") or ""),
+                            "token_secret": str(modal_credentials.get("token_secret") or ""),
+                        },
+                    )
+            if name == "hyperstack" and provider.ssh_key_path:
+                save_provider_metadata("hyperstack", {"ssh_key_path": provider.ssh_key_path}, state="provider-configured")
+        if name == "runpod":
+            state = "provider-configured" if provider.endpoint_id else "supply-pending"
+            save_provider_metadata("runpod", {"endpoint_id": provider.endpoint_id or "", "endpoint_required": not bool(provider.endpoint_id)}, state=state)
         if name == "modal" and provider.deploy_worker:
             results.append(_deploy_modal_worker())
+            plan_hash = modal_plan_hash or _modal_deploy_plan_hash(plan) or "unknown"
+            save_provider_metadata(
+                "modal",
+                {
+                    "environment": _provider_registry_metadata("modal").get("environment") or "main",
+                    "deployment_id": f"modal:gpucall:gpucall-worker-json:{plan_hash}",
+                    "ownership_tag": _modal_ownership_tag(plan_hash),
+                    "cleanup_manifest_path": str(_modal_cleanup_manifest_path(plan_hash)),
+                    "worker_contract_id": "gpucall-worker-json",
+                    "function_name": "gpucall-worker-json",
+                },
+                state="provider-configured",
+            )
         if name == "runpod" and provider.endpoint_id:
             _update_yaml(config_dir / "surfaces" / "runpod-vllm-serverless.yml", {"target": provider.endpoint_id})
             _update_yaml(config_dir / "workers" / "runpod-vllm-serverless.yml", {"target": provider.endpoint_id})
     return results
 
 
+def _provider_registry_metadata(provider: str) -> dict[str, object]:
+    registry = load_provider_registry()
+    providers = registry.get("providers") if isinstance(registry, dict) else {}
+    record = providers.get(provider) if isinstance(providers, dict) else None
+    metadata = record.get("metadata") if isinstance(record, dict) else {}
+    return dict(metadata) if isinstance(metadata, dict) else {}
+
+
 def _deploy_modal_worker() -> str:
     credentials = load_credentials().get("modal", {})
+    metadata = _provider_registry_metadata("modal")
     env = dict(os.environ)
     token_id = str(credentials.get("token_id") or "").strip()
     token_secret = str(credentials.get("token_secret") or "").strip()
-    environment = str(credentials.get("environment") or "").strip()
+    environment = str(metadata.get("environment") or "").strip()
     if token_id and token_secret:
         env["MODAL_TOKEN_ID"] = token_id
         env["MODAL_TOKEN_SECRET"] = token_secret
@@ -1145,6 +1592,744 @@ def _deploy_modal_worker() -> str:
     if completed.returncode != 0:
         raise SystemExit("Modal worker deploy failed: " + _safe_subprocess_tail(completed.stderr or completed.stdout))
     return "[ok] Modal worker deployed: gpucall-worker-json"
+
+
+def _write_modal_cleanup_manifest(consent_artifact: dict[str, object]) -> None:
+    plan_hash = str(consent_artifact.get("plan_hash") or "unknown")
+    manifest = {
+        "schema_version": 1,
+        "phase": "setup-provider-cleanup-manifest",
+        "provider": "modal",
+        "eligible_for_cleanup_only_when": {
+            "ownership_tag": consent_artifact.get("ownership_tag"),
+            "deployment_id": f"modal:gpucall:gpucall-worker-json:{plan_hash}",
+            "plan_hash": plan_hash,
+        },
+        "resources": [
+            {
+                "kind": "modal_function",
+                "app": "gpucall",
+                "function": "gpucall-worker-json",
+                "ownership_tag": consent_artifact.get("ownership_tag"),
+            }
+        ],
+        "created_at": datetime.now(timezone.utc).isoformat(),
+    }
+    _write_json_file(_modal_cleanup_manifest_path(plan_hash), manifest, mode=0o600)
+
+
+def _run_panopticon_bootstrap_refresh(config_dir: Path, plan: SetupPlan) -> dict[str, object]:
+    path = default_state_dir() / "setup" / "panopticon-bootstrap-refresh.json"
+    enabled_cloud_providers = [name for name, provider in plan.providers.items() if provider.enabled and name in CLOUD_PROVIDER_FAMILIES]
+    if not enabled_cloud_providers:
+        report = {
+            "schema_version": 1,
+            "phase": "provider-panopticon-bootstrap-refresh",
+            "status": "skipped",
+            "reason": "no cloud providers configured",
+            "provider_registry_reloaded": True,
+            "created_at": datetime.now(timezone.utc).isoformat(),
+        }
+        _write_json_file(path, report, mode=0o600)
+        return report
+    try:
+        if os.getenv("GPUCALL_SETUP_LIVE_PROVIDER_PROBES", "1") == "0":
+            provider_registry = load_provider_registry()
+            report = {
+                "schema_version": 1,
+                "phase": "provider-panopticon-bootstrap-refresh",
+                "status": "processed",
+                "mode": "preflight-only",
+                "reason": "live provider probes disabled by GPUCALL_SETUP_LIVE_PROVIDER_PROBES=0",
+                "provider_registry_reloaded": True,
+                "provider_registry_snapshot_hash": provider_registry_snapshot_hash(),
+                "provider_count": len(provider_registry.get("providers") or {}),
+                "created_at": datetime.now(timezone.utc).isoformat(),
+            }
+        else:
+            refresh = refresh_panopticon(config_dir=config_dir, panopticon_path=default_panopticon_path())
+            preflight = refresh.get("preflight") if isinstance(refresh, dict) else {}
+            status = "processed" if isinstance(preflight, dict) and preflight.get("status") in {"ok", "partial"} else "blocked"
+            report = {
+                "schema_version": 1,
+                "phase": "provider-panopticon-bootstrap-refresh",
+                "status": status,
+                "mode": "live-non-generation-probes",
+                "reason": "provider panopticon bootstrap refresh completed" if status == "processed" else "provider panopticon bootstrap refresh blocked",
+                "provider_registry_reloaded": True,
+                "provider_registry_snapshot_hash": provider_registry_snapshot_hash(),
+                "panopticon_report": _redacted_panopticon_report(refresh),
+                "created_at": datetime.now(timezone.utc).isoformat(),
+            }
+    except Exception as exc:
+        report = {
+            "schema_version": 1,
+            "phase": "provider-panopticon-bootstrap-refresh",
+            "status": "failed",
+            "reason": f"provider panopticon bootstrap refresh failed: {type(exc).__name__}: {exc}",
+            "provider_registry_reloaded": True,
+            "provider_registry_snapshot_hash": provider_registry_snapshot_hash(),
+            "created_at": datetime.now(timezone.utc).isoformat(),
+        }
+    _write_json_file(path, report, mode=0o600)
+    return report
+
+
+def _start_panopticon_background_service(config_dir: Path, plan: SetupPlan) -> dict[str, object]:
+    path = default_state_dir() / "setup" / "panopticon-service.json"
+    enabled_cloud_providers = [name for name, provider in plan.providers.items() if provider.enabled and name in CLOUD_PROVIDER_FAMILIES]
+    if not enabled_cloud_providers:
+        report = {
+            "schema_version": 1,
+            "phase": "provider-panopticon-service-start",
+            "status": "service-initialized",
+            "reason": "no cloud providers configured",
+            "created_at": datetime.now(timezone.utc).isoformat(),
+        }
+        _write_json_file(path, report, mode=0o600)
+        return report
+    if os.getenv("GPUCALL_SETUP_START_SERVICES", "1") == "0":
+        report = {
+            "schema_version": 1,
+            "phase": "provider-panopticon-service-start",
+            "status": "service-initialized",
+            "reason": "service start disabled by GPUCALL_SETUP_START_SERVICES=0",
+            "created_at": datetime.now(timezone.utc).isoformat(),
+        }
+        _write_json_file(path, report, mode=0o600)
+        return report
+    host = "127.0.0.1"
+    port = int(os.getenv("GPUCALL_PANOPTICON_PORT", "18090"))
+    health_url = f"http://{host}:{port}/healthz"
+    if _http_health_ok(health_url):
+        report = {
+            "schema_version": 1,
+            "phase": "provider-panopticon-service-start",
+            "status": "service-running",
+            "reason": "existing panopticon health endpoint is healthy",
+            "health_url": health_url,
+            "created_at": datetime.now(timezone.utc).isoformat(),
+        }
+        _write_json_file(path, report, mode=0o600)
+        return report
+    if _tcp_port_open(host, port):
+        report = {
+            "schema_version": 1,
+            "phase": "provider-panopticon-service-start",
+            "status": "service-error",
+            "reason": f"port {host}:{port} is already in use by a non-panopticon service",
+            "health_url": health_url,
+            "created_at": datetime.now(timezone.utc).isoformat(),
+        }
+        _write_json_file(path, report, mode=0o600)
+        return report
+    service_mode = _service_mode_for(plan.profile)
+    if _compose_service_mode(service_mode):
+        report = _start_compose_panopticon_service(health_url=health_url)
+        _write_json_file(path, report, mode=0o600)
+        return report
+    if service_mode == "systemd-user-service" and shutil.which("systemctl"):
+        report = _start_systemd_user_panopticon_service(config_dir, host=host, port=port, health_url=health_url)
+        _write_json_file(path, report, mode=0o600)
+        return report
+    if service_mode == "launchd-user-agent" and shutil.which("launchctl"):
+        report = _start_launchd_user_panopticon_service(config_dir, host=host, port=port, health_url=health_url)
+        _write_json_file(path, report, mode=0o600)
+        return report
+    if os.getenv("GPUCALL_SETUP_ALLOW_BACKGROUND_FALLBACK") != "1":
+        report = {
+            "schema_version": 1,
+            "phase": "provider-panopticon-service-start",
+            "status": "service-initialized",
+            "reason": f"no safe supervisor available for service mode {service_mode}",
+            "next_command": f"gpucall panopticon serve --config-dir {config_dir} --host {host} --port {port}",
+            "health_url": health_url,
+            "created_at": datetime.now(timezone.utc).isoformat(),
+        }
+        _write_json_file(path, report, mode=0o600)
+        return report
+    log_path = default_state_dir() / "setup" / "panopticon-service.log"
+    command = [
+        sys.executable,
+        "-m",
+        "gpucall.cli",
+        "panopticon",
+        "serve",
+        "--config-dir",
+        str(config_dir),
+        "--host",
+        host,
+        "--port",
+        str(port),
+        "--panopticon-path",
+        str(default_panopticon_path()),
+    ]
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+    with log_path.open("ab") as log:
+        process = subprocess.Popen(command, stdout=log, stderr=log, start_new_session=True)
+    deadline = time.monotonic() + 8.0
+    while time.monotonic() < deadline:
+        if process.poll() is not None:
+            break
+        if _http_health_ok(health_url):
+            report = {
+                "schema_version": 1,
+                "phase": "provider-panopticon-service-start",
+                "status": "service-running",
+                "reason": "panopticon health endpoint is healthy",
+                "pid": process.pid,
+                "health_url": health_url,
+                "log_path": str(log_path),
+                "created_at": datetime.now(timezone.utc).isoformat(),
+            }
+            _write_json_file(path, report, mode=0o600)
+            return report
+        time.sleep(0.25)
+    report = {
+        "schema_version": 1,
+        "phase": "provider-panopticon-service-start",
+        "status": "service-error",
+        "reason": "panopticon service did not become healthy within 8 seconds",
+        "pid": process.pid,
+        "returncode": process.poll(),
+        "health_url": health_url,
+        "log_path": str(log_path),
+        "created_at": datetime.now(timezone.utc).isoformat(),
+    }
+    if process.poll() is None:
+        process.terminate()
+    _write_json_file(path, report, mode=0o600)
+    return report
+
+
+def _compose_service_mode(service_mode: str) -> bool:
+    return service_mode in {"docker-compose-service", "compose-service"}
+
+
+def _compose_base_command() -> tuple[list[str] | None, str | None]:
+    if not shutil.which("docker"):
+        return None, "docker executable not found"
+    compose_file = os.getenv("GPUCALL_SETUP_COMPOSE_FILE")
+    if not compose_file:
+        return None, "GPUCALL_SETUP_COMPOSE_FILE is required for docker compose service mode"
+    return ["docker", "compose", "-f", compose_file], None
+
+
+def _start_compose_panopticon_service(*, health_url: str) -> dict[str, object]:
+    base_command, error = _compose_base_command()
+    service = os.getenv("GPUCALL_SETUP_PANOPTICON_COMPOSE_SERVICE", "gpucall-panopticon")
+    if base_command is None:
+        return {
+            "schema_version": 1,
+            "phase": "provider-panopticon-service-start",
+            "status": "service-initialized",
+            "reason": error or "docker compose service mode is not configured",
+            "service_mode": "docker-compose-service",
+            "service_name": service,
+            "health_url": health_url,
+            "created_at": datetime.now(timezone.utc).isoformat(),
+        }
+    completed = subprocess.run(base_command + ["up", "-d", service], capture_output=True, text=True, check=False, timeout=60)
+    if completed.returncode != 0:
+        return {
+            "schema_version": 1,
+            "phase": "provider-panopticon-service-start",
+            "status": "service-error",
+            "reason": "docker compose service start failed: " + _safe_subprocess_tail(completed.stderr or completed.stdout),
+            "service_mode": "docker-compose-service",
+            "service_name": service,
+            "health_url": health_url,
+            "created_at": datetime.now(timezone.utc).isoformat(),
+        }
+    return _wait_for_panopticon_health(health_url, unit_path=Path(os.getenv("GPUCALL_SETUP_COMPOSE_FILE", "")), service_mode="docker-compose-service")
+
+
+def _start_systemd_user_panopticon_service(config_dir: Path, *, host: str, port: int, health_url: str) -> dict[str, object]:
+    unit_dir = Path(os.getenv("XDG_CONFIG_HOME", str(Path.home() / ".config"))).expanduser() / "systemd" / "user"
+    unit_path = unit_dir / "gpucall-panopticon.service"
+    unit_dir.mkdir(parents=True, exist_ok=True)
+    command = [
+        sys.executable,
+        "-m",
+        "gpucall.cli",
+        "panopticon",
+        "serve",
+        "--config-dir",
+        str(config_dir),
+        "--host",
+        host,
+        "--port",
+        str(port),
+        "--panopticon-path",
+        str(default_panopticon_path()),
+    ]
+    unit_text = "\n".join(
+        [
+            "[Unit]",
+            "Description=gpucall Provider Panopticon",
+            "",
+            "[Service]",
+            "Type=simple",
+            "Restart=on-failure",
+            f"ExecStart={shlex.join(command)}",
+            "",
+            "[Install]",
+            "WantedBy=default.target",
+            "",
+        ]
+    )
+    unit_path.write_text(unit_text, encoding="utf-8")
+    unit_path.chmod(0o644)
+    commands = [
+        ["systemctl", "--user", "daemon-reload"],
+        ["systemctl", "--user", "enable", "--now", "gpucall-panopticon.service"],
+    ]
+    for command in commands:
+        completed = subprocess.run(command, capture_output=True, text=True, check=False, timeout=20)
+        if completed.returncode != 0:
+            return {
+                "schema_version": 1,
+                "phase": "provider-panopticon-service-start",
+                "status": "service-error",
+                "reason": "systemd user service start failed: " + _safe_subprocess_tail(completed.stderr or completed.stdout),
+                "unit_path": str(unit_path),
+                "health_url": health_url,
+                "created_at": datetime.now(timezone.utc).isoformat(),
+            }
+    return _wait_for_panopticon_health(health_url, unit_path=unit_path, service_mode="systemd-user-service")
+
+
+def _start_launchd_user_panopticon_service(config_dir: Path, *, host: str, port: int, health_url: str) -> dict[str, object]:
+    label = "ai.tnmc.gpucall.panopticon"
+    plist_dir = Path.home() / "Library" / "LaunchAgents"
+    plist_path = plist_dir / f"{label}.plist"
+    plist_dir.mkdir(parents=True, exist_ok=True)
+    payload = {
+        "Label": label,
+        "ProgramArguments": [
+            sys.executable,
+            "-m",
+            "gpucall.cli",
+            "panopticon",
+            "serve",
+            "--config-dir",
+            str(config_dir),
+            "--host",
+            host,
+            "--port",
+            str(port),
+            "--panopticon-path",
+            str(default_panopticon_path()),
+        ],
+        "RunAtLoad": True,
+        "KeepAlive": True,
+        "StandardOutPath": str(default_state_dir() / "setup" / "panopticon-service.log"),
+        "StandardErrorPath": str(default_state_dir() / "setup" / "panopticon-service.log"),
+    }
+    with plist_path.open("wb") as handle:
+        plistlib.dump(payload, handle)
+    plist_path.chmod(0o644)
+    domain = f"gui/{os.getuid()}"
+    bootstrap = subprocess.run(["launchctl", "bootstrap", domain, str(plist_path)], capture_output=True, text=True, check=False, timeout=20)
+    if bootstrap.returncode != 0 and "already bootstrapped" not in (bootstrap.stderr or bootstrap.stdout):
+        return {
+            "schema_version": 1,
+            "phase": "provider-panopticon-service-start",
+            "status": "service-error",
+            "reason": "launchd user agent bootstrap failed: " + _safe_subprocess_tail(bootstrap.stderr or bootstrap.stdout),
+            "unit_path": str(plist_path),
+            "health_url": health_url,
+            "created_at": datetime.now(timezone.utc).isoformat(),
+        }
+    kickstart = subprocess.run(["launchctl", "kickstart", "-k", f"{domain}/{label}"], capture_output=True, text=True, check=False, timeout=20)
+    if kickstart.returncode != 0:
+        return {
+            "schema_version": 1,
+            "phase": "provider-panopticon-service-start",
+            "status": "service-error",
+            "reason": "launchd user agent kickstart failed: " + _safe_subprocess_tail(kickstart.stderr or kickstart.stdout),
+            "unit_path": str(plist_path),
+            "health_url": health_url,
+            "created_at": datetime.now(timezone.utc).isoformat(),
+        }
+    return _wait_for_panopticon_health(health_url, unit_path=plist_path, service_mode="launchd-user-agent")
+
+
+def _wait_for_panopticon_health(health_url: str, *, unit_path: Path, service_mode: str) -> dict[str, object]:
+    deadline = time.monotonic() + 8.0
+    while time.monotonic() < deadline:
+        if _http_health_ok(health_url):
+            return {
+                "schema_version": 1,
+                "phase": "provider-panopticon-service-start",
+                "status": "service-running",
+                "reason": "panopticon health endpoint is healthy",
+                "service_mode": service_mode,
+                "unit_path": str(unit_path),
+                "health_url": health_url,
+                "created_at": datetime.now(timezone.utc).isoformat(),
+            }
+        time.sleep(0.25)
+    return {
+        "schema_version": 1,
+        "phase": "provider-panopticon-service-start",
+        "status": "service-error",
+        "reason": "panopticon service did not become healthy within 8 seconds",
+        "service_mode": service_mode,
+        "unit_path": str(unit_path),
+        "health_url": health_url,
+        "created_at": datetime.now(timezone.utc).isoformat(),
+    }
+
+
+def _http_health_ok(url: str) -> bool:
+    try:
+        with urlopen(url, timeout=1.0) as response:
+            return 200 <= int(response.status) < 300
+    except (OSError, URLError, TimeoutError):
+        return False
+
+
+def _tcp_port_open(host: str, port: int) -> bool:
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+        sock.settimeout(0.5)
+        return sock.connect_ex((host, port)) == 0
+
+
+def _start_admin_automation_service(config_dir: Path, plan: SetupPlan) -> dict[str, object]:
+    path = default_state_dir() / "setup" / "admin-automation-service.json"
+    recipe_inbox = _local_path_from_inbox_spec(plan.tenant_onboarding.recipe_inbox)
+    if recipe_inbox is None:
+        report = {
+            "schema_version": 1,
+            "phase": "admin-automation-service-start",
+            "status": "service-initialized",
+            "reason": "recipe inbox is missing or remote; admin watch service needs a local inbox path",
+            "created_at": datetime.now(timezone.utc).isoformat(),
+        }
+        _write_json_file(path, report, mode=0o600)
+        return report
+    if not plan.recipe_automation.auto_materialize:
+        report = {
+            "schema_version": 1,
+            "phase": "admin-automation-service-start",
+            "status": "service-initialized",
+            "reason": "recipe automation auto_materialize is disabled",
+            "inbox_dir": str(recipe_inbox),
+            "created_at": datetime.now(timezone.utc).isoformat(),
+        }
+        _write_json_file(path, report, mode=0o600)
+        return report
+    if os.getenv("GPUCALL_SETUP_START_SERVICES", "1") == "0":
+        report = {
+            "schema_version": 1,
+            "phase": "admin-automation-service-start",
+            "status": "service-initialized",
+            "reason": "service start disabled by GPUCALL_SETUP_START_SERVICES=0",
+            "inbox_dir": str(recipe_inbox),
+            "created_at": datetime.now(timezone.utc).isoformat(),
+        }
+        _write_json_file(path, report, mode=0o600)
+        return report
+    service_mode = _service_mode_for(plan.profile)
+    if _compose_service_mode(service_mode):
+        report = _start_compose_admin_automation_service()
+        _write_json_file(path, report, mode=0o600)
+        return report
+    if service_mode == "systemd-user-service" and shutil.which("systemctl"):
+        report = _start_systemd_user_admin_automation_service(config_dir, recipe_inbox)
+        _write_json_file(path, report, mode=0o600)
+        return report
+    if service_mode == "launchd-user-agent" and shutil.which("launchctl"):
+        report = _start_launchd_user_admin_automation_service(config_dir, recipe_inbox)
+        _write_json_file(path, report, mode=0o600)
+        return report
+    report = {
+        "schema_version": 1,
+        "phase": "admin-automation-service-start",
+        "status": "service-initialized",
+        "reason": f"no safe supervisor available for service mode {service_mode}",
+        "next_command": shlex.join(_admin_watch_command(config_dir, recipe_inbox)),
+        "inbox_dir": str(recipe_inbox),
+        "created_at": datetime.now(timezone.utc).isoformat(),
+    }
+    _write_json_file(path, report, mode=0o600)
+    return report
+
+
+def _admin_watch_command(config_dir: Path, recipe_inbox: Path) -> list[str]:
+    return [
+        sys.executable,
+        "-m",
+        "gpucall.recipe_admin",
+        "watch",
+        "--inbox-dir",
+        str(recipe_inbox),
+        "--output-dir",
+        str(config_dir / "recipes"),
+        "--config-dir",
+        str(config_dir),
+        "--accept-all",
+    ]
+
+
+def _start_systemd_user_admin_automation_service(config_dir: Path, recipe_inbox: Path) -> dict[str, object]:
+    service_name = "gpucall-recipe-admin-watch.service"
+    unit_dir = Path(os.getenv("XDG_CONFIG_HOME", str(Path.home() / ".config"))).expanduser() / "systemd" / "user"
+    unit_path = unit_dir / service_name
+    unit_dir.mkdir(parents=True, exist_ok=True)
+    unit_text = "\n".join(
+        [
+            "[Unit]",
+            "Description=gpucall recipe admin automation",
+            "",
+            "[Service]",
+            "Type=simple",
+            "Restart=on-failure",
+            f"ExecStart={shlex.join(_admin_watch_command(config_dir, recipe_inbox))}",
+            "",
+            "[Install]",
+            "WantedBy=default.target",
+            "",
+        ]
+    )
+    unit_path.write_text(unit_text, encoding="utf-8")
+    unit_path.chmod(0o644)
+    commands = [
+        ["systemctl", "--user", "daemon-reload"],
+        ["systemctl", "--user", "enable", "--now", service_name],
+    ]
+    for command in commands:
+        completed = subprocess.run(command, capture_output=True, text=True, check=False, timeout=20)
+        if completed.returncode != 0:
+            return {
+                "schema_version": 1,
+                "phase": "admin-automation-service-start",
+                "status": "service-error",
+                "reason": "systemd user service start failed: " + _safe_subprocess_tail(completed.stderr or completed.stdout),
+                "service_mode": "systemd-user-service",
+                "unit_path": str(unit_path),
+                "inbox_dir": str(recipe_inbox),
+                "created_at": datetime.now(timezone.utc).isoformat(),
+            }
+    return _wait_for_systemd_service_active(
+        service_name,
+        phase="admin-automation-service-start",
+        service_mode="systemd-user-service",
+        unit_path=unit_path,
+        extra={"inbox_dir": str(recipe_inbox)},
+    )
+
+
+def _start_launchd_user_admin_automation_service(config_dir: Path, recipe_inbox: Path) -> dict[str, object]:
+    label = "ai.tnmc.gpucall.recipe-admin-watch"
+    plist_dir = Path.home() / "Library" / "LaunchAgents"
+    plist_path = plist_dir / f"{label}.plist"
+    plist_dir.mkdir(parents=True, exist_ok=True)
+    payload = {
+        "Label": label,
+        "ProgramArguments": _admin_watch_command(config_dir, recipe_inbox),
+        "RunAtLoad": True,
+        "KeepAlive": True,
+        "StandardOutPath": str(default_state_dir() / "setup" / "admin-automation-service.log"),
+        "StandardErrorPath": str(default_state_dir() / "setup" / "admin-automation-service.log"),
+    }
+    with plist_path.open("wb") as handle:
+        plistlib.dump(payload, handle)
+    plist_path.chmod(0o644)
+    domain = f"gui/{os.getuid()}"
+    bootstrap = subprocess.run(["launchctl", "bootstrap", domain, str(plist_path)], capture_output=True, text=True, check=False, timeout=20)
+    if bootstrap.returncode != 0 and "already bootstrapped" not in (bootstrap.stderr or bootstrap.stdout):
+        return {
+            "schema_version": 1,
+            "phase": "admin-automation-service-start",
+            "status": "service-error",
+            "reason": "launchd user agent bootstrap failed: " + _safe_subprocess_tail(bootstrap.stderr or bootstrap.stdout),
+            "service_mode": "launchd-user-agent",
+            "unit_path": str(plist_path),
+            "inbox_dir": str(recipe_inbox),
+            "created_at": datetime.now(timezone.utc).isoformat(),
+        }
+    kickstart = subprocess.run(["launchctl", "kickstart", "-k", f"{domain}/{label}"], capture_output=True, text=True, check=False, timeout=20)
+    if kickstart.returncode != 0:
+        return {
+            "schema_version": 1,
+            "phase": "admin-automation-service-start",
+            "status": "service-error",
+            "reason": "launchd user agent kickstart failed: " + _safe_subprocess_tail(kickstart.stderr or kickstart.stdout),
+            "service_mode": "launchd-user-agent",
+            "unit_path": str(plist_path),
+            "inbox_dir": str(recipe_inbox),
+            "created_at": datetime.now(timezone.utc).isoformat(),
+        }
+    status = subprocess.run(["launchctl", "print", f"{domain}/{label}"], capture_output=True, text=True, check=False, timeout=20)
+    if status.returncode == 0:
+        return {
+            "schema_version": 1,
+            "phase": "admin-automation-service-start",
+            "status": "service-running",
+            "reason": "launchd user agent is loaded",
+            "service_mode": "launchd-user-agent",
+            "unit_path": str(plist_path),
+            "inbox_dir": str(recipe_inbox),
+            "created_at": datetime.now(timezone.utc).isoformat(),
+        }
+    return {
+        "schema_version": 1,
+        "phase": "admin-automation-service-start",
+        "status": "service-error",
+        "reason": "launchd user agent is not loaded: " + _safe_subprocess_tail(status.stderr or status.stdout),
+        "service_mode": "launchd-user-agent",
+        "unit_path": str(plist_path),
+        "inbox_dir": str(recipe_inbox),
+        "created_at": datetime.now(timezone.utc).isoformat(),
+    }
+
+
+def _start_compose_admin_automation_service() -> dict[str, object]:
+    base_command, error = _compose_base_command()
+    service = os.getenv("GPUCALL_SETUP_ADMIN_COMPOSE_SERVICE", "gpucall-recipe-admin")
+    if base_command is None:
+        return {
+            "schema_version": 1,
+            "phase": "admin-automation-service-start",
+            "status": "service-initialized",
+            "reason": error or "docker compose service mode is not configured",
+            "service_mode": "docker-compose-service",
+            "service_name": service,
+            "created_at": datetime.now(timezone.utc).isoformat(),
+        }
+    completed = subprocess.run(base_command + ["up", "-d", service], capture_output=True, text=True, check=False, timeout=60)
+    if completed.returncode != 0:
+        return {
+            "schema_version": 1,
+            "phase": "admin-automation-service-start",
+            "status": "service-error",
+            "reason": "docker compose service start failed: " + _safe_subprocess_tail(completed.stderr or completed.stdout),
+            "service_mode": "docker-compose-service",
+            "service_name": service,
+            "created_at": datetime.now(timezone.utc).isoformat(),
+        }
+    return _wait_for_compose_service_running(base_command, service, phase="admin-automation-service-start")
+
+
+def _wait_for_systemd_service_active(
+    service_name: str,
+    *,
+    phase: str,
+    service_mode: str,
+    unit_path: Path,
+    extra: dict[str, object] | None = None,
+) -> dict[str, object]:
+    deadline = time.monotonic() + 5.0
+    while time.monotonic() < deadline:
+        active = subprocess.run(["systemctl", "--user", "is-active", "--quiet", service_name], capture_output=True, text=True, check=False, timeout=10)
+        if active.returncode == 0:
+            report = {
+                "schema_version": 1,
+                "phase": phase,
+                "status": "service-running",
+                "reason": "systemd user service is active",
+                "service_mode": service_mode,
+                "unit_path": str(unit_path),
+                "created_at": datetime.now(timezone.utc).isoformat(),
+            }
+            if extra:
+                report.update(extra)
+            return report
+        time.sleep(0.25)
+    report = {
+        "schema_version": 1,
+        "phase": phase,
+        "status": "service-error",
+        "reason": "systemd user service did not become active within 5 seconds",
+        "service_mode": service_mode,
+        "unit_path": str(unit_path),
+        "created_at": datetime.now(timezone.utc).isoformat(),
+    }
+    if extra:
+        report.update(extra)
+    return report
+
+
+def _wait_for_compose_service_running(base_command: list[str], service: str, *, phase: str) -> dict[str, object]:
+    deadline = time.monotonic() + 5.0
+    while time.monotonic() < deadline:
+        status = subprocess.run(base_command + ["ps", "--status", "running", "--services"], capture_output=True, text=True, check=False, timeout=20)
+        if status.returncode == 0 and service in {line.strip() for line in status.stdout.splitlines()}:
+            return {
+                "schema_version": 1,
+                "phase": phase,
+                "status": "service-running",
+                "reason": "docker compose service is running",
+                "service_mode": "docker-compose-service",
+                "service_name": service,
+                "created_at": datetime.now(timezone.utc).isoformat(),
+            }
+        time.sleep(0.25)
+    return {
+        "schema_version": 1,
+        "phase": phase,
+        "status": "service-error",
+        "reason": "docker compose service did not report running within 5 seconds",
+        "service_mode": "docker-compose-service",
+        "service_name": service,
+        "created_at": datetime.now(timezone.utc).isoformat(),
+    }
+
+
+def _redacted_panopticon_report(report: dict[str, object]) -> dict[str, object]:
+    allowed = {
+        "phase",
+        "status",
+        "snapshot_path",
+        "scope_tuple_count",
+        "selected_tuple_count",
+        "observed_count",
+        "snapshot_count",
+        "preflight",
+    }
+    return {key: value for key, value in report.items() if key in allowed}
+
+
+def _update_oob_control_plane_state(
+    config_dir: Path,
+    plan: SetupPlan,
+    *,
+    synthetic_result: dict[str, object],
+    panopticon_bootstrap: dict[str, object],
+    panopticon_service: dict[str, object],
+    admin_service: dict[str, object],
+) -> None:
+    state_dir = default_state_dir()
+    service_state = _load_control_plane_state()
+    panopticon_status = str(panopticon_bootstrap.get("status") or "")
+    synthetic_status = str(synthetic_result.get("status") or "")
+    panopticon_service_state = str(panopticon_service.get("status") or "service-initialized")
+    admin_service_state = str(admin_service.get("status") or "service-initialized")
+    if panopticon_status in {"failed", "blocked"} and panopticon_service_state == "service-running":
+        panopticon_service_state = "service-error"
+    service_state.update(
+        {
+            "schema_version": 1,
+            "profile": plan.profile,
+            "config_dir": str(config_dir),
+            "panopticon_path": str(default_panopticon_path()),
+            "panopticon_service_mode": _service_mode_for(plan.profile),
+            "panopticon_service_state": panopticon_service_state,
+            "panopticon_service_health_url": panopticon_service.get("health_url"),
+            "panopticon_service_pid": panopticon_service.get("pid"),
+            "panopticon_bootstrap_status": panopticon_status,
+            "admin_automation_service_mode": _service_mode_for(plan.profile),
+            "admin_automation_service_state": admin_service_state,
+            "admin_automation_service_unit_path": admin_service.get("unit_path"),
+            "admin_automation_service_inbox_dir": admin_service.get("inbox_dir"),
+            "admin_synthetic_status": synthetic_status,
+            "admin_synthetic_dry_run_ttl_seconds": ADMIN_SYNTHETIC_DRY_RUN_TTL_SECONDS,
+            "updated_at": datetime.now(timezone.utc).isoformat(),
+        }
+    )
+    _write_json_file(state_dir / "setup" / "control-plane-state.json", service_state, mode=0o600)
 
 
 def _safe_subprocess_tail(text: str, *, limit: int = 1200) -> str:
@@ -1164,7 +2349,7 @@ def _apply_object_store(config_dir: Path, plan: SetupPlan) -> None:
     if object_store.credentials and object_store.credentials.source == "prompt":
         access_key = getpass.getpass("Object store access key: ").strip()
         secret_key = getpass.getpass("Object store secret key: ").strip()
-        save_credentials("aws", {"access_key_id": access_key, "secret_access_key": secret_key, "region": object_store.region, "endpoint_url": object_store.endpoint_url or ""})
+        save_credentials("aws", {"access_key_id": access_key, "secret_access_key": secret_key})
     payload = {
         "provider": "s3",
         "bucket": object_store.bucket,
@@ -1255,9 +2440,44 @@ def _write_external_system_handoff_packages(config_dir: Path, plan: SetupPlan) -
     return results
 
 
+def _synthetic_dry_run_report_text(result: dict[str, object]) -> str:
+    status = str(result.get("status") or "unknown")
+    reason = str(result.get("reason") or "")
+    if status == "processed":
+        return "\n\nAdmin automation synthetic dry-run:\n  [ok] synthetic intake parsed and classified without provider mutation or billable work"
+    if status == "pending":
+        return f"\n\nAdmin automation synthetic dry-run:\n  [warn] {reason}"
+    return f"\n\nAdmin automation synthetic dry-run:\n  [fail] {reason or 'synthetic dry-run failed'}"
+
+
+def _panopticon_bootstrap_report_text(result: dict[str, object]) -> str:
+    status = str(result.get("status") or "unknown")
+    reason = str(result.get("reason") or "")
+    mode = str(result.get("mode") or "")
+    if status == "processed" and mode == "preflight-only":
+        return f"\n\nPanopticon bootstrap refresh:\n  [warn] {reason}"
+    if status == "processed":
+        return "\n\nPanopticon bootstrap refresh:\n  [ok] provider registry reloaded and non-generation readiness evidence refreshed"
+    if status == "skipped":
+        return f"\n\nPanopticon bootstrap refresh:\n  [warn] {reason}"
+    if status == "blocked":
+        return f"\n\nPanopticon bootstrap refresh:\n  [warn] {reason}"
+    return f"\n\nPanopticon bootstrap refresh:\n  [fail] {reason or 'bootstrap refresh failed'}"
+
+
+def _admin_automation_service_report_text(result: dict[str, object]) -> str:
+    status = str(result.get("status") or "unknown")
+    reason = str(result.get("reason") or "")
+    if status == "service-running":
+        return "\n\nAdmin automation service:\n  [ok] recipe admin watch service is running"
+    if status == "service-initialized":
+        return f"\n\nAdmin automation service:\n  [warn] {reason or 'service initialized but not running'}"
+    return f"\n\nAdmin automation service:\n  [fail] {reason or 'service failed'}"
+
+
 def _setup_completion_text(config_dir: Path, plan: SetupPlan, *, handoff_results: list[str]) -> str:
     status = _setup_status(config_dir, profile=plan.profile)
-    missing_required = [item for item in status["required"] if item["state"] in {"missing", "partial", "warn"}]
+    missing_required = [item for item in status["required"] if item["state"] in {"missing", "partial", "warn", "service-error", "service-uninitialized"}]
     if missing_required:
         return (
             "Setup was applied, but this profile is not ready yet.\n\n"
@@ -1273,6 +2493,14 @@ def _setup_completion_text(config_dir: Path, plan: SetupPlan, *, handoff_results
             "  gpucall setup apply --file gpucall.setup.yml"
         )
     if plan.profile == "internal-team":
+        if status["oob_readiness"] == "onboarding-ready-provisional":
+            return (
+                "Setup is onboarding-ready-provisional.\n\n"
+                "Caller onboarding may begin after you verify caller-side gateway reachability, but production routing still requires\n"
+                "fresh Panopticon evidence and exact route validation evidence.\n\n"
+                "Next, start or restart the gpucall gateway and Provider Panopticon service, then generate or hand off the caller package.\n"
+                "The caller-side AI CLI entrypoint is caller-ai-onboarding-prompt.md."
+            )
         if handoff_results:
             return (
                 "Now you are good to go.\n\n"
@@ -1358,6 +2586,12 @@ def _update_yaml(path: Path, updates: dict[str, object]) -> None:
         return
     payload.update(updates)
     path.write_text(yaml.safe_dump(payload, sort_keys=False), encoding="utf-8")
+
+
+def _write_json_file(path: Path, payload: dict[str, object], *, mode: int) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    path.chmod(mode)
 
 
 def _provider_contracts(name: str) -> set[str]:

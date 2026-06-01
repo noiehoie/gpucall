@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 
+from gpucall.caller_auth_registry import load_caller_auth_registry
 from gpucall.cli import admin_command, init_config
 from gpucall.credentials import load_credentials
 
@@ -60,6 +61,46 @@ def test_admin_tenant_key_create_writes_credentials_and_lists_fingerprint(tmp_pa
         "configured": True,
         "api_key_fingerprint": created["api_key_fingerprint"],
     }
+    auth_registry = load_caller_auth_registry()
+    assert auth_registry["records"]["external-system"]["fingerprint"] == created["api_key_fingerprint"]
+
+
+def test_admin_tenant_key_rotate_and_revoke_update_lifecycle(tmp_path, monkeypatch, capsys) -> None:
+    credentials = tmp_path / "credentials.yml"
+    config_dir = tmp_path / "config"
+    monkeypatch.setenv("GPUCALL_CREDENTIALS", str(credentials))
+
+    init_config(config_dir)
+    capsys.readouterr()
+    common = {
+        "requests_per_minute": None,
+        "daily_budget_usd": None,
+        "monthly_budget_usd": None,
+        "max_request_estimated_cost_usd": None,
+        "object_prefix": None,
+    }
+    admin_command("tenant-create", config_dir, name="external-system", **common)
+    capsys.readouterr()
+    admin_command("tenant-key-create", config_dir, name="external-system", **common)
+    created = json.loads(capsys.readouterr().out)
+
+    admin_command("tenant-key-rotate", config_dir, name="external-system", **common)
+    rotated = json.loads(capsys.readouterr().out)
+    rotated_key = rotated["api_key"]
+
+    assert rotated_key.startswith("gpk_")
+    assert rotated_key != created["api_key"]
+    assert rotated["previous_api_key_fingerprint"] == created["api_key_fingerprint"]
+    assert load_credentials()["auth"]["tenant_keys"] == f"external-system:{rotated_key}"
+    assert load_caller_auth_registry()["records"]["external-system"]["last_verification_status"] == "rotated"
+
+    admin_command("tenant-key-revoke", config_dir, name="external-system", **common)
+    revoked = json.loads(capsys.readouterr().out)
+
+    assert revoked["revoked"] is True
+    assert revoked["revoked_api_key_fingerprint"] == rotated["api_key_fingerprint"]
+    assert load_credentials()["auth"].get("tenant_keys") is None
+    assert load_caller_auth_registry()["records"]["external-system"]["last_verification_status"] == "revoked"
 
 
 def test_admin_tenant_key_create_can_emit_complete_manual_handoff(tmp_path, monkeypatch, capsys) -> None:

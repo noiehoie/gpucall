@@ -29,6 +29,12 @@ then
   exit 1
 fi
 
+echo "== OOB product spec =="
+git ls-files --error-unmatch docs/OOB_USER_EXPERIENCE_PRODUCT_SPEC.md >/dev/null
+rg -q '## Default Freshness TTL Policy' docs/OOB_USER_EXPERIENCE_PRODUCT_SPEC.md
+rg -q '## Service Mode Decision Table' docs/OOB_USER_EXPERIENCE_PRODUCT_SPEC.md
+rg -q '## Admin Automation Synthetic Dry-Run' docs/OOB_USER_EXPERIENCE_PRODUCT_SPEC.md
+
 echo "== root migration tests =="
 uv run pytest
 

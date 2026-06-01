@@ -59,6 +59,7 @@ from gpucall.app_helpers import (
 )
 from gpucall.artifacts import build_artifact_registry
 from gpucall.audit import AuditTrail
+from gpucall.caller_auth_registry import record_caller_auth
 from gpucall.compiler import GovernanceCompiler, GovernanceError
 from gpucall.config import ConfigError, default_config_dir, default_state_dir, load_config
 from gpucall.credentials import credentials_path, load_credentials, save_credentials
@@ -228,6 +229,12 @@ def _create_bootstrap_tenant_key(tenant_name: str) -> str:
     tenant_keys[tenant_name] = token
     auth["tenant_keys"] = ",".join(f"{tenant}:{key}" for tenant, key in sorted(tenant_keys.items()))
     save_credentials("auth", auth)
+    record_caller_auth(
+        tenant_name,
+        scope="tenant",
+        token=token,
+        non_expiring_policy_reason="trusted bootstrap key is operator-managed; rotate on caller ownership or exposure changes",
+    )
     return token
 
 

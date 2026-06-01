@@ -1,16 +1,23 @@
 from __future__ import annotations
 
+import json
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Iterable
 
 import yaml
 
-from gpucall.config import load_admin_automation
+from gpucall.config import default_state_dir, load_admin_automation
 from gpucall.domain import ApiKeyHandoffMode, RecipeAdminAutomationConfig
+from gpucall.recipe_admin import process_inbox
+
+
+ADMIN_SYNTHETIC_DRY_RUN_TTL_SECONDS = 3600
 
 
 def admin_automation_summary(config_dir: Path) -> dict[str, object]:
     config = load_admin_automation(config_dir)
+    synthetic = load_admin_automation_synthetic_dry_run()
     return {
         "admin_yml": str(config_dir / "admin.yml"),
         "recipe_inbox_auto_materialize": config.recipe_inbox_auto_materialize,
@@ -41,7 +48,166 @@ def admin_automation_summary(config_dir: Path) -> dict[str, object]:
             "caller_sdk_wheel_url": config.caller_sdk_wheel_url,
         },
         "handoff_file_enabled": config.api_key_handoff_mode is ApiKeyHandoffMode.HANDOFF_FILE,
+        "synthetic_dry_run": synthetic,
     }
+
+
+def load_admin_automation_synthetic_dry_run(*, now: datetime | None = None) -> dict[str, object]:
+    path = admin_automation_synthetic_dry_run_path()
+    current = now or datetime.now(timezone.utc)
+    if not path.exists():
+        return {
+            "status": "missing",
+            "path": str(path),
+            "fresh": False,
+            "reason": "synthetic dry-run evidence missing",
+        }
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        return {
+            "status": "error",
+            "path": str(path),
+            "fresh": False,
+            "reason": f"synthetic dry-run evidence unreadable: {type(exc).__name__}",
+        }
+    expires_raw = payload.get("expires_at")
+    expires_at = _parse_datetime(str(expires_raw or ""))
+    fresh = expires_at is not None and expires_at > current
+    return {
+        **payload,
+        "path": str(path),
+        "fresh": fresh,
+        "status": payload.get("status") if fresh else "stale",
+        "reason": payload.get("reason") if fresh else "synthetic dry-run evidence stale",
+    }
+
+
+def run_admin_automation_synthetic_dry_run(
+    recipe_inbox: str | None,
+    *,
+    config_dir: str | Path | None = None,
+    now: datetime | None = None,
+) -> dict[str, object]:
+    current = now or datetime.now(timezone.utc)
+    path = admin_automation_synthetic_dry_run_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    evidence: dict[str, object] = {
+        "schema_version": 1,
+        "phase": "admin-automation-synthetic-dry-run",
+        "status": "failed",
+        "fresh": False,
+        "created_at": current.isoformat(),
+        "expires_at": (current + timedelta(seconds=ADMIN_SYNTHETIC_DRY_RUN_TTL_SECONDS)).isoformat(),
+        "ttl_seconds": ADMIN_SYNTHETIC_DRY_RUN_TTL_SECONDS,
+        "synthetic_intake_id": "synthetic-oob-intake",
+        "admin_run_id": "admin-run-" + current.strftime("%Y%m%dT%H%M%SZ"),
+        "provider_mutation_performed": False,
+        "generation_performed": False,
+        "billable_validation_performed": False,
+        "raw_payload_written": False,
+        "next_command": "gpucall setup section recipe-inbox",
+    }
+    inbox_path = _local_path_from_inbox_spec(recipe_inbox)
+    if inbox_path is None:
+        evidence.update(
+            {
+                "status": "pending",
+                "reason": "recipe inbox is missing or remote; local synthetic inbox dry-run not possible",
+                "recipe_inbox": _redact_inbox(recipe_inbox),
+            }
+        )
+        _write_json(path, evidence)
+        return evidence
+    try:
+        synthetic_dir = inbox_path / ".gpucall-synthetic-dry-run"
+        synthetic_inbox = synthetic_dir / "inbox"
+        synthetic_output = synthetic_dir / "recipes"
+        synthetic_processed = synthetic_dir / "processed"
+        synthetic_failed = synthetic_dir / "failed"
+        synthetic_reports = synthetic_dir / "reports"
+        synthetic_dir.mkdir(parents=True, exist_ok=True)
+        synthetic_dir.chmod(0o700)
+        synthetic_inbox.mkdir(parents=True, exist_ok=True)
+        synthetic_inbox.chmod(0o700)
+        intake_path = synthetic_inbox / "synthetic-oob-intake.json"
+        payload = {
+            "phase": "deterministic-intake",
+            "source": "gpucall-oob-synthetic",
+            "sanitized_request": {
+                "task": "infer",
+                "mode": "sync",
+                "intent": "summarize_text",
+                "classification": "internal",
+                "expected_output": "plain_text",
+                "desired_capabilities": ["instruction_following", "summarization"],
+                "error": {"context": {"context_budget_tokens": 8192}},
+            },
+            "redaction_report": {
+                "prompt_body_forwarded": False,
+                "data_ref_uri_forwarded": False,
+                "presigned_url_forwarded": False,
+                "raw_payload_forwarded": False,
+            },
+        }
+        _write_json(intake_path, payload)
+        loaded = json.loads(intake_path.read_text(encoding="utf-8"))
+        redaction = loaded.get("redaction_report") if isinstance(loaded, dict) else {}
+        if not isinstance(redaction, dict) or any(redaction.get(key) is not False for key in ("prompt_body_forwarded", "data_ref_uri_forwarded", "presigned_url_forwarded")):
+            raise ValueError("synthetic payload redaction failed")
+        processed = process_inbox(
+            inbox_dir=synthetic_inbox,
+            output_dir=synthetic_output,
+            processed_dir=synthetic_processed,
+            failed_dir=synthetic_failed,
+            report_dir=synthetic_reports,
+            config_dir=config_dir,
+            accept_all=True,
+        )
+        ok = bool(processed and processed[0].get("ok") is True)
+        if not ok:
+            reason = str(processed[0].get("error") if processed else "no synthetic inbox result")
+            evidence.update(
+                {
+                    "status": "failed",
+                    "reason": f"synthetic intake was not materialized: {reason}",
+                    "recipe_inbox": _redact_inbox(str(inbox_path)),
+                    "synthetic_dir": _redact_path(str(synthetic_dir)),
+                    "classification": "failed",
+                }
+            )
+            _write_json(path, evidence)
+            return evidence
+        report_path = str(processed[0].get("report") or "")
+        recipe_path = str(processed[0].get("recipe") or processed[0].get("recipe_path") or "")
+        evidence.update(
+            {
+                "status": "processed",
+                "fresh": True,
+                "reason": "synthetic intake parsed by admin automation and materialized in isolated dry-run workspace",
+                "recipe_inbox": _redact_inbox(str(inbox_path)),
+                "synthetic_dir": _redact_path(str(synthetic_dir)),
+                "classification": "processed",
+                "materialization_mode": "isolated_dry_run",
+                "recipe_candidate": Path(recipe_path).stem if recipe_path else "infer-summarize-text-draft",
+                "admin_report_path": _redact_inbox(report_path),
+                "next_command": "gpucall setup status",
+            }
+        )
+    except Exception as exc:
+        evidence.update(
+            {
+                "status": "failed",
+                "reason": f"synthetic dry-run failed: {type(exc).__name__}: {exc}",
+                "recipe_inbox": _redact_inbox(str(inbox_path)),
+            }
+        )
+    _write_json(path, evidence)
+    return evidence
+
+
+def admin_automation_synthetic_dry_run_path() -> Path:
+    return default_state_dir() / "setup" / "admin-automation-synthetic-dry-run.json"
 
 
 def configure_admin_automation(
@@ -198,6 +364,54 @@ def write_admin_automation(config_dir: Path, config: RecipeAdminAutomationConfig
     payload = config.model_dump(mode="json")
     path.write_text(yaml.safe_dump(payload, sort_keys=False), encoding="utf-8")
     return path
+
+
+def _local_path_from_inbox_spec(value: str | None) -> Path | None:
+    if not value:
+        return None
+    text = value.strip()
+    if text.startswith("file://"):
+        return Path(text[7:]).expanduser()
+    if "@" in text.split(":", 1)[0]:
+        return None
+    if ":" in text and not text.startswith("/"):
+        return None
+    path = Path(text).expanduser()
+    return path if path.is_absolute() else None
+
+
+def _redact_inbox(value: str | None) -> str | None:
+    if not value:
+        return None
+    if "@" in value and ":" in value:
+        host_part, _, _ = value.partition(":")
+        return f"{host_part}:<redacted-path>" if host_part else "<remote-inbox>"
+    return _redact_path(value)
+
+
+def _redact_path(value: str) -> str:
+    home = str(Path.home())
+    if home and value.startswith(home):
+        return "~" + value[len(home):]
+    return value
+
+
+def _write_json(path: Path, payload: dict[str, object]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    path.chmod(0o600)
+
+
+def _parse_datetime(value: str) -> datetime | None:
+    if not value:
+        return None
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        return parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc)
 
 
 def _clean_items(items: Iterable[str]) -> list[str]:

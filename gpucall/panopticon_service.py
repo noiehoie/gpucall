@@ -14,6 +14,7 @@ from gpucall.credentials import configured_credentials, load_credentials
 from gpucall.execution.registry import adapter_descriptor, vendor_family_for_adapter
 from gpucall.live_catalog_scope import live_catalog_scope
 from gpucall.panopticon import default_panopticon_path, load_panopticon_evidence, store_panopticon_evidence
+from gpucall.provider_registry import provider_registry_configured_contracts
 from gpucall.targeting import is_configured_target
 from gpucall.tuple_catalog import live_tuple_catalog_evidence
 
@@ -55,6 +56,7 @@ def refresh_panopticon(
     credentials = load_credentials()
     configured = _configured_contracts_from_credentials(credentials)
     configured.update(configured_credentials())
+    configured.update(provider_registry_configured_contracts())
     preflight = _provider_refresh_preflight(selected, configured)
     probe_scope = {name: selected[name] for name in selected if name not in preflight["skipped_tuples"]}
     observed = live_tuple_catalog_evidence(probe_scope, credentials) if probe_scope else {}
@@ -275,8 +277,6 @@ def _configured_contracts_from_credentials(credentials: dict[str, dict[str, str]
     hyperstack = credentials.get("hyperstack", {})
     if hyperstack.get("api_key"):
         configured.add("api_key:hyperstack")
-    if hyperstack.get("ssh_key_path"):
-        configured.add("ssh_key:hyperstack")
     if credentials.get("azure"):
         configured.add("cloud_subscription:azure")
     if credentials.get("gcp"):

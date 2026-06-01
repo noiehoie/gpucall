@@ -25,6 +25,8 @@ def isolate_process_environment(tmp_path, monkeypatch):
     monkeypatch.setenv("GPUCALL_ALLOW_UNAUTHENTICATED", "1")
     monkeypatch.setenv("GPUCALL_TUPLE_CONCURRENCY_LIMIT", "100")
     monkeypatch.setenv("GPUCALL_PROVIDER_FAMILY_CONCURRENCY_LIMIT", "100")
+    monkeypatch.setenv("GPUCALL_SETUP_LIVE_PROVIDER_PROBES", "0")
+    monkeypatch.setenv("GPUCALL_SETUP_START_SERVICES", "0")
 
     for name in (
         "GPUCALL_API_KEY",
@@ -34,6 +36,9 @@ def isolate_process_environment(tmp_path, monkeypatch):
         "GPUCALL_RUNPOD_API_KEY",
         "GPUCALL_RUNPOD_ENDPOINT_ID",
         "GPUCALL_RUNPOD_FLASH_ENDPOINT_ID",
+        "MODAL_TOKEN_ID",
+        "MODAL_TOKEN_SECRET",
+        "MODAL_ENVIRONMENT",
         "GPUCALL_HYPERSTACK_API_KEY",
         "GPUCALL_HYPERSTACK_SSH_KEY_PATH",
         "GPUCALL_HYPERSTACK_LEASE_MANIFEST",

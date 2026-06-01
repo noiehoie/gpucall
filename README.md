@@ -189,6 +189,8 @@ name lists.
 `gpucall setup apply` runs post-apply checks and rejects interactive
 `credentials.source: prompt` when `--yes` is used. Setup plan syntax is
 documented in [docs/SETUP_PLAN.md](docs/SETUP_PLAN.md).
+The tracked Out-of-Box product experience contract is
+[docs/OOB_USER_EXPERIENCE_PRODUCT_SPEC.md](docs/OOB_USER_EXPERIENCE_PRODUCT_SPEC.md).
 
 Production-like runtime layout follows XDG:
 

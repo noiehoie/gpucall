@@ -34,6 +34,7 @@ if __package__ in (None, ""):
 from gpucall import __version__
 from gpucall.app import build_runtime, create_app, plan_with_worker_refs, worker_readable_request
 from gpucall.admin_automation import admin_automation_summary, configure_admin_automation
+from gpucall.caller_auth_registry import mark_caller_auth_revoked, record_caller_auth
 from gpucall.catalog import SQLiteCapabilityCatalog, dumps_snapshot
 from gpucall.handoff import handoff_payload as _handoff_payload, render_handoff as _render_handoff
 from gpucall.cli_commands.readiness import add_readiness_parser, run_readiness_command
@@ -234,6 +235,8 @@ def main() -> None:
             "tenant-create",
             "tenant-key-create",
             "tenant-key-list",
+            "tenant-key-rotate",
+            "tenant-key-revoke",
             "tenant-onboard",
             "tenant-onboard-batch",
             "tenant-usage",
@@ -1381,6 +1384,55 @@ def admin_command(
             )
         )
         return
+    if action == "tenant-key-rotate":
+        if not name:
+            raise SystemExit("admin tenant-key-rotate requires --name")
+        if name not in config.tenants:
+            raise SystemExit(f"unknown tenant: {name}; run admin tenant-create first")
+        old_fingerprint, token = _rotate_tenant_key(name)
+        record_caller_auth(
+            name,
+            scope="tenant",
+            token=token,
+            non_expiring_policy_reason="tenant key is operator-managed; rotate on caller ownership or exposure changes",
+            last_verification_status="rotated",
+        )
+        print(
+            json.dumps(
+                {
+                    "tenant": name,
+                    "api_key": token,
+                    "api_key_fingerprint": _fingerprint_secret(token),
+                    "previous_api_key_fingerprint": old_fingerprint,
+                    "credentials_path": str(credentials_path()),
+                    "caller_retest_command": "run the caller canary with the new GPUCALL_API_KEY",
+                },
+                indent=2,
+                sort_keys=True,
+            )
+        )
+        return
+    if action == "tenant-key-revoke":
+        if not name:
+            raise SystemExit("admin tenant-key-revoke requires --name")
+        if name not in config.tenants:
+            raise SystemExit(f"unknown tenant: {name}; run admin tenant-create first")
+        old_fingerprint = _revoke_tenant_key(name)
+        mark_caller_auth_revoked(name)
+        print(
+            json.dumps(
+                {
+                    "tenant": name,
+                    "revoked": True,
+                    "revoked_api_key_fingerprint": old_fingerprint,
+                    "credentials_path": str(credentials_path()),
+                    "expected_next_request": "401 unauthorized",
+                },
+                indent=2,
+                sort_keys=True,
+            )
+        )
+        return
     if action == "tenant-list":
         print(json.dumps({"tenants": {name: tenant.model_dump(mode="json") for name, tenant in sorted(config.tenants.items())}}, indent=2, sort_keys=True))
         return
@@ -1460,7 +1512,39 @@ def _create_tenant_key(name: str) -> str:
     from gpucall.credentials import save_credentials
 
     save_credentials("auth", auth)
+    record_caller_auth(
+        name,
+        scope="tenant",
+        token=token,
+        non_expiring_policy_reason="tenant key is operator-managed; rotate on caller ownership or exposure changes",
+    )
     return token
+
+
+def _rotate_tenant_key(name: str) -> tuple[str | None, str]:
+    creds = load_credentials()
+    auth = dict(creds.get("auth", {}))
+    tenant_keys = _parse_tenant_key_pairs(auth.get("tenant_keys", ""))
+    previous = tenant_keys.get(name)
+    token = "gpk_" + secrets.token_urlsafe(32)
+    tenant_keys[name] = token
+    auth["tenant_keys"] = _format_tenant_key_pairs(tenant_keys)
+    from gpucall.credentials import save_credentials
+
+    save_credentials("auth", auth)
+    return (_fingerprint_secret(previous) if previous else None, token)
+
+
+def _revoke_tenant_key(name: str) -> str | None:
+    creds = load_credentials()
+    auth = dict(creds.get("auth", {}))
+    tenant_keys = _parse_tenant_key_pairs(auth.get("tenant_keys", ""))
+    previous = tenant_keys.pop(name, None)
+    auth["tenant_keys"] = _format_tenant_key_pairs(tenant_keys)
+    from gpucall.credentials import save_credentials
+
+    save_credentials("auth", auth)
+    return _fingerprint_secret(previous) if previous else None
 
 
 def _write_secret_file(path: Path, payload: str) -> None:
