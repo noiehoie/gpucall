@@ -302,7 +302,7 @@ def run_setup_command(args: argparse.Namespace) -> None:
             raise SystemExit("setup export-handoff-package requires --system-name")
         if args.output_dir is None:
             raise SystemExit("setup export-handoff-package requires --output-dir")
-        print(yaml.safe_dump(export_handoff_package(args.config_dir, args.system_name, args.output_dir), sort_keys=False))
+        print(yaml.safe_dump(export_handoff_package(args.config_dir, args.system_name, args.output_dir), sort_keys=False, width=1200))
         return
     raise SystemExit(f"unknown setup action: {action}")
 
