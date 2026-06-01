@@ -441,8 +441,9 @@ def process_inbox(
     config_dir: str | Path | None = None,
     validation_dir: str | Path | None = None,
     accept_all: bool = False,
+    automation_override: RecipeAdminAutomationConfig | None = None,
 ) -> list[dict[str, Any]]:
-    automation = _admin_automation(config_dir)
+    automation = automation_override or _admin_automation(config_dir)
     if not _accept_all_allowed(accept_all, config_dir, automation=automation):
         raise PermissionError("recipe inbox auto-materialize is disabled")
     inbox = Path(inbox_dir)

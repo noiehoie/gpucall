@@ -699,9 +699,10 @@ launch:
             "  auto_promote_candidates: true",
             "  auto_provision_supply: true",
             "  auto_apply_supply: false",
-            "  auto_billable_validation: true",
+            "  # Billable validation is intentionally opt-in after setup.",
+            "  auto_billable_validation: false",
             "  auto_validation_budget_usd: 0.10",
-            "  auto_activate_validated: true",
+            "  auto_activate_validated: false",
             "  auto_require_auto_select_safe: false",
             "  auto_set_auto_select: true",
             "  auto_run_validate_config: true",
@@ -896,13 +897,13 @@ def _setup_status(config_dir: Path, *, profile: str | None) -> dict[str, Any]:
         recommended = [
             {**object_store_item, "label": "object store / DataRef storage before file or image workflows"},
             {"state": "ok" if automation["recipe_inbox_auto_materialize"] else "warn", "label": "recipe inbox auto-materialize policy reviewed"},
-            {"state": "ok" if gateway_url else "warn", "label": "external-system onboarding prompt has concrete gateway URL"},
+            _external_system_handoff_status_item(config_dir, gateway_url),
         ]
     else:
         required = [config_item, gateway_item, provider_item, object_store_item, handoff_item, recipe_inbox_item, synthetic_item, panopticon_service_item, admin_service_item, launch_item]
         recommended = [
             {"state": "ok" if automation["recipe_inbox_auto_materialize"] else "warn", "label": "recipe inbox auto-materialize policy reviewed"},
-            {"state": "ok" if gateway_url else "warn", "label": "external-system onboarding prompt has concrete gateway URL"},
+            _external_system_handoff_status_item(config_dir, gateway_url),
         ]
     oob_readiness = _oob_readiness_for(selected_profile, required, control_plane)
     return {
@@ -935,6 +936,39 @@ def _local_trial_cloud_next_text() -> str:
         "If you do not yet have any cloud GPU provider account, create a Modal account and token first.\n"
         "Without provider credentials, gpucall will not start cloud routing; it remains fail-closed."
     )
+
+
+def _external_system_handoff_status_item(config_dir: Path, gateway_url: str | None) -> dict[str, str]:
+    names = _configured_external_system_names(config_dir)
+    if not names:
+        return {"state": "ok" if gateway_url else "warn", "label": "external-system onboarding prompt has concrete gateway URL"}
+    missing = []
+    root = _default_handoff_root()
+    for name in names:
+        directory = root / _safe_handoff_dir_name(name)
+        if not (directory / "caller-ai-onboarding-prompt.md").exists() or not (directory / "CALLER_ENGINEER_README.md").exists():
+            missing.append(name)
+    if missing:
+        return {"state": "warn", "label": "external-system handoff packages pending: " + ", ".join(missing)}
+    return {"state": "ok", "label": "external-system handoff packages generated"}
+
+
+def _configured_external_system_names(config_dir: Path) -> list[str]:
+    path = config_dir / "setup.yml"
+    if not path.exists():
+        return []
+    try:
+        payload = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+    except yaml.YAMLError:
+        return []
+    systems = payload.get("external_systems") if isinstance(payload, dict) else None
+    if not isinstance(systems, list):
+        return []
+    names = []
+    for system in systems:
+        if isinstance(system, dict) and isinstance(system.get("name"), str) and system["name"].strip():
+            names.append(system["name"].strip())
+    return names
 
 
 def _control_plane_status(config_dir: Path, *, profile: str, admin_synthetic_state: str) -> dict[str, str]:
@@ -1521,15 +1555,19 @@ def _apply_providers(config_dir: Path, plan: SetupPlan, *, modal_plan_hash: str 
             continue
         if provider.credentials.source == "prompt":
             if name == "runpod":
-                save_credentials("runpod", {"api_key": getpass.getpass("RunPod API key: ").strip()})
+                api_key = _first_env_value("GPUCALL_RUNPOD_API_KEY", "RUNPOD_API_KEY")
+                save_credentials("runpod", {"api_key": api_key or getpass.getpass("RunPod API key: ").strip()})
             if name == "modal":
-                token_id = input("Modal token ID: ").strip()
-                token_secret = getpass.getpass("Modal token secret: ").strip()
-                environment = input("Modal environment (optional, default main): ").strip()
+                token_id = _first_env_value("MODAL_TOKEN_ID", "GPUCALL_MODAL_TOKEN_ID") or input("Modal token ID: ").strip()
+                token_secret = _first_env_value("MODAL_TOKEN_SECRET", "GPUCALL_MODAL_TOKEN_SECRET") or getpass.getpass("Modal token secret: ").strip()
+                environment = _first_env_value("MODAL_ENVIRONMENT", "GPUCALL_MODAL_ENVIRONMENT")
+                if environment is None:
+                    environment = input("Modal environment (optional, default main): ").strip()
                 save_credentials("modal", {"token_id": token_id, "token_secret": token_secret})
                 save_provider_metadata("modal", {"environment": environment or "main"}, state="credential-configured")
             if name == "hyperstack":
-                save_credentials("hyperstack", {"api_key": getpass.getpass("Hyperstack API key: ").strip()})
+                api_key = _first_env_value("GPUCALL_HYPERSTACK_API_KEY", "HYPERSTACK_API_KEY")
+                save_credentials("hyperstack", {"api_key": api_key or getpass.getpass("Hyperstack API key: ").strip()})
                 save_provider_metadata("hyperstack", {"ssh_key_path": provider.ssh_key_path or ""}, state="provider-configured")
         elif provider.credentials.source == "gpucall_credentials":
             if name == "modal":
@@ -1568,6 +1606,14 @@ def _apply_providers(config_dir: Path, plan: SetupPlan, *, modal_plan_hash: str 
             _update_yaml(config_dir / "surfaces" / "runpod-vllm-serverless.yml", {"target": provider.endpoint_id})
             _update_yaml(config_dir / "workers" / "runpod-vllm-serverless.yml", {"target": provider.endpoint_id})
     return results
+
+
+def _first_env_value(*names: str) -> str | None:
+    for name in names:
+        value = os.getenv(name)
+        if value is not None and value.strip():
+            return value.strip()
+    return None
 
 
 def _provider_registry_metadata(provider: str) -> dict[str, object]:

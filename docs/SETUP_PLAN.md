@@ -116,9 +116,10 @@ recipe_automation:
   auto_promote_candidates: true
   auto_provision_supply: true
   auto_apply_supply: false
-  auto_billable_validation: true
+  # Billable validation is intentionally opt-in after setup.
+  auto_billable_validation: false
   auto_validation_budget_usd: 0.10
-  auto_activate_validated: true
+  auto_activate_validated: false
   auto_require_auto_select_safe: false
   auto_set_auto_select: true
   auto_run_validate_config: true
@@ -233,8 +234,9 @@ setup remains possible, but it is not the default production path.
 `gpucall setup apply`. That makes the shipped Modal function-runtime tuples
 real provider targets before caller intake is processed. The Modal starter plan
 then lets the admin inbox loop materialize sanitized caller intake, refresh
-Provider Panopticon readiness, run a budgeted tuple smoke, and activate only
-after route validation evidence passes.
+Provider Panopticon readiness, prepare the explicit budgeted tuple-smoke step,
+and activate only after route validation evidence passes. It does not run
+billable validation during setup.
 
 RunPod managed endpoint:
 

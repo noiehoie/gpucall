@@ -392,7 +392,8 @@ gpucall-recipe-admin watch --inbox-dir /path/to/inbox --output-dir config/recipe
 
 For a persistent operator host, the same route can be opened by config instead
 of a per-command flag. Raw defaults remain disabled; the Modal starter plan
-enables the bounded happy path explicitly:
+enables the non-billable happy path explicitly. Billable validation is a
+separate opt-in step after setup:
 
 ```yaml
 # config/admin.yml
@@ -402,9 +403,9 @@ recipe_inbox_auto_activate_existing_validated_recipe: true
 recipe_inbox_auto_promote_candidates: true
 recipe_inbox_auto_provision_supply: true
 recipe_inbox_auto_apply_supply: false
-recipe_inbox_auto_billable_validation: true
+recipe_inbox_auto_billable_validation: false
 recipe_inbox_auto_validation_budget_usd: 0.10
-recipe_inbox_auto_activate_validated: true
+recipe_inbox_auto_activate_validated: false
 recipe_inbox_auto_require_auto_select_safe: false
 recipe_inbox_auto_set_auto_select: true
 recipe_inbox_auto_run_launch_check: true

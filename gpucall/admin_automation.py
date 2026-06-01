@@ -163,6 +163,7 @@ def run_admin_automation_synthetic_dry_run(
             report_dir=synthetic_reports,
             config_dir=config_dir,
             accept_all=True,
+            automation_override=RecipeAdminAutomationConfig(recipe_inbox_auto_materialize=True),
         )
         ok = bool(processed and processed[0].get("ok") is True)
         if not ok:

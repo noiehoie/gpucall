@@ -7,6 +7,7 @@ from pathlib import Path
 import pytest
 
 from gpucall import __version__
+from gpucall.admin_automation import run_admin_automation_synthetic_dry_run
 from gpucall.cli import main
 from gpucall.cli_commands.setup import (
     _load_setup_plan,
@@ -22,7 +23,7 @@ from gpucall.cli_commands.setup import (
 )
 from gpucall.config import load_admin_automation, load_object_store
 from gpucall.credentials import load_credentials, save_credentials
-from gpucall.domain import ApiKeyHandoffMode
+from gpucall.domain import ApiKeyHandoffMode, RecipeAdminAutomationConfig
 from gpucall.panopticon import store_panopticon_evidence
 from gpucall.provider_registry import load_provider_registry
 
@@ -136,8 +137,8 @@ def test_setup_starter_plan_modal_is_oob_happy_path(tmp_path, monkeypatch) -> No
     assert "deploy_worker: true" in text
     assert "auto_validate_existing_tuples: true" in text
     assert "auto_activate_existing_validated_recipe: true" in text
-    assert "auto_billable_validation: true" in text
-    assert "auto_activate_validated: true" in text
+    assert "auto_billable_validation: false" in text
+    assert "auto_activate_validated: false" in text
     assert "auto_set_auto_select: true" in text
     assert "auto_run_launch_check: true" in text
     assert "provider worker deployment: modal gpucall-worker-json" in dry_run
@@ -188,6 +189,68 @@ providers:
     assert "environment" not in load_credentials()["modal"]
 
 
+def test_setup_plan_prompt_credentials_can_use_environment_without_getpass_warning(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("GPUCALL_CREDENTIALS", str(tmp_path / "credentials.yml"))
+    monkeypatch.setenv("MODAL_TOKEN_ID", "ak-env")
+    monkeypatch.setenv("MODAL_TOKEN_SECRET", "as-env")
+    monkeypatch.setenv("MODAL_ENVIRONMENT", "dev")
+    monkeypatch.setattr("gpucall.cli_commands.setup._confirm", lambda prompt: True)
+    monkeypatch.setattr("builtins.input", lambda prompt: pytest.fail(f"unexpected prompt: {prompt}"))
+    monkeypatch.setattr("gpucall.cli_commands.setup.getpass.getpass", lambda prompt: pytest.fail(f"unexpected getpass: {prompt}"))
+    config_dir = tmp_path / "config"
+    plan = tmp_path / "gpucall.modal.setup.yml"
+    plan.write_text(
+        """
+setup_schema_version: 1
+profile: internal-team
+providers:
+  modal:
+    enabled: true
+    credentials:
+      source: prompt
+""".lstrip(),
+        encoding="utf-8",
+    )
+
+    report = apply_setup_plan(config_dir, plan, dry_run=False, yes=False)
+    credentials = load_credentials()["modal"]
+
+    assert "Modal configured" in report
+    assert credentials["token_id"] == "ak-env"
+    assert credentials["token_secret"] == "as-env"
+    assert load_provider_registry()["providers"]["modal"]["metadata"]["environment"] == "dev"
+
+
+def test_admin_synthetic_dry_run_forces_materialize_only_automation(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path / "state"))
+    observed: dict[str, RecipeAdminAutomationConfig] = {}
+
+    def fake_process_inbox(**kwargs):
+        automation = kwargs.get("automation_override")
+        assert isinstance(automation, RecipeAdminAutomationConfig)
+        observed["automation"] = automation
+        recipe_path = Path(kwargs["output_dir"]) / "infer-summarize-text-draft.yml"
+        report_path = Path(kwargs["report_dir"]) / "synthetic-oob-intake.report.json"
+        recipe_path.parent.mkdir(parents=True, exist_ok=True)
+        report_path.parent.mkdir(parents=True, exist_ok=True)
+        recipe_path.write_text("name: infer-summarize-text-draft\n", encoding="utf-8")
+        report_path.write_text("{}\n", encoding="utf-8")
+        return [{"ok": True, "recipe": str(recipe_path), "report": str(report_path)}]
+
+    monkeypatch.setattr("gpucall.admin_automation.process_inbox", fake_process_inbox)
+
+    evidence = run_admin_automation_synthetic_dry_run(str(tmp_path / "recipe_requests" / "inbox"), config_dir=tmp_path / "config")
+    automation = observed["automation"]
+
+    assert evidence["status"] == "processed"
+    assert automation.recipe_inbox_auto_materialize is True
+    assert automation.recipe_inbox_auto_validate_existing_tuples is False
+    assert automation.recipe_inbox_auto_promote_candidates is False
+    assert automation.recipe_inbox_auto_provision_supply is False
+    assert automation.recipe_inbox_auto_billable_validation is False
+    assert automation.recipe_inbox_auto_activate_validated is False
+
+
 def test_setup_sections_cover_recipe_inbox_and_external_prompt(tmp_path, monkeypatch) -> None:
     monkeypatch.setenv("GPUCALL_CREDENTIALS", str(tmp_path / "credentials.yml"))
 
@@ -220,6 +283,33 @@ def test_setup_next_and_provider_section_guide_modal_after_local_trial(tmp_path,
     assert providers.index("Modal happy path") < providers.index("RunPod advanced")
     assert "create a Modal account and token first" in providers
     assert "--provider modal" in gateway
+
+
+def test_setup_status_reports_pending_handoff_when_external_system_is_configured(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("GPUCALL_CREDENTIALS", str(tmp_path / "credentials.yml"))
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "data"))
+    config_dir = tmp_path / "config"
+    config_dir.mkdir()
+    (config_dir / "setup.yml").write_text(
+        """
+setup_schema_version: 1
+profile: internal-team
+gateway_base_url: https://gpucall.example.internal
+external_systems:
+  - name: example/system
+""".lstrip(),
+        encoding="utf-8",
+    )
+
+    pending = setup_status_text(config_dir)
+    handoff_dir = tmp_path / "data" / "gpucall" / "handoffs" / "example-system"
+    handoff_dir.mkdir(parents=True)
+    (handoff_dir / "caller-ai-onboarding-prompt.md").write_text("# prompt\n", encoding="utf-8")
+    (handoff_dir / "CALLER_ENGINEER_README.md").write_text("# readme\n", encoding="utf-8")
+    ready = setup_status_text(config_dir)
+
+    assert "[warn] external-system handoff packages pending: example/system" in pending
+    assert "[ok] external-system handoff packages generated" in ready
 
 
 def test_setup_export_handoff_prompt_requires_concrete_values_by_default(tmp_path, monkeypatch) -> None:
