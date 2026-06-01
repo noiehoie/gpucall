@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import json
 import shutil
+import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -36,6 +38,20 @@ from gpucall.recipe_request_index import RecipeRequestIndex
 from gpucall.quality_feedback_index import QualityFeedbackIndex
 from gpucall.candidate_sources import load_tuple_candidate_payloads
 from gpucall.panopticon_provisioning import ProviderSupplyProvisioningApplyResult
+
+
+def test_recipe_admin_module_entrypoint_prints_help() -> None:
+    completed = subprocess.run(
+        [sys.executable, "-m", "gpucall.recipe_admin", "--help"],
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=10,
+    )
+
+    assert completed.returncode == 0
+    assert "gpucall-recipe-admin" in completed.stdout
+    assert "watch" in completed.stdout
 
 
 def test_admin_materializes_intake_to_canonical_recipe() -> None:

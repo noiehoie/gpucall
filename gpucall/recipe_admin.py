@@ -2135,3 +2135,7 @@ def _positive_int(value: Any, *, default: int) -> int:
     except (TypeError, ValueError):
         return default
     return max(1, number)
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
