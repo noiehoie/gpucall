@@ -143,9 +143,9 @@ gpucall setup apply --file gpucall.setup.yml --yes
 After the local trial passes, create the Modal happy-path cloud plan:
 
 ```bash
-gpucall setup starter-plan --profile internal-team --provider modal --output gpucall.setup.yml
-gpucall setup apply --file gpucall.setup.yml --dry-run
-gpucall setup apply --file gpucall.setup.yml
+gpucall setup starter-plan --profile internal-team --provider modal --output gpucall.modal.setup.yml
+gpucall setup apply --file gpucall.modal.setup.yml --dry-run
+gpucall setup apply --file gpucall.modal.setup.yml
 ```
 
 The Modal apply step prompts for the Modal token ID and token secret, stores

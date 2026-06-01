@@ -220,7 +220,7 @@ Common commands:
   gpucall setup status
   gpucall setup next
   gpucall setup starter-plan --profile local-trial
-  gpucall setup starter-plan --profile internal-team --provider modal
+  gpucall setup starter-plan --profile internal-team --provider modal --output gpucall.modal.setup.yml
   gpucall setup section providers
   gpucall setup apply --file gpucall.setup.yml --dry-run
   gpucall setup apply --file gpucall.setup.yml --yes
@@ -330,9 +330,9 @@ Fast path:
 
 Cloud path after local trial:
 
-  gpucall setup starter-plan --profile internal-team --provider modal --output gpucall.setup.yml
-  gpucall setup apply --file gpucall.setup.yml --dry-run
-  gpucall setup apply --file gpucall.setup.yml
+  gpucall setup starter-plan --profile internal-team --provider modal --output gpucall.modal.setup.yml
+  gpucall setup apply --file gpucall.modal.setup.yml --dry-run
+  gpucall setup apply --file gpucall.modal.setup.yml
 
 Profiles:
 
@@ -450,7 +450,7 @@ def setup_next_text(config_dir: Path, *, profile: str | None = None) -> str:
             "  gpucall setup apply --file gpucall.setup.yml --dry-run\n"
             "  gpucall setup apply --file gpucall.setup.yml --yes\n\n"
             "After local trial, switch to the Modal happy-path cloud plan:\n"
-            "  gpucall setup starter-plan --profile internal-team --provider modal --output gpucall.setup.yml"
+            "  gpucall setup starter-plan --profile internal-team --provider modal --output gpucall.modal.setup.yml"
         )
     for item in status["required"]:
         if item["state"] in {"missing", "partial", "warn", "service-error", "service-uninitialized"}:
@@ -494,7 +494,7 @@ def setup_section_text(config_dir: Path, section: str, *, profile: str | None = 
             "  3. production-multitenant  strict budgets, DataRefs, launch gates\n"
             "  4. hardened-regulated      strict auth and audit evidence\n\n"
             "For cloud setup after the trial:\n"
-            "  gpucall setup starter-plan --profile internal-team --provider modal --output gpucall.setup.yml"
+            "  gpucall setup starter-plan --profile internal-team --provider modal --output gpucall.modal.setup.yml"
         )
     if section == "gateway":
         return (
@@ -504,7 +504,7 @@ def setup_section_text(config_dir: Path, section: str, *, profile: str | None = 
             "For local trial, you can skip this until an external caller needs to connect.\n"
             "For a real gateway, set gateway.base_url and gateway.caller_auth in gpucall.setup.yml.\n\n"
             "Beginner path:\n"
-            "  gpucall setup starter-plan --profile internal-team --provider modal --output gpucall.setup.yml"
+            "  gpucall setup starter-plan --profile internal-team --provider modal --output gpucall.modal.setup.yml"
         )
     if section == "providers":
         providers = status["providers"]
@@ -522,9 +522,9 @@ def setup_section_text(config_dir: Path, section: str, *, profile: str | None = 
             f"{provider_lines}\n\n"
             "Fast choices:\n"
             "  Local trial: gpucall setup starter-plan --profile local-trial\n"
-            "  Modal happy path: gpucall setup starter-plan --profile internal-team --provider modal --output gpucall.setup.yml\n"
-            "  RunPod advanced:  gpucall setup starter-plan --profile internal-team --provider runpod --output gpucall.setup.yml\n"
-            "  Hyperstack:  gpucall setup starter-plan --profile internal-team --provider hyperstack --output gpucall.setup.yml\n\n"
+            "  Modal happy path: gpucall setup starter-plan --profile internal-team --provider modal --output gpucall.modal.setup.yml\n"
+            "  RunPod advanced:  gpucall setup starter-plan --profile internal-team --provider runpod --output gpucall.runpod.setup.yml\n"
+            "  Hyperstack:  gpucall setup starter-plan --profile internal-team --provider hyperstack --output gpucall.hyperstack.setup.yml\n\n"
             "If you do not yet have any cloud GPU provider account, create a Modal account and token first.\n"
             "Without provider credentials, gpucall will keep cloud routing fail-closed.\n\n"
             "Advanced: Register controlled runtime / local GPU endpoint with gpucall runtime add-openai or add-ollama."
@@ -761,6 +761,7 @@ def apply_setup_plan(config_dir: Path, plan_path: Path, *, dry_run: bool, yes: b
     _apply_object_store(config_dir, plan)
     _apply_tenant_onboarding(config_dir, plan)
     _maybe_create_local_inboxes(plan.tenant_onboarding.recipe_inbox)
+    _write_setup_state(config_dir, plan)
     synthetic_result = run_admin_automation_synthetic_dry_run(plan.tenant_onboarding.recipe_inbox, config_dir=config_dir)
     panopticon_bootstrap = _run_panopticon_bootstrap_refresh(config_dir, plan)
     panopticon_service = _start_panopticon_background_service(config_dir, plan)
@@ -773,7 +774,6 @@ def apply_setup_plan(config_dir: Path, plan_path: Path, *, dry_run: bool, yes: b
         panopticon_service=panopticon_service,
         admin_service=admin_service,
     )
-    _write_setup_state(config_dir, plan)
     handoff_results = _write_external_system_handoff_packages(config_dir, plan)
     post_checks = _post_apply_checks(config_dir, plan)
     provider_text = ("\n\nProvider setup actions:\n" + "\n".join(f"  {item}" for item in provider_results)) if provider_results else ""
@@ -805,8 +805,8 @@ def export_handoff_prompt(config_dir: Path, system_name: str, *, require_concret
     except ValueError as exc:
         raise SystemExit(
             str(exc)
-            + "\nRun `gpucall setup starter-plan --profile internal-team --provider modal --output gpucall.setup.yml`, "
-            "`gpucall setup apply --file gpucall.setup.yml --dry-run`, then apply a concrete gateway, trusted-bootstrap, and recipe-inbox setup. "
+            + "\nRun `gpucall setup starter-plan --profile internal-team --provider modal --output gpucall.modal.setup.yml`, "
+            "`gpucall setup apply --file gpucall.modal.setup.yml --dry-run`, then apply a concrete gateway, trusted-bootstrap, and recipe-inbox setup. "
             "Use --allow-placeholders only when you intentionally want a template."
         ) from exc
     return caller_ai_onboarding_prompt(contract)
@@ -926,9 +926,9 @@ def _local_trial_cloud_next_text() -> str:
         "To use gpucall with external systems, configure a cloud provider next.\n"
         "Recommended happy path: Modal.\n\n"
         "If you already have a Modal account and token, run:\n"
-        "  gpucall setup starter-plan --profile internal-team --provider modal --output gpucall.setup.yml\n"
-        "  gpucall setup apply --file gpucall.setup.yml --dry-run\n"
-        "  gpucall setup apply --file gpucall.setup.yml\n\n"
+        "  gpucall setup starter-plan --profile internal-team --provider modal --output gpucall.modal.setup.yml\n"
+        "  gpucall setup apply --file gpucall.modal.setup.yml --dry-run\n"
+        "  gpucall setup apply --file gpucall.modal.setup.yml\n\n"
         "The apply step prompts for Modal token ID and token secret, stores them in the gpucall credentials store,\n"
         "deploys the bundled gpucall Modal worker, creates gateway caller auth, creates the recipe inbox,\n"
         "and enables the bounded demand-to-supply automation.\n\n"
@@ -1636,14 +1636,14 @@ def _run_panopticon_bootstrap_refresh(config_dir: Path, plan: SetupPlan) -> dict
         _write_json_file(path, report, mode=0o600)
         return report
     try:
-        if os.getenv("GPUCALL_SETUP_LIVE_PROVIDER_PROBES", "1") == "0":
+        if os.getenv("GPUCALL_SETUP_LIVE_PROVIDER_PROBES", "0") == "0":
             provider_registry = load_provider_registry()
             report = {
                 "schema_version": 1,
                 "phase": "provider-panopticon-bootstrap-refresh",
                 "status": "processed",
                 "mode": "preflight-only",
-                "reason": "live provider probes disabled by GPUCALL_SETUP_LIVE_PROVIDER_PROBES=0",
+                "reason": "inline live probes skipped; Provider Panopticon service will refresh provider evidence in the background",
                 "provider_registry_reloaded": True,
                 "provider_registry_snapshot_hash": provider_registry_snapshot_hash(),
                 "provider_count": len(provider_registry.get("providers") or {}),
@@ -2509,9 +2509,9 @@ def _setup_completion_text(config_dir: Path, plan: SetupPlan, *, handoff_results
         return (
             "Local trial is complete.\n\n"
             "Next, configure the Modal happy path for external systems:\n"
-            "  gpucall setup starter-plan --profile internal-team --provider modal --output gpucall.setup.yml\n"
-            "  gpucall setup apply --file gpucall.setup.yml --dry-run\n"
-            "  gpucall setup apply --file gpucall.setup.yml"
+            "  gpucall setup starter-plan --profile internal-team --provider modal --output gpucall.modal.setup.yml\n"
+            "  gpucall setup apply --file gpucall.modal.setup.yml --dry-run\n"
+            "  gpucall setup apply --file gpucall.modal.setup.yml"
         )
     if plan.profile == "internal-team":
         if status["oob_readiness"] == "onboarding-ready-provisional":

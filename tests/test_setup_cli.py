@@ -214,7 +214,8 @@ def test_setup_next_and_provider_section_guide_modal_after_local_trial(tmp_path,
 
     assert "Local trial is complete." in next_text
     assert "Recommended happy path: Modal." in next_text
-    assert "gpucall setup apply --file gpucall.setup.yml" in next_text
+    assert "gpucall setup apply --file gpucall.modal.setup.yml" in next_text
+    assert "gpucall setup starter-plan --profile internal-team --provider modal --output gpucall.modal.setup.yml" in next_text
     assert "Without provider credentials" in next_text
     assert providers.index("Modal happy path") < providers.index("RunPod advanced")
     assert "create a Modal account and token first" in providers
@@ -807,6 +808,45 @@ providers:
     report = apply_setup_plan(config_dir, plan, dry_run=False, yes=True)
     assert "Applied setup plan." in report
     assert "Modal configured" in report
+
+
+def test_setup_apply_writes_profile_before_bounded_panopticon_bootstrap(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("GPUCALL_CREDENTIALS", str(tmp_path / "credentials.yml"))
+    monkeypatch.delenv("GPUCALL_SETUP_LIVE_PROVIDER_PROBES", raising=False)
+    save_credentials("modal", {"token_id": "ak-test", "token_secret": "as-test"})
+    observed: dict[str, str] = {}
+
+    def fake_bootstrap(config_dir, plan):
+        observed["setup_state"] = (config_dir / "setup.yml").read_text(encoding="utf-8")
+        return {
+            "schema_version": 1,
+            "phase": "provider-panopticon-bootstrap-refresh",
+            "status": "processed",
+            "mode": "preflight-only",
+            "reason": "inline live probes skipped; Provider Panopticon service will refresh provider evidence in the background",
+        }
+
+    monkeypatch.setattr("gpucall.cli_commands.setup._run_panopticon_bootstrap_refresh", fake_bootstrap)
+    config_dir = tmp_path / "config"
+    plan = tmp_path / "gpucall.modal.setup.yml"
+    plan.write_text(
+        """
+setup_schema_version: 1
+profile: internal-team
+providers:
+  modal:
+    enabled: true
+    credentials:
+      source: gpucall_credentials
+""".lstrip(),
+        encoding="utf-8",
+    )
+
+    report = apply_setup_plan(config_dir, plan, dry_run=False, yes=True)
+
+    assert "profile: internal-team" in observed["setup_state"]
+    assert "Profile: internal-team" in report
+    assert "inline live probes skipped" in report
 
 
 def test_setup_plan_keeps_hyperstack_ssh_path_out_of_credentials(tmp_path, monkeypatch) -> None:
