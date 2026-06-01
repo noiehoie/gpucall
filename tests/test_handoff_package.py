@@ -108,6 +108,8 @@ tenant_onboarding:
   allowed_cidrs:
     - 10.0.0.42/32
   recipe_inbox: {recipe_inbox}
+handoff_assets:
+  caller_sdk_wheel_url: https://assets.example/sdk/gpucall_sdk-2.0.34-py3-none-any.whl
 """.lstrip(),
         encoding="utf-8",
     )
@@ -154,6 +156,8 @@ tenant_onboarding:
   allowed_cidrs:
     - 10.0.0.42/32
   recipe_inbox: {recipe_inbox}
+handoff_assets:
+  caller_sdk_wheel_url: https://assets.example/sdk/gpucall_sdk-2.0.34-py3-none-any.whl
 """.lstrip(),
         encoding="utf-8",
     )
@@ -185,3 +189,32 @@ tenant_onboarding:
     assert "next_action:" in stdout
     assert (output / "caller-ai-onboarding-prompt.md").exists()
     assert (output / "CALLER_ENGINEER_README.md").exists()
+
+
+def test_handoff_package_refuses_unpublished_default_sdk_release(tmp_path, monkeypatch) -> None:
+    config_dir = tmp_path / "config"
+    recipe_inbox = tmp_path / "state" / "recipe_requests" / "inbox"
+    plan = tmp_path / "gpucall.setup.yml"
+    plan.write_text(
+        f"""
+setup_schema_version: 1
+profile: internal-team
+gateway:
+  base_url: https://gpucall.example.internal
+tenant_onboarding:
+  mode: trusted_bootstrap
+  allowed_cidrs:
+    - 10.0.0.42/32
+  recipe_inbox: {recipe_inbox}
+""".lstrip(),
+        encoding="utf-8",
+    )
+    apply_setup_plan(config_dir, plan, dry_run=False, yes=True)
+    monkeypatch.setattr("gpucall.handoff_package._default_sdk_wheel_url_available", lambda url: False)
+
+    try:
+        write_handoff_package(config_dir, "example-caller", tmp_path / "handoff")
+    except ValueError as exc:
+        assert "default caller SDK wheel URL is not reachable" in str(exc)
+    else:
+        raise AssertionError("handoff package should reject an unreachable default SDK wheel URL")

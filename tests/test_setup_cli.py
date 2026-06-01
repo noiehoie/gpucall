@@ -121,6 +121,8 @@ def test_setup_starter_plan_cloud_path_is_copy_pasteable(tmp_path, monkeypatch) 
     assert "source: prompt" in text
     assert "endpoint_id is optional on first install" in text
     assert "trusted_bootstrap" in text
+    assert "Add each external caller IP/CIDR" in text
+    assert "127.0.0.1/32" in text
     assert "provider account: runpod (endpoint provisioning pending)" in dry_run
 
 
@@ -137,6 +139,8 @@ def test_setup_starter_plan_modal_is_oob_happy_path(tmp_path, monkeypatch) -> No
     assert "--accept-plan-hash" in report
     assert "modal:" in text
     assert "deploy_worker: true" in text
+    assert "Add each external caller IP/CIDR" in text
+    assert "127.0.0.1/32" in text
     assert "auto_validate_existing_tuples: true" in text
     assert "auto_activate_existing_validated_recipe: true" in text
     assert "auto_billable_validation: false" in text
@@ -147,6 +151,31 @@ def test_setup_starter_plan_modal_is_oob_happy_path(tmp_path, monkeypatch) -> No
     assert "modal deploy requires provider-mutation consent plan_hash=" in dry_run
     assert "Interactive apply still asks for final confirmation" in dry_run
     assert "--yes alone is not provider mutation consent" in dry_run
+
+
+def test_setup_plan_rejects_external_gateway_with_loopback_only_trusted_bootstrap(tmp_path) -> None:
+    plan = tmp_path / "gpucall.setup.yml"
+    plan.write_text(
+        """
+setup_schema_version: 1
+profile: internal-team
+gateway:
+  base_url: http://100.93.87.4:18088
+tenant_onboarding:
+  mode: trusted_bootstrap
+  allowed_cidrs:
+    - 127.0.0.1/32
+  allowed_hosts:
+    - localhost
+  recipe_inbox: /tmp/gpucall/recipe_requests/inbox
+""".lstrip(),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(SystemExit) as exc:
+        apply_setup_plan(tmp_path / "config", plan, dry_run=True, yes=False)
+
+    assert "external gateway.base_url requires tenant_onboarding.allowed_cidrs" in str(exc.value)
 
 
 def test_setup_plan_modal_deploy_worker_uses_gpucall_credentials(tmp_path, monkeypatch) -> None:
@@ -555,6 +584,8 @@ tenant_onboarding:
   allowed_hosts:
     - caller.example.internal
   recipe_inbox: {recipe_inbox}
+handoff_assets:
+  caller_sdk_wheel_url: https://assets.example/sdk/gpucall_sdk-2.0.34-py3-none-any.whl
 external_systems:
   - name: example/system
     expected_workloads: [infer]

@@ -6,6 +6,8 @@ import os
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
+from urllib.error import HTTPError, URLError
+from urllib.request import Request, urlopen
 
 from gpucall.config import load_admin_automation
 from gpucall.handoff import _default_quality_feedback_inbox
@@ -370,6 +372,7 @@ def build_handoff_package(config_dir: str | Path, system_name: str, *, require_c
 
 def write_handoff_package(config_dir: str | Path, system_name: str, output_dir: str | Path) -> dict[str, Any]:
     package = build_handoff_package(config_dir, system_name, require_concrete=True)
+    _assert_caller_sdk_wheel_publishable(package["contract"])
     destination = Path(output_dir)
     destination.mkdir(parents=True, exist_ok=True)
     os.chmod(destination, 0o700)
@@ -416,6 +419,30 @@ def write_handoff_package(config_dir: str | Path, system_name: str, output_dir: 
         "human_readme_quality": package["checklist"]["human_readme_quality"],
         "manifest": manifest,
     }
+
+
+def _assert_caller_sdk_wheel_publishable(contract: dict[str, Any]) -> None:
+    sdk_url = str(contract["assets"]["sdk_wheel_url"])
+    if sdk_url != SDK_WHEEL_URL:
+        return
+    if _default_sdk_wheel_url_available(sdk_url):
+        return
+    raise ValueError(
+        "default caller SDK wheel URL is not reachable. Publish the matching GitHub release asset "
+        "or set handoff_assets.caller_sdk_wheel_url to an operator-hosted wheel before exporting a caller handoff package: "
+        f"{sdk_url}"
+    )
+
+
+def _default_sdk_wheel_url_available(url: str) -> bool:
+    request = Request(url, method="HEAD")
+    try:
+        with urlopen(request, timeout=5) as response:
+            return 200 <= response.status < 400
+    except HTTPError as exc:
+        return exc.code not in {404, 410}
+    except (OSError, URLError):
+        return False
 
 
 def _handoff_contract_placeholders(value: Any, *, prefix: str = "") -> list[str]:

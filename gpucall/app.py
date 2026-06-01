@@ -159,6 +159,8 @@ def _bootstrap_client_allowed(client_host: str, cidrs: tuple[str, ...], hosts: t
         client_ip = ipaddress.ip_address(client_host)
     except ValueError:
         return False
+    if client_ip.is_loopback and "localhost" in {host.lower() for host in hosts}:
+        return True
     for raw_cidr in cidrs:
         try:
             if client_ip in ipaddress.ip_network(raw_cidr, strict=False):

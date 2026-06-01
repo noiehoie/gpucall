@@ -550,6 +550,14 @@ def test_trusted_bootstrap_rejects_untrusted_client(tmp_path, monkeypatch) -> No
     assert response.status_code == 403
 
 
+def test_trusted_bootstrap_localhost_scope_allows_loopback_ip() -> None:
+    from gpucall.app import _bootstrap_client_allowed
+
+    assert _bootstrap_client_allowed("127.0.0.1", (), ("localhost",)) is True
+    assert _bootstrap_client_allowed("::1", (), ("localhost",)) is True
+    assert _bootstrap_client_allowed("100.77.179.3", (), ("localhost",)) is False
+
+
 def test_readyz_reports_trusted_bootstrap_writable_state(tmp_path, monkeypatch) -> None:
     root = copy_config(tmp_path)
     (root / "admin.yml").write_text(

@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import getpass
 import hashlib
+import ipaddress
 import json
 import os
 import plistlib
@@ -17,6 +18,7 @@ from datetime import datetime, timezone
 from importlib.resources import files
 from pathlib import Path
 from typing import Any, Literal
+from urllib.parse import urlparse
 from urllib.error import URLError
 from urllib.request import urlopen
 
@@ -51,6 +53,38 @@ from gpucall.release import GITHUB_RELEASE_TAG, ONBOARDING_MANUAL_URL, ONBOARDIN
 SetupProfile = Literal["local-trial", "internal-team", "production-multitenant", "hardened-regulated"]
 CredentialSource = Literal["official_cli", "prompt", "gpucall_credentials"]
 PROVIDER_MUTATION_CONSENT_TTL_SECONDS = 3600
+_LOOPBACK_BOOTSTRAP_HOSTS = {"localhost", "127.0.0.1", "::1", "[::1]"}
+_LOOPBACK_BOOTSTRAP_CIDRS = {"127.0.0.1/32", "127.0.0.0/8", "::1/128"}
+
+
+def _gateway_base_url_is_non_loopback(base_url: str | None) -> bool:
+    if not base_url:
+        return False
+    parsed = urlparse(base_url)
+    host = parsed.hostname or ""
+    if not host:
+        return False
+    if host.lower() == "localhost":
+        return False
+    try:
+        return not ipaddress.ip_address(host).is_loopback
+    except ValueError:
+        return True
+
+
+def _trusted_bootstrap_scope_is_loopback_only(onboarding: "SetupTenantOnboarding") -> bool:
+    hosts = {host.strip().lower() for host in onboarding.allowed_hosts if host.strip()}
+    cidrs = {cidr.strip().lower() for cidr in onboarding.allowed_cidrs if cidr.strip()}
+    if hosts - _LOOPBACK_BOOTSTRAP_HOSTS:
+        return False
+    for raw_cidr in cidrs:
+        try:
+            network = ipaddress.ip_network(raw_cidr, strict=False)
+        except ValueError:
+            return False
+        if not all(ip.is_loopback for ip in (network.network_address, network.broadcast_address)):
+            return False
+    return True
 
 
 class SetupCredentials(BaseModel):
@@ -206,6 +240,15 @@ class SetupPlan(BaseModel):
             self.tenant_onboarding.allowed_cidrs or self.tenant_onboarding.allowed_hosts
         ):
             raise ValueError("trusted_bootstrap requires at least one allowed CIDR or host")
+        if (
+            self.tenant_onboarding.mode is ApiKeyHandoffMode.TRUSTED_BOOTSTRAP
+            and _gateway_base_url_is_non_loopback(self.gateway.base_url)
+            and _trusted_bootstrap_scope_is_loopback_only(self.tenant_onboarding)
+        ):
+            raise ValueError(
+                "trusted_bootstrap for an external gateway.base_url requires tenant_onboarding.allowed_cidrs "
+                "or allowed_hosts for each external caller"
+            )
         return self
 
 
@@ -624,6 +667,7 @@ def write_starter_plan(output: Path | None, *, profile: str | None, provider: st
                 "  - run the dry-run first and copy the printed --accept-plan-hash value",
                 "  - use --yes together with --accept-plan-hash for non-interactive apply",
                 "  - edit gateway.base_url if callers will connect from another machine",
+                "  - add each external caller IP/CIDR to tenant_onboarding.allowed_cidrs before apply",
                 "  - optionally add external_systems to generate caller handoff packages automatically",
             ]
         )
@@ -730,6 +774,11 @@ launch:
         [
             "tenant_onboarding:",
             "  mode: trusted_bootstrap",
+            "  # Keep loopback for same-machine callers.",
+            "  # Add each external caller IP/CIDR before apply, for example: 100.77.179.3/32",
+            "  allowed_cidrs:",
+            "    - 127.0.0.1/32",
+            "    - ::1/128",
             "  allowed_hosts:",
             "    - localhost",
             f"  recipe_inbox: {recipe_inbox}",
