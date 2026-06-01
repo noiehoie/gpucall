@@ -45,7 +45,9 @@ next action.
 - `provider-pending`: credentials or partial metadata exist, but supply
   prerequisites are incomplete.
 - `onboarding-ready`: gateway self-check, caller auth, handoff package, inboxes,
-  admin automation processing, and required object-store scope are ready.
+  admin automation processing, positive route-validation budget policy,
+  validated-route activation automation, and required object-store scope are
+  ready.
 - `onboarding-ready-provisional`: caller onboarding may begin, but caller-side
   reachability or another caller-only check remains unproven.
 - `onboarding-blocked`: handoff should not be given because the closed

@@ -143,8 +143,9 @@ def test_setup_starter_plan_modal_is_oob_happy_path(tmp_path, monkeypatch) -> No
     assert "127.0.0.1/32" in text
     assert "auto_validate_existing_tuples: true" in text
     assert "auto_activate_existing_validated_recipe: true" in text
-    assert "auto_billable_validation: false" in text
-    assert "auto_activate_validated: false" in text
+    assert "auto_billable_validation: true" in text
+    assert "auto_validation_budget_usd: 0.10" in text
+    assert "auto_activate_validated: true" in text
     assert "auto_set_auto_select: true" in text
     assert "auto_run_launch_check: true" in text
     assert "provider worker deployment: modal gpucall-worker-json" in dry_run
@@ -160,7 +161,7 @@ def test_setup_plan_rejects_external_gateway_with_loopback_only_trusted_bootstra
 setup_schema_version: 1
 profile: internal-team
 gateway:
-  base_url: http://100.93.87.4:18088
+  base_url: http://203.0.113.10:18088
 tenant_onboarding:
   mode: trusted_bootstrap
   allowed_cidrs:
@@ -585,7 +586,16 @@ tenant_onboarding:
     - caller.example.internal
   recipe_inbox: {recipe_inbox}
 handoff_assets:
-  caller_sdk_wheel_url: https://assets.example/sdk/gpucall_sdk-2.0.34-py3-none-any.whl
+  caller_sdk_wheel_url: https://assets.example/sdk/gpucall_sdk-2.0.35-py3-none-any.whl
+recipe_automation:
+  auto_materialize: true
+  auto_validate_existing_tuples: true
+  auto_activate_existing_validated_recipe: true
+  auto_promote_candidates: true
+  auto_billable_validation: true
+  auto_validation_budget_usd: 0.10
+  auto_activate_validated: true
+  auto_set_auto_select: true
 external_systems:
   - name: example/system
     expected_workloads: [infer]
@@ -669,6 +679,13 @@ tenant_onboarding:
   recipe_inbox: {recipe_inbox}
 recipe_automation:
   auto_materialize: true
+  auto_validate_existing_tuples: true
+  auto_activate_existing_validated_recipe: true
+  auto_promote_candidates: true
+  auto_billable_validation: true
+  auto_validation_budget_usd: 0.10
+  auto_activate_validated: true
+  auto_set_auto_select: true
 """.lstrip(),
         encoding="utf-8",
     )
@@ -679,6 +696,43 @@ recipe_automation:
     assert "Panopticon: service-running" in report
     assert "Admin automation: service-running" in report
     assert "Panopticon evidence: evidence-fresh" in report
+
+
+def test_setup_status_blocks_internal_team_without_validation_activation_policy(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("GPUCALL_CREDENTIALS", str(tmp_path / "credentials.yml"))
+    save_credentials("modal", {"token_id": "ak-test", "token_secret": "as-test"})
+    config_dir = tmp_path / "config"
+    recipe_inbox = tmp_path / "state" / "recipe_requests" / "inbox"
+    plan = tmp_path / "gpucall.setup.yml"
+    plan.write_text(
+        f"""
+setup_schema_version: 1
+profile: internal-team
+gateway:
+  base_url: https://gpucall.example.internal
+  caller_auth:
+    mode: generated_gateway_key
+providers:
+  modal:
+    enabled: true
+    credentials:
+      source: gpucall_credentials
+tenant_onboarding:
+  mode: trusted_bootstrap
+  allowed_hosts:
+    - caller.example.internal
+  recipe_inbox: {recipe_inbox}
+recipe_automation:
+  auto_materialize: true
+""".lstrip(),
+        encoding="utf-8",
+    )
+
+    report = apply_setup_plan(config_dir, plan, dry_run=False, yes=True)
+
+    assert "OOB readiness: onboarding-blocked" in report
+    assert "[missing] recipe inbox billable validation budget" in report
+    assert "[missing] validated route activation automation" in report
 
 
 def test_setup_partial_panopticon_refresh_keeps_service_health_separate(tmp_path, monkeypatch) -> None:
@@ -755,6 +809,13 @@ tenant_onboarding:
   recipe_inbox: {recipe_inbox}
 recipe_automation:
   auto_materialize: true
+  auto_validate_existing_tuples: true
+  auto_activate_existing_validated_recipe: true
+  auto_promote_candidates: true
+  auto_billable_validation: true
+  auto_validation_budget_usd: 0.10
+  auto_activate_validated: true
+  auto_set_auto_select: true
 """.lstrip(),
         encoding="utf-8",
     )
@@ -864,6 +925,13 @@ tenant_onboarding:
   recipe_inbox: {recipe_inbox}
 recipe_automation:
   auto_materialize: true
+  auto_validate_existing_tuples: true
+  auto_activate_existing_validated_recipe: true
+  auto_promote_candidates: true
+  auto_billable_validation: true
+  auto_validation_budget_usd: 0.10
+  auto_activate_validated: true
+  auto_set_auto_select: true
 """.lstrip(),
         encoding="utf-8",
     )

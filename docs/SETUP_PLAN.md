@@ -136,10 +136,10 @@ recipe_automation:
   auto_promote_candidates: true
   auto_provision_supply: true
   auto_apply_supply: false
-  # Billable validation is intentionally opt-in after setup.
-  auto_billable_validation: false
+  # Modal happy path validates exact recipe/tuple/mode routes inside this hard budget.
+  auto_billable_validation: true
   auto_validation_budget_usd: 0.10
-  auto_activate_validated: false
+  auto_activate_validated: true
   auto_require_auto_select_safe: false
   auto_set_auto_select: true
   auto_run_validate_config: true
@@ -149,7 +149,7 @@ recipe_automation:
 handoff_assets:
   onboarding_prompt_url: https://assets.example/gpucall/EXTERNAL_SYSTEM_ONBOARDING_PROMPT.md
   onboarding_manual_url: https://assets.example/gpucall/EXTERNAL_SYSTEM_ONBOARDING_MANUAL.md
-  caller_sdk_wheel_url: https://assets.example/gpucall/gpucall_sdk-2.0.34-py3-none-any.whl
+  caller_sdk_wheel_url: https://assets.example/gpucall/gpucall_sdk-2.0.35-py3-none-any.whl
 
 external_systems:
   - name: example-system
@@ -351,6 +351,9 @@ allowlist entry.
 
 Recipe automation is gateway-side only. It starts after an external system has
 submitted sanitized preflight or quality-feedback intake to the approved inbox.
+The Modal starter plan turns on bounded billable validation and route activation
+for the OOB happy path. Custom plans can keep those fields false when the
+operator wants a manual validation gate.
 
 ```yaml
 recipe_automation:
@@ -411,7 +414,7 @@ deployments can point handoff prompts at operator-hosted copies instead:
 handoff_assets:
   onboarding_prompt_url: https://assets.example/gpucall/EXTERNAL_SYSTEM_ONBOARDING_PROMPT.md
   onboarding_manual_url: https://assets.example/gpucall/EXTERNAL_SYSTEM_ONBOARDING_MANUAL.md
-  caller_sdk_wheel_url: https://assets.example/gpucall/gpucall_sdk-2.0.34-py3-none-any.whl
+  caller_sdk_wheel_url: https://assets.example/gpucall/gpucall_sdk-2.0.35-py3-none-any.whl
 ```
 
 `gpucall setup export-handoff-prompt` uses these values when present. This

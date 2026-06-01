@@ -555,7 +555,7 @@ def test_trusted_bootstrap_localhost_scope_allows_loopback_ip() -> None:
 
     assert _bootstrap_client_allowed("127.0.0.1", (), ("localhost",)) is True
     assert _bootstrap_client_allowed("::1", (), ("localhost",)) is True
-    assert _bootstrap_client_allowed("100.77.179.3", (), ("localhost",)) is False
+    assert _bootstrap_client_allowed("203.0.113.10", (), ("localhost",)) is False
 
 
 def test_readyz_reports_trusted_bootstrap_writable_state(tmp_path, monkeypatch) -> None:

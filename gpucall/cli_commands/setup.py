@@ -618,6 +618,8 @@ def setup_section_text(config_dir: Path, section: str, *, profile: str | None = 
             f"Auto activate validated tuples: {automation['recipe_inbox_auto_activate_validated']}\n"
             f"Auto set recipe auto_select: {automation['recipe_inbox_auto_set_auto_select']}\n"
             f"Promotion work dir: {automation['recipe_inbox_promotion_work_dir'] or '<default inbox/promotions>'}\n\n"
+            "For the Modal OOB happy path, billable validation and validated-route\n"
+            "activation must both be enabled with a positive validation budget.\n\n"
             "For setup-as-code, set recipe_automation in gpucall.setup.yml.\n"
             "For one-shot operation, run:\n"
             "  gpucall-recipe-admin process-inbox --inbox-dir <inbox> --output-dir <config>/recipes --config-dir <config>\n"
@@ -753,10 +755,10 @@ launch:
             "  auto_promote_candidates: true",
             "  auto_provision_supply: true",
             "  auto_apply_supply: false",
-            "  # Billable validation is intentionally opt-in after setup.",
-            "  auto_billable_validation: false",
+            "  # Modal happy path validates exact recipe/tuple/mode routes inside this hard budget.",
+            "  auto_billable_validation: true",
             "  auto_validation_budget_usd: 0.10",
-            "  auto_activate_validated: false",
+            "  auto_activate_validated: true",
             "  auto_require_auto_select_safe: false",
             "  auto_set_auto_select: true",
             "  auto_run_validate_config: true",
@@ -775,7 +777,7 @@ launch:
             "tenant_onboarding:",
             "  mode: trusted_bootstrap",
             "  # Keep loopback for same-machine callers.",
-            "  # Add each external caller IP/CIDR before apply, for example: 100.77.179.3/32",
+            "  # Add each external caller IP/CIDR before apply, for example: 192.0.2.10/32",
             "  allowed_cidrs:",
             "    - 127.0.0.1/32",
             "    - ::1/128",
@@ -931,6 +933,29 @@ def _setup_status(config_dir: Path, *, profile: str | None) -> dict[str, Any]:
         "label": "admin automation synthetic intake dry-run",
         "section": "recipe-inbox",
     }
+    try:
+        validation_budget_ok = float(automation["recipe_inbox_auto_validation_budget_usd"]) > 0.0
+    except (TypeError, ValueError):
+        validation_budget_ok = False
+    billable_validation_item = {
+        "state": "ok" if automation["recipe_inbox_auto_billable_validation"] and validation_budget_ok else "missing",
+        "label": "recipe inbox billable validation budget",
+        "section": "recipe-inbox",
+    }
+    route_activation_ready = (
+        bool(automation["recipe_inbox_auto_activate_existing_validated_recipe"])
+        and bool(automation["recipe_inbox_auto_validate_existing_tuples"])
+        and bool(automation["recipe_inbox_auto_set_auto_select"])
+    ) or (
+        bool(automation["recipe_inbox_auto_activate_validated"])
+        and bool(automation["recipe_inbox_auto_billable_validation"])
+        and bool(automation["recipe_inbox_auto_set_auto_select"])
+    )
+    route_activation_item = {
+        "state": "ok" if route_activation_ready else "missing",
+        "label": "validated route activation automation",
+        "section": "recipe-inbox",
+    }
     panopticon_service_item = {
         "state": control_plane["panopticon_service_state"],
         "label": "Panopticon service lifecycle",
@@ -952,14 +977,39 @@ def _setup_status(config_dir: Path, *, profile: str | None) -> dict[str, Any]:
             {**recipe_inbox_item, "label": "recipe request inbox before external callers"},
         ]
     elif selected_profile == "internal-team":
-        required = [config_item, gateway_item, provider_item, handoff_item, recipe_inbox_item, synthetic_item, panopticon_service_item, admin_service_item, launch_item]
+        required = [
+            config_item,
+            gateway_item,
+            provider_item,
+            handoff_item,
+            recipe_inbox_item,
+            billable_validation_item,
+            route_activation_item,
+            synthetic_item,
+            panopticon_service_item,
+            admin_service_item,
+            launch_item,
+        ]
         recommended = [
             {**object_store_item, "label": "object store / DataRef storage before file or image workflows"},
             {"state": "ok" if automation["recipe_inbox_auto_materialize"] else "warn", "label": "recipe inbox auto-materialize policy reviewed"},
             _external_system_handoff_status_item(config_dir, gateway_url),
         ]
     else:
-        required = [config_item, gateway_item, provider_item, object_store_item, handoff_item, recipe_inbox_item, synthetic_item, panopticon_service_item, admin_service_item, launch_item]
+        required = [
+            config_item,
+            gateway_item,
+            provider_item,
+            object_store_item,
+            handoff_item,
+            recipe_inbox_item,
+            billable_validation_item,
+            route_activation_item,
+            synthetic_item,
+            panopticon_service_item,
+            admin_service_item,
+            launch_item,
+        ]
         recommended = [
             {"state": "ok" if automation["recipe_inbox_auto_materialize"] else "warn", "label": "recipe inbox auto-materialize policy reviewed"},
             _external_system_handoff_status_item(config_dir, gateway_url),
