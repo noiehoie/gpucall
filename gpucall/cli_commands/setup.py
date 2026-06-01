@@ -1432,6 +1432,7 @@ def _setup_apply_report(plan: SetupPlan, changes: list[str], warnings: list[str]
             f"  Dry-run result id: {dry_run_id}\n"
             f"  Cleanup manifest: {_modal_cleanup_manifest_path(modal_hash)}\n"
             f"  Re-run apply with: --accept-plan-hash {modal_hash}\n"
+            "  Interactive apply still asks for final confirmation and any prompt-based credentials.\n"
             "  --yes alone is not provider mutation consent."
         )
     return text
@@ -2297,7 +2298,19 @@ def _redacted_panopticon_report(report: dict[str, object]) -> dict[str, object]:
         "snapshot_count",
         "preflight",
     }
-    return {key: value for key, value in report.items() if key in allowed}
+    return {key: _setup_json_safe(value) for key, value in report.items() if key in allowed}
+
+
+def _setup_json_safe(value: object) -> object:
+    if isinstance(value, dict):
+        return {str(key): _setup_json_safe(item) for key, item in value.items()}
+    if isinstance(value, set):
+        return [_setup_json_safe(item) for item in sorted(value, key=str)]
+    if isinstance(value, (list, tuple)):
+        return [_setup_json_safe(item) for item in value]
+    if isinstance(value, (str, int, float, bool)) or value is None:
+        return value
+    return str(value)
 
 
 def _update_oob_control_plane_state(

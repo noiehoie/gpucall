@@ -142,6 +142,7 @@ def test_setup_starter_plan_modal_is_oob_happy_path(tmp_path, monkeypatch) -> No
     assert "auto_run_launch_check: true" in text
     assert "provider worker deployment: modal gpucall-worker-json" in dry_run
     assert "modal deploy requires provider-mutation consent plan_hash=" in dry_run
+    assert "Interactive apply still asks for final confirmation" in dry_run
     assert "--yes alone is not provider mutation consent" in dry_run
 
 
@@ -553,6 +554,13 @@ def test_setup_partial_panopticon_refresh_keeps_service_health_separate(tmp_path
             "snapshot_path": str(panopticon_path),
             "observed_count": 1,
             "snapshot_count": 1,
+            "preflight": {
+                "status": "partial",
+                "probe_tuple_count": 1,
+                "skipped_tuple_count": 1,
+                "skipped_tuples": {"runpod-missing-target"},
+                "blockers": [{"code": "PROVIDER_ENDPOINT_TARGET_MISSING", "provider": "runpod"}],
+            },
         }
 
     monkeypatch.setattr("gpucall.cli_commands.setup.refresh_panopticon", fake_refresh)
@@ -600,6 +608,8 @@ recipe_automation:
     assert "provider panopticon bootstrap refresh completed with provider-level warnings" in report
     assert "service-error" not in report
     assert "Now you are good to go for an internal gateway setup." in next_text
+    bootstrap = json.loads((tmp_path / "state" / "gpucall" / "setup" / "panopticon-bootstrap-refresh.json").read_text(encoding="utf-8"))
+    assert bootstrap["panopticon_report"]["preflight"]["skipped_tuples"] == ["runpod-missing-target"]
 
 
 def test_setup_compose_service_mode_is_bounded_without_compose_file(tmp_path, monkeypatch) -> None:
