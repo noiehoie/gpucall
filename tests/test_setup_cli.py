@@ -177,7 +177,7 @@ providers:
     modal_record = registry["providers"]["modal"]
 
     assert "[ok] Modal worker deployed: gpucall-worker-json" in report
-    assert calls[0]["command"][-3:] == ["modal", "deploy", "gpucall.worker_contracts.modal"]
+    assert calls[0]["command"][-4:] == ["modal", "deploy", "-m", "gpucall.worker_contracts.modal"]
     assert calls[0]["env"]["MODAL_TOKEN_ID"] == "ak-test"
     assert calls[0]["env"]["MODAL_TOKEN_SECRET"] == "as-test"
     assert calls[0]["env"]["MODAL_ENVIRONMENT"] == "main"

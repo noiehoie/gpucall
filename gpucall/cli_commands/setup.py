@@ -1587,7 +1587,7 @@ def _deploy_modal_worker() -> str:
         env["MODAL_TOKEN_SECRET"] = token_secret
     if environment:
         env["MODAL_ENVIRONMENT"] = environment
-    command = [sys.executable, "-m", "modal", "deploy", "gpucall.worker_contracts.modal"]
+    command = [sys.executable, "-m", "modal", "deploy", "-m", "gpucall.worker_contracts.modal"]
     completed = subprocess.run(command, capture_output=True, text=True, env=env, check=False, timeout=1800)
     if completed.returncode != 0:
         raise SystemExit("Modal worker deploy failed: " + _safe_subprocess_tail(completed.stderr or completed.stdout))
