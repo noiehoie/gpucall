@@ -520,6 +520,88 @@ recipe_automation:
     assert "Panopticon evidence: evidence-fresh" in report
 
 
+def test_setup_partial_panopticon_refresh_keeps_service_health_separate(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("GPUCALL_CREDENTIALS", str(tmp_path / "credentials.yml"))
+    monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path / "state"))
+    monkeypatch.setenv("GPUCALL_SETUP_LIVE_PROVIDER_PROBES", "1")
+    save_credentials("modal", {"token_id": "ak-test", "token_secret": "as-test"})
+
+    def fake_refresh(*, config_dir, panopticon_path, **kwargs):
+        store_panopticon_evidence(
+            {
+                "modal-a10g": {
+                    "tuple": "modal-a10g",
+                    "adapter": "modal",
+                    "status": "live_revalidated",
+                    "checked": True,
+                    "findings": [
+                        {
+                            "tuple": "modal-a10g",
+                            "adapter": "modal",
+                            "dimension": "health",
+                            "severity": "info",
+                            "source": "modal",
+                        }
+                    ],
+                }
+            },
+            panopticon_path,
+        )
+        return {
+            "phase": "provider-panopticon-refresh",
+            "status": "partial",
+            "snapshot_path": str(panopticon_path),
+            "observed_count": 1,
+            "snapshot_count": 1,
+        }
+
+    monkeypatch.setattr("gpucall.cli_commands.setup.refresh_panopticon", fake_refresh)
+    monkeypatch.setattr(
+        "gpucall.cli_commands.setup._start_panopticon_background_service",
+        lambda config_dir, plan: {"status": "service-running", "health_url": "http://127.0.0.1:18090/healthz", "pid": 1234},
+    )
+    monkeypatch.setattr(
+        "gpucall.cli_commands.setup._start_admin_automation_service",
+        lambda config_dir, plan: {"status": "service-running", "inbox_dir": str(tmp_path / "state" / "recipe_requests" / "inbox")},
+    )
+    config_dir = tmp_path / "config"
+    recipe_inbox = tmp_path / "state" / "recipe_requests" / "inbox"
+    plan = tmp_path / "gpucall.setup.yml"
+    plan.write_text(
+        f"""
+setup_schema_version: 1
+profile: internal-team
+gateway:
+  base_url: https://gpucall.example.internal
+  caller_auth:
+    mode: generated_gateway_key
+providers:
+  modal:
+    enabled: true
+    credentials:
+      source: gpucall_credentials
+tenant_onboarding:
+  mode: trusted_bootstrap
+  allowed_hosts:
+    - caller.example.internal
+  recipe_inbox: {recipe_inbox}
+recipe_automation:
+  auto_materialize: true
+""".lstrip(),
+        encoding="utf-8",
+    )
+
+    report = apply_setup_plan(config_dir, plan, dry_run=False, yes=True)
+    next_text = setup_next_text(config_dir)
+
+    assert "OOB readiness: onboarding-ready" in report
+    assert "Panopticon: service-running" in report
+    assert "Panopticon bootstrap: processed" in report
+    assert "provider panopticon bootstrap refresh completed with provider-level warnings" in report
+    assert "service-error" not in report
+    assert "Now you are good to go for an internal gateway setup." in next_text
+
+
 def test_setup_compose_service_mode_is_bounded_without_compose_file(tmp_path, monkeypatch) -> None:
     monkeypatch.setenv("GPUCALL_SETUP_START_SERVICES", "1")
     monkeypatch.setenv("GPUCALL_SETUP_SERVICE_MODE", "docker-compose-service")

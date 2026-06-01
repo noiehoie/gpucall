@@ -406,6 +406,7 @@ def setup_status_text(config_dir: Path, *, profile: str | None = None, include_m
         f"Recommended:\n{recommended}\n\n"
         "Control-plane:\n"
         f"  Panopticon: {control_plane['panopticon_service_state']} ({control_plane['panopticon_service_mode']})\n"
+        f"  Panopticon bootstrap: {control_plane['panopticon_bootstrap_state']}\n"
         f"  Panopticon evidence: {control_plane['panopticon_evidence_state']} ({control_plane['panopticon_path']})\n"
         f"  Admin automation: {control_plane['admin_automation_service_state']} ({control_plane['admin_automation_service_mode']})\n"
         f"  Admin synthetic dry-run: {control_plane['admin_synthetic_state']}\n"
@@ -452,7 +453,7 @@ def setup_next_text(config_dir: Path, *, profile: str | None = None) -> str:
             "  gpucall setup starter-plan --profile internal-team --provider modal --output gpucall.setup.yml"
         )
     for item in status["required"]:
-        if item["state"] in {"missing", "partial", "warn"}:
+        if item["state"] in {"missing", "partial", "warn", "service-error", "service-uninitialized"}:
             return f"Next required step: {item['label']}\n\nRun:\n  gpucall setup section {item['section']}"
     if status["profile"] == "local-trial":
         blockers = [item for item in status["recommended"] if item["state"] in {"missing", "partial", "warn"}]
@@ -951,6 +952,7 @@ def _control_plane_status(config_dir: Path, *, profile: str, admin_synthetic_sta
         "panopticon_path": str(panopticon_path),
         "panopticon_service_mode": str(state.get("panopticon_service_mode") or service_mode),
         "panopticon_service_state": panopticon_service_state,
+        "panopticon_bootstrap_state": str(state.get("panopticon_bootstrap_status") or "uninitialized"),
         "panopticon_evidence_state": panopticon_evidence_state,
         "admin_automation_service_mode": str(state.get("admin_automation_service_mode") or service_mode),
         "admin_automation_service_state": str(state.get("admin_automation_service_state") or "service-uninitialized"),
@@ -1649,13 +1651,19 @@ def _run_panopticon_bootstrap_refresh(config_dir: Path, plan: SetupPlan) -> dict
         else:
             refresh = refresh_panopticon(config_dir=config_dir, panopticon_path=default_panopticon_path())
             preflight = refresh.get("preflight") if isinstance(refresh, dict) else {}
-            status = "processed" if isinstance(preflight, dict) and preflight.get("status") in {"ok", "partial"} else "blocked"
+            refresh_status = str(refresh.get("status") or "") if isinstance(refresh, dict) else ""
+            preflight_status = str(preflight.get("status") or "") if isinstance(preflight, dict) else ""
+            status = "processed" if (preflight_status in {"ok", "partial"} or refresh_status in {"ok", "processed", "partial"}) else "blocked"
+            if status == "processed" and refresh_status == "partial":
+                reason = "provider panopticon bootstrap refresh completed with provider-level warnings"
+            else:
+                reason = "provider panopticon bootstrap refresh completed" if status == "processed" else "provider panopticon bootstrap refresh blocked"
             report = {
                 "schema_version": 1,
                 "phase": "provider-panopticon-bootstrap-refresh",
                 "status": status,
                 "mode": "live-non-generation-probes",
-                "reason": "provider panopticon bootstrap refresh completed" if status == "processed" else "provider panopticon bootstrap refresh blocked",
+                "reason": reason,
                 "provider_registry_reloaded": True,
                 "provider_registry_snapshot_hash": provider_registry_snapshot_hash(),
                 "panopticon_report": _redacted_panopticon_report(refresh),
@@ -2307,8 +2315,6 @@ def _update_oob_control_plane_state(
     synthetic_status = str(synthetic_result.get("status") or "")
     panopticon_service_state = str(panopticon_service.get("status") or "service-initialized")
     admin_service_state = str(admin_service.get("status") or "service-initialized")
-    if panopticon_status in {"failed", "blocked"} and panopticon_service_state == "service-running":
-        panopticon_service_state = "service-error"
     service_state.update(
         {
             "schema_version": 1,
@@ -2457,6 +2463,8 @@ def _panopticon_bootstrap_report_text(result: dict[str, object]) -> str:
     if status == "processed" and mode == "preflight-only":
         return f"\n\nPanopticon bootstrap refresh:\n  [warn] {reason}"
     if status == "processed":
+        if "warning" in reason:
+            return f"\n\nPanopticon bootstrap refresh:\n  [warn] {reason}"
         return "\n\nPanopticon bootstrap refresh:\n  [ok] provider registry reloaded and non-generation readiness evidence refreshed"
     if status == "skipped":
         return f"\n\nPanopticon bootstrap refresh:\n  [warn] {reason}"
