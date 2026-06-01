@@ -1200,7 +1200,7 @@ wheels = [
 
 [[package]]
 name = "gpucall"
-version = "2.0.35"
+version = "2.0.36"
 source = { editable = "." }
 dependencies = [
     { name = "boto3" },
@@ -1208,6 +1208,7 @@ dependencies = [
     { name = "fastapi" },
     { name = "httpx" },
     { name = "jsonschema" },
+    { name = "modal" },
     { name = "psycopg", extra = ["binary"] },
     { name = "pydantic" },
     { name = "pyyaml" },
@@ -1227,7 +1228,6 @@ providers = [
     { name = "azure-mgmt-compute" },
     { name = "google-cloud-compute" },
     { name = "hyperstack" },
-    { name = "modal" },
     { name = "ovh" },
     { name = "paramiko" },
     { name = "runpod" },
@@ -1245,7 +1245,7 @@ requires-dist = [
     { name = "httpx", specifier = ">=0.27" },
     { name = "hyperstack", marker = "extra == 'providers'", specifier = ">=1.51.2a0" },
     { name = "jsonschema", specifier = ">=4.26.0" },
-    { name = "modal", marker = "extra == 'providers'", specifier = ">=1.0" },
+    { name = "modal", specifier = ">=1.0" },
     { name = "openai", marker = "extra == 'dev'", specifier = ">=2.0" },
     { name = "ovh", marker = "extra == 'providers'", specifier = ">=1.2" },
     { name = "paramiko", marker = "extra == 'providers'", specifier = ">=3.4,<4" },

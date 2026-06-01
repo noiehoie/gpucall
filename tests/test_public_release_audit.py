@@ -106,6 +106,15 @@ def test_runpod_flash_is_optional_provider_dependency() -> None:
     assert "runpod-flash" in text
 
 
+def test_modal_runtime_is_core_dependency_for_oob_happy_path() -> None:
+    root = Path(__file__).resolve().parents[1]
+    text = (root / "pyproject.toml").read_text(encoding="utf-8")
+    project_deps = text.split("[project.optional-dependencies]", 1)[0]
+    provider_deps = text.split("[project.optional-dependencies]", 1)[1]
+    assert "modal>=1.0" in project_deps
+    assert "modal>=1.0" not in provider_deps
+
+
 def test_public_repo_uses_canonical_release_checklist_only() -> None:
     root = Path(__file__).resolve().parents[1]
     if not (root / ".git").exists():
