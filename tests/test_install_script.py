@@ -135,6 +135,7 @@ def test_readmes_start_with_installer_not_setup_binary() -> None:
     for relative in ("README.md", "README.ja.md", "docs/SETUP_PLAN.md"):
         text = (ROOT / relative).read_text(encoding="utf-8")
         assert "curl -fsSL https://raw.githubusercontent.com/noiehoie/gpucall/main/install.sh | sh" in text
+        assert "GPUCALL_REF=<ref> sh" in text
         assert text.index("install.sh") < text.index("gpucall setup")
 
 

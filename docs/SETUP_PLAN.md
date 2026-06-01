@@ -6,6 +6,13 @@ Install the operator CLI before starting setup:
 curl -fsSL https://raw.githubusercontent.com/noiehoie/gpucall/main/install.sh | sh
 ```
 
+For branch, tag, or release-candidate validation, use the same ref for the raw
+installer and for the package archive:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/noiehoie/gpucall/<ref>/install.sh | GPUCALL_REF=<ref> sh
+```
+
 `gpucall setup` is the first-run operator journey after the CLI is installed. It hides the
 large internal config tree behind an operating profile, a checklist dashboard,
 and setup-as-code.
@@ -33,8 +40,14 @@ After local trial, generate the Modal happy-path cloud starter plan:
 ```bash
 gpucall setup starter-plan --profile internal-team --provider modal --output gpucall.modal.setup.yml
 gpucall setup apply --file gpucall.modal.setup.yml --dry-run
-gpucall setup apply --file gpucall.modal.setup.yml
+gpucall setup apply --file gpucall.modal.setup.yml --accept-plan-hash <plan_hash>
 ```
+
+The dry-run prints `plan_hash`. Modal worker deployment is a provider-side
+mutation, so the final apply must include `--accept-plan-hash <plan_hash>`.
+For non-interactive setup, set `MODAL_TOKEN_ID` and `MODAL_TOKEN_SECRET`, then
+use `credentials.source: gpucall_credentials`; setup imports those environment
+credentials into the gpucall credential store without writing them to plan YAML.
 
 The Modal apply step prompts for Modal token credentials, stores them in the
 gpucall credentials store outside repository YAML, deploys the bundled
@@ -129,7 +142,7 @@ recipe_automation:
 handoff_assets:
   onboarding_prompt_url: https://assets.example/gpucall/EXTERNAL_SYSTEM_ONBOARDING_PROMPT.md
   onboarding_manual_url: https://assets.example/gpucall/EXTERNAL_SYSTEM_ONBOARDING_MANUAL.md
-  caller_sdk_wheel_url: https://assets.example/gpucall/gpucall_sdk-2.0.31-py3-none-any.whl
+  caller_sdk_wheel_url: https://assets.example/gpucall/gpucall_sdk-2.0.32-py3-none-any.whl
 
 external_systems:
   - name: example-system
@@ -391,7 +404,7 @@ deployments can point handoff prompts at operator-hosted copies instead:
 handoff_assets:
   onboarding_prompt_url: https://assets.example/gpucall/EXTERNAL_SYSTEM_ONBOARDING_PROMPT.md
   onboarding_manual_url: https://assets.example/gpucall/EXTERNAL_SYSTEM_ONBOARDING_MANUAL.md
-  caller_sdk_wheel_url: https://assets.example/gpucall/gpucall_sdk-2.0.31-py3-none-any.whl
+  caller_sdk_wheel_url: https://assets.example/gpucall/gpucall_sdk-2.0.32-py3-none-any.whl
 ```
 
 `gpucall setup export-handoff-prompt` uses these values when present. This

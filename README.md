@@ -114,6 +114,14 @@ For a first install, install the operator CLI first:
 curl -fsSL https://raw.githubusercontent.com/noiehoie/gpucall/main/install.sh | sh
 ```
 
+That one-liner installs the current public `main` product. When validating a
+branch, tag, or release candidate, use the same ref for both the installer file
+and the package archive:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/noiehoie/gpucall/<ref>/install.sh | GPUCALL_REF=<ref> sh
+```
+
 If you are installing from a checked-out repository, run:
 
 ```bash
@@ -145,16 +153,23 @@ After the local trial passes, create the Modal happy-path cloud plan:
 ```bash
 gpucall setup starter-plan --profile internal-team --provider modal --output gpucall.modal.setup.yml
 gpucall setup apply --file gpucall.modal.setup.yml --dry-run
-gpucall setup apply --file gpucall.modal.setup.yml
+gpucall setup apply --file gpucall.modal.setup.yml --accept-plan-hash <plan_hash>
 ```
 
-The Modal apply step prompts for the Modal token ID and token secret, stores
-them in the gpucall credentials store outside repository YAML, deploys the
+The dry-run prints the required `plan_hash`. The apply step prompts for the
+Modal token ID and token secret, or imports `MODAL_TOKEN_ID` /
+`MODAL_TOKEN_SECRET` from the environment when they are already set. It stores
+credentials in the gpucall credential store outside repository YAML, deploys the
 bundled `gpucall-worker-json` Modal worker, creates gateway caller auth, creates
-the recipe inbox, and enables bounded demand-to-supply automation. If the
-operator has not signed up for a cloud GPU provider yet, `gpucall setup next`
-points them to Modal before cloud routing is enabled. Without provider
+the recipe inbox, and enables bounded non-billable demand-to-supply automation.
+If the operator has not signed up for a cloud GPU provider yet, `gpucall setup
+next` points them to Modal before cloud routing is enabled. Without provider
 credentials, gpucall remains fail-closed.
+
+For unattended setup, set `MODAL_TOKEN_ID` and `MODAL_TOKEN_SECRET`, change the
+provider block to `credentials.source: gpucall_credentials`, and keep
+`--accept-plan-hash <plan_hash>` from the dry-run. `setup apply --yes` rejects
+interactive `credentials.source: prompt` on purpose.
 
 To prepare caller-side onboarding during setup, add external systems to the
 setup plan before applying it:
@@ -317,7 +332,7 @@ the caller repo, such as
 If the caller-side helper is not installed, install only the SDK helper wheel:
 
 ```bash
-uv tool install https://github.com/noiehoie/gpucall/releases/download/v2.0.31/gpucall_sdk-2.0.31-py3-none-any.whl
+uv tool install https://github.com/noiehoie/gpucall/releases/download/v2.0.32/gpucall_sdk-2.0.32-py3-none-any.whl
 gpucall-recipe-draft --help
 ```
 

@@ -107,6 +107,13 @@ LLM inference が許されるのは、deterministic routing が production tuple
 curl -fsSL https://raw.githubusercontent.com/noiehoie/gpucall/main/install.sh | sh
 ```
 
+この one-liner は公開 `main` の製品を入れます。branch / tag / release
+candidate を検証する場合は、raw installer と package archive に同じ ref を使います。
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/noiehoie/gpucall/<ref>/install.sh | GPUCALL_REF=<ref> sh
+```
+
 checkout 済みの repository から導入する場合:
 
 ```bash
@@ -135,10 +142,15 @@ gpucall setup apply --file gpucall.setup.yml --yes
 local trial が通った後に Modal happy-path cloud plan を作ります。
 
 ```bash
-gpucall setup starter-plan --profile internal-team --provider modal --output gpucall.setup.yml
-gpucall setup apply --file gpucall.setup.yml --dry-run
-gpucall setup apply --file gpucall.setup.yml
+gpucall setup starter-plan --profile internal-team --provider modal --output gpucall.modal.setup.yml
+gpucall setup apply --file gpucall.modal.setup.yml --dry-run
+gpucall setup apply --file gpucall.modal.setup.yml --accept-plan-hash <plan_hash>
 ```
+
+dry-run が必要な `plan_hash` を表示します。Modal worker deploy は provider
+側 mutation なので、最後の apply には `--accept-plan-hash <plan_hash>` が必要です。
+`MODAL_TOKEN_ID` と `MODAL_TOKEN_SECRET` が環境変数にある場合、setup はそれを
+gpucall credential store に取り込み、plan YAML には secret を書きません。
 
 Modal apply step では Modal token ID と token secret を入力します。値は
 repository YAML ではなく gpucall credentials store に保存され、同時に bundled
@@ -276,7 +288,7 @@ https://raw.githubusercontent.com/noiehoie/gpucall/main/docs/EXTERNAL_SYSTEM_ONB
 呼び出し側補助ツールが未導入の場合は、SDK helper wheel だけを導入します。
 
 ```bash
-uv tool install https://github.com/noiehoie/gpucall/releases/download/v2.0.31/gpucall_sdk-2.0.31-py3-none-any.whl
+uv tool install https://github.com/noiehoie/gpucall/releases/download/v2.0.32/gpucall_sdk-2.0.32-py3-none-any.whl
 gpucall-recipe-draft --help
 ```
 

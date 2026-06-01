@@ -618,6 +618,8 @@ def write_starter_plan(output: Path | None, *, profile: str | None, provider: st
                 "",
                 "Before apply:",
                 "  - keep your Modal token ID and token secret ready",
+                "  - set MODAL_TOKEN_ID and MODAL_TOKEN_SECRET for non-interactive apply",
+                "  - run the dry-run first and copy the printed --accept-plan-hash value",
                 "  - edit gateway.base_url if callers will connect from another machine",
                 "  - optionally add external_systems to generate caller handoff packages automatically",
             ]
@@ -1283,6 +1285,7 @@ def _setup_plan_warnings(config_dir: Path, plan: SetupPlan) -> list[str]:
                 warnings.append(f"{name} uses official CLI credentials, but {cli!r} is not on PATH")
         if provider.credentials.source == "gpucall_credentials":
             required = _provider_contracts(name)
+            configured.update(_env_provider_contracts(name))
             missing = sorted(required.difference(configured))
             if missing:
                 warnings.append(f"{name} credentials.source=gpucall_credentials but missing: {', '.join(missing)}")
@@ -1570,18 +1573,27 @@ def _apply_providers(config_dir: Path, plan: SetupPlan, *, modal_plan_hash: str 
                 save_credentials("hyperstack", {"api_key": api_key or getpass.getpass("Hyperstack API key: ").strip()})
                 save_provider_metadata("hyperstack", {"ssh_key_path": provider.ssh_key_path or ""}, state="provider-configured")
         elif provider.credentials.source == "gpucall_credentials":
+            if name == "runpod" and "api_key" not in load_credentials().get("runpod", {}):
+                api_key = _first_env_value("GPUCALL_RUNPOD_API_KEY", "RUNPOD_API_KEY")
+                if api_key:
+                    save_credentials("runpod", {"api_key": api_key})
             if name == "modal":
                 modal_credentials = load_credentials().get("modal", {})
-                environment = modal_credentials.get("environment") or _provider_registry_metadata("modal").get("environment") or "main"
+                token_id = str(modal_credentials.get("token_id") or _first_env_value("MODAL_TOKEN_ID", "GPUCALL_MODAL_TOKEN_ID") or "").strip()
+                token_secret = str(modal_credentials.get("token_secret") or _first_env_value("MODAL_TOKEN_SECRET", "GPUCALL_MODAL_TOKEN_SECRET") or "").strip()
+                environment = (
+                    modal_credentials.get("environment")
+                    or _first_env_value("MODAL_ENVIRONMENT", "GPUCALL_MODAL_ENVIRONMENT")
+                    or _provider_registry_metadata("modal").get("environment")
+                    or "main"
+                )
+                if token_id and token_secret:
+                    save_credentials("modal", {"token_id": token_id, "token_secret": token_secret})
                 save_provider_metadata("modal", {"environment": environment}, state="credential-configured")
-                if "environment" in modal_credentials:
-                    save_credentials(
-                        "modal",
-                        {
-                            "token_id": str(modal_credentials.get("token_id") or ""),
-                            "token_secret": str(modal_credentials.get("token_secret") or ""),
-                        },
-                    )
+            if name == "hyperstack" and "api_key" not in load_credentials().get("hyperstack", {}):
+                api_key = _first_env_value("GPUCALL_HYPERSTACK_API_KEY", "HYPERSTACK_API_KEY")
+                if api_key:
+                    save_credentials("hyperstack", {"api_key": api_key})
             if name == "hyperstack" and provider.ssh_key_path:
                 save_provider_metadata("hyperstack", {"ssh_key_path": provider.ssh_key_path}, state="provider-configured")
         if name == "runpod":
@@ -1614,6 +1626,16 @@ def _first_env_value(*names: str) -> str | None:
         if value is not None and value.strip():
             return value.strip()
     return None
+
+
+def _env_provider_contracts(name: str) -> set[str]:
+    if name == "modal" and _first_env_value("MODAL_TOKEN_ID", "GPUCALL_MODAL_TOKEN_ID") and _first_env_value("MODAL_TOKEN_SECRET", "GPUCALL_MODAL_TOKEN_SECRET"):
+        return {"token_pair:modal"}
+    if name == "runpod" and _first_env_value("GPUCALL_RUNPOD_API_KEY", "RUNPOD_API_KEY"):
+        return {"api_key:runpod"}
+    if name == "hyperstack" and _first_env_value("GPUCALL_HYPERSTACK_API_KEY", "HYPERSTACK_API_KEY"):
+        return {"api_key:hyperstack"}
+    return set()
 
 
 def _provider_registry_metadata(provider: str) -> dict[str, object]:

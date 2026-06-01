@@ -133,6 +133,8 @@ def test_setup_starter_plan_modal_is_oob_happy_path(tmp_path, monkeypatch) -> No
     dry_run = apply_setup_plan(tmp_path / "config", plan, dry_run=True, yes=False)
 
     assert "gpucall setup apply --file" in report
+    assert "MODAL_TOKEN_ID" in report
+    assert "--accept-plan-hash" in report
     assert "modal:" in text
     assert "deploy_worker: true" in text
     assert "auto_validate_existing_tuples: true" in text
@@ -219,6 +221,38 @@ providers:
     assert credentials["token_id"] == "ak-env"
     assert credentials["token_secret"] == "as-env"
     assert load_provider_registry()["providers"]["modal"]["metadata"]["environment"] == "dev"
+
+
+def test_setup_plan_gpucall_credentials_imports_modal_environment_credentials(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("GPUCALL_CREDENTIALS", str(tmp_path / "credentials.yml"))
+    monkeypatch.setenv("MODAL_TOKEN_ID", "ak-env")
+    monkeypatch.setenv("MODAL_TOKEN_SECRET", "as-env")
+    monkeypatch.setenv("MODAL_ENVIRONMENT", "main")
+    config_dir = tmp_path / "config"
+    plan = tmp_path / "gpucall.modal.setup.yml"
+    plan.write_text(
+        """
+setup_schema_version: 1
+profile: internal-team
+providers:
+  modal:
+    enabled: true
+    credentials:
+      source: gpucall_credentials
+""".lstrip(),
+        encoding="utf-8",
+    )
+
+    dry_run = apply_setup_plan(config_dir, plan, dry_run=True, yes=True)
+    report = apply_setup_plan(config_dir, plan, dry_run=False, yes=True)
+    status = setup_status_text(config_dir, profile="internal-team")
+    credentials = load_credentials()["modal"]
+
+    assert "modal credentials.source=gpucall_credentials but missing" not in dry_run
+    assert "Modal configured" in report
+    assert credentials["token_id"] == "ak-env"
+    assert credentials["token_secret"] == "as-env"
+    assert "[ok] GPU execution surfaces: Modal configured" in status
 
 
 def test_admin_synthetic_dry_run_forces_materialize_only_automation(tmp_path, monkeypatch) -> None:
