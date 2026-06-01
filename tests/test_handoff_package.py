@@ -179,5 +179,9 @@ tenant_onboarding:
     stdout = capsys.readouterr().out
 
     assert "phase: gpucall-caller-handoff-package-write" in stdout
+    assert "status: generated" in stdout
+    assert "Caller handoff package generated." in stdout
+    assert "caller_ai_onboarding_prompt_path:" in stdout
+    assert "next_action:" in stdout
     assert (output / "caller-ai-onboarding-prompt.md").exists()
     assert (output / "CALLER_ENGINEER_README.md").exists()

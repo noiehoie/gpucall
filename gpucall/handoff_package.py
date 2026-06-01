@@ -399,11 +399,18 @@ def write_handoff_package(config_dir: str | Path, system_name: str, output_dir: 
     manifest_path = destination / "MANIFEST.json"
     manifest_path.write_text(manifest_text, encoding="utf-8")
     os.chmod(manifest_path, 0o600)
+    prompt_path = destination / "caller-ai-onboarding-prompt.md"
+    readme_path = destination / "CALLER_ENGINEER_README.md"
     return {
         "schema_version": 1,
         "phase": "gpucall-caller-handoff-package-write",
+        "status": "generated",
+        "message": "Caller handoff package generated.",
         "system_name": system_name,
         "output_dir": str(destination),
+        "caller_ai_onboarding_prompt_path": str(prompt_path),
+        "caller_engineer_readme_path": str(readme_path),
+        "next_action": f"Give {prompt_path} to the caller-side AI CLI.",
         "files": sorted(HANDOFF_PACKAGE_FILES),
         "prompt_quality": package["checklist"]["prompt_quality"],
         "human_readme_quality": package["checklist"]["human_readme_quality"],

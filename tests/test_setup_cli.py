@@ -521,6 +521,8 @@ launch:
     assert (handoff_dir / "caller-ai-onboarding-prompt.md").exists()
     assert "Caller handoff packages:" in report
     assert "example-system" in report
+    assert "Caller handoff package generated." in report
+    assert "give to caller-side AI CLI:" in report
 
 
 def test_setup_plan_auto_writes_external_system_handoff_package(tmp_path, monkeypatch) -> None:
@@ -569,6 +571,8 @@ external_systems:
     assert oct(handoff_dir.stat().st_mode & 0o777) == "0o700"
     assert "Caller handoff packages:" in report
     assert "[ok] example/system:" in report
+    assert "Caller handoff package generated." in report
+    assert "give to caller-side AI CLI:" in report
     assert "Setup is onboarding-ready-provisional." in report
     assert "Panopticon bootstrap refresh:" in report
     assert "caller-ai-onboarding-prompt.md" in report

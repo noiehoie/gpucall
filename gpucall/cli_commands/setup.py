@@ -2585,7 +2585,15 @@ def _write_external_system_handoff_packages(config_dir: Path, plan: SetupPlan) -
     for system in plan.external_systems:
         output_dir = root / _safe_handoff_dir_name(system.name)
         report = write_handoff_package(config_dir, system.name, output_dir)
-        results.append(f"[ok] {system.name}: {report['output_dir']}")
+        results.append(
+            "\n".join(
+                [
+                    f"[ok] {system.name}: Caller handoff package generated.",
+                    f"    package: {report['output_dir']}",
+                    f"    give to caller-side AI CLI: {report['caller_ai_onboarding_prompt_path']}",
+                ]
+            )
+        )
     return results
 
 
