@@ -145,12 +145,19 @@ local trial が通った後に Modal happy-path cloud plan を作ります。
 gpucall setup starter-plan --profile internal-team --provider modal --output gpucall.modal.setup.yml
 gpucall setup apply --file gpucall.modal.setup.yml --dry-run
 gpucall setup apply --file gpucall.modal.setup.yml --accept-plan-hash <plan_hash>
+# 非対話 apply:
+gpucall setup apply --file gpucall.modal.setup.yml --yes --accept-plan-hash <plan_hash>
 ```
 
 dry-run が必要な `plan_hash` を表示します。Modal worker deploy は provider
 側 mutation なので、最後の apply には `--accept-plan-hash <plan_hash>` が必要です。
 `MODAL_TOKEN_ID` と `MODAL_TOKEN_SECRET` が環境変数にある場合、setup はそれを
 gpucall credential store に取り込み、plan YAML には secret を書きません。
+非対話 apply では、同じ `--accept-plan-hash <plan_hash>` コマンドに `--yes` を
+追加します。`credentials.source: prompt` のままでは `--yes` は拒否されます。
+
+Linux systemd user install では、setup が `gpucall-panopticon.service` と
+`gpucall-recipe-admin-watch.service` を起動します。
 
 Modal apply step では Modal token ID と token secret を入力します。値は
 repository YAML ではなく gpucall credentials store に保存され、同時に bundled
@@ -288,7 +295,7 @@ https://raw.githubusercontent.com/noiehoie/gpucall/main/docs/EXTERNAL_SYSTEM_ONB
 呼び出し側補助ツールが未導入の場合は、SDK helper wheel だけを導入します。
 
 ```bash
-uv tool install https://github.com/noiehoie/gpucall/releases/download/v2.0.32/gpucall_sdk-2.0.32-py3-none-any.whl
+uv tool install https://github.com/noiehoie/gpucall/releases/download/v2.0.33/gpucall_sdk-2.0.33-py3-none-any.whl
 gpucall-recipe-draft --help
 ```
 

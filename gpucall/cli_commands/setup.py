@@ -35,7 +35,7 @@ from gpucall.credentials import configured_credentials, credentials_path, load_c
 from gpucall.domain import ApiKeyHandoffMode
 from gpucall.handoff import _default_quality_feedback_inbox
 from gpucall.handoff_package import caller_ai_onboarding_prompt, build_handoff_contract, write_handoff_package
-from gpucall.panopticon import PANOPTICON_TTL_BY_DIMENSION, PANOPTICON_SCHEMA_VERSION, default_panopticon_path
+from gpucall.panopticon import PANOPTICON_TTL_BY_DIMENSION, PANOPTICON_SCHEMA_VERSION, default_panopticon_path, store_panopticon_evidence
 from gpucall.panopticon_service import refresh_panopticon
 from gpucall.provider_registry import (
     load_provider_registry,
@@ -332,7 +332,7 @@ Cloud path after local trial:
 
   gpucall setup starter-plan --profile internal-team --provider modal --output gpucall.modal.setup.yml
   gpucall setup apply --file gpucall.modal.setup.yml --dry-run
-  gpucall setup apply --file gpucall.modal.setup.yml
+  gpucall setup apply --file gpucall.modal.setup.yml --accept-plan-hash <plan_hash>
 
 Profiles:
 
@@ -399,16 +399,18 @@ def setup_status_text(config_dir: Path, *, profile: str | None = None, include_m
     control_plane = status["control_plane"]
     caller_auth = status["caller_auth"]
     caller_auth_line = _caller_auth_status_line(caller_auth)
+    panopticon_service_name = _service_name_suffix(control_plane["panopticon_service_name"])
+    admin_service_name = _service_name_suffix(control_plane["admin_automation_service_name"])
     text = (
         f"Profile: {status['profile']}\n\n"
         f"OOB readiness: {status['oob_readiness']}\n\n"
         f"Required:\n{required}\n\n"
         f"Recommended:\n{recommended}\n\n"
         "Control-plane:\n"
-        f"  Panopticon: {control_plane['panopticon_service_state']} ({control_plane['panopticon_service_mode']})\n"
+        f"  Panopticon: {control_plane['panopticon_service_state']} ({control_plane['panopticon_service_mode']}{panopticon_service_name})\n"
         f"  Panopticon bootstrap: {control_plane['panopticon_bootstrap_state']}\n"
         f"  Panopticon evidence: {control_plane['panopticon_evidence_state']} ({control_plane['panopticon_path']})\n"
-        f"  Admin automation: {control_plane['admin_automation_service_state']} ({control_plane['admin_automation_service_mode']})\n"
+        f"  Admin automation: {control_plane['admin_automation_service_state']} ({control_plane['admin_automation_service_mode']}{admin_service_name})\n"
         f"  Admin synthetic dry-run: {control_plane['admin_synthetic_state']}\n"
         f"  Caller auth lifecycle: {caller_auth_line}\n"
         f"  TTL defaults: hot={PANOPTICON_TTL_BY_DIMENSION['health']}s price={PANOPTICON_TTL_BY_DIMENSION['price']}s "
@@ -620,6 +622,7 @@ def write_starter_plan(output: Path | None, *, profile: str | None, provider: st
                 "  - keep your Modal token ID and token secret ready",
                 "  - set MODAL_TOKEN_ID and MODAL_TOKEN_SECRET for non-interactive apply",
                 "  - run the dry-run first and copy the printed --accept-plan-hash value",
+                "  - use --yes together with --accept-plan-hash for non-interactive apply",
                 "  - edit gateway.base_url if callers will connect from another machine",
                 "  - optionally add external_systems to generate caller handoff packages automatically",
             ]
@@ -629,7 +632,12 @@ def write_starter_plan(output: Path | None, *, profile: str | None, provider: st
             "",
             "Next:",
             f"  gpucall setup apply --file {path} --dry-run",
-            f"  gpucall setup apply --file {path}" + (" --yes" if selected_profile == "local-trial" else ""),
+            f"  gpucall setup apply --file {path}"
+            + (
+                " --yes"
+                if selected_profile == "local-trial"
+                else " --accept-plan-hash <plan_hash>    # add --yes for non-interactive apply"
+            ),
         ]
     )
     return "\n".join(next_lines)
@@ -931,7 +939,8 @@ def _local_trial_cloud_next_text() -> str:
         "If you already have a Modal account and token, run:\n"
         "  gpucall setup starter-plan --profile internal-team --provider modal --output gpucall.modal.setup.yml\n"
         "  gpucall setup apply --file gpucall.modal.setup.yml --dry-run\n"
-        "  gpucall setup apply --file gpucall.modal.setup.yml\n\n"
+        "  gpucall setup apply --file gpucall.modal.setup.yml --accept-plan-hash <plan_hash>\n"
+        "  # Non-interactive apply: add --yes to the final command.\n\n"
         "The apply step prompts for Modal token ID and token secret, stores them in the gpucall credentials store,\n"
         "deploys the bundled gpucall Modal worker, creates gateway caller auth, creates the recipe inbox,\n"
         "and enables the bounded demand-to-supply automation.\n\n"
@@ -988,12 +997,28 @@ def _control_plane_status(config_dir: Path, *, profile: str, admin_synthetic_sta
         "panopticon_path": str(panopticon_path),
         "panopticon_service_mode": str(state.get("panopticon_service_mode") or service_mode),
         "panopticon_service_state": panopticon_service_state,
+        "panopticon_service_name": str(state.get("panopticon_service_name") or _default_service_name("panopticon", service_mode)),
         "panopticon_bootstrap_state": str(state.get("panopticon_bootstrap_status") or "uninitialized"),
         "panopticon_evidence_state": panopticon_evidence_state,
         "admin_automation_service_mode": str(state.get("admin_automation_service_mode") or service_mode),
         "admin_automation_service_state": str(state.get("admin_automation_service_state") or "service-uninitialized"),
+        "admin_automation_service_name": str(state.get("admin_automation_service_name") or _default_service_name("admin", service_mode)),
         "admin_synthetic_state": admin_synthetic_state,
     }
+
+
+def _service_name_suffix(name: str) -> str:
+    return f", unit={name}" if name else ""
+
+
+def _default_service_name(kind: str, service_mode: str) -> str:
+    if service_mode == "systemd-user-service":
+        return "gpucall-panopticon.service" if kind == "panopticon" else "gpucall-recipe-admin-watch.service"
+    if service_mode == "launchd-user-agent":
+        return "ai.tnmc.gpucall.panopticon" if kind == "panopticon" else "ai.tnmc.gpucall.recipe-admin-watch"
+    if _compose_service_mode(service_mode):
+        return "gpucall-panopticon" if kind == "panopticon" else "gpucall-recipe-admin"
+    return ""
 
 
 def _load_control_plane_state() -> dict[str, object]:
@@ -1706,15 +1731,17 @@ def _run_panopticon_bootstrap_refresh(config_dir: Path, plan: SetupPlan) -> dict
     try:
         if os.getenv("GPUCALL_SETUP_LIVE_PROVIDER_PROBES", "0") == "0":
             provider_registry = load_provider_registry()
+            setup_evidence_count = _write_panopticon_setup_preflight_evidence(enabled_cloud_providers)
             report = {
                 "schema_version": 1,
                 "phase": "provider-panopticon-bootstrap-refresh",
                 "status": "processed",
                 "mode": "preflight-only",
-                "reason": "inline live probes skipped; Provider Panopticon service will refresh provider evidence in the background",
+                "reason": "inline live probes skipped; setup preflight evidence written and Provider Panopticon service will refresh provider evidence in the background",
                 "provider_registry_reloaded": True,
                 "provider_registry_snapshot_hash": provider_registry_snapshot_hash(),
                 "provider_count": len(provider_registry.get("providers") or {}),
+                "setup_preflight_evidence_count": setup_evidence_count,
                 "created_at": datetime.now(timezone.utc).isoformat(),
             }
         else:
@@ -1750,6 +1777,26 @@ def _run_panopticon_bootstrap_refresh(config_dir: Path, plan: SetupPlan) -> dict
         }
     _write_json_file(path, report, mode=0o600)
     return report
+
+
+def _write_panopticon_setup_preflight_evidence(enabled_cloud_providers: list[str]) -> int:
+    evidence: dict[str, dict[str, object]] = {}
+    for provider_name in sorted(set(enabled_cloud_providers)):
+        tuple_name = f"{provider_name}-setup-bootstrap"
+        evidence[tuple_name] = {
+            "tuple": tuple_name,
+            "adapter": provider_name,
+            "status": "unknown",
+            "checked": False,
+            "findings": [],
+        }
+    if evidence:
+        store_panopticon_evidence(
+            evidence,
+            default_panopticon_path(),
+            ttl_seconds=PANOPTICON_TTL_BY_DIMENSION["panopticon"],
+        )
+    return len(evidence)
 
 
 def _start_panopticon_background_service(config_dir: Path, plan: SetupPlan) -> dict[str, object]:
@@ -1969,6 +2016,8 @@ def _start_systemd_user_panopticon_service(config_dir: Path, *, host: str, port:
                 "phase": "provider-panopticon-service-start",
                 "status": "service-error",
                 "reason": "systemd user service start failed: " + _safe_subprocess_tail(completed.stderr or completed.stdout),
+                "service_mode": "systemd-user-service",
+                "service_name": "gpucall-panopticon.service",
                 "unit_path": str(unit_path),
                 "health_url": health_url,
                 "created_at": datetime.now(timezone.utc).isoformat(),
@@ -2014,6 +2063,8 @@ def _start_launchd_user_panopticon_service(config_dir: Path, *, host: str, port:
             "phase": "provider-panopticon-service-start",
             "status": "service-error",
             "reason": "launchd user agent bootstrap failed: " + _safe_subprocess_tail(bootstrap.stderr or bootstrap.stdout),
+            "service_mode": "launchd-user-agent",
+            "service_name": label,
             "unit_path": str(plist_path),
             "health_url": health_url,
             "created_at": datetime.now(timezone.utc).isoformat(),
@@ -2025,6 +2076,8 @@ def _start_launchd_user_panopticon_service(config_dir: Path, *, host: str, port:
             "phase": "provider-panopticon-service-start",
             "status": "service-error",
             "reason": "launchd user agent kickstart failed: " + _safe_subprocess_tail(kickstart.stderr or kickstart.stdout),
+            "service_mode": "launchd-user-agent",
+            "service_name": label,
             "unit_path": str(plist_path),
             "health_url": health_url,
             "created_at": datetime.now(timezone.utc).isoformat(),
@@ -2185,6 +2238,7 @@ def _start_systemd_user_admin_automation_service(config_dir: Path, recipe_inbox:
                 "status": "service-error",
                 "reason": "systemd user service start failed: " + _safe_subprocess_tail(completed.stderr or completed.stdout),
                 "service_mode": "systemd-user-service",
+                "service_name": service_name,
                 "unit_path": str(unit_path),
                 "inbox_dir": str(recipe_inbox),
                 "created_at": datetime.now(timezone.utc).isoformat(),
@@ -2223,6 +2277,7 @@ def _start_launchd_user_admin_automation_service(config_dir: Path, recipe_inbox:
             "status": "service-error",
             "reason": "launchd user agent bootstrap failed: " + _safe_subprocess_tail(bootstrap.stderr or bootstrap.stdout),
             "service_mode": "launchd-user-agent",
+            "service_name": label,
             "unit_path": str(plist_path),
             "inbox_dir": str(recipe_inbox),
             "created_at": datetime.now(timezone.utc).isoformat(),
@@ -2235,6 +2290,7 @@ def _start_launchd_user_admin_automation_service(config_dir: Path, recipe_inbox:
             "status": "service-error",
             "reason": "launchd user agent kickstart failed: " + _safe_subprocess_tail(kickstart.stderr or kickstart.stdout),
             "service_mode": "launchd-user-agent",
+            "service_name": label,
             "unit_path": str(plist_path),
             "inbox_dir": str(recipe_inbox),
             "created_at": datetime.now(timezone.utc).isoformat(),
@@ -2247,6 +2303,7 @@ def _start_launchd_user_admin_automation_service(config_dir: Path, recipe_inbox:
             "status": "service-running",
             "reason": "launchd user agent is loaded",
             "service_mode": "launchd-user-agent",
+            "service_name": label,
             "unit_path": str(plist_path),
             "inbox_dir": str(recipe_inbox),
             "created_at": datetime.now(timezone.utc).isoformat(),
@@ -2257,6 +2314,7 @@ def _start_launchd_user_admin_automation_service(config_dir: Path, recipe_inbox:
         "status": "service-error",
         "reason": "launchd user agent is not loaded: " + _safe_subprocess_tail(status.stderr or status.stdout),
         "service_mode": "launchd-user-agent",
+        "service_name": label,
         "unit_path": str(plist_path),
         "inbox_dir": str(recipe_inbox),
         "created_at": datetime.now(timezone.utc).isoformat(),
@@ -2308,6 +2366,7 @@ def _wait_for_systemd_service_active(
                 "status": "service-running",
                 "reason": "systemd user service is active",
                 "service_mode": service_mode,
+                "service_name": service_name,
                 "unit_path": str(unit_path),
                 "created_at": datetime.now(timezone.utc).isoformat(),
             }
@@ -2321,6 +2380,7 @@ def _wait_for_systemd_service_active(
         "status": "service-error",
         "reason": "systemd user service did not become active within 5 seconds",
         "service_mode": service_mode,
+        "service_name": service_name,
         "unit_path": str(unit_path),
         "created_at": datetime.now(timezone.utc).isoformat(),
     }
@@ -2404,11 +2464,13 @@ def _update_oob_control_plane_state(
             "panopticon_path": str(default_panopticon_path()),
             "panopticon_service_mode": _service_mode_for(plan.profile),
             "panopticon_service_state": panopticon_service_state,
+            "panopticon_service_name": panopticon_service.get("service_name") or _default_service_name("panopticon", _service_mode_for(plan.profile)),
             "panopticon_service_health_url": panopticon_service.get("health_url"),
             "panopticon_service_pid": panopticon_service.get("pid"),
             "panopticon_bootstrap_status": panopticon_status,
             "admin_automation_service_mode": _service_mode_for(plan.profile),
             "admin_automation_service_state": admin_service_state,
+            "admin_automation_service_name": admin_service.get("service_name") or _default_service_name("admin", _service_mode_for(plan.profile)),
             "admin_automation_service_unit_path": admin_service.get("unit_path"),
             "admin_automation_service_inbox_dir": admin_service.get("inbox_dir"),
             "admin_synthetic_status": synthetic_status,
@@ -2579,7 +2641,8 @@ def _setup_completion_text(config_dir: Path, plan: SetupPlan, *, handoff_results
             "Next, configure the Modal happy path for external systems:\n"
             "  gpucall setup starter-plan --profile internal-team --provider modal --output gpucall.modal.setup.yml\n"
             "  gpucall setup apply --file gpucall.modal.setup.yml --dry-run\n"
-            "  gpucall setup apply --file gpucall.modal.setup.yml"
+            "  gpucall setup apply --file gpucall.modal.setup.yml --accept-plan-hash <plan_hash>\n"
+            "  # Non-interactive apply: add --yes to the final command."
         )
     if plan.profile == "internal-team":
         if status["oob_readiness"] == "onboarding-ready-provisional":

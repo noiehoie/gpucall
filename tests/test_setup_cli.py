@@ -973,6 +973,37 @@ providers:
     assert "inline live probes skipped" in report
 
 
+def test_setup_preflight_only_bootstrap_writes_panopticon_evidence(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("GPUCALL_CREDENTIALS", str(tmp_path / "credentials.yml"))
+    monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path / "state"))
+    monkeypatch.setenv("GPUCALL_SETUP_START_SERVICES", "0")
+    monkeypatch.delenv("GPUCALL_SETUP_LIVE_PROVIDER_PROBES", raising=False)
+    save_credentials("modal", {"token_id": "ak-test", "token_secret": "as-test"})
+    config_dir = tmp_path / "config"
+    plan = tmp_path / "gpucall.modal.setup.yml"
+    plan.write_text(
+        """
+setup_schema_version: 1
+profile: internal-team
+providers:
+  modal:
+    enabled: true
+    credentials:
+      source: gpucall_credentials
+""".lstrip(),
+        encoding="utf-8",
+    )
+
+    report = apply_setup_plan(config_dir, plan, dry_run=False, yes=True)
+    snapshot = json.loads((tmp_path / "state" / "gpucall" / "catalog" / "provider-panopticon.json").read_text(encoding="utf-8"))
+
+    assert "setup preflight evidence written" in report
+    assert "Panopticon evidence: evidence-fresh" in report
+    assert snapshot["tuples"]["modal-setup-bootstrap"]["adapter"] == "modal"
+    assert snapshot["tuples"]["modal-setup-bootstrap"]["status"] == "unknown"
+    assert snapshot["tuples"]["modal-setup-bootstrap"]["checked"] is False
+
+
 def test_setup_plan_keeps_hyperstack_ssh_path_out_of_credentials(tmp_path, monkeypatch) -> None:
     monkeypatch.setenv("GPUCALL_CREDENTIALS", str(tmp_path / "credentials.yml"))
     save_credentials("hyperstack", {"api_key": "hs-test"})

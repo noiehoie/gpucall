@@ -50,7 +50,7 @@ Options:
 Environment:
   GPUCALL_PACKAGE_SPEC      Full uv package spec to install.
   GPUCALL_REF               GitHub ref for the default archive install. Default: main.
-  GPUCALL_REPO_ARCHIVE_BASE Repository archive base URL.
+  GPUCALL_REPO_ARCHIVE_BASE Repository base URL for archive installs.
   GPUCALL_UV_INSTALL_URL    uv installer URL.
   GPUCALL_ALLOW_ROOT=1      Allow running as root. Not recommended.
   XDG_BIN_HOME              Preferred user binary directory for uv/gpucall.
@@ -218,15 +218,7 @@ if [ -z "$package_spec" ]; then
   elif [ -n "$script_dir" ] && [ -f "$script_dir/install.sh" ] && [ -f "$script_dir/pyproject.toml" ] && [ -d "$script_dir/gpucall" ]; then
     package_spec="gpucall$extras @ file://$script_dir"
   else
-    case "$gpucall_ref" in
-      main|master|develop|trunk)
-        archive_path="heads/$gpucall_ref"
-        ;;
-      *)
-        archive_path="tags/$gpucall_ref"
-        ;;
-    esac
-    package_spec="gpucall$extras @ $repo_archive_base/archive/refs/$archive_path.zip"
+    package_spec="gpucall$extras @ $repo_archive_base/archive/$gpucall_ref.zip"
   fi
 fi
 

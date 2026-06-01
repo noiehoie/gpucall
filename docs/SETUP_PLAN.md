@@ -41,6 +41,8 @@ After local trial, generate the Modal happy-path cloud starter plan:
 gpucall setup starter-plan --profile internal-team --provider modal --output gpucall.modal.setup.yml
 gpucall setup apply --file gpucall.modal.setup.yml --dry-run
 gpucall setup apply --file gpucall.modal.setup.yml --accept-plan-hash <plan_hash>
+# Non-interactive apply:
+gpucall setup apply --file gpucall.modal.setup.yml --yes --accept-plan-hash <plan_hash>
 ```
 
 The dry-run prints `plan_hash`. Modal worker deployment is a provider-side
@@ -48,6 +50,11 @@ mutation, so the final apply must include `--accept-plan-hash <plan_hash>`.
 For non-interactive setup, set `MODAL_TOKEN_ID` and `MODAL_TOKEN_SECRET`, then
 use `credentials.source: gpucall_credentials`; setup imports those environment
 credentials into the gpucall credential store without writing them to plan YAML.
+`--yes` is valid for the final non-interactive apply only when it is paired with
+the exact `--accept-plan-hash <plan_hash>` printed by dry-run.
+
+On Linux systemd user installs, the control-plane units are
+`gpucall-panopticon.service` and `gpucall-recipe-admin-watch.service`.
 
 The Modal apply step prompts for Modal token credentials, stores them in the
 gpucall credentials store outside repository YAML, deploys the bundled
@@ -142,7 +149,7 @@ recipe_automation:
 handoff_assets:
   onboarding_prompt_url: https://assets.example/gpucall/EXTERNAL_SYSTEM_ONBOARDING_PROMPT.md
   onboarding_manual_url: https://assets.example/gpucall/EXTERNAL_SYSTEM_ONBOARDING_MANUAL.md
-  caller_sdk_wheel_url: https://assets.example/gpucall/gpucall_sdk-2.0.32-py3-none-any.whl
+  caller_sdk_wheel_url: https://assets.example/gpucall/gpucall_sdk-2.0.33-py3-none-any.whl
 
 external_systems:
   - name: example-system
@@ -404,7 +411,7 @@ deployments can point handoff prompts at operator-hosted copies instead:
 handoff_assets:
   onboarding_prompt_url: https://assets.example/gpucall/EXTERNAL_SYSTEM_ONBOARDING_PROMPT.md
   onboarding_manual_url: https://assets.example/gpucall/EXTERNAL_SYSTEM_ONBOARDING_MANUAL.md
-  caller_sdk_wheel_url: https://assets.example/gpucall/gpucall_sdk-2.0.32-py3-none-any.whl
+  caller_sdk_wheel_url: https://assets.example/gpucall/gpucall_sdk-2.0.33-py3-none-any.whl
 ```
 
 `gpucall setup export-handoff-prompt` uses these values when present. This

@@ -154,6 +154,8 @@ After the local trial passes, create the Modal happy-path cloud plan:
 gpucall setup starter-plan --profile internal-team --provider modal --output gpucall.modal.setup.yml
 gpucall setup apply --file gpucall.modal.setup.yml --dry-run
 gpucall setup apply --file gpucall.modal.setup.yml --accept-plan-hash <plan_hash>
+# Non-interactive apply:
+gpucall setup apply --file gpucall.modal.setup.yml --yes --accept-plan-hash <plan_hash>
 ```
 
 The dry-run prints the required `plan_hash`. The apply step prompts for the
@@ -168,8 +170,12 @@ credentials, gpucall remains fail-closed.
 
 For unattended setup, set `MODAL_TOKEN_ID` and `MODAL_TOKEN_SECRET`, change the
 provider block to `credentials.source: gpucall_credentials`, and keep
-`--accept-plan-hash <plan_hash>` from the dry-run. `setup apply --yes` rejects
-interactive `credentials.source: prompt` on purpose.
+`--accept-plan-hash <plan_hash>` from the dry-run. Add `--yes` only to that
+final apply command. `setup apply --yes` rejects interactive
+`credentials.source: prompt` on purpose.
+
+On Linux systemd user installs, setup starts `gpucall-panopticon.service` and
+`gpucall-recipe-admin-watch.service`.
 
 To prepare caller-side onboarding during setup, add external systems to the
 setup plan before applying it:
@@ -332,7 +338,7 @@ the caller repo, such as
 If the caller-side helper is not installed, install only the SDK helper wheel:
 
 ```bash
-uv tool install https://github.com/noiehoie/gpucall/releases/download/v2.0.32/gpucall_sdk-2.0.32-py3-none-any.whl
+uv tool install https://github.com/noiehoie/gpucall/releases/download/v2.0.33/gpucall_sdk-2.0.33-py3-none-any.whl
 gpucall-recipe-draft --help
 ```
 

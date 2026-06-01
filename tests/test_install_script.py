@@ -64,6 +64,46 @@ def test_install_script_dry_run_from_checkout_does_not_install() -> None:
     assert "Modal credentials and cloud happy path" in output
 
 
+def test_install_script_ref_with_slash_or_commit_uses_generic_archive_url(tmp_path) -> None:
+    script = tmp_path / "install.sh"
+    script.write_text(INSTALL_SH.read_text(encoding="utf-8"), encoding="utf-8")
+    script.chmod(0o755)
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    (fake_bin / "uv").write_text("#!/usr/bin/env sh\nexit 0\n", encoding="utf-8")
+    (fake_bin / "uv").chmod(0o755)
+    home = tmp_path / "home"
+    home.mkdir()
+    env = {
+        "HOME": str(home),
+        "PATH": f"{fake_bin}:/usr/bin:/bin:/usr/sbin:/sbin",
+        "GPUCALL_ALLOW_ROOT": "1",
+    }
+
+    branch = subprocess.run(
+        ["sh", str(script), "--dry-run", "--no-bootstrap-uv", "--ref", "codex/rc-audit-product-static-conditional-go"],
+        cwd=tmp_path,
+        env=env,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        check=True,
+    )
+    commit = subprocess.run(
+        ["sh", str(script), "--dry-run", "--no-bootstrap-uv", "--ref", "f191d27"],
+        cwd=tmp_path,
+        env=env,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        check=True,
+    )
+
+    assert "https://github.com/noiehoie/gpucall/archive/codex/rc-audit-product-static-conditional-go.zip" in branch.stdout
+    assert "https://github.com/noiehoie/gpucall/archive/f191d27.zip" in commit.stdout
+    assert "archive/refs/tags" not in branch.stdout + commit.stdout
+
+
 def test_install_script_bootstraps_uv_from_xdg_data_bin(tmp_path) -> None:
     fake_bin = tmp_path / "fake-bin"
     fake_bin.mkdir()
