@@ -178,7 +178,7 @@ needs_object_store = any(
     for token in tokens
 )
 if needs_object_store:
-    ready_url = os.environ["GPUCALL_BASE_URL"].rstrip("/") + "/readyz"
+    ready_url = os.environ["GPUCALL_BASE_URL"].rstrip("/") + "/readyz/details"
     ready = json.loads(urlopen(ready_url, timeout=10).read().decode("utf-8"))
     if ready.get("object_store") is not True:
         Path(".gpucall-migration/operator-blocker.json").write_text(
