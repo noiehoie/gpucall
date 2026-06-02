@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import getpass
 import hashlib
 import json
 import os
@@ -7,6 +8,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 from urllib.error import HTTPError, URLError
+from urllib.parse import urlsplit
 from urllib.request import Request, urlopen
 
 from gpucall.config import load_admin_automation
@@ -26,7 +28,10 @@ HANDOFF_PACKAGE_FILES = (
 def build_handoff_contract(config_dir: str | Path, system_name: str, *, require_concrete: bool = False) -> dict[str, Any]:
     automation = load_admin_automation(Path(config_dir))
     gateway_url = automation.api_key_bootstrap_gateway_url or "<GPUCALL_BASE_URL>"
-    recipe_inbox = automation.api_key_bootstrap_recipe_inbox or "<GPUCALL_RECIPE_INBOX>"
+    recipe_inbox = _caller_visible_inbox_spec(
+        automation.api_key_bootstrap_recipe_inbox or "<GPUCALL_RECIPE_INBOX>",
+        gateway_url=gateway_url,
+    )
     contract = {
         "schema_version": 1,
         "phase": "gpucall-caller-handoff",
@@ -149,7 +154,7 @@ gpucall-recipe-draft submit \
   --source {system_name}
 ```
 
-If `GPUCALL_RECIPE_INBOX` is an absolute local path, use `--inbox-dir "$GPUCALL_RECIPE_INBOX"` instead of `--remote-inbox`. If you submit preflight-only requests, `gpucall-recipe-draft preflight --remote-inbox "$GPUCALL_RECIPE_INBOX"` must create a submission whose top-level `draft` field is a JSON object, not `null`. Submit low-quality success feedback to `GPUCALL_QUALITY_FEEDBACK_INBOX` with `--remote-quality-inbox` or `--quality-inbox-dir`; quality feedback must not create recipe drafts.
+If `GPUCALL_RECIPE_INBOX` is a `user@host:/path` value, use `--remote-inbox`. Use `--inbox-dir` only when the caller repository is on the same host as gpucall and the handoff path exists on the current machine. If you submit preflight-only requests, `gpucall-recipe-draft preflight --remote-inbox "$GPUCALL_RECIPE_INBOX"` must create a submission whose top-level `draft` field is a JSON object, not `null`. Submit low-quality success feedback to `GPUCALL_QUALITY_FEEDBACK_INBOX` with `--remote-quality-inbox` or `--quality-inbox-dir`; quality feedback must not create recipe drafts.
 8. Patch caller wrappers so application code sends only task, mode, input data, or DataRefs to `GPUCALL_BASE_URL`.
 9. Run caller canaries through the gpucall gateway when the operator handoff says the gateway is ready.
 10. Run the caller business validator and write a final onboarding report under `.gpucall-migration/`.
@@ -443,6 +448,48 @@ def _default_sdk_wheel_url_available(url: str) -> bool:
         return exc.code not in {404, 410}
     except (OSError, URLError):
         return False
+
+
+def _caller_visible_inbox_spec(recipe_inbox: str, *, gateway_url: str) -> str:
+    if _has_placeholder(recipe_inbox):
+        return recipe_inbox
+    if _is_remote_inbox_spec(recipe_inbox):
+        return recipe_inbox
+    path = Path(recipe_inbox).expanduser()
+    if not path.is_absolute():
+        return recipe_inbox
+    host = _gateway_host(gateway_url)
+    if not host or _is_loopback_host(host):
+        return recipe_inbox
+    user = _handoff_ssh_user()
+    return f"{user}@{host}:{recipe_inbox}"
+
+
+def _is_remote_inbox_spec(value: str) -> bool:
+    if "://" in value:
+        return True
+    prefix, separator, suffix = value.partition(":")
+    return bool(separator and suffix.startswith("/") and "@" in prefix)
+
+
+def _gateway_host(gateway_url: str) -> str | None:
+    if _has_placeholder(gateway_url):
+        return None
+    parsed = urlsplit(gateway_url)
+    if parsed.hostname:
+        return parsed.hostname
+    if "://" not in gateway_url:
+        return gateway_url.split("/", 1)[0].split(":", 1)[0] or None
+    return None
+
+
+def _is_loopback_host(host: str) -> bool:
+    normalized = host.strip("[]").lower()
+    return normalized in {"localhost", "127.0.0.1", "::1"}
+
+
+def _handoff_ssh_user() -> str:
+    return os.environ.get("GPUCALL_HANDOFF_SSH_USER") or getpass.getuser()
 
 
 def _handoff_contract_placeholders(value: Any, *, prefix: str = "") -> list[str]:

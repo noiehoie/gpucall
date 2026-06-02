@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import getpass
 import json
 import sys
 
@@ -7,7 +8,8 @@ from gpucall.cli_commands.setup import apply_setup_plan
 from gpucall.handoff_package import build_handoff_package, human_readme_quality_blockers, prompt_quality_blockers, write_handoff_package
 
 
-def test_handoff_package_bundles_caller_ai_prompt_with_concrete_values(tmp_path) -> None:
+def test_handoff_package_bundles_caller_ai_prompt_with_concrete_values(tmp_path, monkeypatch) -> None:
+    monkeypatch.delenv("GPUCALL_HANDOFF_SSH_USER", raising=False)
     config_dir = tmp_path / "config"
     recipe_inbox = tmp_path / "state" / "recipe_requests" / "inbox"
     plan = tmp_path / "gpucall.setup.yml"
@@ -38,8 +40,9 @@ handoff_assets:
     assert package["checklist"]["human_readme_quality"]["go"] is True
     prompt = package["prompt"]
     readme = package["human_readme"]
+    remote_recipe_inbox = f"{getpass.getuser()}@gpucall.example.internal:{recipe_inbox}"
     assert "https://gpucall.example.internal" in prompt
-    assert str(recipe_inbox) in prompt
+    assert remote_recipe_inbox in prompt
     assert "GPUCALL_API_KEY_HANDOFF_MODE: `trusted_bootstrap`" in prompt
     assert "request the key exactly once from `GPUCALL_BOOTSTRAP_ENDPOINT`" in prompt
     assert 'uv tool install --force "$GPUCALL_SDK_WHEEL_URL"' in prompt
@@ -56,8 +59,68 @@ handoff_assets:
     assert "Do not choose providers, GPUs, endpoint IDs, model IDs, recipes, tuples, or fallback order in caller code." in readme
     assert "Go / No-Go Rule" in readme
     assert "https://gpucall.example.internal" in readme
-    assert str(recipe_inbox) in readme
+    assert remote_recipe_inbox in readme
     assert human_readme_quality_blockers(readme, package["contract"]) == []
+
+
+def test_handoff_package_keeps_same_machine_local_inbox_path(tmp_path) -> None:
+    config_dir = tmp_path / "config"
+    recipe_inbox = tmp_path / "state" / "recipe_requests" / "inbox"
+    plan = tmp_path / "gpucall.setup.yml"
+    plan.write_text(
+        f"""
+setup_schema_version: 1
+profile: internal-team
+gateway:
+  base_url: http://localhost:18088
+tenant_onboarding:
+  mode: trusted_bootstrap
+  allowed_cidrs:
+    - 127.0.0.1/32
+  recipe_inbox: {recipe_inbox}
+handoff_assets:
+  caller_sdk_wheel_url: https://assets.example/sdk/gpucall_sdk-2.0.37-py3-none-any.whl
+""".lstrip(),
+        encoding="utf-8",
+    )
+    apply_setup_plan(config_dir, plan, dry_run=False, yes=True)
+
+    package = build_handoff_package(config_dir, "same-machine-caller")
+
+    assert package["contract"]["inboxes"]["recipe"] == str(recipe_inbox)
+    assert f"@localhost:{recipe_inbox}" not in package["prompt"]
+
+
+def test_handoff_package_converts_local_inbox_path_for_remote_gateway(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("GPUCALL_HANDOFF_SSH_USER", "operator")
+    config_dir = tmp_path / "config"
+    recipe_inbox = tmp_path / "state" / "recipe_requests" / "inbox"
+    plan = tmp_path / "gpucall.setup.yml"
+    plan.write_text(
+        f"""
+setup_schema_version: 1
+profile: internal-team
+gateway:
+  base_url: http://192.0.2.10:18088
+tenant_onboarding:
+  mode: trusted_bootstrap
+  allowed_cidrs:
+    - 192.0.2.20/32
+  recipe_inbox: {recipe_inbox}
+handoff_assets:
+  caller_sdk_wheel_url: https://assets.example/sdk/gpucall_sdk-2.0.37-py3-none-any.whl
+""".lstrip(),
+        encoding="utf-8",
+    )
+    apply_setup_plan(config_dir, plan, dry_run=False, yes=True)
+
+    package = build_handoff_package(config_dir, "remote-caller")
+
+    remote_recipe_inbox = f"operator@192.0.2.10:{recipe_inbox}"
+    assert package["contract"]["inboxes"]["recipe"] == remote_recipe_inbox
+    assert package["contract"]["inboxes"]["quality_feedback"] == f"operator@192.0.2.10:{recipe_inbox.parent.parent}/quality_feedback/inbox"
+    assert remote_recipe_inbox in package["prompt"]
+    assert "Use `--inbox-dir` only when the caller repository is on the same host" in package["prompt"]
 
 
 def test_prompt_quality_does_not_reject_marker_text_inside_concrete_values(tmp_path) -> None:
@@ -109,7 +172,7 @@ tenant_onboarding:
     - 10.0.0.42/32
   recipe_inbox: {recipe_inbox}
 handoff_assets:
-  caller_sdk_wheel_url: https://assets.example/sdk/gpucall_sdk-2.0.36-py3-none-any.whl
+  caller_sdk_wheel_url: https://assets.example/sdk/gpucall_sdk-2.0.37-py3-none-any.whl
 """.lstrip(),
         encoding="utf-8",
     )
@@ -157,7 +220,7 @@ tenant_onboarding:
     - 10.0.0.42/32
   recipe_inbox: {recipe_inbox}
 handoff_assets:
-  caller_sdk_wheel_url: https://assets.example/sdk/gpucall_sdk-2.0.36-py3-none-any.whl
+  caller_sdk_wheel_url: https://assets.example/sdk/gpucall_sdk-2.0.37-py3-none-any.whl
 """.lstrip(),
         encoding="utf-8",
     )
