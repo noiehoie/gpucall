@@ -586,7 +586,7 @@ tenant_onboarding:
     - caller.example.internal
   recipe_inbox: {recipe_inbox}
 handoff_assets:
-  caller_sdk_wheel_url: https://assets.example/sdk/gpucall_sdk-2.0.37-py3-none-any.whl
+  caller_sdk_wheel_url: https://assets.example/sdk/gpucall_sdk-2.0.38-py3-none-any.whl
 recipe_automation:
   auto_materialize: true
   auto_validate_existing_tuples: true

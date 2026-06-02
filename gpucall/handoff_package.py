@@ -96,6 +96,7 @@ Use only the operator-provided handoff values below. Treat them as authoritative
 - Do not ask for provider credentials, GPU names, endpoint IDs, model IDs, recipes, tuples, or provider choice.
 - Do not add direct hosted-AI fallback. Unknown or unsupported work must fail closed and submit sanitized intake.
 - Do not send raw confidential payloads to the recipe inbox. Submit sanitized intent, metadata, workload contracts, and quality feedback only.
+- Do not skip recipe submission because caller code, recipes, or previous migration artifacts already exist. Every onboarding run must submit or verify a fresh recipe request for the current workload.
 - Final status must be exactly `Go` or `No-Go`; skipped canary is `No-Go`.
 
 ## Required Flow
@@ -151,10 +152,38 @@ gpucall-recipe-draft submit \
   --intake .gpucall-migration/recipe-intake.json \
   --draft .gpucall-migration/recipe-draft.json \
   --remote-inbox "$GPUCALL_RECIPE_INBOX" \
-  --source {system_name}
+  --source {system_name} | tee .gpucall-migration/recipe-submission-ref.txt
 ```
 
-If `GPUCALL_RECIPE_INBOX` is a `user@host:/path` value, use `--remote-inbox`. Use `--inbox-dir` only when the caller repository is on the same host as gpucall and the handoff path exists on the current machine. If you submit preflight-only requests, `gpucall-recipe-draft preflight --remote-inbox "$GPUCALL_RECIPE_INBOX"` must create a submission whose top-level `draft` field is a JSON object, not `null`. Submit low-quality success feedback to `GPUCALL_QUALITY_FEEDBACK_INBOX` with `--remote-quality-inbox` or `--quality-inbox-dir`; quality feedback must not create recipe drafts.
+If `GPUCALL_RECIPE_INBOX` is a `user@host:/path` value, use `--remote-inbox`. Use `--inbox-dir` only when the caller repository is on the same host as gpucall and the handoff path exists on the current machine. After submission, extract the `rr-...` request id from `.gpucall-migration/recipe-submission-ref.txt` and verify that the operator inbox can see it:
+
+```bash
+submission_ref="$(tail -n 1 .gpucall-migration/recipe-submission-ref.txt)"
+request_id="${{submission_ref##*/}}"
+request_id="${{request_id%.json}}"
+test -n "$request_id"
+case "$GPUCALL_RECIPE_INBOX" in
+  *@*:/*)
+    gpucall-recipe-draft status --request-id "$request_id" --remote-inbox "$GPUCALL_RECIPE_INBOX" --output .gpucall-migration/recipe-submission-status.json
+    ;;
+  /*)
+    gpucall-recipe-draft status --request-id "$request_id" --inbox-dir "$GPUCALL_RECIPE_INBOX" --output .gpucall-migration/recipe-submission-status.json
+    ;;
+  *)
+    echo "Unsupported GPUCALL_RECIPE_INBOX format" >&2
+    exit 1
+    ;;
+esac
+python - <<'PY'
+import json
+from pathlib import Path
+status = json.loads(Path(".gpucall-migration/recipe-submission-status.json").read_text())
+if status.get("status") == "missing":
+    raise SystemExit("recipe submission is not visible in the operator inbox")
+PY
+```
+
+If you submit preflight-only requests, `gpucall-recipe-draft preflight --remote-inbox "$GPUCALL_RECIPE_INBOX"` must create a submission whose top-level `draft` field is a JSON object, not `null`. Submit low-quality success feedback to `GPUCALL_QUALITY_FEEDBACK_INBOX` with `--remote-quality-inbox` or `--quality-inbox-dir`; quality feedback must not create recipe drafts.
 8. Patch caller wrappers so application code sends only task, mode, input data, or DataRefs to `GPUCALL_BASE_URL`.
 9. Run caller canaries through the gpucall gateway when the operator handoff says the gateway is ready.
 10. Run the caller business validator and write a final onboarding report under `.gpucall-migration/`.
@@ -167,7 +196,9 @@ If `GPUCALL_RECIPE_INBOX` is a `user@host:/path` value, use `--remote-inbox`. Us
 - `.gpucall-migration/workload-contract.json`
 - `.gpucall-migration/recipe-intake.json`
 - `.gpucall-migration/recipe-draft.json`
-- sanitized recipe submission evidence proving the submitted top-level `draft` field is a JSON object
+- `.gpucall-migration/recipe-submission-ref.txt`
+- `.gpucall-migration/recipe-submission-status.json`
+- sanitized recipe submission evidence proving the submitted top-level `draft` field is a JSON object and is visible in the operator inbox
 - gateway canary report or explicit No-Go reason
 - caller business validator report
 - final `Go` or `No-Go` decision with blockers owned by caller, gpucall-admin, or provider-ops
@@ -297,6 +328,9 @@ def prompt_quality_blockers(prompt: str, contract: dict[str, Any]) -> list[str]:
         "gpucall-recipe-draft",
         "--remote-inbox",
         ".gpucall-migration/recipe-draft.json",
+        ".gpucall-migration/recipe-submission-ref.txt",
+        ".gpucall-migration/recipe-submission-status.json",
+        "recipe submission is not visible in the operator inbox",
         "top-level `draft` field is a JSON object",
         "Final status must be exactly `Go` or `No-Go`",
         ".gpucall-migration/workload-contract.json",
