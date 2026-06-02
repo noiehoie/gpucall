@@ -143,6 +143,60 @@ gpucall-migrate draft-contract . --profile .gpucall-migration/workload-profile.j
 gpucall-migrate preflight . --source {system_name}
 ```
 
+If the discovered workload needs image or file DataRefs, verify that the
+gateway has object store support before proceeding to canary traffic:
+
+```bash
+python - <<'PY'
+import json
+import os
+from pathlib import Path
+from urllib.request import urlopen
+
+profile_path = Path(".gpucall-migration/workload-profile.json")
+contract_path = Path(".gpucall-migration/workload-contract.json")
+payloads = []
+for path in (profile_path, contract_path):
+    if path.exists():
+        payloads.append(json.loads(path.read_text()))
+
+def walk(value):
+    if isinstance(value, dict):
+        for item in value.values():
+            yield from walk(item)
+    elif isinstance(value, list):
+        for item in value:
+            yield from walk(item)
+    else:
+        yield value
+
+tokens = [str(item).lower() for payload in payloads for item in walk(payload)]
+needs_object_store = any(
+    token == "vision"
+    or token.startswith("image/")
+    or token in ("data_refs", "dataref", "ocr", "document_image", "file/image analysis")
+    for token in tokens
+)
+if needs_object_store:
+    ready_url = os.environ["GPUCALL_BASE_URL"].rstrip("/") + "/readyz"
+    ready = json.loads(urlopen(ready_url, timeout=10).read().decode("utf-8"))
+    if ready.get("object_store") is not True:
+        Path(".gpucall-migration/operator-blocker.json").write_text(
+            json.dumps(
+                dict(
+                    owner="gpucall-admin",
+                    blocker="object_store_missing",
+                    reason="discovered image/file workload requires DataRef object storage before gateway canary",
+                ),
+                indent=2,
+                sort_keys=True,
+            )
+            + "\n"
+        )
+        raise SystemExit("No-Go: gpucall-admin must configure object_store before image/file canary")
+PY
+```
+
 7. Verify that deterministic draft artifacts exist, then submit the intake and draft to `GPUCALL_RECIPE_INBOX` using `gpucall-recipe-draft`. The helper auto-generates a draft from recipe intake when `--draft` is omitted, but if `.gpucall-migration/recipe-draft.json` exists you must submit it explicitly:
 
 ```bash
@@ -181,6 +235,59 @@ status = json.loads(Path(".gpucall-migration/recipe-submission-status.json").rea
 if status.get("status") == "missing":
     raise SystemExit("recipe submission is not visible in the operator inbox")
 PY
+```
+
+The status check above is only the immediate visibility probe. After that,
+wait until gpucall-admin has processed the request and either activated a
+validated route or reported a deterministic operator-side blocker. Do not run a
+gateway canary while the recipe request is still `pending`.
+
+```bash
+timeout_seconds="${{GPUCALL_RECIPE_STATUS_TIMEOUT_SECONDS:-1800}}"
+interval_seconds="${{GPUCALL_RECIPE_STATUS_INTERVAL_SECONDS:-15}}"
+deadline=$(( $(date +%s) + timeout_seconds ))
+while :; do
+  case "$GPUCALL_RECIPE_INBOX" in
+    *@*:/*)
+      gpucall-recipe-draft status --request-id "$request_id" --remote-inbox "$GPUCALL_RECIPE_INBOX" --output .gpucall-migration/recipe-submission-status.json
+      ;;
+    /*)
+      gpucall-recipe-draft status --request-id "$request_id" --inbox-dir "$GPUCALL_RECIPE_INBOX" --output .gpucall-migration/recipe-submission-status.json
+      ;;
+  esac
+  if python - <<'PY'
+import json
+from pathlib import Path
+status = json.loads(Path(".gpucall-migration/recipe-submission-status.json").read_text())
+state = status.get("status")
+activation = status.get("existing_tuple_activation_decision")
+if state == "missing":
+    raise SystemExit("recipe submission disappeared from the operator inbox")
+if state == "failed":
+    raise SystemExit("recipe request failed in gpucall-admin")
+if state != "processed":
+    raise SystemExit(75)
+if activation in ("VALIDATION_FAILED", "NO_ELIGIBLE_TUPLE", "BLOCKED"):
+    reason = status.get("validation_error") or status.get("validation_failure_summary") or activation
+    raise SystemExit("gpucall-admin could not activate a validated route: " + str(reason))
+PY
+  then
+    rc=0
+  else
+    rc=$?
+  fi
+  if [ "$rc" -eq 0 ]; then
+    break
+  fi
+  if [ "$rc" -ne 75 ]; then
+    exit "$rc"
+  fi
+  if [ "$(date +%s)" -ge "$deadline" ]; then
+    echo "No-Go: recipe request did not finish gpucall-admin processing within ${{timeout_seconds}}s" >&2
+    exit 1
+  fi
+  sleep "$interval_seconds"
+done
 ```
 
 If you submit preflight-only requests, `gpucall-recipe-draft preflight --remote-inbox "$GPUCALL_RECIPE_INBOX"` must create a submission whose top-level `draft` field is a JSON object, not `null`. Submit low-quality success feedback to `GPUCALL_QUALITY_FEEDBACK_INBOX` with `--remote-quality-inbox` or `--quality-inbox-dir`; quality feedback must not create recipe drafts.

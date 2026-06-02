@@ -586,7 +586,7 @@ tenant_onboarding:
     - caller.example.internal
   recipe_inbox: {recipe_inbox}
 handoff_assets:
-  caller_sdk_wheel_url: https://assets.example/sdk/gpucall_sdk-2.0.38-py3-none-any.whl
+  caller_sdk_wheel_url: https://assets.example/sdk/gpucall_sdk-2.0.39-py3-none-any.whl
 recipe_automation:
   auto_materialize: true
   auto_validate_existing_tuples: true
@@ -617,6 +617,62 @@ external_systems:
     assert "Setup is onboarding-ready-provisional." in report
     assert "Panopticon bootstrap refresh:" in report
     assert "caller-ai-onboarding-prompt.md" in report
+
+
+def test_setup_status_requires_object_store_for_external_vision_workload(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("GPUCALL_CREDENTIALS", str(tmp_path / "credentials.yml"))
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "data"))
+    save_credentials("modal", {"token_id": "ak-test", "token_secret": "as-test"})
+    monkeypatch.setattr(
+        "gpucall.cli_commands.setup._deploy_modal_worker",
+        lambda: "[ok] Modal worker deployed: gpucall-worker-json",
+    )
+    config_dir = tmp_path / "config"
+    recipe_inbox = tmp_path / "state" / "recipe_requests" / "inbox"
+    plan = tmp_path / "gpucall.setup.yml"
+    plan.write_text(
+        f"""
+setup_schema_version: 1
+profile: internal-team
+gateway:
+  base_url: https://gpucall.example.internal
+  caller_auth:
+    mode: generated_gateway_key
+providers:
+  modal:
+    enabled: true
+    credentials:
+      source: gpucall_credentials
+    deploy_worker: true
+tenant_onboarding:
+  mode: trusted_bootstrap
+  allowed_hosts:
+    - caller.example.internal
+  recipe_inbox: {recipe_inbox}
+handoff_assets:
+  caller_sdk_wheel_url: https://assets.example/sdk/gpucall_sdk-2.0.39-py3-none-any.whl
+recipe_automation:
+  auto_materialize: true
+  auto_validate_existing_tuples: true
+  auto_activate_existing_validated_recipe: true
+  auto_promote_candidates: true
+  auto_billable_validation: true
+  auto_validation_budget_usd: 0.10
+  auto_activate_validated: true
+  auto_set_auto_select: true
+external_systems:
+  - name: example/vision-system
+    expected_workloads: [vision]
+""".lstrip(),
+        encoding="utf-8",
+    )
+
+    setup_plan = _load_setup_plan(plan)
+    apply_setup_plan(config_dir, plan, dry_run=False, yes=True, accept_plan_hash=_modal_deploy_plan_hash(setup_plan))
+    status = setup_status_text(config_dir)
+
+    assert "OOB readiness: onboarding-blocked" in status
+    assert "[missing] object store / DataRef storage for external image/file workflows" in status
 
 
 def test_setup_internal_team_reaches_onboarding_ready_with_fresh_panopticon_evidence(tmp_path, monkeypatch) -> None:

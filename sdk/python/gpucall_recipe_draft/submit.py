@@ -132,6 +132,8 @@ def summarize_status(status: dict[str, Any]) -> dict[str, Any]:
     index = status.get("index_record") if isinstance(status.get("index_record"), dict) else {}
     quality = report.get("quality_feedback") if isinstance(report.get("quality_feedback"), dict) else {}
     observed = report.get("observed") if isinstance(report.get("observed"), dict) else {}
+    recipe = report.get("canonical_recipe") if isinstance(report.get("canonical_recipe"), dict) else {}
+    activation = report.get("existing_tuple_activation") if isinstance(report.get("existing_tuple_activation"), dict) else {}
     result: dict[str, Any] = {
         "pipeline": pipeline,
         "request_id": request_id,
@@ -140,8 +142,8 @@ def summarize_status(status: dict[str, Any]) -> dict[str, Any]:
     }
     if report:
         result["decision"] = report.get("decision")
-        result["task"] = report.get("task")
-        result["intent"] = report.get("intent")
+        result["task"] = report.get("task") or recipe.get("task")
+        result["intent"] = report.get("intent") or recipe.get("intent")
         if report.get("phase"):
             result["phase"] = report.get("phase")
         if report.get("next_actions"):
@@ -150,6 +152,14 @@ def summarize_status(status: dict[str, Any]) -> dict[str, Any]:
             result["blockers"] = _safe_findings(report.get("blockers"))
         if report.get("warnings"):
             result["warnings"] = _safe_findings(report.get("warnings"))
+        if activation:
+            result["existing_tuple_activation_decision"] = activation.get("decision")
+            validation_gate = activation.get("validation_gate")
+            if isinstance(validation_gate, dict):
+                result["validation_gate_decision"] = validation_gate.get("decision") or validation_gate.get("status")
+            validation_error = _first_validation_error(activation)
+            if validation_error:
+                result["validation_error"] = validation_error
         if pipeline == "quality":
             result["quality_kind"] = quality.get("kind")
             result["observed_tuple"] = observed.get("tuple")
@@ -245,3 +255,33 @@ def _safe_findings(value: Any) -> list[dict[str, Any]]:
         if safe:
             output.append(safe)
     return output
+
+
+def _first_validation_error(activation: dict[str, Any]) -> str | None:
+    attempts = activation.get("validation_attempts")
+    if not isinstance(attempts, list):
+        return None
+    for attempt in attempts:
+        if not isinstance(attempt, dict):
+            continue
+        validation = attempt.get("validation") if isinstance(attempt.get("validation"), dict) else attempt
+        if not isinstance(validation, dict):
+            continue
+        message = validation.get("stderr") or validation.get("error") or validation.get("message")
+        safe = _safe_status_text(message)
+        if safe:
+            return safe
+    return None
+
+
+def _safe_status_text(value: Any) -> str | None:
+    if value in (None, "", [], {}):
+        return None
+    text = str(value).replace("\r", " ").replace("\n", " ").strip()
+    if not text:
+        return None
+    text = re.sub(r"https?://\S+", "[redacted-url]", text)
+    text = re.sub(r"s3://\S+", "[redacted-dataref]", text)
+    text = re.sub(r"(?i)(authorization|token|secret|password|api[_-]?key|signature)=\S+", r"\1=[redacted]", text)
+    text = re.sub(r"(?i)(authorization|token|secret|password|api[_-]?key|signature):\s*\S+", r"\1: [redacted]", text)
+    return text[:500]

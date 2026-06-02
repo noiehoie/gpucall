@@ -926,6 +926,15 @@ def _setup_status(config_dir: Path, *, profile: str | None) -> dict[str, Any]:
         "section": "providers",
     }
     object_store_item = {"state": object_store_state, "label": "object store / DataRef storage", "section": "object-store"}
+    external_requires_object_store = _external_systems_require_object_store(config_dir)
+    external_object_store_item = {
+        **object_store_item,
+        "label": (
+            "object store / DataRef storage for external image/file workflows"
+            if external_requires_object_store
+            else "object store / DataRef storage before file or image workflows"
+        ),
+    }
     handoff_item = {"state": handoff_state, "label": "tenant API key handoff", "section": "tenant-handoff"}
     recipe_inbox_item = {"state": recipe_inbox_state, "label": "recipe request inbox", "section": "recipe-inbox"}
     synthetic_item = {
@@ -981,6 +990,7 @@ def _setup_status(config_dir: Path, *, profile: str | None) -> dict[str, Any]:
             config_item,
             gateway_item,
             provider_item,
+            *([external_object_store_item] if external_requires_object_store else []),
             handoff_item,
             recipe_inbox_item,
             billable_validation_item,
@@ -991,7 +1001,7 @@ def _setup_status(config_dir: Path, *, profile: str | None) -> dict[str, Any]:
             launch_item,
         ]
         recommended = [
-            {**object_store_item, "label": "object store / DataRef storage before file or image workflows"},
+            *([] if external_requires_object_store else [external_object_store_item]),
             {"state": "ok" if automation["recipe_inbox_auto_materialize"] else "warn", "label": "recipe inbox auto-materialize policy reviewed"},
             _external_system_handoff_status_item(config_dir, gateway_url),
         ]
@@ -1079,6 +1089,31 @@ def _configured_external_system_names(config_dir: Path) -> list[str]:
         if isinstance(system, dict) and isinstance(system.get("name"), str) and system["name"].strip():
             names.append(system["name"].strip())
     return names
+
+
+def _external_systems_require_object_store(config_dir: Path) -> bool:
+    path = config_dir / "setup.yml"
+    if not path.exists():
+        return False
+    try:
+        payload = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+    except yaml.YAMLError:
+        return False
+    systems = payload.get("external_systems") if isinstance(payload, dict) else None
+    if not isinstance(systems, list):
+        return False
+    object_store_workloads = {"vision", "image", "images", "file", "files", "ocr", "document", "documents", "dataref", "datarefs"}
+    for system in systems:
+        if not isinstance(system, dict):
+            continue
+        workloads = system.get("expected_workloads")
+        if not isinstance(workloads, list):
+            continue
+        for workload in workloads:
+            token = str(workload).strip().lower().replace("-", "_")
+            if token in object_store_workloads or any(part in token for part in ("vision", "image", "file", "ocr", "document", "dataref")):
+                return True
+    return False
 
 
 def _control_plane_status(config_dir: Path, *, profile: str, admin_synthetic_state: str) -> dict[str, str]:

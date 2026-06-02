@@ -26,8 +26,8 @@ rg -q '## Service Mode Decision Table' docs/OOB_USER_EXPERIENCE_PRODUCT_SPEC.md
 rg -q '## Admin Automation Synthetic Dry-Run' docs/OOB_USER_EXPERIENCE_PRODUCT_SPEC.md
 scripts/check_product_contamination.sh
 uv run python scripts/check_provider_parity.py
-uv tool run --from https://github.com/noiehoie/gpucall/releases/download/v2.0.38/gpucall_sdk-2.0.38-py3-none-any.whl gpucall-recipe-draft --help
-curl -fsSLO https://github.com/noiehoie/gpucall/releases/download/v2.0.38/SHA256SUMS
+uv tool run --from https://github.com/noiehoie/gpucall/releases/download/v2.0.39/gpucall_sdk-2.0.39-py3-none-any.whl gpucall-recipe-draft --help
+curl -fsSLO https://github.com/noiehoie/gpucall/releases/download/v2.0.39/SHA256SUMS
 ```
 
 The product-contamination and private-artifact commands must

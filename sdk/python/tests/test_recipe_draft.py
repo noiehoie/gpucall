@@ -14,7 +14,13 @@ from gpucall_recipe_draft.core import (
     intake_from_preflight,
     intake_from_quality_feedback,
 )
-from gpucall_recipe_draft.submit import build_submission_bundle, parse_remote_inbox, submit_bundle, submit_bundle_to_remote
+from gpucall_recipe_draft.submit import (
+    build_submission_bundle,
+    parse_remote_inbox,
+    submit_bundle,
+    submit_bundle_to_remote,
+    summarize_status,
+)
 from gpucall_migrate.cli import main as migrate_main
 
 
@@ -300,6 +306,49 @@ def test_recipe_draft_cli_recipe_status_reads_report(tmp_path, capsys) -> None:
         "phase": "recipe-materialization",
         "next_actions": ["run validation"],
         "warnings": [{"check": "tuple_fit", "reason": "validation required"}],
+    }
+
+
+def test_recipe_draft_status_summarizes_existing_tuple_validation_failure() -> None:
+    output = summarize_status(
+        {
+            "pipeline": "recipe",
+            "request_id": "rr-activation-failed",
+            "status": "processed",
+            "report": {
+                "phase": "recipe-materialization",
+                "canonical_recipe": {
+                    "task": "vision",
+                    "intent": "understand_document_image",
+                },
+                "existing_tuple_activation": {
+                    "decision": "VALIDATION_FAILED",
+                    "validation_gate": {"decision": "READY_FOR_BILLABLE_VALIDATION"},
+                    "validation_attempts": [
+                        {
+                            "tuple": "modal-h100-qwen25-vl-7b",
+                            "validation": {
+                                "returncode": 1,
+                                "stderr": "tuple-smoke vision requires object_store\n",
+                            },
+                        }
+                    ],
+                },
+            },
+        }
+    )
+
+    assert output == {
+        "pipeline": "recipe",
+        "request_id": "rr-activation-failed",
+        "status": "processed",
+        "report_available": True,
+        "task": "vision",
+        "intent": "understand_document_image",
+        "phase": "recipe-materialization",
+        "existing_tuple_activation_decision": "VALIDATION_FAILED",
+        "validation_gate_decision": "READY_FOR_BILLABLE_VALIDATION",
+        "validation_error": "tuple-smoke vision requires object_store",
     }
 
 
