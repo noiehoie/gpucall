@@ -151,7 +151,7 @@ python - <<'PY'
 import json
 import os
 from pathlib import Path
-from urllib.request import urlopen
+from urllib.request import Request, urlopen
 
 profile_path = Path(".gpucall-migration/workload-profile.json")
 contract_path = Path(".gpucall-migration/workload-contract.json")
@@ -179,7 +179,11 @@ needs_object_store = any(
 )
 if needs_object_store:
     ready_url = os.environ["GPUCALL_BASE_URL"].rstrip("/") + "/readyz/details"
-    ready = json.loads(urlopen(ready_url, timeout=10).read().decode("utf-8"))
+    headers = dict()
+    api_key = os.environ.get("GPUCALL_API_KEY")
+    if api_key:
+        headers["Authorization"] = "Bearer " + api_key
+    ready = json.loads(urlopen(Request(ready_url, headers=headers), timeout=10).read().decode("utf-8"))
     if ready.get("object_store") is not True:
         Path(".gpucall-migration/operator-blocker.json").write_text(
             json.dumps(
