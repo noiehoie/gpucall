@@ -3301,7 +3301,7 @@ def _function_runtime_live_cost_audit(tuples: dict[str, object]) -> dict[str, ob
     if not function_providers:
         return {"configured": False}
     family_names = sorted({vendor_family_for_adapter(str(getattr(tuple, "adapter", "") or "")) for tuple in function_providers})
-    modal = shutil.which("modal") if "modal" in family_names else None
+    modal = _find_cli_executable("modal") if "modal" in family_names else None
     if "modal" in family_names and modal is None:
         return {"configured": True, "ok": False, "credential_families": family_names, "error": "modal CLI not found"}
     result: dict[str, object] = {"configured": True, "credential_families": family_names}
@@ -3319,6 +3319,16 @@ def _function_runtime_live_cost_audit(tuples: dict[str, object]) -> dict[str, ob
     return {
         **result,
     }
+
+
+def _find_cli_executable(name: str) -> str | None:
+    path = shutil.which(name)
+    if path:
+        return path
+    sibling = Path(sys.executable).resolve().parent / name
+    if sibling.is_file() and os.access(sibling, os.X_OK):
+        return str(sibling)
+    return None
 
 
 def _managed_endpoint_live_cost_audit(tuples: dict[str, object], creds: dict[str, dict[str, str]]) -> dict[str, object]:

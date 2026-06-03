@@ -3,6 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 import json
 import os
+from types import SimpleNamespace
 
 import yaml
 
@@ -132,6 +133,36 @@ def test_live_cost_audit_uses_policy_allowlist_when_present(tmp_path, monkeypatc
     tuples = _live_cost_audit_tuples(config)
 
     assert set(tuples) == {"runpod-vllm-ampere48-qwen2-5-vl-7b-instruct"}
+
+
+def test_function_runtime_live_cost_audit_finds_modal_next_to_python(tmp_path, monkeypatch) -> None:
+    from gpucall.cli import _function_runtime_live_cost_audit
+
+    bin_dir = tmp_path / "venv" / "bin"
+    bin_dir.mkdir(parents=True)
+    python = bin_dir / "python"
+    modal = bin_dir / "modal"
+    python.write_text("", encoding="utf-8")
+    modal.write_text("#!/bin/sh\n", encoding="utf-8")
+    modal.chmod(0o755)
+    commands: list[list[str]] = []
+
+    monkeypatch.setattr("gpucall.cli.shutil.which", lambda _name: None)
+    monkeypatch.setattr("gpucall.cli.sys.executable", str(python))
+    monkeypatch.setattr("gpucall.cli._run_jsonish_command", lambda command, timeout: commands.append(command) or {"ok": True})
+
+    result = _function_runtime_live_cost_audit(
+        {
+            "modal-a10g": SimpleNamespace(
+                execution_surface=SimpleNamespace(value="function_runtime"),
+                adapter="modal",
+            )
+        }
+    )
+
+    assert result["configured"] is True
+    assert result["app_list"] == {"ok": True}
+    assert commands[0][0] == str(modal)
 
 
 def test_gateway_smoke_uses_v2_inline_inputs(monkeypatch) -> None:
