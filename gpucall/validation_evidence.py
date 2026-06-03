@@ -61,8 +61,6 @@ def load_route_validation_evidence(
     expected_commit = git_commit()
     expected_config_hash = config_hash(Path(config_dir)) if config_dir is not None else None
     strict_hash = route_validation_strict_config_hash_enabled() if strict_config_hash is None else strict_config_hash
-    if expected_commit is None:
-        return {}
     if strict_hash and config_dir is not None and expected_config_hash is None:
         return {}
     evidence: dict[RouteValidationKey, RouteValidationEvidence] = {}

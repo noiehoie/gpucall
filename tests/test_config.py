@@ -1323,7 +1323,7 @@ def test_readiness_reports_latest_failed_route_validation_artifact(tmp_path, mon
     assert any("rerun explicit tuple validation" in action for action in failed_recipe_report["next_actions"])
 
 
-def test_readiness_does_not_label_unloaded_accepted_validation_as_rejected(tmp_path, monkeypatch) -> None:
+def test_readiness_accepts_validation_when_installed_product_commit_is_unavailable(tmp_path, monkeypatch) -> None:
     from gpucall.execution.contracts import official_contract, official_contract_hash
     from gpucall.readiness import build_readiness_report
     from gpucall.validation_evidence import config_hash
@@ -1343,13 +1343,13 @@ def test_readiness_does_not_label_unloaded_accepted_validation_as_rejected(tmp_p
     mode = blocked["mode"]
     tuple_spec = load_config(root).tuples[tuple_name]
     contract = official_contract(tuple_spec)
-    accepted_but_unloaded = {
+    installed_product_artifact = {
         "tuple": tuple_name,
         "recipe": recipe_report["recipe"],
         "mode": mode,
         "started_at": "2026-01-01T00:00:00+00:00",
         "ended_at": "2026-01-01T00:00:01+00:00",
-        "commit": "unavailable-during-test",
+        "commit": None,
         "config_hash": config_hash(root),
         "governance_hash": "c" * 64,
         "validation_schema_version": 1,
@@ -1360,13 +1360,13 @@ def test_readiness_does_not_label_unloaded_accepted_validation_as_rejected(tmp_p
         "official_contract": contract,
         "official_contract_hash": official_contract_hash(contract),
     }
-    (artifact_dir / "accepted-but-unloaded.json").write_text(json.dumps(accepted_but_unloaded), encoding="utf-8")
+    (artifact_dir / "installed-product.json").write_text(json.dumps(installed_product_artifact), encoding="utf-8")
 
     checked = build_readiness_report(config_dir=root, recipe=recipe_report["recipe"], validation_dir=artifact_dir)
-    row = next(item for item in checked["recipes"][0]["live_blocked_tuples"] if item["tuple"] == tuple_name and item["mode"] == mode)
+    row = next(item for item in checked["recipes"][0]["live_ready_tuples"] if item["tuple"] == tuple_name and item["mode"] == mode)
 
     assert row["route_validation_status"] == "accepted"
-    assert row["live_reason"] == "missing_route_validation_evidence"
+    assert str(row["live_validation_artifact"]).endswith("installed-product.json")
 
 
 def test_readiness_reports_policy_blocked_replacement_candidates(tmp_path, monkeypatch) -> None:
