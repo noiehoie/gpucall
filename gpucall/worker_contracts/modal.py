@@ -316,6 +316,13 @@ def _prefetch_qwen25_vl_3b() -> None:
     snapshot_download("microsoft/Florence-2-large-ft")
 
 
+def _prefetch_qwen25_text_oob() -> None:
+    os.environ.setdefault("HF_HUB_ENABLE_HF_TRANSFER", "1")
+    from huggingface_hub import snapshot_download
+
+    snapshot_download("Qwen/Qwen2.5-0.5B-Instruct")
+
+
 def _env_int(name: str, default: int) -> int:
     try:
         return max(int(os.getenv(name, str(default))), 0)
@@ -343,6 +350,7 @@ if modal is not None:
             "pyairports",
         )
         .env({"HF_HUB_ENABLE_HF_TRANSFER": "1"})
+        .run_function(_prefetch_qwen25_text_oob, timeout=3600)
         .run_function(_prefetch_qwen25_vl_3b, timeout=3600)
     )
     _QWEN_1M_IMAGE = (

@@ -721,6 +721,45 @@ def test_standard_config_transport_matrix_is_explicit(tmp_path) -> None:
         assert required_tuples.issubset(set(plan.tuple_chain)), label
 
 
+def test_oob_light_modal_routes_cover_text_canary_intents(tmp_path) -> None:
+    from gpucall.validation_evidence import route_validation_key
+
+    root = copy_config(tmp_path)
+    config = load_config(root)
+    validated = {
+        route_validation_key("modal-t4-qwen25-0.5b", "infer-summarize-text-light", "sync"),
+        route_validation_key("modal-t4-qwen25-0.5b", "infer-translate-text-light", "sync"),
+        route_validation_key("modal-t4-qwen25-0.5b", "infer-extract-json-light", "sync"),
+    }
+    compiler = GovernanceCompiler(
+        policy=config.policy,
+        recipes=config.recipes,
+        tuples=config.tuples,
+        models=config.models,
+        engines=config.engines,
+        registry=ObservedRegistry(),
+        require_route_validation=True,
+        validated_routes=validated,
+    )
+
+    cases = [
+        ("summarize_text", "infer-summarize-text-light"),
+        ("translate_text", "infer-translate-text-light"),
+        ("extract_json", "infer-extract-json-light"),
+    ]
+    for intent, recipe_name in cases:
+        plan = compiler.compile(
+            TaskRequest(
+                task="infer",
+                mode=ExecutionMode.SYNC,
+                intent=intent,
+                inline_inputs={"prompt": InlineValue(value="short caller canary")},
+            )
+        )
+        assert plan.recipe_name == recipe_name
+        assert plan.tuple_chain[0] == "modal-t4-qwen25-0.5b"
+
+
 def test_standard_config_routes_structured_vision_to_json_capable_model(tmp_path) -> None:
     root = copy_config(tmp_path)
     runpod_worker = root / "workers" / "runpod-vllm-ampere48-qwen2-5-vl-7b-instruct.yml"
