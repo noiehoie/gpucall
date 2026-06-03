@@ -3325,7 +3325,7 @@ def _find_cli_executable(name: str) -> str | None:
     path = shutil.which(name)
     if path:
         return path
-    sibling = Path(sys.executable).resolve().parent / name
+    sibling = Path(sys.executable).parent / name
     if sibling.is_file() and os.access(sibling, os.X_OK):
         return str(sibling)
     return None

@@ -139,10 +139,14 @@ def test_function_runtime_live_cost_audit_finds_modal_next_to_python(tmp_path, m
     from gpucall.cli import _function_runtime_live_cost_audit
 
     bin_dir = tmp_path / "venv" / "bin"
+    real_dir = tmp_path / "python-install" / "bin"
     bin_dir.mkdir(parents=True)
+    real_dir.mkdir(parents=True)
     python = bin_dir / "python"
+    real_python = real_dir / "python"
     modal = bin_dir / "modal"
-    python.write_text("", encoding="utf-8")
+    real_python.write_text("", encoding="utf-8")
+    python.symlink_to(real_python)
     modal.write_text("#!/bin/sh\n", encoding="utf-8")
     modal.chmod(0o755)
     commands: list[list[str]] = []
