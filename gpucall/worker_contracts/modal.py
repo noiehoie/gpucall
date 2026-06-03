@@ -351,7 +351,6 @@ if modal is not None:
         )
         .env({"HF_HUB_ENABLE_HF_TRANSFER": "1"})
         .run_function(_prefetch_qwen25_text_oob, timeout=3600)
-        .run_function(_prefetch_qwen25_vl_3b, timeout=3600)
     )
     _QWEN_1M_IMAGE = (
         modal.Image.from_registry("nvidia/cuda:12.1.1-devel-ubuntu22.04", add_python="3.11")

@@ -86,6 +86,17 @@ def test_modal_config_targets_match_worker_app_and_functions() -> None:
     assert errors == []
 
 
+def test_modal_text_vllm_image_does_not_prefetch_vision_models() -> None:
+    root = Path(__file__).resolve().parents[1]
+    source = (root / "gpucall" / "worker_contracts" / "modal.py").read_text(encoding="utf-8")
+    match = re.search(r"_VLLM_IMAGE = \((.*?)\n    \)", source, flags=re.S)
+    assert match is not None
+    block = match.group(1)
+
+    assert "_prefetch_qwen25_text_oob" in block
+    assert "_prefetch_qwen25_vl_3b" not in block
+
+
 def test_runpod_vllm_tuple_examples_include_official_worker_env() -> None:
     root = Path(__file__).resolve().parents[1]
     target_files = [
