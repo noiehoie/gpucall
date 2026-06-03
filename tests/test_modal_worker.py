@@ -186,3 +186,11 @@ def test_modal_worker_image_dependencies_are_pinned() -> None:
     assert 'os.getenv("GPUCALL_MODAL_TRANSFORMERS_PACKAGE", "transformers==4.51.3")' in source
     assert 'os.getenv("GPUCALL_MODAL_HUGGINGFACE_HUB_PACKAGE", "huggingface-hub>=0.30.0,<1.0")' in source
     assert '"huggingface-hub[hf_transfer]"' not in source
+
+
+def test_modal_t4_worker_forces_float16_dtype() -> None:
+    source = __import__("pathlib").Path("gpucall/worker_contracts/modal.py").read_text(encoding="utf-8")
+
+    assert 'def run_inference_on_modal_t4(payload: dict[str, Any], workload: str = "infer", **kwargs) -> str:' in source
+    assert 'dtype=kwargs.get("dtype") or "float16"' in source
+    assert 'kwargs["dtype"] = dtype' in source

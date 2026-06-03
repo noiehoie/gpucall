@@ -416,6 +416,7 @@ if modal is not None:
         tensor_parallel_size: int = 1,
         long_context: bool = False,
         trust_remote_code: bool = False,
+        dtype: str | None = None,
     ) -> Any:
         global _TOP_LEVEL_LLM, _TOP_LEVEL_LOADED_ID
         if model_id not in _ALLOWED_MODELS:
@@ -444,6 +445,8 @@ if modal is not None:
             "tensor_parallel_size": tensor_parallel_size,
             "disable_log_stats": True,
         }
+        if dtype:
+            kwargs["dtype"] = dtype
         if long_context:
             kwargs.update(
                 {
@@ -607,6 +610,7 @@ if modal is not None:
         *,
         tensor_parallel_size: int = 1,
         long_context: bool = False,
+        dtype: str | None = None,
     ) -> str:
         artifact_result = _execute_artifact_workload(payload)
         if artifact_result is not None:
@@ -620,6 +624,7 @@ if modal is not None:
             tensor_parallel_size=tensor_parallel_size,
             long_context=long_context,
             trust_remote_code=bool(payload.get("trust_remote_code")),
+            dtype=dtype,
         )
         prompt = _format_prompt_for_model(llm, requested_model, payload)
         outputs = llm.generate([prompt], _sampling_params(payload), use_tqdm=False)
@@ -756,7 +761,7 @@ if modal is not None:
     )
     def run_inference_on_modal(payload: dict[str, Any], workload: str = "infer", **kwargs) -> str:
         payload = {**payload, "task": workload or payload.get("task")}
-        return _generate_text(payload, kwargs.get("model"), kwargs.get("max_model_len") or 32768)
+        return _generate_text(payload, kwargs.get("model"), kwargs.get("max_model_len") or 32768, dtype=kwargs.get("dtype"))
 
     @app.function(
         image=_VLLM_IMAGE,
@@ -767,7 +772,7 @@ if modal is not None:
     )
     def run_inference_on_modal_t4(payload: dict[str, Any], workload: str = "infer", **kwargs) -> str:
         payload = {**payload, "task": workload or payload.get("task")}
-        return _generate_text(payload, kwargs.get("model"), kwargs.get("max_model_len") or 32768)
+        return _generate_text(payload, kwargs.get("model"), kwargs.get("max_model_len") or 32768, dtype=kwargs.get("dtype") or "float16")
 
     @app.function(
         image=_VLLM_IMAGE,
@@ -778,7 +783,7 @@ if modal is not None:
     )
     def run_inference_on_modal_l4(payload: dict[str, Any], workload: str = "infer", **kwargs) -> str:
         payload = {**payload, "task": workload or payload.get("task")}
-        return _generate_text(payload, kwargs.get("model"), kwargs.get("max_model_len") or 32768)
+        return _generate_text(payload, kwargs.get("model"), kwargs.get("max_model_len") or 32768, dtype=kwargs.get("dtype"))
 
     @app.function(
         image=_VLLM_IMAGE,
@@ -789,7 +794,7 @@ if modal is not None:
     )
     def run_inference_on_modal_l40s(payload: dict[str, Any], workload: str = "infer", **kwargs) -> str:
         payload = {**payload, "task": workload or payload.get("task")}
-        return _generate_text(payload, kwargs.get("model"), kwargs.get("max_model_len") or 131072)
+        return _generate_text(payload, kwargs.get("model"), kwargs.get("max_model_len") or 131072, dtype=kwargs.get("dtype"))
 
     @app.function(
         image=_VLLM_IMAGE,
@@ -800,7 +805,7 @@ if modal is not None:
     )
     def run_inference_on_modal_a100(payload: dict[str, Any], workload: str = "infer", **kwargs) -> str:
         payload = {**payload, "task": workload or payload.get("task")}
-        return _generate_text(payload, kwargs.get("model"), kwargs.get("max_model_len") or 131072)
+        return _generate_text(payload, kwargs.get("model"), kwargs.get("max_model_len") or 131072, dtype=kwargs.get("dtype"))
 
     @app.function(
         image=_VLLM_IMAGE,
@@ -811,7 +816,7 @@ if modal is not None:
     )
     def run_inference_on_modal_h100(payload: dict[str, Any], workload: str = "infer", **kwargs) -> str:
         payload = {**payload, "task": workload or payload.get("task")}
-        return _generate_text(payload, kwargs.get("model"), kwargs.get("max_model_len") or 131072)
+        return _generate_text(payload, kwargs.get("model"), kwargs.get("max_model_len") or 131072, dtype=kwargs.get("dtype"))
 
     @app.function(
         image=_VLLM_IMAGE,
@@ -822,7 +827,7 @@ if modal is not None:
     )
     def run_inference_on_modal_rtx_pro_6000(payload: dict[str, Any], workload: str = "infer", **kwargs) -> str:
         payload = {**payload, "task": workload or payload.get("task")}
-        return _generate_text(payload, kwargs.get("model"), kwargs.get("max_model_len") or 131072)
+        return _generate_text(payload, kwargs.get("model"), kwargs.get("max_model_len") or 131072, dtype=kwargs.get("dtype"))
 
     @app.function(
         image=_VLLM_IMAGE,
@@ -833,7 +838,7 @@ if modal is not None:
     )
     def run_inference_on_modal_h200(payload: dict[str, Any], workload: str = "infer", **kwargs) -> str:
         payload = {**payload, "task": workload or payload.get("task")}
-        return _generate_text(payload, kwargs.get("model"), kwargs.get("max_model_len") or 131072)
+        return _generate_text(payload, kwargs.get("model"), kwargs.get("max_model_len") or 131072, dtype=kwargs.get("dtype"))
 
     @app.function(
         image=_VLLM_IMAGE,
@@ -844,7 +849,7 @@ if modal is not None:
     )
     def run_inference_on_modal_b200(payload: dict[str, Any], workload: str = "infer", **kwargs) -> str:
         payload = {**payload, "task": workload or payload.get("task")}
-        return _generate_text(payload, kwargs.get("model"), kwargs.get("max_model_len") or 131072)
+        return _generate_text(payload, kwargs.get("model"), kwargs.get("max_model_len") or 131072, dtype=kwargs.get("dtype"))
 
     @app.function(
         image=_QWEN_1M_IMAGE,
@@ -861,6 +866,7 @@ if modal is not None:
             kwargs.get("max_model_len") or 1010000,
             tensor_parallel_size=int(kwargs.get("tensor_parallel_size") or 4),
             long_context=True,
+            dtype=kwargs.get("dtype"),
         )
 
     @app.function(
@@ -878,6 +884,7 @@ if modal is not None:
             kwargs.get("max_model_len") or 1010000,
             tensor_parallel_size=int(kwargs.get("tensor_parallel_size") or 8),
             long_context=True,
+            dtype=kwargs.get("dtype"),
         )
 
     @app.function(
@@ -895,6 +902,7 @@ if modal is not None:
             kwargs.get("max_model_len") or 1010000,
             tensor_parallel_size=int(kwargs.get("tensor_parallel_size") or 2),
             long_context=True,
+            dtype=kwargs.get("dtype"),
         )
 
     @app.function(
@@ -912,6 +920,7 @@ if modal is not None:
             kwargs.get("max_model_len") or 1010000,
             tensor_parallel_size=int(kwargs.get("tensor_parallel_size") or 4),
             long_context=True,
+            dtype=kwargs.get("dtype"),
         )
 
     @app.function(
@@ -929,6 +938,7 @@ if modal is not None:
             kwargs.get("max_model_len") or 1010000,
             tensor_parallel_size=int(kwargs.get("tensor_parallel_size") or 8),
             long_context=True,
+            dtype=kwargs.get("dtype"),
         )
 
     @app.function(
