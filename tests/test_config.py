@@ -344,6 +344,13 @@ def test_object_store_accepts_legacy_provider_key() -> None:
     config = ObjectStoreConfig.model_validate({"provider": "s3", "bucket": "gpucall"})
 
     assert config.tuple == "s3"
+    assert config.addressing_style == "virtual"
+
+
+def test_object_store_accepts_path_addressing_style() -> None:
+    config = ObjectStoreConfig.model_validate({"provider": "s3", "bucket": "gpucall", "addressing_style": "path"})
+
+    assert config.addressing_style == "path"
 
 
 def test_load_config_rejects_recipe_without_capable_provider(tmp_path) -> None:

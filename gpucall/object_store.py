@@ -16,7 +16,7 @@ class ObjectStore:
     def __init__(self, config: ObjectStoreConfig) -> None:
         self.config = config
         kwargs = {}
-        s3_config_kwargs = {"signature_version": "s3v4", "s3": {"addressing_style": "virtual"}}
+        s3_config_kwargs = {"signature_version": "s3v4", "s3": {"addressing_style": config.addressing_style}}
 
         if config.region:
             kwargs["region_name"] = config.region

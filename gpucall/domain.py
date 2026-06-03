@@ -766,6 +766,7 @@ class ObjectStoreConfig(BaseModel):
     endpoint: AnyHttpUrl | None = None
     prefix: str = "gpucall"
     presign_ttl_seconds: PositiveInt = 900
+    addressing_style: Literal["virtual", "path"] = "virtual"
 
     @model_validator(mode="before")
     @classmethod

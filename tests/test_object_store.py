@@ -35,6 +35,34 @@ def test_object_store_presign_put_builds_s3_data_ref(monkeypatch) -> None:
     assert response.data_ref.content_type == "text/plain"
 
 
+def test_object_store_presign_uses_configured_path_addressing(monkeypatch) -> None:
+    class FakeS3:
+        def generate_presigned_url(self, *args, **kwargs):
+            return "https://example.com/upload"
+
+    def fake_client(*args, **kwargs):
+        config = kwargs.get("config")
+        assert config is not None
+        assert config.s3 == {"addressing_style": "path"}
+        return FakeS3()
+
+    monkeypatch.setattr("gpucall.object_store.boto3", types.SimpleNamespace(client=fake_client))
+    store = ObjectStore(
+        ObjectStoreConfig(
+            bucket="bucket",
+            region="us-east-1",
+            endpoint="https://s3.example.test",
+            addressing_style="path",
+        )
+    )
+
+    response = store.presign_put(
+        PresignPutRequest(name="prompt.txt", bytes=4, sha256="a" * 64, content_type="text/plain")
+    )
+
+    assert str(response.upload_url) == "https://example.com/upload"
+
+
 def test_object_store_allows_empty_prefix_for_own_data_refs(monkeypatch) -> None:
     generated_keys: list[str] = []
 

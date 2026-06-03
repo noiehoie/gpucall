@@ -185,6 +185,7 @@ def _write_object_store(config_dir: Path, *, bucket: str, region: str, endpoint:
         "endpoint": endpoint or None,
         "prefix": "gpucall",
         "presign_ttl_seconds": 900,
+        "addressing_style": "virtual",
     }
     path.write_text(yaml.safe_dump(data, sort_keys=False), encoding="utf-8")
     print(f"Updated {path}")

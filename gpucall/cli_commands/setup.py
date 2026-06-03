@@ -124,6 +124,7 @@ class SetupObjectStore(BaseModel):
     region: str = "auto"
     endpoint_url: str | None = None
     prefix: str = "gpucall"
+    addressing_style: Literal["virtual", "path"] = "virtual"
     credentials: SetupCredentials | None = None
 
 
@@ -2640,6 +2641,7 @@ def _apply_object_store(config_dir: Path, plan: SetupPlan) -> None:
         "endpoint": object_store.endpoint_url,
         "prefix": object_store.prefix,
         "presign_ttl_seconds": 900,
+        "addressing_style": object_store.addressing_style,
     }
     path = config_dir / "object_store.yml"
     path.write_text(yaml.safe_dump(payload, sort_keys=False), encoding="utf-8")
