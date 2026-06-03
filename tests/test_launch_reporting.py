@@ -150,10 +150,17 @@ def test_function_runtime_live_cost_audit_finds_modal_next_to_python(tmp_path, m
     modal.write_text("#!/bin/sh\n", encoding="utf-8")
     modal.chmod(0o755)
     commands: list[list[str]] = []
+    envs: list[dict[str, str] | None] = []
 
     monkeypatch.setattr("gpucall.cli.shutil.which", lambda _name: None)
     monkeypatch.setattr("gpucall.cli.sys.executable", str(python))
-    monkeypatch.setattr("gpucall.cli._run_jsonish_command", lambda command, timeout: commands.append(command) or {"ok": True})
+
+    def fake_run(command, *, timeout, env=None):
+        commands.append(command)
+        envs.append(env)
+        return {"ok": True}
+
+    monkeypatch.setattr("gpucall.cli._run_jsonish_command", fake_run)
 
     result = _function_runtime_live_cost_audit(
         {
@@ -161,12 +168,16 @@ def test_function_runtime_live_cost_audit_finds_modal_next_to_python(tmp_path, m
                 execution_surface=SimpleNamespace(value="function_runtime"),
                 adapter="modal",
             )
-        }
+        },
+        {"modal": {"token_id": "id", "token_secret": "secret", "environment": "main"}},
     )
 
     assert result["configured"] is True
     assert result["app_list"] == {"ok": True}
     assert commands[0][0] == str(modal)
+    assert envs[0]["MODAL_TOKEN_ID"] == "id"
+    assert envs[0]["MODAL_TOKEN_SECRET"] == "secret"
+    assert envs[0]["MODAL_ENVIRONMENT"] == "main"
 
 
 def test_gateway_smoke_uses_v2_inline_inputs(monkeypatch) -> None:

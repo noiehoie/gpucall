@@ -3216,7 +3216,7 @@ def _provider_cost_audit_row(tuple) -> dict[str, object]:
 
 def _live_cost_audit(tuples: dict[str, object], creds: dict[str, dict[str, str]]) -> dict[str, object]:
     return {
-        "function_runtime": _function_runtime_live_cost_audit(tuples),
+        "function_runtime": _function_runtime_live_cost_audit(tuples, creds),
         "managed_endpoint": _managed_endpoint_live_cost_audit(tuples, creds),
         "iaas_vm_lease": _iaas_vm_live_cost_audit(tuples, creds),
     }
@@ -3294,7 +3294,7 @@ def _live_cost_audit_findings(live: object) -> list[dict[str, object]]:
     return findings
 
 
-def _function_runtime_live_cost_audit(tuples: dict[str, object]) -> dict[str, object]:
+def _function_runtime_live_cost_audit(tuples: dict[str, object], creds: dict[str, dict[str, str]]) -> dict[str, object]:
     function_providers = [
         tuple for tuple in tuples.values() if str(getattr(getattr(tuple, "execution_surface", None), "value", "")) == "function_runtime"
     ]
@@ -3307,12 +3307,14 @@ def _function_runtime_live_cost_audit(tuples: dict[str, object]) -> dict[str, ob
     result: dict[str, object] = {"configured": True, "credential_families": family_names}
     if modal is None:
         return result
+    modal_env = _modal_cli_env(creds)
     result.update(
         {
-            "app_list": _run_jsonish_command([modal, "app", "list"], timeout=30),
+            "app_list": _run_jsonish_command([modal, "app", "list"], timeout=30, env=modal_env),
             "billing_today": _run_jsonish_command(
                 [modal, "billing", "report", "--for", "today", "--resolution", "h", "--tz", "Asia/Tokyo", "--json"],
                 timeout=60,
+                env=modal_env,
             ),
         }
     )
@@ -3329,6 +3331,21 @@ def _find_cli_executable(name: str) -> str | None:
     if sibling.is_file() and os.access(sibling, os.X_OK):
         return str(sibling)
     return None
+
+
+def _modal_cli_env(creds: dict[str, dict[str, str]]) -> dict[str, str] | None:
+    modal = creds.get("modal", {})
+    token_id = str(modal.get("token_id") or "").strip()
+    token_secret = str(modal.get("token_secret") or "").strip()
+    if not token_id or not token_secret:
+        return None
+    env = os.environ.copy()
+    env["MODAL_TOKEN_ID"] = token_id
+    env["MODAL_TOKEN_SECRET"] = token_secret
+    environment = str(modal.get("environment") or "").strip()
+    if environment:
+        env["MODAL_ENVIRONMENT"] = environment
+    return env
 
 
 def _managed_endpoint_live_cost_audit(tuples: dict[str, object], creds: dict[str, dict[str, str]]) -> dict[str, object]:
@@ -3691,9 +3708,9 @@ def _iaas_vm_live_cost_audit(tuples: dict[str, object], creds: dict[str, dict[st
     }
 
 
-def _run_jsonish_command(command: list[str], *, timeout: int) -> dict[str, object]:
+def _run_jsonish_command(command: list[str], *, timeout: int, env: dict[str, str] | None = None) -> dict[str, object]:
     try:
-        completed = subprocess.run(command, check=False, capture_output=True, text=True, timeout=timeout)
+        completed = subprocess.run(command, check=False, capture_output=True, text=True, timeout=timeout, env=env)
     except Exception as exc:
         return {"ok": False, "error": f"{type(exc).__name__}: {exc}"}
     stdout = completed.stdout.strip()
