@@ -605,6 +605,56 @@ def test_modal_provider_requires_deployed_function_target() -> None:
         raise AssertionError("Modal tuple accepted a non-deployed-function target")
 
 
+def test_modal_live_catalog_records_endpoint_success(monkeypatch) -> None:
+    class FakeFunction:
+        @staticmethod
+        def from_name(app_name: str, function_name: str):
+            assert app_name == "gpucall-worker-json"
+            assert function_name == "run_inference_on_modal_t4"
+            return FakeFunction()
+
+        def hydrate(self) -> None:
+            return None
+
+    class FakeModal:
+        Function = FakeFunction
+
+    class FakeResponse:
+        text = "NVIDIA T4 $0.59 / hour"
+
+    class FakeRequests:
+        @staticmethod
+        def get(url: str, **_kwargs):
+            assert url == "https://modal.com/pricing"
+            return FakeResponse()
+
+    monkeypatch.setitem(__import__("sys").modules, "modal", FakeModal)
+    monkeypatch.setitem(__import__("sys").modules, "requests", FakeRequests)
+    tuple = ExecutionTupleSpec(
+        name="modal-t4-qwen25-1.5b",
+        adapter="modal",
+        gpu="T4",
+        vram_gb=16,
+        max_model_len=32768,
+        cost_per_second=0.000164,
+        modes=["sync"],
+        target="gpucall-worker-json:run_inference_on_modal_t4",
+        endpoint_contract="modal-function",
+        input_contracts=["text", "chat_messages"],
+        output_contract="plain-text",
+        stream_contract="none",
+        model="Qwen/Qwen2.5-1.5B-Instruct",
+    )
+
+    evidence = live_tuple_catalog_evidence({tuple.name: tuple}, {"modal": {"token_id": "id", "token_secret": "secret"}})
+    findings = evidence[tuple.name]["findings"]
+
+    assert evidence[tuple.name]["status"] == "live_revalidated"
+    assert {item["dimension"] for item in findings} == {"endpoint", "price", "stock"}
+    endpoint = next(item for item in findings if item["dimension"] == "endpoint")
+    assert endpoint["source"] == "modal.Function.from_name"
+
+
 def test_runpod_vllm_requires_model_storage_contract() -> None:
     tuple = ExecutionTupleSpec(
         name="runpod-vllm-serverless",

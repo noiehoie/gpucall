@@ -395,6 +395,7 @@ def modal_catalog_findings(tuples: list[Any], credentials: dict[str, dict[str, s
         if price is not None:
             findings.append(live_info(tuple, dimension="price", source=price["source"], live_price_per_second=price["price_per_second"]))
         if tuple.target and tuple_errors == 0:
+            findings.append(live_info(tuple, dimension="endpoint", source="modal.Function.from_name"))
             findings.append(live_info(tuple, dimension="stock", source="modal.Function.from_name", live_stock_state="available"))
     return findings
 

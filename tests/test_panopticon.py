@@ -140,6 +140,78 @@ def test_panopticon_price_update_preserves_other_dimensions(tmp_path) -> None:
     assert {item["dimension"] for item in row["findings"]} == {"price", "stock"}
 
 
+def test_panopticon_endpoint_success_replaces_old_endpoint_error(tmp_path) -> None:
+    path = tmp_path / "provider-panopticon.json"
+    now = datetime(2026, 5, 19, 8, 0, tzinfo=timezone.utc)
+
+    store_panopticon_evidence(
+        {
+            "modal-t4": {
+                "tuple": "modal-t4",
+                "adapter": "modal",
+                "status": "blocked",
+                "checked": True,
+                "findings": [
+                    {
+                        "tuple": "modal-t4",
+                        "adapter": "modal",
+                        "dimension": "endpoint",
+                        "severity": "error",
+                        "reason": "Modal deployed function lookup failed",
+                    },
+                    {
+                        "tuple": "modal-t4",
+                        "adapter": "modal",
+                        "dimension": "price",
+                        "severity": "info",
+                        "live_price_per_second": 0.000164,
+                    },
+                ],
+            }
+        },
+        path,
+        now=now,
+    )
+
+    store_panopticon_evidence(
+        {
+            "modal-t4": {
+                "tuple": "modal-t4",
+                "adapter": "modal",
+                "status": "live_revalidated",
+                "checked": True,
+                "findings": [
+                    {
+                        "tuple": "modal-t4",
+                        "adapter": "modal",
+                        "dimension": "endpoint",
+                        "severity": "info",
+                        "source": "modal.Function.from_name",
+                    },
+                    {
+                        "tuple": "modal-t4",
+                        "adapter": "modal",
+                        "dimension": "stock",
+                        "severity": "info",
+                        "source": "modal.Function.from_name",
+                        "live_stock_state": "available",
+                    },
+                ],
+            }
+        },
+        path,
+        now=now,
+    )
+
+    loaded = load_panopticon_evidence(path, now=now)
+
+    assert loaded["modal-t4"]["status"] == "live_revalidated"
+    assert {item["dimension"] for item in loaded["modal-t4"]["findings"]} == {"endpoint", "price", "stock"}
+    endpoint = next(item for item in loaded["modal-t4"]["findings"] if item["dimension"] == "endpoint")
+    assert endpoint["severity"] == "info"
+    assert "reason" not in endpoint
+
+
 def test_panopticon_merge_preserves_dimensions_and_dedupes_findings() -> None:
     finding = {
         "tuple": "runpod-h100",
