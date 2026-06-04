@@ -10,6 +10,7 @@ from fastapi.testclient import TestClient
 from gpucall.domain import ExecutionTupleSpec
 from gpucall.panopticon_service import (
     PANOPTICON_DEFAULT_PORT,
+    PANOPTICON_DEFAULT_REFRESH_INTERVAL_SECONDS,
     assert_safe_panopticon_host,
     create_panopticon_app,
     refresh_panopticon,
@@ -256,6 +257,37 @@ def test_panopticon_cli_serve_defaults_to_localhost(tmp_path, monkeypatch) -> No
     main()
 
     assert called == {"host": "127.0.0.1", "port": PANOPTICON_DEFAULT_PORT, "title": "gpucall Provider Panopticon"}
+
+
+def test_panopticon_default_refresh_interval_stays_inside_snapshot_ttl() -> None:
+    assert PANOPTICON_DEFAULT_REFRESH_INTERVAL_SECONDS < 300
+
+
+def test_panopticon_cli_serve_enables_default_refresh_loop(tmp_path, monkeypatch) -> None:
+    from gpucall.cli import main
+
+    observed: dict[str, object] = {}
+
+    def fake_create_panopticon_app(*, config_dir, panopticon_path=None, refresh_interval_seconds=None):
+        observed["config_dir"] = config_dir
+        observed["panopticon_path"] = panopticon_path
+        observed["refresh_interval_seconds"] = refresh_interval_seconds
+        return SimpleNamespace(title="gpucall Provider Panopticon")
+
+    def fake_run(app, *, host, port):
+        observed["host"] = host
+        observed["port"] = port
+        observed["title"] = app.title
+
+    monkeypatch.setattr("gpucall.cli_commands.panopticon.create_panopticon_app", fake_create_panopticon_app)
+    monkeypatch.setattr("gpucall.cli_commands.panopticon.uvicorn.run", fake_run)
+    monkeypatch.setattr(sys, "argv", ["gpucall", "panopticon", "serve", "--config-dir", str(tmp_path)])
+
+    main()
+
+    assert observed["host"] == "127.0.0.1"
+    assert observed["port"] == PANOPTICON_DEFAULT_PORT
+    assert observed["refresh_interval_seconds"] == PANOPTICON_DEFAULT_REFRESH_INTERVAL_SECONDS
 
 
 def test_panopticon_serve_rejects_public_bind() -> None:
