@@ -312,7 +312,13 @@ class GovernanceCompiler:
                 code="NO_AUTO_SELECTABLE_RECIPE",
                 context=context,
             )
-        return sorted(candidates, key=lambda recipe: self._recipe_selection_key(recipe, request))[0]
+        ordered = sorted(candidates, key=lambda recipe: self._recipe_selection_key(recipe, request))
+        for recipe in ordered:
+            effective_request = self._request_with_recipe_defaults(request, recipe)
+            eligible = self._eligible_tuples(sorted(self.tuples), effective_request, recipe, auto_selected=True)
+            if eligible:
+                return recipe
+        return ordered[0]
 
     def _recipe_rejection_reason(self, request: TaskRequest, recipe: Recipe) -> str | None:
         if not recipe.auto_select:
@@ -354,7 +360,8 @@ class GovernanceCompiler:
         # because they are smaller. A caller that supplies an intent still gets
         # the exact deterministic recipe match for that intent.
         requirements = recipe_requirements(recipe)
-        quality_rank = 0 if request.intent is not None else _quality_selection_rank(recipe.quality_floor)
+        structured = request.response_format is not None and request.response_format.type is not ResponseFormatType.TEXT
+        quality_rank = 0 if request.intent is not None and not structured else _quality_selection_rank(recipe.quality_floor)
         return (quality_rank, classification_rank(recipe.data_classification), requirements.minimum_vram_gb, requirements.context_budget_tokens, recipe.name)
 
     def _validate_request_against_recipe(self, request: TaskRequest, recipe: Recipe) -> None:

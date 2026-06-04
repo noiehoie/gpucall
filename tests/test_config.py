@@ -732,7 +732,7 @@ def test_standard_config_transport_matrix_is_explicit(tmp_path) -> None:
         assert required_tuples.issubset(set(plan.tuple_chain)), label
 
 
-def test_oob_light_modal_routes_cover_text_canary_intents(tmp_path) -> None:
+def test_oob_light_modal_routes_cover_caller_canary_intents(tmp_path) -> None:
     from gpucall.validation_evidence import route_validation_key
 
     root = copy_config(tmp_path)
@@ -741,6 +741,12 @@ def test_oob_light_modal_routes_cover_text_canary_intents(tmp_path) -> None:
         route_validation_key("modal-t4-qwen25-0.5b", "infer-summarize-text-light", "sync"),
         route_validation_key("modal-t4-qwen25-0.5b", "infer-translate-text-light", "sync"),
         route_validation_key("modal-t4-qwen25-0.5b", "infer-extract-json-light", "sync"),
+        route_validation_key("modal-t4-qwen25-0.5b", "infer-rank-text-items-light", "sync"),
+        route_validation_key(
+            "modal-vision-catalog-t4-microsoft-florence-2-large-ft",
+            "vision-understand-document-image-light",
+            "sync",
+        ),
     }
     compiler = GovernanceCompiler(
         policy=config.policy,
@@ -754,11 +760,12 @@ def test_oob_light_modal_routes_cover_text_canary_intents(tmp_path) -> None:
     )
 
     cases = [
-        ("summarize_text", "infer-summarize-text-light"),
-        ("translate_text", "infer-translate-text-light"),
-        ("extract_json", "infer-extract-json-light"),
+        ("summarize_text", "infer-summarize-text-light", "modal-t4-qwen25-0.5b"),
+        ("translate_text", "infer-translate-text-light", "modal-t4-qwen25-0.5b"),
+        ("extract_json", "infer-extract-json-light", "modal-t4-qwen25-0.5b"),
+        ("rank_text_items", "infer-rank-text-items-light", "modal-t4-qwen25-0.5b"),
     ]
-    for intent, recipe_name in cases:
+    for intent, recipe_name, tuple_name in cases:
         plan = compiler.compile(
             TaskRequest(
                 task="infer",
@@ -768,7 +775,18 @@ def test_oob_light_modal_routes_cover_text_canary_intents(tmp_path) -> None:
             )
         )
         assert plan.recipe_name == recipe_name
-        assert plan.tuple_chain[0] == "modal-t4-qwen25-0.5b"
+        assert plan.tuple_chain[0] == tuple_name
+
+    vision_plan = compiler.compile(
+        TaskRequest(
+            task="vision",
+            mode=ExecutionMode.SYNC,
+            intent="understand_document_image",
+            input_refs=[DataRef(uri="s3://bucket/canary.png", sha256="c" * 64, bytes=120_000, content_type="image/png")],
+        )
+    )
+    assert vision_plan.recipe_name == "vision-understand-document-image-light"
+    assert vision_plan.tuple_chain[0] == "modal-vision-catalog-t4-microsoft-florence-2-large-ft"
 
 
 def test_standard_config_routes_structured_vision_to_json_capable_model(tmp_path) -> None:

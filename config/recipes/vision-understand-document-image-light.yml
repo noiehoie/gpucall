@@ -1,0 +1,42 @@
+name: vision-understand-document-image-light
+recipe_schema_version: 3
+task: vision
+intent: understand_document_image
+auto_select: true
+data_classification: confidential
+allowed_modes:
+- sync
+context_budget_tokens: 8192
+resource_class: light
+latency_class: standard
+quality_floor: draft
+timeout_seconds: 600
+lease_ttl_seconds: 900
+token_estimation_profile: generic_utf8
+max_input_bytes: 16777216
+allowed_mime_prefixes:
+- image/
+allowed_inline_mime_prefixes:
+- text/
+default_temperature: 0.2
+structured_temperature: 0.0
+system_prompt: Answer the user's vision request directly from the supplied image and prompt.
+structured_system_prompt: Return only valid JSON when response_format requests JSON.
+  Do not include markdown fences or prose.
+stop_tokens:
+- <|im_end|>
+- <|endoftext|>
+repetition_penalty: 1.05
+guided_decoding: false
+output_validation_attempts: 1
+artifact_export: false
+requires_key_release: false
+required_model_capabilities:
+- document_understanding
+- visual_question_answering
+- instruction_following
+output_contract: plain-text
+expected_cold_start_seconds: 120
+expected_runtime_seconds: 120
+cost_policy:
+  max_estimated_cost_usd: 2.0

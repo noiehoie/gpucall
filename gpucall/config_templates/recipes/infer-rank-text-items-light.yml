@@ -1,0 +1,42 @@
+name: infer-rank-text-items-light
+recipe_schema_version: 3
+task: infer
+intent: rank_text_items
+auto_select: true
+data_classification: confidential
+allowed_modes:
+- sync
+context_budget_tokens: 8192
+resource_class: light
+latency_class: standard
+quality_floor: draft
+timeout_seconds: 180
+lease_ttl_seconds: 240
+token_estimation_profile: qwen
+max_input_bytes: 8388608
+max_output_tokens: 4096
+allowed_mime_prefixes:
+- text/
+allowed_inline_mime_prefixes: []
+default_temperature: 0.0
+structured_temperature: 0.0
+structured_system_prompt: Return exactly one valid JSON object when response_format
+  requests JSON. The response must start with { and end with }. Do not include
+  markdown fences, prose, reasoning, comments, or trailing text. Preserve the caller's
+  requested keys, item identifiers, ranks, and ranking criteria exactly.
+system_prompt: Compare the provided text items, apply the caller's ranking criteria, and return the ranked result directly.
+stop_tokens:
+- <|im_end|>
+- <|endoftext|>
+repetition_penalty: 1.05
+guided_decoding: true
+output_validation_attempts: 1
+artifact_export: false
+requires_key_release: false
+required_model_capabilities:
+- instruction_following
+- structured_output
+output_contract: plain-text
+expected_cold_start_seconds: 120
+cost_policy:
+  max_estimated_cost_usd: 2.0
