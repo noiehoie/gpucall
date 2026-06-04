@@ -100,6 +100,12 @@ reasons such as `validation_budget_exhausted`,
 control surface a background validator daemon should consume before running
 `tuple-smoke --write-artifact`.
 
+When recipe admin actually attempts `tuple-smoke` and the estimate exceeds the
+configured automatic budget, the workflow decision is
+`PENDING_BUDGET_APPROVAL`, with the estimated cost, current budget, recommended
+budget, and approval commands. Treat this as operator budget approval pending,
+not provider failure or validation failure.
+
 `seed-liveness` is also billable and fails closed when a compiled plan has a
 zero or missing cost estimate. Use `--allow-zero-estimate` only for local
 non-billable tuples.

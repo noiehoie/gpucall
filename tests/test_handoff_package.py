@@ -54,6 +54,8 @@ handoff_assets:
     assert "gateway canary while the recipe request is still `pending`." in prompt
     assert 'state != "processed"' in prompt
     assert "existing_tuple_activation_decision" in prompt
+    assert "PENDING_BUDGET_APPROVAL" in prompt
+    assert "waiting for explicit validation budget approval" in prompt
     assert "<caller baseline command>" not in prompt
     assert "First identify the smallest representative baseline command" in prompt
     assert "$CALLER_BASELINE_COMMAND" in prompt
@@ -85,7 +87,7 @@ tenant_onboarding:
     - 127.0.0.1/32
   recipe_inbox: {recipe_inbox}
 handoff_assets:
-  caller_sdk_wheel_url: https://assets.example/sdk/gpucall_sdk-2.0.52-py3-none-any.whl
+  caller_sdk_wheel_url: https://assets.example/sdk/gpucall_sdk-2.0.53-py3-none-any.whl
 """.lstrip(),
         encoding="utf-8",
     )
@@ -114,7 +116,7 @@ tenant_onboarding:
     - 192.0.2.20/32
   recipe_inbox: {recipe_inbox}
 handoff_assets:
-  caller_sdk_wheel_url: https://assets.example/sdk/gpucall_sdk-2.0.52-py3-none-any.whl
+  caller_sdk_wheel_url: https://assets.example/sdk/gpucall_sdk-2.0.53-py3-none-any.whl
 """.lstrip(),
         encoding="utf-8",
     )
@@ -178,7 +180,7 @@ tenant_onboarding:
     - 10.0.0.42/32
   recipe_inbox: {recipe_inbox}
 handoff_assets:
-  caller_sdk_wheel_url: https://assets.example/sdk/gpucall_sdk-2.0.52-py3-none-any.whl
+  caller_sdk_wheel_url: https://assets.example/sdk/gpucall_sdk-2.0.53-py3-none-any.whl
 """.lstrip(),
         encoding="utf-8",
     )
@@ -226,7 +228,7 @@ tenant_onboarding:
     - 10.0.0.42/32
   recipe_inbox: {recipe_inbox}
 handoff_assets:
-  caller_sdk_wheel_url: https://assets.example/sdk/gpucall_sdk-2.0.52-py3-none-any.whl
+  caller_sdk_wheel_url: https://assets.example/sdk/gpucall_sdk-2.0.53-py3-none-any.whl
 """.lstrip(),
         encoding="utf-8",
     )

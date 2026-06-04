@@ -271,6 +271,9 @@ if state == "failed":
     raise SystemExit("recipe request failed in gpucall-admin")
 if state != "processed":
     raise SystemExit(75)
+if activation == "PENDING_BUDGET_APPROVAL":
+    reason = status.get("budget_approval") or status.get("validation_failure_summary") or activation
+    raise SystemExit("gpucall-admin is waiting for explicit validation budget approval: " + str(reason))
 if activation in ("VALIDATION_FAILED", "NO_ELIGIBLE_TUPLE", "BLOCKED"):
     reason = status.get("validation_error") or status.get("validation_failure_summary") or activation
     raise SystemExit("gpucall-admin could not activate a validated route: " + str(reason))

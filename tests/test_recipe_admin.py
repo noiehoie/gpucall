@@ -897,6 +897,80 @@ def test_existing_tuple_auto_validation_uses_budget_after_validation_hash_mismat
     assert validation_calls[0]["budget_usd"] == 0.04
 
 
+def test_existing_tuple_auto_validation_budget_exceeded_waits_for_approval(tmp_path, monkeypatch) -> None:
+    config_dir = tmp_path / "config"
+    shutil.copytree("gpucall/config_templates", config_dir)
+    report_dir = tmp_path / "reports"
+    report_dir.mkdir()
+
+    def fake_readiness_report(*, config_dir, recipe, validation_dir, live=False, **kwargs):
+        assert live is True
+        return {
+            "recipes": [
+                {
+                    "recipe": recipe,
+                    "live_ready_tuples": [],
+                    "live_blocked_tuples": [{"tuple": "modal-a10g", "live_reason": "validation_config_hash_mismatch"}],
+                }
+            ]
+        }
+
+    def fake_validation(**kwargs):
+        return {
+            "command": [
+                "python",
+                "-m",
+                "gpucall.cli",
+                "tuple-smoke",
+                kwargs["tuple_name"],
+                "--config-dir",
+                str(kwargs["config_dir"]),
+                "--recipe",
+                kwargs["recipe_name"],
+                "--mode",
+                "sync",
+                "--budget-usd",
+                "0.10",
+                "--write-artifact",
+            ],
+            "returncode": 1,
+            "passed": False,
+            "stdout": "",
+            "stderr": "tuple-smoke budget exceeded before execution: estimated=0.143603, budget=0.100000\n",
+        }
+
+    monkeypatch.setattr("gpucall.recipe_admin.build_readiness_report", fake_readiness_report)
+    monkeypatch.setattr("gpucall.recipe_admin._run_existing_tuple_validation", fake_validation)
+
+    report = _auto_existing_tuple_report(
+        {
+            "canonical_recipe": {"name": "vision-understand-document-image-draft"},
+            "eligible_tuples": ["modal-a10g"],
+            "live_validation": {"matched": []},
+        },
+        request_id="rr-budget",
+        automation=RecipeAdminAutomationConfig(
+            recipe_inbox_auto_materialize=True,
+            recipe_inbox_auto_validate_existing_tuples=True,
+            recipe_inbox_auto_billable_validation=True,
+            recipe_inbox_auto_validation_budget_usd=0.10,
+        ),
+        report_dir=report_dir,
+        config_dir=config_dir,
+        validation_dir=tmp_path / "tuple-validation",
+        force=False,
+    )
+
+    assert report["decision"] == "PENDING_BUDGET_APPROVAL"
+    approval = report["budget_approval"]
+    assert approval["code"] == "VALIDATION_BUDGET_APPROVAL_REQUIRED"
+    assert approval["estimated_usd"] == pytest.approx(0.143603)
+    assert approval["current_budget_usd"] == pytest.approx(0.1)
+    assert approval["recommended_budget_usd"] == pytest.approx(0.16)
+    assert any("--recipe-auto-validation-budget-usd 0.16" in command for command in approval["approval_commands"])
+    assert any("tuple-smoke modal-a10g" in command and "--budget-usd 0.16" in command for command in approval["approval_commands"])
+
+
 def test_admin_author_dry_run_bundle_redacts_prompt_text(tmp_path) -> None:
     config_dir = tmp_path / "config"
     shutil.copytree("gpucall/config_templates", config_dir)
@@ -1256,6 +1330,107 @@ def test_admin_auto_supply_apply_triggers_readiness_and_billable_validation(tmp_
     assert any("tuple-smoke" in command and "0.07" in command for command in commands)
     assert (reports / "rr-supply-apply.post-supply-readiness.json").exists()
     assert (reports / "rr-supply-apply.post-supply-validation.json").exists()
+
+
+def test_admin_auto_supply_apply_budget_exceeded_waits_for_approval(tmp_path, monkeypatch) -> None:
+    config_dir = tmp_path / "config"
+    shutil.copytree("gpucall/config_templates", config_dir)
+    inbox = tmp_path / "inbox"
+    reports = inbox / "reports"
+    reports.mkdir(parents=True)
+    tuple_name = "runpod-vllm-ampere48-qwen2-5-vl-7b-instruct"
+    candidate = next(row for row in load_tuple_candidate_payloads(config_dir) if row["name"] == tuple_name)
+    recipe = yaml.safe_load((config_dir / "recipes" / "vision-image-standard.yml").read_text(encoding="utf-8"))
+    recipe["name"] = "vision-understand-document-image-draft"
+    recipe["auto_select"] = False
+    recipe["quality_floor"] = "draft"
+
+    def fake_apply(plan, *, dry_run=True, now=None, credentials=None):
+        assert dry_run is False
+        return ProviderSupplyProvisioningApplyResult(
+            generated_at="2026-05-23T00:00:00+00:00",
+            dry_run=False,
+            plan_action_count=plan.action_count,
+            applied_count=1,
+            skipped_count=0,
+            failed_count=0,
+            results=[
+                {
+                    "action_id": "endpoint-action",
+                    "action": "create_runpod_serverless_endpoint",
+                    "provider": "runpod",
+                    "resource_type": "endpoint",
+                    "resource_id": "endpoint-created",
+                    "tuple": tuple_name,
+                    "status": "applied",
+                    "response": {"id": "endpoint-created"},
+                    "materialized_config_patch": [
+                        {
+                            "kind": "worker_target",
+                            "config_dir_relative_path": f"workers/{tuple_name}.yml",
+                            "json_pointer": "/target",
+                            "value": "endpoint-created",
+                        }
+                    ],
+                }
+            ],
+        )
+
+    def fake_readiness_report(*, config_dir, recipe, validation_dir, live=False, **kwargs):
+        assert live is True
+        return {
+            "recipes": [
+                {
+                    "recipe": recipe,
+                    "live_ready_tuples": [],
+                    "live_blocked_tuples": [{"tuple": tuple_name, "live_reason": "missing_route_validation_evidence"}],
+                }
+            ]
+        }
+
+    def fake_admin_check(command, *, validation_dir=None, parse_json=False):
+        if "tuple-smoke" in command:
+            return {
+                "command": command,
+                "returncode": 1,
+                "stdout": "",
+                "stderr": "tuple-smoke budget exceeded before execution: estimated=0.143603, budget=0.100000\n",
+                "passed": False,
+            }
+        return {"command": command, "returncode": 0, "stdout": "", "stderr": ""}
+
+    monkeypatch.setattr("gpucall.recipe_admin.apply_provider_supply_provisioning_plan", fake_apply)
+    monkeypatch.setattr("gpucall.recipe_admin.build_readiness_report", fake_readiness_report)
+    monkeypatch.setattr("gpucall.recipe_admin._run_admin_check", fake_admin_check)
+
+    report = _auto_promotion_report(
+        {
+            "canonical_recipe": recipe,
+            "tuple_candidate_matches": [{"name": tuple_name, "path": candidate["_path"]}],
+        },
+        request_id="rr-supply-budget",
+        automation=RecipeAdminAutomationConfig(
+            recipe_inbox_auto_materialize=True,
+            recipe_inbox_auto_promote_candidates=True,
+            recipe_inbox_auto_provision_supply=True,
+            recipe_inbox_auto_apply_supply=True,
+            recipe_inbox_auto_billable_validation=True,
+            recipe_inbox_auto_validation_budget_usd=0.10,
+        ),
+        inbox_dir=inbox,
+        report_dir=reports,
+        config_dir=config_dir,
+        validation_dir=tmp_path / "tuple-validation",
+        force=True,
+    )
+
+    workflow = report["post_supply_workflow"]
+    assert workflow["decision"] == "PENDING_BUDGET_APPROVAL"
+    approval = workflow["budget_approval"]
+    assert approval["owner"] == "gpucall-admin"
+    assert approval["recommended_budget_usd"] == pytest.approx(0.16)
+    assert any("tuple-smoke" in command and "--budget-usd 0.16" in command for command in approval["approval_commands"])
+    assert (reports / "rr-supply-budget.post-supply-validation.json").exists()
 
 
 def test_tuple_candidate_promotion_preserves_runtime_cost_estimates(tmp_path) -> None:

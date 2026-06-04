@@ -506,6 +506,12 @@ recipe_inbox_auto_run_launch_check: false
 recipe_inbox_promotion_work_dir: /opt/gpucall/state/recipe_requests/promotions
 ```
 
+If an automatic `tuple-smoke` estimate exceeds
+`recipe_inbox_auto_validation_budget_usd`, recipe admin records
+`PENDING_BUDGET_APPROVAL` instead of `VALIDATION_FAILED`. The report includes
+the estimate, current budget, recommended budget, and explicit approval
+commands. This is caller-specific budget approval, not an OOB product failure.
+
 The chain is ordered and fail-closed:
 
 - `recipe_inbox_auto_promote_candidates` requires `recipe_inbox_auto_materialize`.

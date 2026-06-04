@@ -352,6 +352,47 @@ def test_recipe_draft_status_summarizes_existing_tuple_validation_failure() -> N
     }
 
 
+def test_recipe_draft_status_summarizes_budget_approval_wait() -> None:
+    output = summarize_status(
+        {
+            "pipeline": "recipe",
+            "request_id": "rr-budget",
+            "status": "processed",
+            "report": {
+                "phase": "recipe-materialization",
+                "canonical_recipe": {
+                    "task": "vision",
+                    "intent": "understand_document_image",
+                },
+                "existing_tuple_activation": {
+                    "decision": "PENDING_BUDGET_APPROVAL",
+                    "validation_gate": {"decision": "READY_FOR_BILLABLE_VALIDATION"},
+                    "budget_approval": {
+                        "status": "pending_budget_approval",
+                        "code": "VALIDATION_BUDGET_APPROVAL_REQUIRED",
+                        "owner": "gpucall-admin",
+                        "reason": "tuple-smoke estimate exceeds configured auto validation budget",
+                        "estimated_usd": 0.143603,
+                        "current_budget_usd": 0.1,
+                        "minimum_budget_usd": 0.143603,
+                        "recommended_budget_usd": 0.16,
+                        "approval_commands": [
+                            "gpucall admin automation-configure --recipe-auto-validation-budget-usd 0.16",
+                            "gpucall tuple-smoke modal-a10g --config-dir /config --recipe vision-understand-document-image-draft --mode sync --budget-usd 0.16 --write-artifact",
+                        ],
+                        "next_actions": ["approve validation budget >= 0.143603 USD; recommended 0.16 USD"],
+                    },
+                },
+            },
+        }
+    )
+
+    assert output["existing_tuple_activation_decision"] == "PENDING_BUDGET_APPROVAL"
+    assert output["budget_approval"]["code"] == "VALIDATION_BUDGET_APPROVAL_REQUIRED"
+    assert output["budget_approval"]["recommended_budget_usd"] == 0.16
+    assert any("--recipe-auto-validation-budget-usd 0.16" in command for command in output["budget_approval"]["approval_commands"])
+
+
 def test_sdk_migrate_cli_writes_prompt_required_artifacts(tmp_path) -> None:
     project = tmp_path / "example-caller"
     project.mkdir()

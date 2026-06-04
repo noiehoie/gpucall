@@ -83,6 +83,9 @@ next action.
 ### Route State
 
 - `route-validation-missing`: exact route has no accepted validation evidence.
+- `pending-budget-approval`: exact route is ready for billable validation, but
+  the estimated validation cost exceeds the configured automatic validation
+  budget. This is an operator approval wait, not an OOB product failure.
 - `route-validation-accepted`: exact route has accepted validation evidence.
 - `route-production-ready`: exact route has both fresh provider evidence and
   accepted validation evidence.
@@ -317,8 +320,11 @@ Rotation and revocation are product requirements:
     policy.
 47. Billable validation does not run without explicit budget policy or operator
     confirmation.
-48. Accepted validation evidence is stored for the exact route and config hash.
-49. Gateway routes only when exact route provider evidence is fresh and route
+48. If validation cost exceeds the automatic budget, gpucall records
+    `PENDING_BUDGET_APPROVAL` with estimated cost, current budget, recommended
+    budget, and explicit approval commands.
+49. Accepted validation evidence is stored for the exact route and config hash.
+50. Gateway routes only when exact route provider evidence is fresh and route
     validation evidence is accepted.
 50. Caller receives the normal application result, or a bounded No-Go reason
     with owner and next action.

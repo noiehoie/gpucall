@@ -3,8 +3,11 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import math
 import os
+import re
 import shutil
+import shlex
 import subprocess
 import sys
 import time
@@ -52,6 +55,11 @@ from gpucall.panopticon_provisioning import (
     build_provider_supply_provisioning_plan,
     dumps_provider_supply_provisioning_apply_result,
     dumps_provider_supply_provisioning_plan,
+)
+
+
+_TUPLE_SMOKE_BUDGET_EXCEEDED_RE = re.compile(
+    r"tuple-smoke budget exceeded before execution:\s*estimated=(?P<estimated>[0-9]+(?:\.[0-9]+)?),\s*budget=(?P<budget>[0-9]+(?:\.[0-9]+)?)"
 )
 
 
@@ -930,6 +938,12 @@ def _auto_post_supply_workflow_report(
     report["validation_report_path"] = str(validation_path)
     report["validation"] = validation
     if validation.get("returncode") != 0 or validation.get("passed") is not True:
+        budget_approval = _validation_budget_approval(validation)
+        if budget_approval is not None:
+            report["decision"] = "PENDING_BUDGET_APPROVAL"
+            report["budget_approval"] = budget_approval
+            report["next_actions"].extend(budget_approval["next_actions"])
+            return _write_post_supply_report(report_dir, request_id, report)
         report["decision"] = "VALIDATION_FAILED"
         report["next_actions"].append("inspect validation report, provider queue/capacity, and panopticon evidence")
         return _write_post_supply_report(report_dir, request_id, report)
@@ -1277,6 +1291,13 @@ def _auto_existing_tuple_report(
         report["validation_attempts"] = attempts
         report["validation"] = validation
         if validation is None or matched_tuple is None:
+            budget_approval = _first_validation_budget_approval(attempts)
+            if budget_approval is not None:
+                report["decision"] = "PENDING_BUDGET_APPROVAL"
+                report["budget_approval"] = budget_approval
+                report["next_actions"] = budget_approval["next_actions"]
+                _write_auto_existing_report(report_dir, request_id, report)
+                return report
             report["decision"] = "VALIDATION_FAILED"
             _write_auto_existing_report(report_dir, request_id, report)
             return report
@@ -1441,6 +1462,89 @@ def _run_admin_check(command: list[str], *, validation_dir: Path | None = None, 
             report["parse_error"] = "stdout was not JSON"
             report["passed"] = False
     return report
+
+
+def _first_validation_budget_approval(attempts: list[Mapping[str, Any]]) -> dict[str, Any] | None:
+    for attempt in attempts:
+        validation = _mapping(attempt.get("validation"))
+        approval = _validation_budget_approval(validation)
+        if approval is not None:
+            return approval
+    return None
+
+
+def _validation_budget_approval(validation: Mapping[str, Any]) -> dict[str, Any] | None:
+    message = "\n".join(str(validation.get(key) or "") for key in ("stderr", "stdout"))
+    match = _TUPLE_SMOKE_BUDGET_EXCEEDED_RE.search(message)
+    if match is None:
+        return None
+    estimated = float(match.group("estimated"))
+    current_budget = float(match.group("budget"))
+    recommended = _recommended_validation_budget_usd(estimated)
+    command = [str(item) for item in validation.get("command", [])] if isinstance(validation.get("command"), list) else []
+    approval_commands = _budget_approval_commands(command, recommended)
+    return {
+        "status": "pending_budget_approval",
+        "code": "VALIDATION_BUDGET_APPROVAL_REQUIRED",
+        "owner": "gpucall-admin",
+        "reason": "tuple-smoke estimate exceeds configured auto validation budget",
+        "estimated_usd": estimated,
+        "current_budget_usd": current_budget,
+        "minimum_budget_usd": estimated,
+        "recommended_budget_usd": recommended,
+        "approval_commands": approval_commands,
+        "next_actions": [
+            f"approve validation budget >= {estimated:.6f} USD; recommended {recommended:.2f} USD",
+            "rerun recipe admin automation or run the explicit tuple-smoke approval command",
+        ],
+    }
+
+
+def _recommended_validation_budget_usd(estimated_usd: float) -> float:
+    return math.ceil(max(estimated_usd * 1.10, estimated_usd + 0.01) * 100.0) / 100.0
+
+
+def _budget_approval_commands(command: list[str], recommended_budget_usd: float) -> list[str]:
+    configure = ["gpucall", "admin"]
+    config_dir = _command_arg(command, "--config-dir")
+    if config_dir:
+        configure.extend(["--config-dir", config_dir])
+    configure.extend(
+        [
+            "automation-configure",
+            "--recipe-auto-validation-budget-usd",
+            f"{recommended_budget_usd:.2f}",
+        ]
+    )
+    commands = [
+        shlex.join(configure)
+    ]
+    tuple_smoke = _rerender_tuple_smoke_command(command, recommended_budget_usd)
+    if tuple_smoke:
+        commands.append(tuple_smoke)
+    return commands
+
+
+def _rerender_tuple_smoke_command(command: list[str], recommended_budget_usd: float) -> str | None:
+    if "tuple-smoke" not in command:
+        return None
+    start = command.index("tuple-smoke")
+    rerun = ["gpucall", *command[start:]]
+    for index, value in enumerate(rerun):
+        if value == "--budget-usd" and index + 1 < len(rerun):
+            rerun[index + 1] = f"{recommended_budget_usd:.2f}"
+            break
+    return shlex.join(rerun)
+
+
+def _command_arg(command: list[str], flag: str) -> str | None:
+    try:
+        index = command.index(flag)
+    except ValueError:
+        return None
+    if index + 1 >= len(command):
+        return None
+    return command[index + 1]
 
 
 def _materialization_catalog(config_dir: str | Path | None) -> Any | None:

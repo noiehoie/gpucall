@@ -134,6 +134,7 @@ def summarize_status(status: dict[str, Any]) -> dict[str, Any]:
     observed = report.get("observed") if isinstance(report.get("observed"), dict) else {}
     recipe = report.get("canonical_recipe") if isinstance(report.get("canonical_recipe"), dict) else {}
     activation = report.get("existing_tuple_activation") if isinstance(report.get("existing_tuple_activation"), dict) else {}
+    post_supply = report.get("post_supply_workflow") if isinstance(report.get("post_supply_workflow"), dict) else {}
     result: dict[str, Any] = {
         "pipeline": pipeline,
         "request_id": request_id,
@@ -157,9 +158,17 @@ def summarize_status(status: dict[str, Any]) -> dict[str, Any]:
             validation_gate = activation.get("validation_gate")
             if isinstance(validation_gate, dict):
                 result["validation_gate_decision"] = validation_gate.get("decision") or validation_gate.get("status")
+            budget_approval = _safe_budget_approval(activation.get("budget_approval"))
+            if budget_approval:
+                result["budget_approval"] = budget_approval
             validation_error = _first_validation_error(activation)
             if validation_error:
                 result["validation_error"] = validation_error
+        if post_supply:
+            result["post_supply_workflow_decision"] = post_supply.get("decision")
+            budget_approval = _safe_budget_approval(post_supply.get("budget_approval"))
+            if budget_approval:
+                result["budget_approval"] = budget_approval
         if pipeline == "quality":
             result["quality_kind"] = quality.get("kind")
             result["observed_tuple"] = observed.get("tuple")
@@ -272,6 +281,24 @@ def _first_validation_error(activation: dict[str, Any]) -> str | None:
         if safe:
             return safe
     return None
+
+
+def _safe_budget_approval(value: Any) -> dict[str, Any] | None:
+    if not isinstance(value, dict):
+        return None
+    safe: dict[str, Any] = {}
+    for key in ("status", "code", "owner", "reason", "estimated_usd", "current_budget_usd", "minimum_budget_usd", "recommended_budget_usd"):
+        if key in value:
+            safe[key] = value[key]
+    commands = value.get("approval_commands")
+    if isinstance(commands, list):
+        safe_commands = [_safe_status_text(item) for item in commands]
+        safe["approval_commands"] = [item for item in safe_commands if item]
+    actions = value.get("next_actions")
+    if isinstance(actions, list):
+        safe_actions = [_safe_status_text(item) for item in actions]
+        safe["next_actions"] = [item for item in safe_actions if item]
+    return safe or None
 
 
 def _safe_status_text(value: Any) -> str | None:
