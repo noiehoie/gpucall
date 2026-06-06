@@ -285,7 +285,7 @@ def build_runtime(config_dir: Path) -> Runtime:
         }
     if live_catalog:
         for tuple_name, evidence in live_catalog.items():
-            if evidence.get("status") == "blocked":
+            if _panopticon_evidence_should_open_breaker(evidence):
                 registry.mark_unavailable(tuple_name)
     audit = AuditTrail(state_dir / "audit" / "trail.jsonl")
     artifact_registry = build_artifact_registry(state_dir)
@@ -330,6 +330,32 @@ def build_runtime(config_dir: Path) -> Runtime:
         metrics={"requests": {}, "latency_ms": []},
         panopticon_fetch=panopticon_fetch,
     )
+
+
+def _panopticon_evidence_should_open_breaker(evidence: dict[str, Any]) -> bool:
+    if evidence.get("status") != "blocked":
+        return False
+    findings = evidence.get("findings")
+    if not isinstance(findings, list):
+        return True
+    for finding in findings:
+        if not isinstance(finding, dict):
+            continue
+        raw = finding.get("raw")
+        if isinstance(raw, dict) and raw.get("live_reason") == "panopticon_evidence_expired":
+            continue
+        if finding.get("reason") == "provider panopticon evidence TTL expired":
+            continue
+        if finding.get("live_stock_state") == "unavailable":
+            return True
+        if finding.get("severity") == "error":
+            return True
+    return False
+
+
+def _refresh_runtime_route_validation(runtime: Runtime, config_dir: Path) -> None:
+    if runtime.compiler.require_route_validation:
+        runtime.compiler.validated_routes = validated_route_keys(config_dir=config_dir)
 
 
 def create_app(config_dir: Path | None = None) -> FastAPI:
@@ -547,7 +573,7 @@ def create_app(config_dir: Path | None = None) -> FastAPI:
 
     @app.get("/v2/readiness/intents/{intent}")
     async def intent_readiness(intent: str, runtime: Runtime = Depends(runtime_dep)) -> dict[str, object]:
-        report = await asyncio.to_thread(build_readiness_report, config_dir=root, intent=intent, config=runtime.compiler)
+        report = await asyncio.to_thread(build_readiness_report, config_dir=root, intent=intent, config=runtime.compiler, live=True)
         admission = runtime.dispatcher.admission.snapshot()
         suppressed_tuples = admission.get("suppressed_tuples") if isinstance(admission.get("suppressed_tuples"), dict) else {}
         suppressed_families = admission.get("suppressed_provider_families") if isinstance(admission.get("suppressed_provider_families"), dict) else {}
@@ -668,6 +694,7 @@ def create_app(config_dir: Path | None = None) -> FastAPI:
         idempotency_hash_value = None
         try:
             enforce_gateway_owned_routing(request)
+            _refresh_runtime_route_validation(runtime, root)
             plan = runtime.compiler.compile(request)
             caller_identity = idempotency_identity(http_request)
             caller_request_hash = idempotency_request_hash(request)
@@ -773,6 +800,7 @@ def create_app(config_dir: Path | None = None) -> FastAPI:
         task_request = admission.task_request
         plan = None
         try:
+            _refresh_runtime_route_validation(runtime, root)
             plan = runtime.compiler.compile(task_request)
             await enforce_request_budget(runtime, http_request, plan)
             if admission.stream:
@@ -877,6 +905,7 @@ def create_app(config_dir: Path | None = None) -> FastAPI:
         idempotency_hash_value = None
         try:
             enforce_gateway_owned_routing(request)
+            _refresh_runtime_route_validation(runtime, root)
             plan = runtime.compiler.compile(request)
             owner_identity = idempotency_identity(http_request)
             caller_request_hash = idempotency_request_hash(request)
@@ -976,6 +1005,7 @@ def create_app(config_dir: Path | None = None) -> FastAPI:
         plan = None
         try:
             enforce_gateway_owned_routing(request)
+            _refresh_runtime_route_validation(runtime, root)
             plan = runtime.compiler.compile(request)
             await enforce_request_budget(runtime, http_request, plan)
             tenant_prefix = object_tenant_prefix(runtime, http_request) if request_needs_worker_object_access(request) else None
@@ -1029,6 +1059,7 @@ def create_app(config_dir: Path | None = None) -> FastAPI:
             try:
                 plan = None
                 enforce_gateway_owned_routing(item)
+                _refresh_runtime_route_validation(runtime, root)
                 plan = runtime.compiler.compile(item)
                 await enforce_request_budget(runtime, http_request, plan)
                 tenant_prefix = object_tenant_prefix(runtime, http_request) if request_needs_worker_object_access(item) else None

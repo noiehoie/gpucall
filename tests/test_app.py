@@ -15,6 +15,8 @@ from gpucall.app import (
     idempotency_execution_lock,
     plan_with_worker_refs,
     recover_interrupted_jobs,
+    _panopticon_evidence_should_open_breaker,
+    _refresh_runtime_route_validation,
     safe_tenant_object_prefix,
     warning_headers,
     worker_readable_request,
@@ -88,6 +90,53 @@ def test_sync_endpoint_returns_200(tmp_path) -> None:
 
     assert response.status_code == 200
     assert response.json()["result"]["kind"] == "inline"
+
+
+def test_panopticon_ttl_expiry_does_not_open_runtime_breaker() -> None:
+    assert not _panopticon_evidence_should_open_breaker(
+        {
+            "status": "blocked",
+            "findings": [
+                {
+                    "severity": "error",
+                    "dimension": "panopticon",
+                    "reason": "provider panopticon evidence TTL expired",
+                    "raw": {"live_reason": "panopticon_evidence_expired"},
+                }
+            ],
+        }
+    )
+
+
+def test_panopticon_provider_error_opens_runtime_breaker() -> None:
+    assert _panopticon_evidence_should_open_breaker(
+        {
+            "status": "blocked",
+            "findings": [
+                {
+                    "severity": "error",
+                    "dimension": "endpoint",
+                    "reason": "models_probe_failed",
+                    "raw": {"live_reason": "models_probe_failed"},
+                }
+            ],
+        }
+    )
+
+
+def test_runtime_route_validation_is_refreshed_before_compile(monkeypatch, tmp_path) -> None:
+    from gpucall import app as app_module
+    from gpucall.validation_evidence import route_validation_key
+
+    runtime = app_module.build_runtime(copy_config(tmp_path))
+    runtime.compiler.require_route_validation = True
+    runtime.compiler.validated_routes = set()
+    expected = {route_validation_key("modal-t4-qwen25-0.5b", "infer-summarize-text-light", "sync")}
+    monkeypatch.setattr(app_module, "validated_route_keys", lambda *, config_dir: expected)
+
+    _refresh_runtime_route_validation(runtime, tmp_path)
+
+    assert runtime.compiler.validated_routes == expected
 
 
 def test_database_url_selects_postgres_stores(monkeypatch, tmp_path) -> None:
