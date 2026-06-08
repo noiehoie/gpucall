@@ -5,6 +5,7 @@ from pathlib import Path
 
 
 ROUTE_VALIDATION_HASH_EXCLUDED_PREFIXES = ("tenants/",)
+ROUTE_VALIDATION_HASH_EXCLUDED_PATHS = {"credentials.yml"}
 
 
 def route_validation_config_hash(config_dir: Path | None) -> str | None:
@@ -28,4 +29,6 @@ def route_validation_config_hash(config_dir: Path | None) -> str | None:
 
 
 def _route_validation_hash_excluded(relative_path: str) -> bool:
-    return any(relative_path.startswith(prefix) for prefix in ROUTE_VALIDATION_HASH_EXCLUDED_PREFIXES)
+    return relative_path in ROUTE_VALIDATION_HASH_EXCLUDED_PATHS or any(
+        relative_path.startswith(prefix) for prefix in ROUTE_VALIDATION_HASH_EXCLUDED_PREFIXES
+    )

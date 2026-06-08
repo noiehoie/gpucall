@@ -1516,7 +1516,7 @@ def test_readiness_reports_latest_failed_route_validation_artifact(tmp_path, mon
     assert any("rerun explicit tuple validation" in action for action in failed_recipe_report["next_actions"])
 
 
-def test_route_validation_config_hash_ignores_tenant_files(tmp_path) -> None:
+def test_route_validation_config_hash_ignores_tenant_and_credential_files(tmp_path) -> None:
     from gpucall.validation_evidence import config_hash
 
     root = tmp_path / "config"
@@ -1527,10 +1527,13 @@ def test_route_validation_config_hash_ignores_tenant_files(tmp_path) -> None:
 
     (root / "tenants" / "caller-a.yml").write_text("name: caller-a\napi_key: redacted\n", encoding="utf-8")
     after_tenant = config_hash(root)
+    (root / "credentials.yml").write_text("auth:\n  tenant_keys: redacted\n", encoding="utf-8")
+    after_credentials = config_hash(root)
     (root / "recipes" / "infer.yml").write_text("name: infer\nversion: 2\n", encoding="utf-8")
     after_recipe = config_hash(root)
 
     assert after_tenant == before
+    assert after_credentials == before
     assert after_recipe != before
 
 
