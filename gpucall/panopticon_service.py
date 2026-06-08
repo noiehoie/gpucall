@@ -5,6 +5,7 @@ import json
 import multiprocessing as mp
 import os
 import queue
+import sys
 from contextlib import asynccontextmanager, suppress
 from datetime import datetime, timezone
 from pathlib import Path
@@ -260,6 +261,13 @@ def _adapter_groups(tuples: dict[str, Any]) -> dict[str, dict[str, Any]]:
 
 def _probe_start_method() -> str:
     methods = mp.get_all_start_methods()
+    override = os.environ.get("GPUCALL_PANOPTICON_REFRESH_START_METHOD", "").strip()
+    if override:
+        if override not in methods:
+            raise ValueError(f"unsupported Panopticon refresh start method {override!r}; available: {', '.join(methods)}")
+        return override
+    if sys.platform.startswith("linux") and "fork" in methods:
+        return "fork"
     if "forkserver" in methods:
         return "forkserver"
     if "spawn" in methods:

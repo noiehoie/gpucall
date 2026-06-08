@@ -157,6 +157,25 @@ def test_refresh_panopticon_live_probe_timeout_returns_bounded_evidence(tmp_path
     assert "timed out after 0.1s" in finding["reason"]
 
 
+def test_panopticon_refresh_start_method_env_override(monkeypatch) -> None:
+    import gpucall.panopticon_service as service
+
+    monkeypatch.setenv("GPUCALL_PANOPTICON_REFRESH_START_METHOD", "fork")
+    monkeypatch.setattr(service.mp, "get_all_start_methods", lambda: ["fork", "spawn"])
+
+    assert service._probe_start_method() == "fork"
+
+
+def test_panopticon_refresh_start_method_rejects_unknown_env(monkeypatch) -> None:
+    import gpucall.panopticon_service as service
+
+    monkeypatch.setenv("GPUCALL_PANOPTICON_REFRESH_START_METHOD", "missing")
+    monkeypatch.setattr(service.mp, "get_all_start_methods", lambda: ["fork", "spawn"])
+
+    with pytest.raises(ValueError, match="unsupported Panopticon refresh start method"):
+        service._probe_start_method()
+
+
 def test_panopticon_app_refresh_missing_credentials_returns_bounded_blocker(tmp_path, monkeypatch) -> None:
     path = tmp_path / "provider-panopticon.json"
     tuple_spec = ExecutionTupleSpec(
