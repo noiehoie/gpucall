@@ -5,6 +5,7 @@ import json
 import re
 from datetime import datetime, timezone
 
+from gpucall.cost_policy import effective_cost_policy, tuple_cost_policy_rejection_reason
 from gpucall.costing import budget_reservation_usd, estimate_tuple_cost
 from gpucall.domain import (
     CompileArtifact,
@@ -642,45 +643,17 @@ class GovernanceCompiler:
         if not auto_selected:
             return None
         timeout = min(request.timeout_seconds or recipe.timeout_seconds, self.policy.max_timeout_seconds)
-        estimate = self._cost_estimate(tuple, request, recipe, timeout)
-        policy = self._effective_cost_policy(recipe)
-        explicit_budget = any(
-            value is not None
-            for value in (
-                policy.max_estimated_cost_usd,
-                policy.max_cold_start_cost_usd,
-                policy.max_idle_cost_usd,
-            )
+        required_len = self._required_model_len(request, recipe)
+        output_tokens = output_context_tokens(request)
+        reason, _estimate = tuple_cost_policy_rejection_reason(
+            policy=self.policy,
+            tuple=tuple,
+            recipe=recipe,
+            timeout_seconds=timeout,
+            input_tokens=max(0, required_len - output_tokens),
+            output_tokens=output_tokens,
         )
-        if policy.max_cold_start_cost_usd is not None and estimate["cold_start_cost_usd"] > float(policy.max_cold_start_cost_usd):
-            return (
-                f"estimated cold start cost {estimate['cold_start_cost_usd']:.4f} exceeds "
-                f"max_cold_start_cost_usd {float(policy.max_cold_start_cost_usd):.4f}"
-            )
-        if policy.max_idle_cost_usd is not None and estimate["idle_cost_usd"] > float(policy.max_idle_cost_usd):
-            return (
-                f"estimated idle cost {estimate['idle_cost_usd']:.4f} exceeds "
-                f"max_idle_cost_usd {float(policy.max_idle_cost_usd):.4f}"
-            )
-        if policy.max_estimated_cost_usd is not None and estimate["estimated_cost_usd"] > float(policy.max_estimated_cost_usd):
-            return (
-                f"estimated cost {estimate['estimated_cost_usd']:.4f} exceeds "
-                f"max_estimated_cost_usd {float(policy.max_estimated_cost_usd):.4f}"
-            )
-        require_budget = policy.require_budget_for_high_cost_tuple
-        if require_budget is None:
-            require_budget = True
-        threshold = policy.high_cost_threshold_usd
-        if threshold is None:
-            threshold = 5.0
-        if require_budget and not explicit_budget and estimate["estimated_cost_usd"] > float(threshold):
-            return (
-                f"estimated cost {estimate['estimated_cost_usd']:.4f} exceeds high_cost_threshold_usd "
-                f"{float(threshold):.4f} without explicit budget"
-            )
-        if policy.require_fresh_price_for_budget and estimate.get("price_freshness") != "fresh":
-            return f"tuple price is {estimate.get('price_freshness')} under strict budget policy"
-        return None
+        return reason
 
     def _cost_estimate(
         self,
@@ -701,30 +674,7 @@ class GovernanceCompiler:
         )
 
     def _effective_cost_policy(self, recipe: Recipe) -> CostPolicy:
-        base = self.policy.cost_policy
-        override = recipe.cost_policy
-        if override is None:
-            return base
-        return CostPolicy(
-            max_estimated_cost_usd=override.max_estimated_cost_usd
-            if override.max_estimated_cost_usd is not None
-            else base.max_estimated_cost_usd,
-            max_cold_start_cost_usd=override.max_cold_start_cost_usd
-            if override.max_cold_start_cost_usd is not None
-            else base.max_cold_start_cost_usd,
-            max_idle_cost_usd=override.max_idle_cost_usd
-            if override.max_idle_cost_usd is not None
-            else base.max_idle_cost_usd,
-            require_budget_for_high_cost_tuple=override.require_budget_for_high_cost_tuple
-            if override.require_budget_for_high_cost_tuple is not None
-            else base.require_budget_for_high_cost_tuple,
-            high_cost_threshold_usd=override.high_cost_threshold_usd
-            if override.high_cost_threshold_usd is not None
-            else base.high_cost_threshold_usd,
-            require_fresh_price_for_budget=override.require_fresh_price_for_budget
-            if override.require_fresh_price_for_budget is not None
-            else base.require_fresh_price_for_budget,
-        )
+        return effective_cost_policy(self.policy, recipe)
 
     @staticmethod
     def _inline_mime_prefixes(recipe: Recipe) -> list[str]:

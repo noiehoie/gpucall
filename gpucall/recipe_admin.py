@@ -456,9 +456,11 @@ def process_inbox(
         raise PermissionError("recipe inbox auto-materialize is disabled")
     inbox = Path(inbox_dir)
     processed = Path(processed_dir) if processed_dir else inbox / "processed"
+    processing = inbox / "processing"
     failed = Path(failed_dir) if failed_dir else inbox / "failed"
     reports = Path(report_dir) if report_dir else inbox / "reports"
     processed.mkdir(parents=True, exist_ok=True)
+    processing.mkdir(parents=True, exist_ok=True)
     failed.mkdir(parents=True, exist_ok=True)
     reports.mkdir(parents=True, exist_ok=True)
     index = RecipeRequestIndex(index_db or default_recipe_request_index_path(inbox))
@@ -466,24 +468,27 @@ def process_inbox(
     output.mkdir(parents=True, exist_ok=True)
     catalog = _materialization_catalog(config_dir)
     results: list[dict[str, Any]] = []
-    for path in sorted(inbox.glob("*.json")):
-        if path.parent != inbox:
+    for path in sorted([*inbox.glob("*.json"), *processing.glob("*.json")]):
+        if path.parent not in {inbox, processing}:
             continue
         current_path = path
         request_id = path.stem
         try:
-            submission = _load_json(str(path))
-            request_id = index.upsert_pending(path, submission)["request_id"]
+            submission = _load_json(str(current_path))
+            request_id = index.upsert_pending(current_path, submission)["request_id"]
+            if current_path.parent == inbox:
+                current_path = move_submission(current_path, processing / current_path.name)
+            index.mark_processing(request_id, original_path=current_path)
             draft_validation = validate_draft_artifact(submission, config_dir=config_dir)
             if draft_validation.get("decision") == "REJECTED_DRAFT":
-                report_path = reports / f"{path.stem}.report.json"
+                report_path = reports / f"{request_id}.report.json"
                 rejection_report = {
                     "schema_version": 1,
                     "phase": "recipe-request-processing",
                     "request_id": request_id,
                     "decision": "REJECTED_DRAFT",
                     "draft_validation": draft_validation,
-                    "submission_path": str(path),
+                    "submission_path": str(current_path),
                 }
                 report_path.write_text(json.dumps(rejection_report, ensure_ascii=False, indent=2, sort_keys=True) + "\n", encoding="utf-8")
                 destination = move_submission(current_path, failed / current_path.name)
@@ -519,7 +524,7 @@ def process_inbox(
                 recipe_path = write_recipe_yaml(recipe, output, force=force, allow_contract_narrowing=allow_contract_narrowing)
                 report["processing_action"] = "recipe_written"
             report["recipe_path"] = str(recipe_path)
-            report["submission_path"] = str(path)
+            report["submission_path"] = str(current_path)
             report["catalog_readiness"] = _recipe_readiness_from_review(review, config_dir=config_dir)
             existing_activation = _auto_existing_tuple_report(
                 review,
@@ -544,9 +549,9 @@ def process_inbox(
             )
             if promotion is not None:
                 report["promotion"] = promotion
-            report_path = reports / f"{path.stem}.report.json"
+            report_path = reports / f"{request_id}.report.json"
             report_path.write_text(json.dumps(report, ensure_ascii=False, indent=2, sort_keys=True) + "\n", encoding="utf-8")
-            destination = processed / path.name
+            destination = processed / current_path.name
             destination = move_submission(current_path, destination)
             current_path = destination
             index.mark_processed(request_id, original_path=destination, report_path=report_path, recipe_path=recipe_path)
@@ -1608,6 +1613,7 @@ def recipe_request_status(request_id: str, inbox_dir: str | Path, *, index_db: s
         index_record = RecipeRequestIndex(db_path).get(request_id)
     candidates = [
         ("pending", inbox / f"{request_id}.json"),
+        ("processing", inbox / "processing" / f"{request_id}.json"),
         ("processed", inbox / "processed" / f"{request_id}.json"),
         ("failed", inbox / "failed" / f"{request_id}.json"),
     ]

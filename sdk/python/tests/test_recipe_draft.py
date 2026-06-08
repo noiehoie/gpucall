@@ -309,6 +309,23 @@ def test_recipe_draft_cli_recipe_status_reads_report(tmp_path, capsys) -> None:
     }
 
 
+def test_recipe_draft_cli_recipe_status_reports_processing(tmp_path, capsys) -> None:
+    request_id = "rr-test-processing"
+    processing = tmp_path / "inbox" / "processing"
+    processing.mkdir(parents=True)
+    (processing / f"{request_id}.json").write_text("{}", encoding="utf-8")
+
+    assert main(["status", "--pipeline", "recipe", "--request-id", request_id, "--inbox-dir", str(tmp_path / "inbox")]) == 0
+    output = json.loads(capsys.readouterr().out)
+
+    assert output["pipeline"] == "recipe"
+    assert output["request_id"] == request_id
+    assert output["status"] == "processing"
+    assert output["report_available"] is False
+    assert output["status_path"].endswith("processing/rr-test-processing.json")
+    assert "status_mtime" in output
+
+
 def test_recipe_draft_status_summarizes_existing_tuple_validation_failure() -> None:
     output = summarize_status(
         {

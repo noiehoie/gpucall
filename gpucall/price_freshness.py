@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
+from collections.abc import Mapping
 from typing import Any
 
 from gpucall.domain import ExecutionTupleSpec, PriceFreshness
@@ -68,4 +69,75 @@ def parse_time(value: str | None) -> datetime | None:
         return None
     if parsed.tzinfo is None:
         return parsed.replace(tzinfo=timezone.utc)
+    return parsed
+
+
+def tuple_with_live_price_evidence(
+    tuple: ExecutionTupleSpec,
+    evidence: Mapping[str, Any] | None,
+    *,
+    now: datetime | None = None,
+) -> ExecutionTupleSpec:
+    overlay = live_price_overlay(evidence, now=now)
+    if overlay is None:
+        return tuple
+    return tuple.model_copy(update=overlay)
+
+
+def tuples_with_live_price_evidence(
+    tuples: Mapping[str, ExecutionTupleSpec],
+    evidence_by_tuple: Mapping[str, Mapping[str, Any]] | None,
+    *,
+    now: datetime | None = None,
+) -> dict[str, ExecutionTupleSpec]:
+    evidence_by_tuple = evidence_by_tuple or {}
+    return {
+        name: tuple_with_live_price_evidence(tuple, evidence_by_tuple.get(name), now=now)
+        for name, tuple in tuples.items()
+    }
+
+
+def live_price_overlay(evidence: Mapping[str, Any] | None, *, now: datetime | None = None) -> dict[str, Any] | None:
+    if not isinstance(evidence, Mapping):
+        return None
+    now = now or datetime.now(timezone.utc)
+    findings = evidence.get("findings")
+    if not isinstance(findings, list):
+        return None
+    best: tuple[datetime, dict[str, Any]] | None = None
+    for finding in findings:
+        if not isinstance(finding, Mapping):
+            continue
+        if finding.get("dimension") != "price" or finding.get("severity") == "error":
+            continue
+        price = _finite_float(finding.get("live_price_per_second"))
+        if price is None:
+            continue
+        observed = parse_time(str(finding.get("observed_at") or ""))
+        expires = parse_time(str(finding.get("expires_at") or ""))
+        if observed is None or expires is None or expires <= now:
+            continue
+        ttl_seconds = max(1.0, (expires - observed).total_seconds())
+        overlay = {
+            "cost_per_second": price,
+            "configured_price_source": str(finding.get("live_price_source") or finding.get("source") or "provider-panopticon"),
+            "configured_price_observed_at": observed.isoformat(),
+            "configured_price_ttl_seconds": ttl_seconds,
+        }
+        if best is None or observed > best[0]:
+            best = (observed, overlay)
+    return best[1] if best is not None else None
+
+
+def _finite_float(value: Any) -> float | None:
+    if isinstance(value, bool):
+        return None
+    try:
+        parsed = float(value)
+    except (TypeError, ValueError):
+        return None
+    if parsed < 0:
+        return None
+    if parsed in (float("inf"), float("-inf")) or parsed != parsed:
+        return None
     return parsed

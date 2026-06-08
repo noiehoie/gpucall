@@ -6,11 +6,12 @@ from pathlib import Path
 from typing import Any
 
 from gpucall.config import ConfigError, default_state_dir, load_config
+from gpucall.cost_policy import tuple_cost_policy_rejection_reason
 from gpucall.credentials import load_credentials
 from gpucall.domain import ExecutionMode, Recipe, recipe_requirements
 from gpucall.panopticon import default_panopticon_path, store_panopticon_evidence
 from gpucall.panopticon_client import PanopticonClientConfig, fetch_panopticon_snapshot, panopticon_report_summary
-from gpucall.price_freshness import tuple_configured_price_freshness
+from gpucall.price_freshness import tuple_configured_price_freshness, tuple_with_live_price_evidence
 from gpucall.routing import tuple_route_rejection_reason
 from gpucall.tuple_catalog import live_tuple_catalog_evidence
 from gpucall.validation_evidence import (
@@ -199,29 +200,41 @@ def _recipe_readiness(
     rejected: list[dict[str, Any]] = []
     required_inputs = _required_input_contracts(recipe)
     for tuple in sorted(config.tuples.values(), key=lambda item: item.name):
+        live = (live_evidence or {}).get(tuple.name)
+        priced_tuple = tuple_with_live_price_evidence(tuple, live if isinstance(live, Mapping) else None)
         for mode in modes:
             reason = tuple_route_rejection_reason(
                 policy=config.policy,
                 recipe=recipe,
-                tuple=tuple,
-                model=config.models.get(tuple.model_ref) if tuple.model_ref else None,
-                engine=config.engines.get(tuple.engine_ref) if tuple.engine_ref else None,
+                tuple=priced_tuple,
+                model=config.models.get(priced_tuple.model_ref) if priced_tuple.model_ref else None,
+                engine=config.engines.get(priced_tuple.engine_ref) if priced_tuple.engine_ref else None,
                 mode=mode,
                 required_len=requirements.context_budget_tokens,
                 required_input_contracts=required_inputs,
                 auto_selected=True,
             )
-            validation_key = route_validation_key(tuple.name, recipe.name, mode.value)
+            validation_key = route_validation_key(priced_tuple.name, recipe.name, mode.value)
             validation = (route_validation_evidence or {}).get(validation_key)
             validation_status = (route_validation_statuses or {}).get(validation_key)
+            cost_policy_reason, cost_estimate = tuple_cost_policy_rejection_reason(
+                policy=config.policy,
+                tuple=priced_tuple,
+                recipe=recipe,
+                timeout_seconds=int(recipe.timeout_seconds),
+                input_tokens=int(requirements.context_budget_tokens),
+                output_tokens=0,
+            )
             row = {
-                "tuple": tuple.name,
+                "tuple": priced_tuple.name,
                 "mode": mode.value,
-                "vram_gb": tuple.vram_gb,
-                "max_model_len": tuple.max_model_len,
-                "price_freshness": tuple_configured_price_freshness(tuple).value,
+                "vram_gb": priced_tuple.vram_gb,
+                "max_model_len": priced_tuple.max_model_len,
+                "price_freshness": tuple_configured_price_freshness(priced_tuple).value,
+                "cost_policy_reason": cost_policy_reason,
+                "cost_estimate": _readiness_cost_estimate(cost_estimate),
                 "live_validation_artifact": validation.path if validation else None,
-                "route_validation_required": route_validation_required_for_tuple(tuple),
+                "route_validation_required": route_validation_required_for_tuple(priced_tuple),
             }
             if validation_status is not None:
                 row["latest_route_validation_artifact"] = validation_status.path
@@ -229,7 +242,6 @@ def _recipe_readiness(
                 row["route_validation_status"] = "accepted" if validation_status.accepted else "rejected"
                 if validation_status.reason:
                     row["route_validation_reason"] = validation_status.reason
-            live = (live_evidence or {}).get(tuple.name)
             if isinstance(live, Mapping):
                 row["live_catalog_checked"] = bool(live.get("checked"))
                 row["live_catalog_status"] = live.get("status")
@@ -251,6 +263,9 @@ def _recipe_readiness(
                 if row["route_validation_required"] and validation is None and row.get("live_blocked") is not True:
                     row["live_blocked"] = True
                     row["live_reason"] = _route_validation_block_reason(validation_status)
+                if cost_policy_reason is not None and row.get("live_blocked") is not True:
+                    row["live_blocked"] = True
+                    row["live_reason"] = _cost_policy_live_reason(cost_policy_reason, row.get("price_freshness"))
                 eligible.append(row)
             else:
                 row["reason"] = reason
@@ -315,10 +330,33 @@ def classify_shipment_status(report: dict[str, Any]) -> str:
     if "live_stock_unavailable" in reasons:
         return "provider_lack"
 
+    if any(str(r).startswith("price_") and "strict_budget_policy" in str(r) for r in reasons):
+        return "price_unknown"
+
     if any(r in {"missing_route_validation_evidence", "route_validation_rejected"} for r in reasons):
         return "validation_lack"
 
     return "configuration_blocked"
+
+
+def _readiness_cost_estimate(estimate: Mapping[str, Any]) -> dict[str, Any]:
+    return {
+        "estimated_cost_usd": estimate.get("estimated_cost_usd"),
+        "budget_reservation_usd": estimate.get("budget_reservation_usd"),
+        "price_freshness": estimate.get("price_freshness"),
+        "configured_price_source": estimate.get("configured_price_source"),
+        "configured_price_observed_at": estimate.get("configured_price_observed_at"),
+        "configured_price_ttl_seconds": estimate.get("configured_price_ttl_seconds"),
+    }
+
+
+def _cost_policy_live_reason(reason: str, price_freshness: object) -> str:
+    if "under strict budget policy" in reason:
+        freshness = str(price_freshness or "unknown")
+        if freshness not in {"fresh", "stale", "unknown"}:
+            freshness = "unknown"
+        return f"price_{freshness}_under_strict_budget_policy"
+    return "cost_policy_blocked"
 
 
 def _allowed_modes(recipe: Recipe) -> list[ExecutionMode]:
@@ -453,6 +491,8 @@ def _next_actions(recipe: Recipe, eligible: list[Mapping[str, Any]], policy_bloc
         actions.append("rerun explicit tuple validation after the provider endpoint is stable")
     if "validation_config_hash_mismatch" in live_reasons or "validation_commit_mismatch" in live_reasons:
         actions.append("refresh route validation evidence for the current config and commit")
+    if any(reason.startswith("price_") and "strict_budget_policy" in reason for reason in live_reasons):
+        actions.append("refresh provider price evidence or explicitly relax strict budget policy")
     if not any(item.get("live_validation_artifact") for item in eligible):
         actions.append("run explicit billable validation with gpucall-recipe-admin promote --run-validation")
     if not recipe.auto_select:

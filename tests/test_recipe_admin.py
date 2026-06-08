@@ -427,6 +427,43 @@ def test_admin_process_inbox_materializes_submission(tmp_path) -> None:
     assert status["index_record"]["status"] == "processed"
 
 
+def test_admin_process_inbox_marks_submission_processing_during_long_work(tmp_path, monkeypatch) -> None:
+    inbox = tmp_path / "inbox"
+    output_dir = tmp_path / "recipes"
+    inbox.mkdir()
+    submission = {
+        "kind": "gpucall.recipe_request_submission",
+        "request_id": "rr-processing",
+        "intake": {
+            "phase": "deterministic-intake",
+            "sanitized_request": {
+                "task": "infer",
+                "mode": "sync",
+                "intent": "summarize_text",
+                "classification": "confidential",
+                "desired_capabilities": ["summarization"],
+                "error": {"context": {"context_budget_tokens": 40000}},
+            },
+            "redaction_report": {"prompt_body_forwarded": False, "data_ref_uri_forwarded": False, "presigned_url_forwarded": False},
+        },
+        "draft": None,
+    }
+    (inbox / "rr-processing.json").write_text(json.dumps(submission), encoding="utf-8")
+
+    def fake_existing_activation(*_args, **_kwargs):
+        status = recipe_request_status("rr-processing", inbox)
+        assert status["state"] == "processing"
+        assert (inbox / "processing" / "rr-processing.json").exists()
+        return {"decision": "READY_FOR_BILLABLE_VALIDATION"}
+
+    monkeypatch.setattr("gpucall.recipe_admin._auto_existing_tuple_report", fake_existing_activation)
+
+    results = process_inbox(inbox_dir=inbox, output_dir=output_dir, accept_all=True)
+
+    assert results[0]["ok"] is True
+    assert recipe_request_status("rr-processing", inbox)["state"] == "processed"
+
+
 def test_admin_process_inbox_rejects_weak_draft_before_recipe_write(tmp_path) -> None:
     inbox = tmp_path / "inbox"
     output_dir = tmp_path / "recipes"

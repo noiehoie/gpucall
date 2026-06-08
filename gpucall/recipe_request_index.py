@@ -79,6 +79,21 @@ class RecipeRequestIndex:
             )
         return metadata
 
+    def mark_processing(self, request_id: str, *, original_path: str | Path) -> None:
+        now = _now()
+        source = Path(original_path)
+        with self._connect() as conn:
+            conn.execute(
+                """
+                UPDATE recipe_requests
+                SET status = 'processing',
+                    original_path = ?,
+                    updated_at = ?
+                WHERE request_id = ?
+                """,
+                (str(source), now, request_id),
+            )
+
     def mark_processed(
         self,
         request_id: str,

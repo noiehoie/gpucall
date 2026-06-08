@@ -16,6 +16,7 @@ from gpucall.app import (
     plan_with_worker_refs,
     recover_interrupted_jobs,
     _panopticon_evidence_should_open_breaker,
+    _refresh_runtime_live_price_evidence,
     _refresh_runtime_route_validation,
     safe_tenant_object_prefix,
     warning_headers,
@@ -137,6 +138,61 @@ def test_runtime_route_validation_is_refreshed_before_compile(monkeypatch, tmp_p
     _refresh_runtime_route_validation(runtime, tmp_path)
 
     assert runtime.compiler.validated_routes == expected
+
+
+def test_runtime_live_price_evidence_is_refreshed_before_compile(monkeypatch) -> None:
+    from types import SimpleNamespace
+
+    from gpucall.config import load_config
+    from gpucall.price_freshness import tuple_configured_price_freshness
+
+    config = load_config(Path("config"))
+    stale = config.tuples["local-echo"].model_copy(
+        update={
+            "cost_per_second": 0.001,
+            "configured_price_source": "test-price-sheet",
+            "configured_price_observed_at": "2026-01-01T00:00:00+00:00",
+            "configured_price_ttl_seconds": 60,
+        }
+    )
+    now = datetime.now(timezone.utc)
+    runtime = SimpleNamespace(
+        compiler=SimpleNamespace(tuples={"local-echo": stale}),
+        dispatcher=SimpleNamespace(tuple_costs={"local-echo": float(stale.cost_per_second)}),
+        panopticon_fetch={},
+    )
+    monkeypatch.setattr(
+        "gpucall.app.fetch_panopticon_snapshot",
+        lambda tuple_scope: {
+            "status": "ok",
+            "snapshot": {
+                "local-echo": {
+                    "tuple": "local-echo",
+                    "adapter": "echo",
+                    "status": "live_revalidated",
+                    "checked": True,
+                    "findings": [
+                        {
+                            "tuple": "local-echo",
+                            "adapter": "echo",
+                            "dimension": "price",
+                            "severity": "info",
+                            "source": "test-live-price",
+                            "live_price_per_second": 0.002,
+                            "observed_at": now.isoformat(),
+                            "expires_at": now.replace(year=now.year + 1).isoformat(),
+                        }
+                    ],
+                }
+            },
+        },
+    )
+
+    _refresh_runtime_live_price_evidence(runtime)
+
+    assert runtime.compiler.tuples["local-echo"].cost_per_second == 0.002
+    assert tuple_configured_price_freshness(runtime.compiler.tuples["local-echo"]).value == "fresh"
+    assert runtime.dispatcher.tuple_costs["local-echo"] == 0.002
 
 
 def test_database_url_selects_postgres_stores(monkeypatch, tmp_path) -> None:

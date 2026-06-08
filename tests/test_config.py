@@ -40,7 +40,26 @@ def copy_config(tmp_path: Path) -> Path:
     source = Path(__file__).resolve().parents[1] / "config"
     root = tmp_path / "config"
     shutil.copytree(source, root)
+    refresh_configured_price_observed_at(root)
     return root
+
+
+def refresh_configured_price_observed_at(root: Path) -> None:
+    now = datetime.now(timezone.utc).isoformat()
+    for path in root.rglob("*.yml"):
+        payload = yaml.safe_load(path.read_text(encoding="utf-8"))
+        if not isinstance(payload, dict):
+            continue
+        changed = False
+        if "configured_price_observed_at" in payload:
+            payload["configured_price_observed_at"] = now
+            changed = True
+        common = payload.get("common")
+        if isinstance(common, dict) and "configured_price_observed_at" in common:
+            common["configured_price_observed_at"] = now
+            changed = True
+        if changed:
+            path.write_text(yaml.safe_dump(payload, sort_keys=False), encoding="utf-8")
 
 
 def enable_recipe_auto_select(root: Path, *recipe_names: str) -> None:
@@ -1073,6 +1092,162 @@ def test_readiness_blocks_local_author_ollama_without_validation(tmp_path, monke
     blocked = next(item for item in recipe["live_blocked_tuples"] if item["tuple"] == "local-author-ollama")
     assert blocked["route_validation_required"] is True
     assert blocked["live_reason"] == "missing_route_validation_evidence"
+
+
+def test_readiness_blocks_strict_budget_stale_price(tmp_path, monkeypatch) -> None:
+    from datetime import datetime, timedelta, timezone
+
+    from gpucall.domain import CostPolicy
+    from gpucall.execution.contracts import official_contract, official_contract_hash
+    from gpucall.readiness import build_readiness_report
+    from gpucall.validation_evidence import config_hash, git_commit
+
+    root = copy_config(tmp_path)
+    config = load_config(root)
+    tuple_name = "modal-t4-qwen25-0.5b"
+    recipe_name = "infer-summarize-text-light"
+    config.policy = config.policy.model_copy(
+        update={
+            "tuples": config.policy.tuples.model_copy(update={"allow": [tuple_name]}),
+            "cost_policy": CostPolicy(max_estimated_cost_usd=1.0, require_fresh_price_for_budget=True),
+        }
+    )
+    config.tuples[tuple_name] = config.tuples[tuple_name].model_copy(
+        update={
+            "cost_per_second": 0.001,
+            "configured_price_source": "test-price-sheet",
+            "configured_price_observed_at": (datetime.now(timezone.utc) - timedelta(days=2)).isoformat(),
+            "configured_price_ttl_seconds": 60,
+        }
+    )
+    artifact_dir = tmp_path / "validation"
+    artifact_dir.mkdir()
+    contract = official_contract(config.tuples[tuple_name])
+    (artifact_dir / "accepted.json").write_text(
+        json.dumps(
+            {
+                "tuple": tuple_name,
+                "recipe": recipe_name,
+                "mode": "sync",
+                "started_at": "2026-01-01T00:00:00+00:00",
+                "ended_at": "2026-01-01T00:00:01+00:00",
+                "commit": git_commit(),
+                "config_hash": config_hash(root),
+                "governance_hash": "c" * 64,
+                "validation_schema_version": 1,
+                "passed": True,
+                "cleanup": {"required": False, "completed": None},
+                "cost": {"observed": None, "estimated": None},
+                "audit": {"event_ids": []},
+                "official_contract": contract,
+                "official_contract_hash": official_contract_hash(contract),
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr("gpucall.readiness.load_credentials", lambda: {})
+
+    report = build_readiness_report(config_dir=root, config=config, recipe=recipe_name, validation_dir=artifact_dir)
+
+    recipe = report["recipes"][0]
+    assert recipe["live_ready_tuple_count"] == 0
+    assert recipe["shipment_status"] == "price_unknown"
+    blocked = next(item for item in recipe["live_blocked_tuples"] if item["tuple"] == tuple_name)
+    assert blocked["live_reason"] == "price_stale_under_strict_budget_policy"
+    assert blocked["cost_policy_reason"] == "tuple price is stale under strict budget policy"
+    assert any("refresh provider price evidence" in action for action in recipe["next_actions"])
+
+
+def test_readiness_uses_fresh_panopticon_price_for_strict_budget(tmp_path, monkeypatch) -> None:
+    from datetime import datetime, timezone
+
+    from gpucall.domain import CostPolicy
+    from gpucall.execution.contracts import official_contract, official_contract_hash
+    from gpucall.panopticon import store_panopticon_evidence
+    from gpucall.readiness import build_readiness_report
+    from gpucall.validation_evidence import config_hash, git_commit
+
+    root = copy_config(tmp_path)
+    config = load_config(root)
+    tuple_name = "modal-t4-qwen25-0.5b"
+    recipe_name = "infer-summarize-text-light"
+    config.policy = config.policy.model_copy(
+        update={
+            "tuples": config.policy.tuples.model_copy(update={"allow": [tuple_name]}),
+            "cost_policy": CostPolicy(max_estimated_cost_usd=1.0, require_fresh_price_for_budget=True),
+        }
+    )
+    config.tuples[tuple_name] = config.tuples[tuple_name].model_copy(
+        update={
+            "cost_per_second": 0.001,
+            "configured_price_source": "test-price-sheet",
+            "configured_price_observed_at": "2026-01-01T00:00:00+00:00",
+            "configured_price_ttl_seconds": 60,
+        }
+    )
+    artifact_dir = tmp_path / "validation"
+    artifact_dir.mkdir()
+    contract = official_contract(config.tuples[tuple_name])
+    (artifact_dir / "accepted.json").write_text(
+        json.dumps(
+            {
+                "tuple": tuple_name,
+                "recipe": recipe_name,
+                "mode": "sync",
+                "started_at": "2026-01-01T00:00:00+00:00",
+                "ended_at": "2026-01-01T00:00:01+00:00",
+                "commit": git_commit(),
+                "config_hash": config_hash(root),
+                "governance_hash": "c" * 64,
+                "validation_schema_version": 1,
+                "passed": True,
+                "cleanup": {"required": False, "completed": None},
+                "cost": {"observed": None, "estimated": None},
+                "audit": {"event_ids": []},
+                "official_contract": contract,
+                "official_contract_hash": official_contract_hash(contract),
+            }
+        ),
+        encoding="utf-8",
+    )
+    state = tmp_path / "state"
+    panopticon_path = state / "catalog" / "provider-panopticon.json"
+    store_panopticon_evidence(
+        {
+            tuple_name: {
+                "tuple": tuple_name,
+                "adapter": "modal",
+                "status": "live_revalidated",
+                "checked": True,
+                "findings": [
+                    {
+                        "tuple": tuple_name,
+                        "adapter": "modal",
+                        "dimension": "price",
+                        "severity": "info",
+                        "source": "test-live-price",
+                        "live_price_per_second": 0.001,
+                    }
+                ],
+            }
+        },
+        panopticon_path,
+        now=datetime.now(timezone.utc),
+        ttl_seconds=3600,
+    )
+    monkeypatch.setattr("gpucall.readiness.load_credentials", lambda: {})
+
+    report = build_readiness_report(
+        config_dir=root,
+        config=config,
+        recipe=recipe_name,
+        validation_dir=artifact_dir,
+        panopticon_path=panopticon_path,
+    )
+
+    recipe = report["recipes"][0]
+    assert any(item["tuple"] == tuple_name and item["price_freshness"] == "fresh" for item in recipe["live_ready_tuples"])
+    assert recipe["shipment_status"] == "shippable"
 
 
 def test_readiness_reports_live_catalog_blocked_tuple(tmp_path, monkeypatch) -> None:

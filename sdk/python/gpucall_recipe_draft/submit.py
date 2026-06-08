@@ -88,6 +88,7 @@ def get_submission_status(*, request_id: str, inbox_dir: str | Path, pipeline: s
         return _status_from_report(request_id=request_id, pipeline=pipeline, report_path=report_path)
     candidates = [
         ("pending", inbox / f"{request_id}.json"),
+        ("processing", inbox / "processing" / f"{request_id}.json"),
         ("processed", inbox / "processed" / f"{request_id}.json"),
         ("failed", inbox / "failed" / f"{request_id}.json"),
     ]
@@ -98,6 +99,8 @@ def get_submission_status(*, request_id: str, inbox_dir: str | Path, pipeline: s
                 "request_id": request_id,
                 "status": state,
                 "report_available": False,
+                "status_path": str(path),
+                "status_mtime": datetime.fromtimestamp(path.stat().st_mtime, UTC).isoformat(),
             }
     return {
         "pipeline": pipeline,
@@ -176,6 +179,8 @@ def summarize_status(status: dict[str, Any]) -> dict[str, Any]:
     elif index:
         result["task"] = index.get("task")
         result["intent"] = index.get("intent")
+        if index.get("updated_at"):
+            result["updated_at"] = index.get("updated_at")
         if pipeline == "quality":
             result["quality_kind"] = index.get("quality_kind")
             result["observed_tuple"] = index.get("observed_tuple")
@@ -235,6 +240,7 @@ def _remote_status_command(*, inbox_dir: str, request_id: str, pipeline: str) ->
         f"id={shlex.quote(request_id)}; "
         'report="$inbox/reports/$id.report.json"; '
         'processed="$inbox/processed/$id.json"; '
+        'processing="$inbox/processing/$id.json"; '
         'failed="$inbox/failed/$id.json"; '
         'pending="$inbox/$id.json"; '
         'if [ -f "$report" ]; then '
@@ -243,6 +249,8 @@ def _remote_status_command(*, inbox_dir: str, request_id: str, pipeline: str) ->
         "printf '}\\n'; "
         'elif [ -f "$processed" ]; then '
         f"printf '{{\"pipeline\":{pipeline_json},\"request_id\":{request_id_json},\"status\":\"processed\",\"report_available\":false}}\\n'; "
+        'elif [ -f "$processing" ]; then '
+        f"printf '{{\"pipeline\":{pipeline_json},\"request_id\":{request_id_json},\"status\":\"processing\",\"report_available\":false}}\\n'; "
         'elif [ -f "$failed" ]; then '
         f"printf '{{\"pipeline\":{pipeline_json},\"request_id\":{request_id_json},\"status\":\"failed\",\"report_available\":false}}\\n'; "
         'elif [ -f "$pending" ]; then '
