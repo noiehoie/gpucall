@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import sys
+import time
 from types import SimpleNamespace
 
 import pytest
@@ -118,6 +119,42 @@ def test_refresh_panopticon_configured_provider_missing_target_returns_bounded_b
             "next_action": "Run provider supply provisioning for RunPod, or set tuple target to a live RunPod endpoint before refreshing endpoint evidence.",
         }
     ]
+
+
+def test_refresh_panopticon_live_probe_timeout_returns_bounded_evidence(tmp_path, monkeypatch) -> None:
+    path = tmp_path / "provider-panopticon.json"
+    tuple_spec = ExecutionTupleSpec(
+        name="runpod-h100",
+        adapter="runpod-vllm-serverless",
+        gpu="H100",
+        vram_gb=80,
+        max_model_len=8192,
+        cost_per_second=0.001,
+        target="rp-endpoint",
+    )
+    monkeypatch.setenv("GPUCALL_PANOPTICON_REFRESH_TIMEOUT_SECONDS", "0.1")
+    monkeypatch.setattr("gpucall.panopticon_service._probe_start_method", lambda: "fork")
+    monkeypatch.setattr("gpucall.panopticon_service.load_config", lambda _config_dir: SimpleNamespace(tuples={"runpod-h100": tuple_spec}))
+    monkeypatch.setattr("gpucall.panopticon_service.load_credentials", lambda: {"runpod": {"api_key": "test"}})
+    monkeypatch.setattr("gpucall.panopticon_service.configured_credentials", lambda: [])
+
+    def hanging_live_tuple_catalog_evidence(_tuples, _credentials):
+        time.sleep(5)
+        return {}
+
+    monkeypatch.setattr("gpucall.panopticon_service.live_tuple_catalog_evidence", hanging_live_tuple_catalog_evidence)
+
+    started = time.monotonic()
+    report = refresh_panopticon(config_dir=tmp_path, panopticon_path=path, tuple_names=["runpod-h100"])
+    elapsed = time.monotonic() - started
+
+    assert elapsed < 2
+    assert report["probe_timeout_seconds"] == 0.1
+    assert report["observed_tuple_count"] == 1
+    assert report["snapshot"]["runpod-h100"]["status"] == "blocked"
+    finding = report["snapshot"]["runpod-h100"]["findings"][0]
+    assert finding["dimension"] == "live_tuple_catalog"
+    assert "timed out after 0.1s" in finding["reason"]
 
 
 def test_panopticon_app_refresh_missing_credentials_returns_bounded_blocker(tmp_path, monkeypatch) -> None:
@@ -321,6 +358,7 @@ def _patch_one_tuple_config(monkeypatch) -> None:
     monkeypatch.setattr("gpucall.panopticon_service.load_config", lambda _config_dir: SimpleNamespace(tuples={"runpod-h100": tuple_spec}))
     monkeypatch.setattr("gpucall.panopticon_service.load_credentials", lambda: {"runpod": {"api_key": "test"}})
     monkeypatch.setattr("gpucall.panopticon_service.configured_credentials", lambda: [])
+    monkeypatch.setenv("GPUCALL_PANOPTICON_REFRESH_TIMEOUT_SECONDS", "0")
 
     def fake_live_tuple_catalog_evidence(tuples, credentials):
         assert list(tuples) == ["runpod-h100"]

@@ -2,6 +2,9 @@ from __future__ import annotations
 
 import asyncio
 import json
+import multiprocessing as mp
+import os
+import queue
 from contextlib import asynccontextmanager, suppress
 from datetime import datetime, timezone
 from pathlib import Path
@@ -22,6 +25,7 @@ from gpucall.tuple_catalog import live_tuple_catalog_evidence
 PANOPTICON_DEFAULT_HOST = "127.0.0.1"
 PANOPTICON_DEFAULT_PORT = 18090
 PANOPTICON_DEFAULT_REFRESH_INTERVAL_SECONDS = 240
+PANOPTICON_DEFAULT_PROBE_TIMEOUT_SECONDS = 30.0
 PANOPTICON_ALLOWED_HOSTS = {"127.0.0.1", "localhost", "::1"}
 
 
@@ -59,7 +63,8 @@ def refresh_panopticon(
     configured.update(provider_registry_configured_contracts())
     preflight = _provider_refresh_preflight(selected, configured)
     probe_scope = {name: selected[name] for name in selected if name not in preflight["skipped_tuples"]}
-    observed = live_tuple_catalog_evidence(probe_scope, credentials) if probe_scope else {}
+    probe_timeout_seconds = _panopticon_probe_timeout_seconds()
+    observed = _bounded_live_tuple_catalog_evidence(probe_scope, credentials, timeout_seconds=probe_timeout_seconds) if probe_scope else {}
     path = panopticon_path or default_panopticon_path()
     if observed:
         store_panopticon_evidence(observed, path, ttl_seconds=ttl_seconds, now=now)
@@ -74,6 +79,7 @@ def refresh_panopticon(
         scope_tuple_count=len(scope),
         selected_tuple_count=len(selected),
         preflight=preflight,
+        probe_timeout_seconds=probe_timeout_seconds,
     )
 
 
@@ -162,6 +168,111 @@ def _selected_scope(scope: dict[str, Any], tuple_names: Iterable[str] | None) ->
     if missing:
         raise ValueError(f"unknown tuple(s): {', '.join(missing)}")
     return {name: scope[name] for name in names}
+
+
+def _bounded_live_tuple_catalog_evidence(
+    tuples: dict[str, Any],
+    credentials: dict[str, dict[str, str]],
+    *,
+    timeout_seconds: float,
+) -> dict[str, dict[str, Any]]:
+    if timeout_seconds <= 0:
+        return live_tuple_catalog_evidence(tuples, credentials)
+    observed: dict[str, dict[str, Any]] = {}
+    for adapter, group in _adapter_groups(tuples).items():
+        observed.update(_bounded_adapter_catalog_evidence(adapter, group, credentials, timeout_seconds=timeout_seconds))
+    return observed
+
+
+def _bounded_adapter_catalog_evidence(
+    adapter: str,
+    tuples: dict[str, Any],
+    credentials: dict[str, dict[str, str]],
+    *,
+    timeout_seconds: float,
+) -> dict[str, dict[str, Any]]:
+    context = mp.get_context(_probe_start_method())
+    result_queue = context.Queue(maxsize=1)
+    process = context.Process(target=_live_tuple_catalog_evidence_worker, args=(tuples, credentials, result_queue))
+    process.start()
+    process.join(timeout_seconds)
+    if process.is_alive():
+        process.terminate()
+        process.join(2)
+        if process.is_alive():
+            process.kill()
+            process.join(2)
+        return _bounded_probe_failure_evidence(
+            tuples,
+            reason=f"{adapter} provider catalog check timed out after {timeout_seconds:g}s; skipped bounded live lookup",
+        )
+    try:
+        payload = result_queue.get_nowait()
+    except queue.Empty:
+        payload = {"ok": False, "error": f"{adapter} provider catalog worker exited with code {process.exitcode}"}
+    if payload.get("ok") is True:
+        evidence = payload.get("evidence")
+        return evidence if isinstance(evidence, dict) else {}
+    return _bounded_probe_failure_evidence(
+        tuples,
+        reason=str(payload.get("error") or f"{adapter} provider catalog worker failed"),
+    )
+
+
+def _live_tuple_catalog_evidence_worker(tuples: dict[str, Any], credentials: dict[str, dict[str, str]], result_queue: Any) -> None:
+    try:
+        result_queue.put({"ok": True, "evidence": live_tuple_catalog_evidence(tuples, credentials)})
+    except Exception as exc:
+        result_queue.put({"ok": False, "error": f"{type(exc).__name__}: {exc}"})
+
+
+def _bounded_probe_failure_evidence(tuples: dict[str, Any], *, reason: str) -> dict[str, dict[str, Any]]:
+    evidence: dict[str, dict[str, Any]] = {}
+    for tuple_name, tuple_spec in tuples.items():
+        descriptor = adapter_descriptor(tuple_spec)
+        evidence[tuple_name] = {
+            "tuple": tuple_name,
+            "adapter": getattr(tuple_spec, "adapter", None),
+            "status": "blocked",
+            "checked": False,
+            "catalog_validator": descriptor.catalog_validator is not None if descriptor else False,
+            "findings": [
+                {
+                    "tuple": tuple_name,
+                    "severity": "error",
+                    "dimension": "live_tuple_catalog",
+                    "reason": reason,
+                }
+            ],
+        }
+    return evidence
+
+
+def _adapter_groups(tuples: dict[str, Any]) -> dict[str, dict[str, Any]]:
+    groups: dict[str, dict[str, Any]] = {}
+    for tuple_name, tuple_spec in tuples.items():
+        adapter = str(getattr(tuple_spec, "adapter", "") or "").strip().lower()
+        groups.setdefault(adapter, {})[tuple_name] = tuple_spec
+    return groups
+
+
+def _probe_start_method() -> str:
+    methods = mp.get_all_start_methods()
+    if "forkserver" in methods:
+        return "forkserver"
+    if "spawn" in methods:
+        return "spawn"
+    return methods[0]
+
+
+def _panopticon_probe_timeout_seconds() -> float:
+    raw = os.environ.get("GPUCALL_PANOPTICON_REFRESH_TIMEOUT_SECONDS")
+    if raw is None or not raw.strip():
+        return PANOPTICON_DEFAULT_PROBE_TIMEOUT_SECONDS
+    try:
+        return max(0.0, float(raw))
+    except ValueError:
+        return PANOPTICON_DEFAULT_PROBE_TIMEOUT_SECONDS
 
 
 def _provider_refresh_preflight(selected: dict[str, Any], configured: set[str]) -> dict[str, Any]:
@@ -317,6 +428,7 @@ def _report(
     scope_tuple_count: int | None = None,
     selected_tuple_count: int | None = None,
     preflight: dict[str, Any] | None = None,
+    probe_timeout_seconds: float | None = None,
 ) -> dict[str, Any]:
     generated_at = (now or datetime.now(timezone.utc)).astimezone(timezone.utc).isoformat()
     status_counts: dict[str, int] = {}
@@ -350,6 +462,8 @@ def _report(
         report["scope_tuple_count"] = scope_tuple_count
     if selected_tuple_count is not None:
         report["selected_tuple_count"] = selected_tuple_count
+    if probe_timeout_seconds is not None:
+        report["probe_timeout_seconds"] = probe_timeout_seconds
     if preflight is not None:
         report["status"] = preflight["status"]
         report["probe_tuple_count"] = preflight["probe_tuple_count"]
