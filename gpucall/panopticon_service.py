@@ -55,7 +55,8 @@ def refresh_panopticon(
     now: datetime | None = None,
 ) -> dict[str, Any]:
     config = load_config(config_dir)
-    scope = live_catalog_scope(config, config_dir)
+    include_candidate_scope = _panopticon_include_candidate_scope()
+    scope = live_catalog_scope(config, config_dir, include_candidates=include_candidate_scope)
     selected = _selected_scope(scope, tuple_names)
     credentials = load_credentials()
     configured = _configured_contracts_from_credentials(credentials)
@@ -80,6 +81,7 @@ def refresh_panopticon(
         selected_tuple_count=len(selected),
         preflight=preflight,
         probe_timeout_seconds=probe_timeout_seconds,
+        include_candidate_scope=include_candidate_scope,
     )
 
 
@@ -275,6 +277,10 @@ def _panopticon_probe_timeout_seconds() -> float:
         return PANOPTICON_DEFAULT_PROBE_TIMEOUT_SECONDS
 
 
+def _panopticon_include_candidate_scope() -> bool:
+    return os.environ.get("GPUCALL_PANOPTICON_INCLUDE_CANDIDATES", "0").strip().lower() in {"1", "true", "yes", "on"}
+
+
 def _provider_refresh_preflight(selected: dict[str, Any], configured: set[str]) -> dict[str, Any]:
     provider_counts: dict[str, int] = {}
     skipped_tuples: set[str] = set()
@@ -429,6 +435,7 @@ def _report(
     selected_tuple_count: int | None = None,
     preflight: dict[str, Any] | None = None,
     probe_timeout_seconds: float | None = None,
+    include_candidate_scope: bool | None = None,
 ) -> dict[str, Any]:
     generated_at = (now or datetime.now(timezone.utc)).astimezone(timezone.utc).isoformat()
     status_counts: dict[str, int] = {}
@@ -464,6 +471,8 @@ def _report(
         report["selected_tuple_count"] = selected_tuple_count
     if probe_timeout_seconds is not None:
         report["probe_timeout_seconds"] = probe_timeout_seconds
+    if include_candidate_scope is not None:
+        report["include_candidate_scope"] = include_candidate_scope
     if preflight is not None:
         report["status"] = preflight["status"]
         report["probe_tuple_count"] = preflight["probe_tuple_count"]

@@ -8,8 +8,10 @@ from gpucall.domain import ExecutionTupleSpec
 from gpucall.tuple_audit import _tuple_from_candidate
 
 
-def live_catalog_scope(config: Any, config_dir: Path) -> dict[str, ExecutionTupleSpec]:
+def live_catalog_scope(config: Any, config_dir: Path, *, include_candidates: bool = False) -> dict[str, ExecutionTupleSpec]:
     scope: dict[str, ExecutionTupleSpec] = dict(config.tuples)
+    if not include_candidates:
+        return scope
     for candidate in load_tuple_candidate_payloads(config_dir):
         try:
             tuple_spec = _tuple_from_candidate(candidate, config)

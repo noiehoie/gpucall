@@ -295,7 +295,7 @@ https://raw.githubusercontent.com/noiehoie/gpucall/main/docs/EXTERNAL_SYSTEM_ONB
 呼び出し側補助ツールが未導入の場合は、SDK helper wheel だけを導入します。
 
 ```bash
-uv tool install https://github.com/noiehoie/gpucall/releases/download/v2.0.56/gpucall_sdk-2.0.56-py3-none-any.whl
+uv tool install https://github.com/noiehoie/gpucall/releases/download/v2.0.57/gpucall_sdk-2.0.57-py3-none-any.whl
 gpucall-recipe-draft --help
 ```
 
