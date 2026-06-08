@@ -176,6 +176,43 @@ def test_panopticon_refresh_start_method_rejects_unknown_env(monkeypatch) -> Non
         service._probe_start_method()
 
 
+def test_catalog_success_finding_is_added_for_successful_validator() -> None:
+    import gpucall.panopticon_service as service
+
+    tuple_spec = ExecutionTupleSpec(
+        name="modal-a10g",
+        adapter="modal",
+        gpu="A10G",
+        vram_gb=24,
+        max_model_len=8192,
+        cost_per_second=0.001,
+        target="gpucall-worker-json:run_inference_on_modal",
+    )
+    evidence = {
+        "modal-a10g": {
+            "tuple": "modal-a10g",
+            "adapter": "modal",
+            "status": "live_revalidated",
+            "checked": True,
+            "catalog_validator": True,
+            "findings": [
+                {
+                    "tuple": "modal-a10g",
+                    "adapter": "modal",
+                    "dimension": "endpoint",
+                    "severity": "info",
+                    "source": "modal.Function.from_name",
+                }
+            ],
+        }
+    }
+
+    enriched = service._with_catalog_success_findings({"modal-a10g": tuple_spec}, evidence)
+
+    assert [finding["dimension"] for finding in enriched["modal-a10g"]["findings"]] == ["endpoint", "live_tuple_catalog"]
+    assert enriched["modal-a10g"]["findings"][1]["severity"] == "info"
+
+
 def test_panopticon_app_refresh_missing_credentials_returns_bounded_blocker(tmp_path, monkeypatch) -> None:
     path = tmp_path / "provider-panopticon.json"
     tuple_spec = ExecutionTupleSpec(

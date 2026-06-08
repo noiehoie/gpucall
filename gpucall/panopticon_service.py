@@ -16,6 +16,7 @@ from fastapi import FastAPI
 from gpucall.config import load_config
 from gpucall.credentials import configured_credentials, load_credentials
 from gpucall.execution.registry import adapter_descriptor, vendor_family_for_adapter
+from gpucall.live_catalog import live_info
 from gpucall.live_catalog_scope import live_catalog_scope
 from gpucall.panopticon import default_panopticon_path, load_panopticon_evidence, store_panopticon_evidence
 from gpucall.provider_registry import provider_registry_configured_contracts
@@ -215,7 +216,7 @@ def _bounded_adapter_catalog_evidence(
         payload = {"ok": False, "error": f"{adapter} provider catalog worker exited with code {process.exitcode}"}
     if payload.get("ok") is True:
         evidence = payload.get("evidence")
-        return evidence if isinstance(evidence, dict) else {}
+        return _with_catalog_success_findings(tuples, evidence if isinstance(evidence, dict) else {})
     return _bounded_probe_failure_evidence(
         tuples,
         reason=str(payload.get("error") or f"{adapter} provider catalog worker failed"),
@@ -249,6 +250,21 @@ def _bounded_probe_failure_evidence(tuples: dict[str, Any], *, reason: str) -> d
             ],
         }
     return evidence
+
+
+def _with_catalog_success_findings(tuples: dict[str, Any], evidence: dict[str, Any]) -> dict[str, dict[str, Any]]:
+    enriched: dict[str, dict[str, Any]] = {}
+    for tuple_name, row in evidence.items():
+        row_payload = dict(row) if isinstance(row, dict) else {}
+        findings = [dict(finding) for finding in row_payload.get("findings") or [] if isinstance(finding, dict)]
+        has_catalog_finding = any(finding.get("dimension") == "live_tuple_catalog" for finding in findings)
+        if row_payload.get("checked") is True and row_payload.get("catalog_validator") is True and not has_catalog_finding:
+            tuple_spec = tuples.get(tuple_name)
+            if tuple_spec is not None:
+                findings.append(live_info(tuple_spec, dimension="live_tuple_catalog", source="provider-panopticon-refresh"))
+        row_payload["findings"] = findings
+        enriched[tuple_name] = row_payload
+    return enriched
 
 
 def _adapter_groups(tuples: dict[str, Any]) -> dict[str, dict[str, Any]]:
