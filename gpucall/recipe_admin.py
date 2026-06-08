@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import argparse
-import hashlib
 import json
 import math
 import os
@@ -20,6 +19,7 @@ import yaml
 
 from gpucall.candidate_sources import load_tuple_candidate_payloads
 from gpucall.config import ConfigError, default_config_dir, default_state_dir, load_admin_automation, load_config
+from gpucall.config_fingerprint import route_validation_config_hash
 from gpucall.domain import ExecutionMode, ExecutionTupleSpec, Recipe, RecipeAdminAutomationConfig, recipe_requirements
 from gpucall.execution.contracts import artifact_tuple_evidence_key, tuple_evidence_key
 from gpucall.execution.registry import adapter_descriptor
@@ -2190,17 +2190,7 @@ def _write_json(data: Mapping[str, Any], output: str | None) -> None:
 
 
 def _config_hash(config_dir: Path | None) -> str | None:
-    if config_dir is None or not config_dir.exists():
-        return None
-    digest = hashlib.sha256()
-    for path in sorted(config_dir.rglob("*.yml")):
-        if not path.is_file():
-            continue
-        digest.update(str(path.relative_to(config_dir)).encode("utf-8"))
-        digest.update(b"\0")
-        digest.update(path.read_bytes())
-        digest.update(b"\0")
-    return digest.hexdigest()
+    return route_validation_config_hash(config_dir)
 
 
 def _git_commit(root: Path) -> str | None:

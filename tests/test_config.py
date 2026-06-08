@@ -1516,6 +1516,24 @@ def test_readiness_reports_latest_failed_route_validation_artifact(tmp_path, mon
     assert any("rerun explicit tuple validation" in action for action in failed_recipe_report["next_actions"])
 
 
+def test_route_validation_config_hash_ignores_tenant_files(tmp_path) -> None:
+    from gpucall.validation_evidence import config_hash
+
+    root = tmp_path / "config"
+    (root / "recipes").mkdir(parents=True)
+    (root / "tenants").mkdir()
+    (root / "recipes" / "infer.yml").write_text("name: infer\n", encoding="utf-8")
+    before = config_hash(root)
+
+    (root / "tenants" / "caller-a.yml").write_text("name: caller-a\napi_key: redacted\n", encoding="utf-8")
+    after_tenant = config_hash(root)
+    (root / "recipes" / "infer.yml").write_text("name: infer\nversion: 2\n", encoding="utf-8")
+    after_recipe = config_hash(root)
+
+    assert after_tenant == before
+    assert after_recipe != before
+
+
 def test_readiness_accepts_validation_when_installed_product_commit_is_unavailable(tmp_path, monkeypatch) -> None:
     from gpucall.execution.contracts import official_contract, official_contract_hash
     from gpucall.readiness import build_readiness_report

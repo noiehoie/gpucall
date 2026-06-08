@@ -42,6 +42,7 @@ from gpucall.cli_commands.panopticon import add_panopticon_parser, run_panoptico
 from gpucall.cli_commands.setup import add_setup_parser, run_setup_command
 from gpucall.compiler import GovernanceCompiler
 from gpucall.config import ConfigError, default_config_dir, default_state_dir, load_config
+from gpucall.config_fingerprint import route_validation_config_hash
 from gpucall.configure import configure_command
 from gpucall.costing import budget_reservation_usd
 from gpucall.credentials import configured_credentials, credentials_path, load_credentials
@@ -2563,13 +2564,10 @@ def _git_commit() -> str | None:
 
 
 def _config_hash(config_dir: Path) -> str:
-    digest = hashlib.sha256()
-    for path in sorted(config_dir.rglob("*.yml")):
-        digest.update(str(path.relative_to(config_dir)).encode("utf-8"))
-        digest.update(b"\0")
-        digest.update(path.read_bytes())
-        digest.update(b"\0")
-    return digest.hexdigest()
+    value = route_validation_config_hash(config_dir)
+    if value is None:
+        raise ValueError(f"failed to fingerprint config directory: {config_dir}")
+    return value
 
 
 def registry_command(action: str) -> None:

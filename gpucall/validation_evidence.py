@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import hashlib
 import json
 import os
 from dataclasses import dataclass
@@ -8,6 +7,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Mapping
 
+from gpucall.config_fingerprint import route_validation_config_hash
 from gpucall.config import default_state_dir
 from gpucall.domain import ExecutionTupleSpec
 from gpucall.execution.contracts import official_contract_hash
@@ -269,16 +269,7 @@ def route_validation_required_from_env() -> bool:
 
 
 def config_hash(config_dir: Path) -> str | None:
-    digest = hashlib.sha256()
-    for path in sorted(config_dir.rglob("*.yml")):
-        try:
-            digest.update(path.relative_to(config_dir).as_posix().encode("utf-8"))
-            digest.update(b"\0")
-            digest.update(path.read_bytes())
-            digest.update(b"\0")
-        except OSError:
-            return None
-    return digest.hexdigest()
+    return route_validation_config_hash(config_dir)
 
 
 def git_commit() -> str | None:
