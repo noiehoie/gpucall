@@ -14,7 +14,7 @@ from gpucall.validator_plan import build_validator_plan
 def test_validator_plan_is_budgeted_and_active_tuple_scoped_by_default() -> None:
     config = load_config(Path("config"))
     snapshot = build_resource_catalog_snapshot(config, config_dir=Path("config"))
-    plan = build_validator_plan(snapshot, budget_usd=0.001, max_items=10)
+    plan = build_validator_plan(snapshot, budget_usd=0.001, max_items=10, strict_price=False)
 
     assert plan.budget_usd == 0.001
     assert plan.selected_estimated_cost_usd <= plan.budget_usd
