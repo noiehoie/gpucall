@@ -21,7 +21,7 @@ from gpucall_recipe_draft.submit import (
     submit_bundle_to_remote,
     summarize_status,
 )
-from gpucall_migrate.cli import main as migrate_main
+from gpucall_migrate.cli import main as migrate_main, profile_project
 
 
 def test_intake_redacts_sensitive_payload_and_keeps_metadata() -> None:
@@ -138,6 +138,22 @@ def test_draft_uses_sanitized_intake_only() -> None:
     assert draft["proposed_recipe"]["context_budget_tokens"] == 32768
     assert draft["proposed_recipe"]["resource_class"] == "document_vision"
     assert draft["workload_contract"]["input_contracts"] == ["image", "data_refs", "text"]
+
+
+def test_draft_keeps_initial_vision_preflight_on_light_path() -> None:
+    intake = intake_from_preflight(
+        PreflightInputs(
+            task="vision",
+            intent="understand_document_image",
+            content_types=("image/png",),
+            context_budget_tokens=8192,
+        )
+    )
+
+    draft = draft_from_intake(intake)
+
+    assert draft["proposed_recipe"]["context_budget_tokens"] == 8192
+    assert draft["proposed_recipe"]["resource_class"] == "light"
 
 
 def test_draft_does_not_select_provider_model_gpu_runtime_tuple_or_fallback() -> None:
@@ -822,6 +838,20 @@ def test_compare_preflight_to_failure_matches() -> None:
     assert report["preflight_matched_actual"] is True
     assert report["classification"] == "preflight_matched_runtime_failure"
     assert report["differences"] == []
+
+
+def test_migrate_profiles_initial_vision_as_light_sync_contract(tmp_path) -> None:
+    project = tmp_path / "project"
+    project.mkdir()
+    (project / "vision.py").write_text("def run():\n    call_llm_vision(image_path, prompt='read image')\n", encoding="utf-8")
+
+    profile = profile_project(project, [], source="caller")
+    workload = profile["workloads"][0]
+
+    assert workload["task"] == "vision"
+    assert workload["intent"] == "understand_document_image"
+    assert workload["modes"] == ["sync"]
+    assert workload["input_profile"]["context_budget_tokens"] == 8192
 
 
 def test_preflight_normalizes_legacy_topic_ranking_intent() -> None:

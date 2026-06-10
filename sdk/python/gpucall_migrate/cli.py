@@ -348,7 +348,7 @@ def _classify_workload(
 ) -> tuple[str, str, str, int]:
     text = json.dumps({"source": source, "assessment": assessment, "traces": traces}, ensure_ascii=False).lower()
     if any(token in text for token in ("vision", "ocr", "image", "画像")):
-        return "vision", "understand_document_image", "async", 32768
+        return "vision", "understand_document_image", "sync", 8192
     if any(token in text for token in ("news", "rss", "article", "topic", "rank", "記事")):
         return "infer", "rank_text_items", "async", 131072
     return "infer", "summarize_text", "sync", 32768

@@ -119,6 +119,8 @@ class RecipeAdminAutomationConfig(BaseModel):
     recipe_inbox_auto_apply_supply: bool = False
     recipe_inbox_auto_billable_validation: bool = False
     recipe_inbox_auto_validation_budget_usd: NonNegativeFloat = 0.10
+    recipe_inbox_auto_validation_poll_timeout_seconds: PositiveInt = 90
+    recipe_inbox_auto_validation_max_attempts: PositiveInt = 3
     recipe_inbox_auto_activate_validated: bool = False
     recipe_inbox_auto_require_auto_select_safe: bool = True
     recipe_inbox_auto_set_auto_select: bool = False

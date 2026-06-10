@@ -699,7 +699,7 @@ def _input_contracts_for(task: str) -> list[str]:
 
 def _resource_class_for(task: str, context_budget_tokens: int) -> str:
     if task == "vision":
-        return "document_vision" if context_budget_tokens >= 8192 else "standard"
+        return "document_vision" if context_budget_tokens > 8192 else "light"
     if context_budget_tokens <= 8192:
         return "light"
     if context_budget_tokens <= 32768:

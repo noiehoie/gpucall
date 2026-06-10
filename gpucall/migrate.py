@@ -2670,7 +2670,7 @@ def _preflight_command(task: str, intent: str, required_len: int, *, source: str
 
 def _recommended_preflight_mode(task: str, intent: str, required_len: int) -> str:
     if task == "vision":
-        return "async"
+        return "async" if required_len > 8192 else "sync"
     if intent in {"rank_text_items", "rss_semantic_match", "pairwise_match"}:
         return "async"
     return "async" if required_len > 32768 else "sync"

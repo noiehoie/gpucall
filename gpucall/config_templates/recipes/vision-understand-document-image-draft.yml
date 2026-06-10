@@ -3,7 +3,7 @@ task: vision
 recipe_schema_version: 3
 intent: understand_document_image
 context_budget_tokens: 8192
-resource_class: document_vision
+resource_class: light
 latency_class: standard
 quality_floor: standard
 cost_ceiling_usd: null
@@ -11,8 +11,8 @@ auto_select: true
 data_classification: confidential
 allowed_modes:
 - sync
-timeout_seconds: 1800
-lease_ttl_seconds: 2100
+timeout_seconds: 600
+lease_ttl_seconds: 900
 token_estimation_profile: generic_utf8
 max_input_bytes: 16777216
 allowed_mime_prefixes:
@@ -38,6 +38,6 @@ required_model_capabilities:
 - visual_question_answering
 - instruction_following
 output_contract: plain-text
-expected_cold_start_seconds: null
-expected_runtime_seconds: 180
+expected_cold_start_seconds: 120
+expected_runtime_seconds: 120
 cost_policy: null

@@ -472,7 +472,7 @@ def _tuple_latency_buckets(*, task: str, context_budget_tokens: int, catalog: An
 
 def _resource_class_for(task: str, context_budget_tokens: int) -> str:
     if task == "vision":
-        return "document_vision" if context_budget_tokens >= 8192 else "standard"
+        return "document_vision" if context_budget_tokens > 8192 else "light"
     if context_budget_tokens <= 8192:
         return "light"
     if context_budget_tokens <= 32768:

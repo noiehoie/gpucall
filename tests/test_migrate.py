@@ -105,7 +105,7 @@ def test_migrate_preflight_prefers_integrated_news_analysis_over_rss_word(tmp_pa
     assert "--required-model-len 131072" in requests[0]["command"]
 
 
-def test_migrate_preflight_overdeclares_document_vision_as_async(tmp_path) -> None:
+def test_migrate_preflight_keeps_initial_document_vision_on_light_sync_path(tmp_path) -> None:
     project = tmp_path / "project"
     project.mkdir()
     (project / "overseas_vision.py").write_text("def run():\n    call_llm_vision(image_path, prompt='extract frontpage articles')\n", encoding="utf-8")
@@ -115,9 +115,10 @@ def test_migrate_preflight_overdeclares_document_vision_as_async(tmp_path) -> No
 
     assert requests[0]["task"] == "vision"
     assert requests[0]["intent"] == "understand_document_image"
-    assert requests[0]["mode"] == "async"
+    assert requests[0]["mode"] == "sync"
     assert requests[0]["bytes"] == 16 * 1024 * 1024
-    assert "--mode async" in requests[0]["command"]
+    assert requests[0]["required_model_len"] == 8192
+    assert "--mode sync" in requests[0]["command"]
 
 
 def test_migrate_cli_writes_reports(tmp_path) -> None:

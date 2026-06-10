@@ -747,7 +747,7 @@ def test_admin_process_inbox_existing_tuple_validation_tries_next_eligible(tmp_p
             ]
         }
 
-    def fake_validation(*, tuple_name, recipe_name, config_dir, validation_dir, budget_usd=0.10):
+    def fake_validation(*, tuple_name, recipe_name, config_dir, validation_dir, budget_usd=0.10, poll_timeout_seconds=90):
         attempts.append(tuple_name)
         if tuple_name == "modal-a10g":
             return {"returncode": 1, "passed": False, "stderr": "not eligible"}
@@ -830,6 +830,75 @@ def test_existing_tuple_auto_validation_uses_only_readiness_ready_tuples(tmp_pat
     assert attempts == ["modal-a10g"]
     assert activation["validation_gate"]["ready_tuples"] == ["modal-a10g"]
     assert activation["decision"] == "VALIDATED_READY_TO_ACTIVATE"
+
+
+def test_existing_tuple_auto_validation_orders_by_cost_and_bounds_attempts(tmp_path, monkeypatch) -> None:
+    config_dir = tmp_path / "config"
+    shutil.copytree("gpucall/config_templates", config_dir)
+    report_dir = tmp_path / "reports"
+    report_dir.mkdir()
+    calls = []
+
+    def fake_readiness_report(*, config_dir, recipe, validation_dir, live=False, **kwargs):
+        assert live is True
+        return {
+            "recipes": [
+                {
+                    "recipe": recipe,
+                    "live_ready_tuples": [],
+                    "live_blocked_tuples": [
+                        {
+                            "tuple": "expensive-first",
+                            "live_reason": "missing_route_validation_evidence",
+                            "cost_estimate": {"estimated_cost_usd": 0.15},
+                        },
+                        {
+                            "tuple": "cheap-first",
+                            "live_reason": "missing_route_validation_evidence",
+                            "cost_estimate": {"estimated_cost_usd": 0.02},
+                        },
+                        {
+                            "tuple": "middle-skipped-by-max-attempts",
+                            "live_reason": "missing_route_validation_evidence",
+                            "cost_estimate": {"estimated_cost_usd": 0.08},
+                        },
+                    ],
+                }
+            ]
+        }
+
+    def fake_validation(**kwargs):
+        calls.append(kwargs)
+        return {"returncode": 1, "passed": False, "stderr": "provider failed"}
+
+    monkeypatch.setattr("gpucall.recipe_admin.build_readiness_report", fake_readiness_report)
+    monkeypatch.setattr("gpucall.recipe_admin._run_existing_tuple_validation", fake_validation)
+
+    report = _auto_existing_tuple_report(
+        {
+            "canonical_recipe": {"name": "vision-understand-document-image-draft"},
+            "eligible_tuples": ["expensive-first", "middle-skipped-by-max-attempts", "cheap-first"],
+            "live_validation": {"matched": []},
+        },
+        request_id="rr-bounded",
+        automation=RecipeAdminAutomationConfig(
+            recipe_inbox_auto_materialize=True,
+            recipe_inbox_auto_validate_existing_tuples=True,
+            recipe_inbox_auto_billable_validation=True,
+            recipe_inbox_auto_validation_budget_usd=0.16,
+            recipe_inbox_auto_validation_poll_timeout_seconds=45,
+            recipe_inbox_auto_validation_max_attempts=2,
+        ),
+        report_dir=report_dir,
+        config_dir=config_dir,
+        validation_dir=tmp_path / "tuple-validation",
+        force=False,
+    )
+
+    assert [call["tuple_name"] for call in calls] == ["cheap-first", "middle-skipped-by-max-attempts"]
+    assert all(call["poll_timeout_seconds"] == 45 for call in calls)
+    assert report["decision"] == "VALIDATION_FAILED"
+    assert report["validation_target_policy"]["selected_targets"] == ["cheap-first", "middle-skipped-by-max-attempts"]
 
 
 def test_existing_tuple_auto_validation_blocks_before_billable_when_readiness_is_stale(tmp_path, monkeypatch) -> None:
@@ -932,6 +1001,7 @@ def test_existing_tuple_auto_validation_uses_budget_after_validation_hash_mismat
     assert report["decision"] == "VALIDATED_READY_TO_ACTIVATE"
     assert report["validation_gate"]["decision"] == "READY_FOR_BILLABLE_VALIDATION"
     assert validation_calls[0]["budget_usd"] == 0.04
+    assert validation_calls[0]["poll_timeout_seconds"] == 90
 
 
 def test_existing_tuple_auto_validation_budget_exceeded_waits_for_approval(tmp_path, monkeypatch) -> None:

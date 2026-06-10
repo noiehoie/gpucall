@@ -1024,7 +1024,7 @@ def _existing_tuple_validation_gate(readiness: Mapping[str, Any], *, eligible_tu
     recipes = report.get("recipes")
     recipe_rows = recipes if isinstance(recipes, list) else []
     eligible_set = set(eligible_tuples)
-    ready_tuples: list[str] = []
+    ready_rows: list[Mapping[str, Any]] = []
     next_actions: list[str] = []
     for recipe in recipe_rows:
         if not isinstance(recipe, Mapping):
@@ -1040,15 +1040,77 @@ def _existing_tuple_validation_gate(readiness: Mapping[str, Any], *, eligible_tu
                 continue
             reason = str(row.get("live_reason") or "")
             if _route_validation_refresh_reason(reason):
-                if tuple_name not in ready_tuples:
-                    ready_tuples.append(tuple_name)
+                ready_rows.append(row)
                 continue
             next_actions.append(f"resolve readiness blocker for {tuple_name}: {reason or 'unknown'}")
+    ready_tuples = _ordered_tuple_names_from_readiness_rows(ready_rows)
     if ready_tuples:
-        return {"decision": "READY_FOR_BILLABLE_VALIDATION", "next_actions": [], "ready_tuples": ready_tuples}
+        return {
+            "decision": "READY_FOR_BILLABLE_VALIDATION",
+            "next_actions": [],
+            "ready_tuples": ready_tuples,
+            "ready_tuple_rows": [_validation_gate_row(row) for row in sorted(ready_rows, key=_readiness_validation_row_rank)],
+        }
     if not next_actions:
         next_actions.append("refresh Panopticon evidence until an eligible tuple appears in readiness")
     return {"decision": "WAITING_FOR_FRESH_READINESS", "next_actions": next_actions}
+
+
+def _ordered_existing_validation_targets(
+    validation_gate: Mapping[str, Any],
+    *,
+    eligible: list[str],
+    ready_set: set[str],
+) -> list[str]:
+    rows = validation_gate.get("ready_tuple_rows")
+    if isinstance(rows, list):
+        ordered = _ordered_tuple_names_from_readiness_rows([row for row in rows if isinstance(row, Mapping)])
+        if ordered:
+            return [name for name in ordered if not ready_set or name in ready_set]
+    return [tuple_name for tuple_name in eligible if not ready_set or tuple_name in ready_set]
+
+
+def _ordered_tuple_names_from_readiness_rows(rows: list[Mapping[str, Any]]) -> list[str]:
+    ordered: list[str] = []
+    seen: set[str] = set()
+    for row in sorted(rows, key=_readiness_validation_row_rank):
+        tuple_name = str(row.get("tuple") or "")
+        if tuple_name and tuple_name not in seen:
+            seen.add(tuple_name)
+            ordered.append(tuple_name)
+    return ordered
+
+
+def _validation_gate_row(row: Mapping[str, Any]) -> dict[str, Any]:
+    cost = _mapping(row.get("cost_estimate"))
+    return {
+        "tuple": str(row.get("tuple") or ""),
+        "mode": row.get("mode"),
+        "live_reason": row.get("live_reason"),
+        "estimated_cost_usd": cost.get("estimated_cost_usd"),
+        "budget_reservation_usd": cost.get("budget_reservation_usd"),
+        "price_freshness": row.get("price_freshness") or cost.get("price_freshness"),
+    }
+
+
+def _readiness_validation_row_rank(row: Mapping[str, Any]) -> tuple[float, int, str]:
+    cost = _mapping(row.get("cost_estimate"))
+    estimated = _float_or_inf(
+        cost.get("estimated_cost_usd")
+        or cost.get("budget_reservation_usd")
+        or row.get("estimated_cost_usd")
+        or row.get("budget_reservation_usd")
+    )
+    reason = str(row.get("live_reason") or "")
+    reason_rank = 0 if reason == "missing_route_validation_evidence" else 1
+    return (estimated, reason_rank, str(row.get("tuple") or ""))
+
+
+def _float_or_inf(value: Any) -> float:
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return math.inf
 
 
 def _route_validation_refresh_reason(reason: str) -> bool:
@@ -1277,7 +1339,15 @@ def _auto_existing_tuple_report(
             return report
         ready_tuples = validation_gate.get("ready_tuples") if isinstance(validation_gate.get("ready_tuples"), list) else []
         ready_set = {str(item) for item in ready_tuples if str(item)}
-        validation_targets = [tuple_name for tuple_name in eligible if not ready_set or tuple_name in ready_set]
+        validation_targets = _ordered_existing_validation_targets(validation_gate, eligible=eligible, ready_set=ready_set)
+        max_attempts = max(1, int(automation.recipe_inbox_auto_validation_max_attempts))
+        validation_targets = validation_targets[:max_attempts]
+        report["validation_target_policy"] = {
+            "order": "readiness_cost_then_tuple_name",
+            "max_attempts": max_attempts,
+            "poll_timeout_seconds": int(automation.recipe_inbox_auto_validation_poll_timeout_seconds),
+            "selected_targets": validation_targets,
+        }
         attempts = []
         validation = None
         matched_tuple = None
@@ -1288,6 +1358,7 @@ def _auto_existing_tuple_report(
                 config_dir=Path(config_dir).expanduser(),
                 validation_dir=Path(validation_dir).expanduser() if validation_dir else None,
                 budget_usd=float(automation.recipe_inbox_auto_validation_budget_usd),
+                poll_timeout_seconds=float(automation.recipe_inbox_auto_validation_poll_timeout_seconds),
             )
             attempts.append({"tuple": tuple_name, "validation": validation})
             if validation.get("returncode") == 0 and validation.get("passed") is True:
@@ -1415,6 +1486,7 @@ def _run_existing_tuple_validation(
     config_dir: Path,
     validation_dir: Path | None,
     budget_usd: float = 0.10,
+    poll_timeout_seconds: float = 90.0,
 ) -> dict[str, Any]:
     mode = "sync"
     try:
@@ -1438,6 +1510,8 @@ def _run_existing_tuple_validation(
             mode,
             "--budget-usd",
             str(float(budget_usd)),
+            "--poll-timeout-seconds",
+            str(float(poll_timeout_seconds)),
             "--write-artifact",
         ],
         validation_dir=validation_dir,
