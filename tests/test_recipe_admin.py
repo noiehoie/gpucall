@@ -747,7 +747,7 @@ def test_admin_process_inbox_existing_tuple_validation_tries_next_eligible(tmp_p
             ]
         }
 
-    def fake_validation(*, tuple_name, recipe_name, config_dir, validation_dir, budget_usd=0.10, poll_timeout_seconds=90):
+    def fake_validation(*, tuple_name, recipe_name, config_dir, validation_dir, budget_usd=0.10, poll_timeout_seconds=180):
         attempts.append(tuple_name)
         if tuple_name == "modal-a10g":
             return {"returncode": 1, "passed": False, "stderr": "not eligible"}
@@ -1001,7 +1001,7 @@ def test_existing_tuple_auto_validation_uses_budget_after_validation_hash_mismat
     assert report["decision"] == "VALIDATED_READY_TO_ACTIVATE"
     assert report["validation_gate"]["decision"] == "READY_FOR_BILLABLE_VALIDATION"
     assert validation_calls[0]["budget_usd"] == 0.04
-    assert validation_calls[0]["poll_timeout_seconds"] == 90
+    assert validation_calls[0]["poll_timeout_seconds"] == 180
 
 
 def test_existing_tuple_auto_validation_budget_exceeded_waits_for_approval(tmp_path, monkeypatch) -> None:

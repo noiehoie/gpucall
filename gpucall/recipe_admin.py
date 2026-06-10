@@ -1486,7 +1486,7 @@ def _run_existing_tuple_validation(
     config_dir: Path,
     validation_dir: Path | None,
     budget_usd: float = 0.10,
-    poll_timeout_seconds: float = 90.0,
+    poll_timeout_seconds: float = 180.0,
 ) -> dict[str, Any]:
     mode = "sync"
     try:
