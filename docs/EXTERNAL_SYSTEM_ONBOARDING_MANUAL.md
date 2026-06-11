@@ -39,7 +39,7 @@ External systems do not need to clone the gpucall gateway repository. The
 caller-side helper is distributed as the SDK wheel:
 
 ```bash
-uv tool install https://github.com/noiehoie/gpucall/releases/download/v2.0.65/gpucall_sdk-2.0.65-py3-none-any.whl
+uv tool install https://github.com/noiehoie/gpucall/releases/download/v2.0.66/gpucall_sdk-2.0.66-py3-none-any.whl
 gpucall-recipe-draft --help
 ```
 
@@ -389,6 +389,12 @@ to `upload_url`, then submit the task with the returned object:
 {
   "task": "vision",
   "mode": "sync",
+  "inline_inputs": {
+    "prompt": {
+      "value": "Describe this document image.",
+      "content_type": "text/plain"
+    }
+  },
   "input_refs": [
     {
       "uri": "s3://bucket/gpucall/tenants/example/page.png",
@@ -400,6 +406,13 @@ to `upload_url`, then submit the task with the returned object:
   "max_tokens": 512
 }
 ```
+
+For vision requests, image/file bytes belong in `input_refs`; the text prompt
+belongs in `inline_inputs.prompt`. Do not upload the prompt as a `text/plain`
+DataRef and include it in `input_refs`, because vision recipe selection checks
+`input_refs` against image/file MIME contracts. If the prompt is too large for
+inline policy, fail closed and submit sanitized intake instead of converting the
+prompt to a text DataRef.
 
 Do not transform the returned DataRef into a string. Keep `uri`, `sha256`,
 `bytes`, `content_type`, and any other returned DataRef fields intact.

@@ -299,6 +299,9 @@ done
 
 If you submit preflight-only requests, `gpucall-recipe-draft preflight --remote-inbox "$GPUCALL_RECIPE_INBOX"` must create a submission whose top-level `draft` field is a JSON object, not `null`. Submit low-quality success feedback to `GPUCALL_QUALITY_FEEDBACK_INBOX` with `--remote-quality-inbox` or `--quality-inbox-dir`; quality feedback must not create recipe drafts.
 8. Patch caller wrappers so application code sends only task, mode, input data, or DataRefs to `GPUCALL_BASE_URL`.
+   For vision requests, put image/file DataRefs in `input_refs` and put the text prompt in `inline_inputs.prompt`.
+   Do not upload the text prompt as a text DataRef for `task="vision"`; `input_refs` for vision are matched against image/file MIME contracts.
+   If a vision prompt is too large for inline policy, fail closed and submit sanitized intake instead of converting the prompt to a text DataRef.
 9. Run caller canaries through the gpucall gateway when the operator handoff says the gateway is ready.
 10. Run the caller business validator and write a final onboarding report under `.gpucall-migration/`.
 
@@ -446,6 +449,7 @@ def prompt_quality_blockers(prompt: str, contract: dict[str, Any]) -> list[str]:
         ".gpucall-migration/recipe-submission-status.json",
         "recipe submission is not visible in the operator inbox",
         "top-level `draft` field is a JSON object",
+        "For vision requests, put image/file DataRefs in `input_refs` and put the text prompt in `inline_inputs.prompt`.",
         "Final status must be exactly `Go` or `No-Go`",
         ".gpucall-migration/workload-contract.json",
         "Any other write location is a product onboarding failure.",

@@ -61,7 +61,7 @@ deployment instruction:
   quality feedback
 - `<canary-command>`: smallest representative command for that system
 - `<gpucall-sdk-wheel-url>`: caller SDK helper wheel URL; default is
-  `https://github.com/noiehoie/gpucall/releases/download/v2.0.65/gpucall_sdk-2.0.65-py3-none-any.whl`, or an operator-hosted
+  `https://github.com/noiehoie/gpucall/releases/download/v2.0.66/gpucall_sdk-2.0.66-py3-none-any.whl`, or an operator-hosted
   mirror for the installed environment
 
 Strict acceptance rule:
@@ -419,6 +419,12 @@ Rules:
   inline byte limit in code and test it.
 - Images and files must use presign PUT and `DataRef`. Do not implement
   production vision/file transport as OpenAI-facade base64 inline content.
+- For vision requests, put image/file DataRefs in `input_refs` and put the text
+  prompt in `inline_inputs.prompt`. Do not upload the text prompt as a text
+  DataRef for `task="vision"`; `input_refs` for vision are matched against
+  image/file MIME contracts. If a vision prompt is too large for inline policy,
+  fail closed and submit sanitized intake instead of converting the prompt to a
+  text DataRef.
 - Confidential content and payloads above the inline text limit must use presign
   PUT and `DataRef`.
 - If a required DataRef helper cannot be implemented in this turn, leave the

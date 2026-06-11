@@ -5,8 +5,8 @@ Public evaluation package for gpucall v2.0 integrations.
 Install the caller SDK helper without cloning the gateway repository:
 
 ```bash
-uv tool install https://github.com/noiehoie/gpucall/releases/download/v2.0.65/gpucall_sdk-2.0.65-py3-none-any.whl
-uv tool run --from https://github.com/noiehoie/gpucall/releases/download/v2.0.65/gpucall_sdk-2.0.65-py3-none-any.whl gpucall-recipe-draft --help
+uv tool install https://github.com/noiehoie/gpucall/releases/download/v2.0.66/gpucall_sdk-2.0.66-py3-none-any.whl
+uv tool run --from https://github.com/noiehoie/gpucall/releases/download/v2.0.66/gpucall_sdk-2.0.66-py3-none-any.whl gpucall-recipe-draft --help
 ```
 
 Verify that the SDK console script is installed:
@@ -69,6 +69,12 @@ wire format is:
 
 `input_refs` is a list of DataRef objects with a `uri` field. It is not a list
 of strings, and task requests do not use a single `data_ref` string field.
+
+For vision requests, pass image/file bytes as DataRefs in `input_refs` and keep
+the text prompt in `inline_inputs.prompt`. Do not upload the prompt as a
+`text/plain` DataRef for `task="vision"`; vision recipe selection matches
+`input_refs` against image/file MIME contracts. If the prompt is too large for
+inline policy, fail closed instead of converting it to a text DataRef.
 
 ## Recipe Draft Helper
 

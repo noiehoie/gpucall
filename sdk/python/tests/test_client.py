@@ -197,8 +197,29 @@ def test_vision_sends_vision_task_with_intent() -> None:
 
     assert sent_payload["task"] == "vision"
     assert sent_payload["intent"] == "understand_document_image"
+    assert len(sent_payload["input_refs"]) == 1
+    assert sent_payload["input_refs"][0]["content_type"] == "image/png"
+    assert sent_payload["inline_inputs"]["prompt"]["value"] == "read"
+    assert sent_payload["inline_inputs"]["prompt"]["content_type"] == "text/plain"
+    assert all(not ref["content_type"].startswith("text/") for ref in sent_payload["input_refs"])
     assert "recipe" not in sent_payload
     assert "requested_tuple" not in sent_payload
+
+
+def test_vision_rejects_auto_upload_prompt_as_text_dataref() -> None:
+    client = GPUCallClient(
+        "http://gpucall.test",
+        transport=httpx.MockTransport(lambda request: httpx.Response(500)),
+        auto_upload_threshold_bytes=4,
+    )
+
+    import tempfile
+
+    with tempfile.TemporaryDirectory() as directory:
+        image = Path(directory) / "image.png"
+        image.write_bytes(b"png")
+        with pytest.raises(ValueError, match="vision prompt exceeds the inline threshold"):
+            client.vision(image=image, prompt="read this image")
 
 
 def test_sdk_rejects_intent_name_as_task() -> None:
@@ -648,3 +669,18 @@ async def test_async_upload_uses_clean_presigned_put_client(monkeypatch) -> None
         await client.close()
 
     assert seen_upload_auth is None
+
+
+async def test_async_vision_rejects_auto_upload_prompt_as_text_dataref(tmp_path: Path) -> None:
+    client = AsyncGPUCallClient(
+        "http://gpucall.test",
+        transport=httpx.MockTransport(lambda request: httpx.Response(500)),
+        auto_upload_threshold_bytes=4,
+    )
+    image = tmp_path / "image.png"
+    image.write_bytes(b"png")
+    try:
+        with pytest.raises(ValueError, match="vision prompt exceeds the inline threshold"):
+            await client.vision(image=image, prompt="read this image")
+    finally:
+        await client.close()

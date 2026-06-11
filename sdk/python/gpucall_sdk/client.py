@@ -458,6 +458,11 @@ class GPUCallClient:
         auto_upload: bool = True,
     ) -> dict[str, Any]:
         _validate_task(task)
+        if prompt is not None and task == "vision" and auto_upload and len(prompt.encode("utf-8")) > self.auto_upload_threshold_bytes:
+            raise ValueError(
+                "vision prompt exceeds the inline threshold; keep vision prompt text in inline_inputs.prompt "
+                "and send image/file bytes as DataRefs in input_refs"
+            )
         refs = [self.upload_file(path) for path in files or []]
         inline = {}
         if prompt is not None:
@@ -817,6 +822,11 @@ class AsyncGPUCallClient:
         auto_upload: bool = True,
     ) -> dict[str, Any]:
         _validate_task(task)
+        if prompt is not None and task == "vision" and auto_upload and len(prompt.encode("utf-8")) > self.auto_upload_threshold_bytes:
+            raise ValueError(
+                "vision prompt exceeds the inline threshold; keep vision prompt text in inline_inputs.prompt "
+                "and send image/file bytes as DataRefs in input_refs"
+            )
         refs = [await self.upload_file(path) for path in files or []]
         inline = {}
         if prompt is not None:
