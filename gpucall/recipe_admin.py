@@ -1388,6 +1388,13 @@ def _auto_existing_tuple_report(
         active_recipe["auto_select"] = True
         if active_recipe.get("quality_floor") == "draft":
             active_recipe["quality_floor"] = "standard"
+    active_config_dir = Path(config_dir).expanduser()
+    active_recipe_path = _recipe_yaml_path(active_config_dir / "recipes", active_recipe["name"])
+    existing_active = _existing_active_recipe_report(active_recipe_path, active_recipe, require_auto_select=automation.recipe_inbox_auto_set_auto_select)
+    if existing_active is not None:
+        report.update(existing_active)
+        _write_auto_existing_report(report_dir, request_id, report)
+        return report
     config = load_config(Path(config_dir).expanduser())
     shadowing = _auto_select_shadowing(Recipe.model_validate(active_recipe), config.recipes)
     report["auto_select_review"] = shadowing
@@ -1396,8 +1403,6 @@ def _auto_existing_tuple_report(
         report["reason"] = shadowing["reason"]
         _write_auto_existing_report(report_dir, request_id, report)
         return report
-    active_config_dir = Path(config_dir).expanduser()
-    active_recipe_path = _recipe_yaml_path(active_config_dir / "recipes", active_recipe["name"])
     check_config_dir = active_config_dir
     if automation.recipe_inbox_auto_run_validate_config or automation.recipe_inbox_auto_run_launch_check:
         check_config_dir = _stage_activation_config(active_config_dir, report_dir, request_id)
@@ -1423,6 +1428,30 @@ def _auto_existing_tuple_report(
     report["decision"] = "ACTIVATED" if active_recipe.get("auto_select") is True else "ACTIVATED_NO_AUTO_SELECT"
     _write_auto_existing_report(report_dir, request_id, report)
     return report
+
+
+def _existing_active_recipe_report(path: Path, active_recipe: Mapping[str, Any], *, require_auto_select: bool) -> dict[str, Any] | None:
+    if not path.exists():
+        return None
+    try:
+        existing = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+    except Exception:
+        return None
+    if not isinstance(existing, Mapping):
+        return None
+    if existing.get("name") != active_recipe.get("name"):
+        return None
+    for key in ("task", "intent", "resource_class"):
+        if existing.get(key) and active_recipe.get(key) and existing.get(key) != active_recipe.get(key):
+            return None
+    if require_auto_select and existing.get("auto_select") is not True:
+        return None
+    return {
+        "decision": "EXISTING_RECIPE_ALREADY_ACTIVE",
+        "reason": "active recipe already satisfies the submitted workload route; linked submission without overwriting active contract",
+        "activation_paths": {"recipe": str(path)},
+        "activated": False,
+    }
 
 
 def _write_auto_existing_report(report_dir: Path, request_id: str, report: dict[str, Any]) -> None:

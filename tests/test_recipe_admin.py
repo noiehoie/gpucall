@@ -1004,6 +1004,68 @@ def test_existing_tuple_auto_validation_uses_budget_after_validation_hash_mismat
     assert validation_calls[0]["poll_timeout_seconds"] == 180
 
 
+def test_existing_tuple_activation_links_existing_active_recipe_without_overwrite(tmp_path) -> None:
+    config_dir = tmp_path / "config"
+    shutil.copytree("gpucall/config_templates", config_dir)
+    report_dir = tmp_path / "reports"
+    report_dir.mkdir()
+    active_recipe_path = config_dir / "recipes" / "vision-understand-document-image-draft.yml"
+    active_recipe = yaml.safe_load(active_recipe_path.read_text(encoding="utf-8"))
+    active_recipe.update(
+        {
+            "auto_select": True,
+            "quality_floor": "standard",
+            "timeout_seconds": 600,
+            "lease_ttl_seconds": 900,
+            "expected_cold_start_seconds": 120,
+            "expected_runtime_seconds": 120,
+        }
+    )
+    active_recipe_path.write_text(yaml.safe_dump(active_recipe, sort_keys=False), encoding="utf-8")
+
+    report = _auto_existing_tuple_report(
+        {
+            "canonical_recipe": {
+                "name": "vision-understand-document-image-draft",
+                "task": "vision",
+                "intent": "understand_document_image",
+                "resource_class": "light",
+                "quality_floor": "draft",
+                "timeout_seconds": 1800,
+                "lease_ttl_seconds": 2100,
+            },
+            "eligible_tuples": ["modal-vision-catalog-a10g-microsoft-florence-2-large-ft"],
+            "live_validation": {
+                "matched": [
+                    {
+                        "tuple": "modal-vision-catalog-a10g-microsoft-florence-2-large-ft",
+                        "recipe": "vision-understand-document-image-draft",
+                        "path": str(tmp_path / "validation.json"),
+                    }
+                ]
+            },
+        },
+        request_id="rr-existing-active",
+        automation=RecipeAdminAutomationConfig(
+            recipe_inbox_auto_materialize=True,
+            recipe_inbox_auto_validate_existing_tuples=True,
+            recipe_inbox_auto_activate_existing_validated_recipe=True,
+            recipe_inbox_auto_set_auto_select=True,
+            recipe_inbox_auto_run_validate_config=True,
+            recipe_inbox_auto_run_launch_check=True,
+        ),
+        report_dir=report_dir,
+        config_dir=config_dir,
+        validation_dir=tmp_path / "tuple-validation",
+        force=False,
+    )
+
+    assert report["decision"] == "EXISTING_RECIPE_ALREADY_ACTIVE"
+    assert report["activation_paths"]["recipe"] == str(active_recipe_path)
+    assert report["checks"] == []
+    assert not any(path.name.startswith("rr-existing-active.activation-config") for path in report_dir.iterdir())
+
+
 def test_existing_tuple_auto_validation_budget_exceeded_waits_for_approval(tmp_path, monkeypatch) -> None:
     config_dir = tmp_path / "config"
     shutil.copytree("gpucall/config_templates", config_dir)
