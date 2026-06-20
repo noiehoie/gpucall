@@ -1,0 +1,54 @@
+{
+  "date_jst": "2026-06-20",
+  "release": "v2.0.67",
+  "decision": "Go",
+  "sanitized": true,
+  "release_artifacts": {
+    "status": "pass",
+    "url": "https://github.com/noiehoie/gpucall/releases/tag/v2.0.67",
+    "assets": [
+      "gpucall-2.0.67-py3-none-any.whl",
+      "gpucall-2.0.67.tar.gz",
+      "gpucall_sdk-2.0.67-py3-none-any.whl",
+      "gpucall_sdk-2.0.67.tar.gz",
+      "SHA256SUMS"
+    ]
+  },
+  "clean_room_install": {
+    "status": "pass",
+    "host": "netcup2",
+    "sandbox_home": "/tmp/gpucall-oob-v2067-20260620T201656",
+    "uv_initial_state": "missing",
+    "installed_version": "gpucall 2.0.67",
+    "initial_readiness": "onboarding-blocked",
+    "final_readiness": "local-trial-ready",
+    "next_action": "configure Modal happy path for external systems"
+  },
+  "production_setup": {
+    "status": "pass",
+    "host": "netcup2",
+    "readiness": "onboarding-ready",
+    "gateway_health": "ok",
+    "handoff_path": "/home/admin/.local/share/gpucall/handoffs/news-system/caller-ai-onboarding-prompt.md",
+    "handoff_sdk_version": "2.0.67",
+    "caller_contracts": {
+      "no_default_max_tokens": true,
+      "no_default_timeout_seconds": true,
+      "vision_input_refs_contract": true
+    }
+  },
+  "news_system_canary": {
+    "status": "pass",
+    "host": "macmini",
+    "caller_tests": "32 passed",
+    "intents": {
+      "extract_json": "pass",
+      "translate_text": "pass",
+      "summarize_text": "pass",
+      "rank_text_items": "pass",
+      "vision": "pass"
+    },
+    "canary_result": "GO"
+  },
+  "blockers": []
+}
