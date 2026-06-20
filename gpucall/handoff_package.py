@@ -97,6 +97,7 @@ Use only the operator-provided handoff values below. Treat them as authoritative
 - Do not add direct hosted-AI fallback. Unknown or unsupported work must fail closed and submit sanitized intake.
 - Do not send raw confidential payloads to the recipe inbox. Submit sanitized intent, metadata, workload contracts, and quality feedback only.
 - Do not skip recipe submission because caller code, recipes, or previous migration artifacts already exist. Every onboarding run must submit or verify a fresh recipe request for the current workload.
+- Do not send `max_tokens` or `timeout_seconds` as default routing selectors. Omit them unless the caller has an explicit lower workload contract; if `timeout_seconds` is sent, it must be at or below the accepted recipe lease.
 - Final status must be exactly `Go` or `No-Go`; skipped canary is `No-Go`.
 
 ## Required Flow
@@ -299,6 +300,7 @@ done
 
 If you submit preflight-only requests, `gpucall-recipe-draft preflight --remote-inbox "$GPUCALL_RECIPE_INBOX"` must create a submission whose top-level `draft` field is a JSON object, not `null`. Submit low-quality success feedback to `GPUCALL_QUALITY_FEEDBACK_INBOX` with `--remote-quality-inbox` or `--quality-inbox-dir`; quality feedback must not create recipe drafts.
 8. Patch caller wrappers so application code sends only task, mode, input data, or DataRefs to `GPUCALL_BASE_URL`.
+   Do not add default `max_tokens` or `timeout_seconds` fields to every request. They can change recipe selection or violate recipe lease policy; omit them unless a caller-owned workload contract requires a lower bound.
    For vision requests, put image/file DataRefs in `input_refs` and put the text prompt in `inline_inputs.prompt`.
    Do not upload the text prompt as a text DataRef for `task="vision"`; `input_refs` for vision are matched against image/file MIME contracts.
    If a vision prompt is too large for inline policy, fail closed and submit sanitized intake instead of converting the prompt to a text DataRef.

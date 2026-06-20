@@ -52,6 +52,8 @@ handoff_assets:
     assert '"/readyz/details"' in prompt
     assert 'headers["Authorization"] = "Bearer " + api_key' in prompt
     assert "gateway canary while the recipe request is still `pending`." in prompt
+    assert "Do not send `max_tokens` or `timeout_seconds` as default routing selectors." in prompt
+    assert "They can change recipe selection or violate recipe lease policy" in prompt
     assert "For vision requests, put image/file DataRefs in `input_refs` and put the text prompt in `inline_inputs.prompt`." in prompt
     assert 'state != "processed"' in prompt
     assert "existing_tuple_activation_decision" in prompt
@@ -88,7 +90,7 @@ tenant_onboarding:
     - 127.0.0.1/32
   recipe_inbox: {recipe_inbox}
 handoff_assets:
-  caller_sdk_wheel_url: https://assets.example/sdk/gpucall_sdk-2.0.66-py3-none-any.whl
+  caller_sdk_wheel_url: https://assets.example/sdk/gpucall_sdk-2.0.67-py3-none-any.whl
 """.lstrip(),
         encoding="utf-8",
     )
@@ -117,7 +119,7 @@ tenant_onboarding:
     - 192.0.2.20/32
   recipe_inbox: {recipe_inbox}
 handoff_assets:
-  caller_sdk_wheel_url: https://assets.example/sdk/gpucall_sdk-2.0.66-py3-none-any.whl
+  caller_sdk_wheel_url: https://assets.example/sdk/gpucall_sdk-2.0.67-py3-none-any.whl
 """.lstrip(),
         encoding="utf-8",
     )
@@ -181,7 +183,7 @@ tenant_onboarding:
     - 10.0.0.42/32
   recipe_inbox: {recipe_inbox}
 handoff_assets:
-  caller_sdk_wheel_url: https://assets.example/sdk/gpucall_sdk-2.0.66-py3-none-any.whl
+  caller_sdk_wheel_url: https://assets.example/sdk/gpucall_sdk-2.0.67-py3-none-any.whl
 """.lstrip(),
         encoding="utf-8",
     )
@@ -229,7 +231,7 @@ tenant_onboarding:
     - 10.0.0.42/32
   recipe_inbox: {recipe_inbox}
 handoff_assets:
-  caller_sdk_wheel_url: https://assets.example/sdk/gpucall_sdk-2.0.66-py3-none-any.whl
+  caller_sdk_wheel_url: https://assets.example/sdk/gpucall_sdk-2.0.67-py3-none-any.whl
 """.lstrip(),
         encoding="utf-8",
     )

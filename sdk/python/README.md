@@ -5,8 +5,8 @@ Public evaluation package for gpucall v2.0 integrations.
 Install the caller SDK helper without cloning the gateway repository:
 
 ```bash
-uv tool install https://github.com/noiehoie/gpucall/releases/download/v2.0.66/gpucall_sdk-2.0.66-py3-none-any.whl
-uv tool run --from https://github.com/noiehoie/gpucall/releases/download/v2.0.66/gpucall_sdk-2.0.66-py3-none-any.whl gpucall-recipe-draft --help
+uv tool install https://github.com/noiehoie/gpucall/releases/download/v2.0.67/gpucall_sdk-2.0.67-py3-none-any.whl
+uv tool run --from https://github.com/noiehoie/gpucall/releases/download/v2.0.67/gpucall_sdk-2.0.67-py3-none-any.whl gpucall-recipe-draft --help
 ```
 
 Verify that the SDK console script is installed:
@@ -69,6 +69,11 @@ wire format is:
 
 `input_refs` is a list of DataRef objects with a `uri` field. It is not a list
 of strings, and task requests do not use a single `data_ref` string field.
+
+Do not add default `max_tokens` or `timeout_seconds` fields to every request.
+They can change recipe selection or violate recipe lease policy. Omit them
+unless a caller-owned workload contract requires a lower bound; if
+`timeout_seconds` is sent, it must be at or below the accepted recipe lease.
 
 For vision requests, pass image/file bytes as DataRefs in `input_refs` and keep
 the text prompt in `inline_inputs.prompt`. Do not upload the prompt as a
