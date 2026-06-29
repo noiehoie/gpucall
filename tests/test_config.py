@@ -881,6 +881,17 @@ def test_template_config_routes_structured_vision_to_json_capable_model() -> Non
     assert "modal-h100-florence-2-large-ft" not in plan.tuple_chain
 
 
+def test_rank_text_items_standard_allows_batch_runtime_observed_in_oob() -> None:
+    config = load_config(Path("gpucall/config_templates"))
+    recipe = config.recipes["infer-rank-text-items-standard"]
+
+    assert recipe.intent == "rank_text_items"
+    assert recipe.context_budget_tokens == 131072
+    assert recipe.timeout_seconds == 1200
+    assert recipe.lease_ttl_seconds == 1500
+    assert recipe.lease_ttl_seconds >= recipe.timeout_seconds
+
+
 def test_provider_smoke_uses_chat_messages_for_chat_only_provider(tmp_path) -> None:
     config = load_config(copy_config(tmp_path))
     recipe = config.recipes["text-infer-light"]

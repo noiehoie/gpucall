@@ -11,8 +11,8 @@ context_budget_tokens: 131072
 resource_class: standard
 latency_class: batch
 quality_floor: standard
-timeout_seconds: 600
-lease_ttl_seconds: 900
+timeout_seconds: 1200
+lease_ttl_seconds: 1500
 token_estimation_profile: qwen
 max_input_bytes: 134217728
 allowed_mime_prefixes:
