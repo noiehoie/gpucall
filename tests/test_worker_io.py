@@ -51,6 +51,16 @@ def test_worker_fetches_gateway_presigned_https_data_ref_text(monkeypatch) -> No
     assert prompt_from_payload(payload) == "secret payload"
 
 
+def test_worker_prompt_keeps_data_refs_when_messages_exist(monkeypatch) -> None:
+    monkeypatch.setattr("gpucall.worker_contracts.io.fetch_data_ref_text", lambda _ref: "secret payload")
+    payload = {
+        "messages": [{"role": "system", "content": "rank these items"}],
+        "input_refs": [{"uri": "https://objects.example/prompt.txt", "gateway_presigned": True}],
+    }
+
+    assert prompt_from_payload(payload) == "rank these items\nsecret payload"
+
+
 def test_worker_rejects_untrusted_https_data_ref(monkeypatch) -> None:
     payload = {
         "inline_inputs": {},

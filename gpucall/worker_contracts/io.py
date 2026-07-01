@@ -72,14 +72,15 @@ def _get_pinned_opener(pinned_ip, scheme):
 
 def prompt_from_payload(payload: dict[str, Any]) -> str:
     messages = payload.get("messages") or []
-    if messages:
-        return "\n".join(str(message.get("content", "")) for message in messages if str(message.get("content", "")))
-    inline = payload.get("inline_inputs") or {}
     parts: list[str] = []
-    if "prompt" in inline:
-        parts.append(str(inline["prompt"]["value"]))
+    if messages:
+        parts.extend(str(message.get("content", "")) for message in messages if str(message.get("content", "")))
     else:
-        parts.extend(str(value.get("value", "")) for value in inline.values())
+        inline = payload.get("inline_inputs") or {}
+        if "prompt" in inline:
+            parts.append(str(inline["prompt"]["value"]))
+        else:
+            parts.extend(str(value.get("value", "")) for value in inline.values())
 
     for ref in payload.get("input_refs") or []:
         parts.append(fetch_data_ref_text(ref))

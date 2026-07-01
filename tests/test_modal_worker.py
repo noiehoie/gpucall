@@ -12,6 +12,7 @@ from gpucall.worker_contracts.modal import (
     _looks_like_document_prompt,
     _prepare_vision_image,
     normalize_structured_vision_output,
+    prompt_from_payload,
     vision_prompt_from_payload,
 )
 
@@ -85,6 +86,33 @@ def test_qwen_fallback_template_preserves_all_messages() -> None:
     assert "first" in prompt
     assert "second" in prompt
     assert "third" in prompt
+
+
+def test_modal_prompt_keeps_data_refs_when_messages_exist(monkeypatch) -> None:
+    monkeypatch.setattr("gpucall.worker_contracts.modal._fetch_data_ref_text", lambda _ref: "DATAREF_TEXT_BODY")
+
+    payload = {
+        "messages": [{"role": "system", "content": "rank these items"}],
+        "input_refs": [{"uri": "https://objects.example/item.txt", "gateway_presigned": True}],
+    }
+
+    assert prompt_from_payload(payload) == "rank these items\nDATAREF_TEXT_BODY"
+
+
+def test_modal_chat_template_adds_data_refs_as_user_message(monkeypatch) -> None:
+    monkeypatch.setattr("gpucall.worker_contracts.modal._fetch_data_ref_text", lambda _ref: "DATAREF_TEXT_BODY")
+
+    payload = {
+        "messages": [{"role": "system", "content": "rank these items"}],
+        "input_refs": [{"uri": "https://objects.example/item.txt", "gateway_presigned": True}],
+    }
+
+    rendered = json.loads(_format_prompt_for_model(FakeLLM(), "Qwen/Qwen2.5-7B-Instruct", payload))
+
+    assert rendered == [
+        {"role": "system", "content": "rank these items"},
+        {"role": "user", "content": "DATAREF_TEXT_BODY"},
+    ]
 
 
 def test_vision_prompt_excludes_gateway_system_prompt() -> None:

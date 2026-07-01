@@ -34,10 +34,11 @@ def _system_prompt_for_payload(payload: dict[str, Any]) -> str:
 
 
 def _format_prompt_for_model(llm: Any, model_id: str, payload: dict[str, Any]) -> str:
-    raw_prompt = prompt_from_payload(payload).strip()
+    ref_parts = _input_ref_text_parts(payload)
+    raw_prompt = prompt_from_payload(payload, _ref_parts=ref_parts).strip()
     if not _should_apply_chat_template(model_id, llm):
         return raw_prompt
-    messages = _messages_from_payload(payload, raw_prompt)
+    messages = _messages_from_payload(payload, raw_prompt, ref_parts=ref_parts)
     tokenizer = _get_tokenizer(llm)
     template = getattr(tokenizer, "apply_chat_template", None)
     if callable(template):
@@ -57,14 +58,24 @@ def _format_prompt_for_model(llm: Any, model_id: str, payload: dict[str, Any]) -
     return raw_prompt
 
 
-def _messages_from_payload(payload: dict[str, Any], raw_prompt: str) -> list[dict[str, str]]:
+def _messages_from_payload(
+    payload: dict[str, Any],
+    raw_prompt: str,
+    *,
+    ref_parts: list[str] | None = None,
+) -> list[dict[str, str]]:
     raw_messages = payload.get("messages") or []
     if raw_messages:
-        return [
+        messages = [
             {"role": str(message.get("role", "user")), "content": str(message.get("content", ""))}
             for message in raw_messages
             if str(message.get("content", ""))
         ]
+        refs = ref_parts if ref_parts is not None else _input_ref_text_parts(payload)
+        ref_prompt = "\n".join(part for part in refs if part)
+        if ref_prompt:
+            messages.append({"role": "user", "content": ref_prompt})
+        return messages
     messages: list[dict[str, str]] = []
     system_prompt = _system_prompt_for_payload(payload)
     if system_prompt:
@@ -88,22 +99,29 @@ def _get_tokenizer(llm: Any) -> Any:
     return getattr(llm, "tokenizer", None)
 
 
-def prompt_from_payload(payload: dict[str, Any]) -> str:
+def prompt_from_payload(payload: dict[str, Any], *, _ref_parts: list[str] | None = None) -> str:
     messages = payload.get("messages") or []
-    if messages:
-        return "\n".join(str(message.get("content", "")) for message in messages if str(message.get("content", "")))
-    inline = payload.get("inline_inputs") or {}
     parts: list[str] = []
-    if "prompt" in inline:
-        parts.append(str(inline["prompt"].get("value", "")))
+    if messages:
+        parts.extend(str(message.get("content", "")) for message in messages if str(message.get("content", "")))
     else:
-        for key in sorted(inline):
-            value = inline[key]
-            if isinstance(value, dict):
-                parts.append(str(value.get("value", "")))
+        inline = payload.get("inline_inputs") or {}
+        if "prompt" in inline:
+            parts.append(str(inline["prompt"].get("value", "")))
+        else:
+            for key in sorted(inline):
+                value = inline[key]
+                if isinstance(value, dict):
+                    parts.append(str(value.get("value", "")))
+    parts.extend(_ref_parts if _ref_parts is not None else _input_ref_text_parts(payload))
+    return "\n".join(part for part in parts if part)
+
+
+def _input_ref_text_parts(payload: dict[str, Any]) -> list[str]:
+    parts: list[str] = []
     for ref in payload.get("input_refs") or []:
         parts.append(_fetch_data_ref_text(ref))
-    return "\n".join(part for part in parts if part)
+    return parts
 
 
 def vision_prompt_from_payload(payload: dict[str, Any]) -> str:

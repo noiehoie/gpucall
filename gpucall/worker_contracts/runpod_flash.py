@@ -110,15 +110,16 @@ if Endpoint is not None and GpuGroup is not None:
 
         def _prompt_from_payload(payload):
             messages = payload.get("messages") or []
-            if messages:
-                return "\n\n".join(str(message.get("content", "")) for message in messages if str(message.get("content", "")))
-            inline_inputs = payload.get("inline_inputs") or {}
             parts = []
-            for key in sorted(inline_inputs):
-                item = inline_inputs[key] or {}
-                value = item.get("value")
-                if value:
-                    parts.append(str(value))
+            if messages:
+                parts.extend(str(message.get("content", "")) for message in messages if str(message.get("content", "")))
+            else:
+                inline_inputs = payload.get("inline_inputs") or {}
+                for key in sorted(inline_inputs):
+                    item = inline_inputs[key] or {}
+                    value = item.get("value")
+                    if value:
+                        parts.append(str(value))
             refs = payload.get("input_refs") or []
             for ref in refs:
                 if not isinstance(ref, dict):
@@ -302,15 +303,16 @@ def _format_prompt_for_model(tokenizer: object, model_id: str, payload: dict) ->
 
 def _prompt_from_payload(payload: dict) -> str:
     messages = payload.get("messages") or []
-    if messages:
-        return "\n\n".join(str(message.get("content", "")) for message in messages if str(message.get("content", "")))
-    inline_inputs = payload.get("inline_inputs") or {}
     parts: list = []
-    for key in sorted(inline_inputs):
-        item = inline_inputs[key] or {}
-        value = item.get("value")
-        if value:
-            parts.append(str(value))
+    if messages:
+        parts.extend(str(message.get("content", "")) for message in messages if str(message.get("content", "")))
+    else:
+        inline_inputs = payload.get("inline_inputs") or {}
+        for key in sorted(inline_inputs):
+            item = inline_inputs[key] or {}
+            value = item.get("value")
+            if value:
+                parts.append(str(value))
     refs = payload.get("input_refs") or []
     for ref in refs:
         if not isinstance(ref, dict):
