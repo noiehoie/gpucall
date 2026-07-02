@@ -149,3 +149,9 @@ gpucall-recipe-draft quality-status \
 The caller-side helper does not call an LLM. It creates deterministic intake material for gpucall administrators. If LLM-assisted recipe authoring is needed, it should run on the gpucall administrator side as an audited admin workflow.
 
 Generated drafts are review artifacts, not production config. `submit` writes a JSON bundle to a file-based recipe request inbox; it does not call the gpucall gateway API. `preflight` and `intake` can also write to that inbox directly with `--inbox-dir` or over SSH with `--remote-inbox USER@HOST:/absolute/path`. `quality` should write to the separate quality feedback inbox with `--quality-inbox-dir` or `--remote-quality-inbox`. `status`, `recipe-status`, and `quality-status` read back sanitized processing state and next actions without returning raw prompt text, raw model output, DataRef URIs, presigned URLs, or API keys.
+
+## License
+
+Apache-2.0 (see [LICENSE](LICENSE)). The SDK is licensed permissively so
+caller applications take no copyleft obligation; the gpucall gateway itself
+is AGPL-3.0-only.

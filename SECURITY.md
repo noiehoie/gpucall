@@ -1,4 +1,21 @@
-# Security Notes
+# Security Policy
+
+## Reporting a vulnerability
+
+Use GitHub's private vulnerability reporting on this repository
+(**Security → Report a vulnerability**). Please do not open public issues for
+suspected vulnerabilities. Expect an acknowledgement within 7 days; this is a
+single-maintainer project, and confirmed issues in the gateway request path,
+credential handling, or DataRef fetching take priority over all other work.
+
+Especially valuable reports: auth/tenant-isolation bypass, budget-enforcement
+bypass, any way a secret / presigned URL / DataRef URI reaches logs or
+reports, SSRF-hardening bypass in worker DataRef fetching, cleanup that could
+touch resources gpucall does not own, and install-script or release-artifact
+integrity issues.
+
+Only the latest tagged release receives security fixes; upgrading is a
+`GPUCALL_REF=<tag>` reinstall.
 
 ## Data Plane
 

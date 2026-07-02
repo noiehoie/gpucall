@@ -1,603 +1,169 @@
-# gpucall v2.0
+# gpucall
+
+[![CI](https://github.com/noiehoie/gpucall/actions/workflows/ci.yml/badge.svg)](https://github.com/noiehoie/gpucall/actions/workflows/ci.yml)
+[![License: AGPL-3.0](https://img.shields.io/badge/license-AGPL--3.0-blue)](LICENSE)
+[![SDK License: Apache-2.0](https://img.shields.io/badge/SDK-Apache--2.0-green)](sdk/python/LICENSE)
+[![Release](https://img.shields.io/github/v/release/noiehoie/gpucall)](https://github.com/noiehoie/gpucall/releases)
+
+**レンタルGPU推論のための fail-closed ガバナンスゲートウェイ。**
+アプリケーションは「何が要るか」（task・intent・予算）だけを宣言し、
+「どこで実行するか」— Modal / RunPod / Hyperstack / ローカルランタイム — は
+gpucall が決める。判断材料は検証可能な証跡のみ: ルート検証結果・価格鮮度・
+プロバイダ readiness probe・予算台帳。**証跡が無ければ流さない。例外なし。**
 
 [English README](README.md)
 
-## 北極星
+```text
+caller / AIエージェント              gpucall gateway                     プロバイダ
+─────────────────    ─────────────────────────────────────────    ────────────────
+POST /v2/tasks/sync   compile: recipe → tuple chain（決定論的）      Modal functions
+  task: infer     →   gates:   ルート検証証跡は新鮮か？          →   RunPod endpoints
+  intent: rank         価格証跡は新鮮か？予算は確保できるか？        Hyperstack VMs
+  budget, inputs       provider readinessは確認済みか？無ければ拒否   local (vLLM/Ollama)
+                      audit:   試行記録・コスト確定・cleanup証跡・
+                               失敗タクソノミ
+                                        ▲
+                      Provider Panopticon（実行パス外の監視）:
+                      endpoint存在・health・queue深度・価格観測
+                      → 鮮度境界付きスナップショット
+```
 
-gpucall は、外部システムと AI agent にとって GPU compute を電気のように扱えるものにする。呼び出し側は workload intent を宣言し、provider、GPU、model、cost、readiness、validation evidence、data sovereignty、execution、cleanup は gpucall が統制する。
+## なぜ存在するか
 
-具体的には、workload 宣言型 execution、cost prediction と hard ceiling、data-sovereignty evidence、agent-native structured API、multi-provider market arbitration、provider lifecycle governance を含む。
+「業務データを hosted AI API に出せない」と決めた瞬間、2つの事実が衝突する。
 
-プロジェクトの北極星は [docs/PRODUCT_NORTH_STAR.md](docs/PRODUCT_NORTH_STAR.md) に記録しています。Provider Panopticon は北極星そのものではなく、そこへ近づくための小さな一里塚として同文書に記録しています。
+1. **レンタルGPUは安くてどこにでもある** — serverless function、managed
+   endpoint、spot VM、マーケットプレイス。ただし実行面ごとにライフサイクル・
+   価格・故障モード・後始末の義務が全部違う。
+2. **アプリコードがGPUを選び始めた瞬間**、`modal-h100` のような文字列が
+   ビジネスロジックに漏れ、どのルートが検証済みか・いくらかかったか・
+   データが後始末されたかを誰も言えなくなる。
 
-ロードマップ要約:
+既存レイヤーは隣の問題を解いている: LLM APIゲートウェイ（LiteLLM/Portkey）は
+「既存エンドポイント」へのプロキシでありエンドポイント自体のライフサイクルは
+持たない。GPUオーケストレータ（SkyPilot/dstack)は計算資源を供給するが、
+ルート検証証跡や fail-closed 予算ルーティングの概念を持たない。gpucall は
+その間の層を所有する: **(recipe × tuple × mode × provider) のルートを
+「証明されるまで信用しない」し、証明し続ける。**
 
-- **v2**: `infer` / `vision` 向け governed job gateway kernel。最小 Provider
-  Panopticon、persistent job state、metering hook、budget enforcement point、
-  cleanup evidence を含む。
-- **v2.5**: public async API/CLI、agent-readable structured output、budget
-  hardening、MCP/tool interface を含む agent-native execution layer。
-- **v3**: training、LoRA、checkpoint、artifact lifecycle。
-- **v4**: managed product と enterprise control plane。
-- **v5**: public provider plugin platform。
+ルーティング判断にLLMは一切関与しない。同じ入力・同じカタログ・同じ証跡
+なら同じルート。拒否は機械可読な failure artifact（分類・呼び出し側の
+次アクション・責任者付き）で返る。
 
-**gpucall は「どの GPU / model / provider で処理するか」をアプリケーション側に考えさせず、組織側の policy と evidence だけで 100% 決定論的に GPU 実行を統制する gateway です。**
+## Status — 評価の前に読め
 
-Gemini、GPT、Claude などの hosted AI API に業務データを投げることは、多くの組織にとって原理的には社内リソースの外部送信です。これを避けるには、自社管理の GPU 上に LLM / vLLM / Transformers を載せて処理するのが自然です。しかし GPU を購入して常時運用するには、巨額の初期投資、調達リードタイム、運用要員、余剰キャパシティの問題が発生します。
-
-gpucall は、その中間にある現実的な選択肢を狙います。**データと統制は組織側に残し、GPU の計算力だけをクラウドから借りる**。ただし、クラウド GPU を借りる以上、どの実行先が使われたか、価格は妥当か、検証済みか、policy に合うかを、アプリケーション側の場当たり的な判断ではなく gateway の決定論的 governance で強制します。
-
-OpenAI SDK 互換の facade の背後で、Modal serverless、RunPod managed endpoints、Hyperstack VMs、local runtimes などの heterogeneous GPU 実行面を束ねます。アプリケーション側は `task`、`mode`、input または `DataRef` を渡すだけです。gpucall が recipe、model、engine、execution tuple、price freshness、validation evidence、tenant policy を照合し、実行してよい production tuple だけに route します。
-
-v2.0 MVP の production 対象は `infer` と `vision` です。
-
-## どんなニーズを埋めるか
-
-LLM / Vision を業務システムに組み込むと、現場では次の問題が起きます。
-
-- **社内データを hosted AI API に投げたくない**: SaaS 型 AI API は便利ですが、業務データ、顧客データ、未公開文書、内部分析結果を外部 API に送ること自体が governance 上の問題になります。
-- **かといって GPU を買うのは重すぎる**: 自前 GPU は調達費、設置、運用、故障対応、空き時間の無駄が大きく、需要の波にも弱い。必要な時だけクラウド GPU を借りたいという圧力が生まれます。
-- **アプリケーション側が model / provider / GPU を選んでしまう**: アプリ側に `claude-haiku`、`gpt-4o`、`modal-h100` のような選択が散らばり、policy と cost control が崩れます。
-- **hosted API gateway では足りない**: LiteLLM や Portkey のような API gateway は hosted model provider の統一には強い一方、自前で借りた GPU 実行面の lifecycle、validation、cleanup、billable smoke、price freshness までは主責務にしません。
-- **Kubernetes inference stack では前提が重い**: すべての実行面が単一 K8s cluster 内にあるとは限りません。現実には serverless GPU、managed endpoint、IaaS VM、local runtime が混在します。
-- **条件を満たせない時に勝手な迂回をしてほしくない**: 使える GPU がない、価格情報が古い、まだ検証していない実行先しかない。そういう時に「とりあえず別の安い model に投げる」動作は、コスト事故や情報管理事故につながります。
-- **新しい業務要件を安全に受け付けたい**: 既存の設定で処理できない依頼が来た時、raw prompt や機密ファイルを管理者に渡して相談するのではなく、「何をしたいか」という intent だけを提出し、管理側で安全に審査・設定・検証できる流れが必要です。
-
-gpucall はこの隙間を埋めます。既存アプリは OpenAI 互換 API または gpucall SDK で呼び出し、GPU / provider / model selection は gateway 側に回収します。未知 workload は fail closed し、呼び出し側の補助ツールが sanitized intake を作り、管理側の補助ツールが recipe / tuple / validation pipeline に載せます。
-
-## 最大の売り: 100% 決定論ルーティング
-
-gpucall の routing 判断に LLM は入りません。
-
-どの recipe を選ぶか、どの tuple を候補にするか、どの provider に fallback するか、価格が予算上使えるか、validation evidence が production 昇格済みか、tenant policy に合うか。これらはすべて catalog、policy、runtime evidence、request metadata に対する deterministic evaluation です。
-
-つまり:
-
-- 同じ入力、同じ catalog、同じ policy、同じ live evidence なら、同じ routing decision になります。
-- なぜその tuple が選ばれたか、なぜ別 tuple が reject されたかを audit できます。
-- LLM による「なんとなくの model routing」や prompt classification は gateway runtime に入りません。
-- unknown / stale / unvalidated / over-budget は fail closed します。
-
-gpucall は「賢そうに選ぶ router」ではありません。**後から説明でき、再現でき、監査できる GPU governance router** です。
-
-## 製品の形
-
-gpucall は単なる gateway binary ではなく、3つの部品で構成される製品です。
-
-- **Gateway runtime scripts**: 決定論的な request admission、recipe selection、tuple routing、policy enforcement、audit、validation gate、cleanup、fail-closed execution を担います。
-- **呼び出し側補助ツール**: SDK に同梱される `gpucall-recipe-draft` です。外部システムは raw content や provider / GPU / model / tuple 選択を渡さず、sanitized workload intent、preflight metadata、post-failure intake、low-quality-success feedback を提出できます。
-- **管理側補助ツール**: gateway 側に同梱される `gpucall-recipe-admin` です。呼び出し側 intake をレビューし、recipe intent を materialize し、不足する execution contract を導出し、candidate tuple を isolated config と billable validation を通じて昇格し、最後に production activation を許可します。
-
-責任境界は製品契約の一部です。呼び出し側は workload intent を記述するだけです。管理側は catalog、tuple、validation evidence、production promotion を管理します。gateway は検証済み policy decision だけを実行します。
-
-## 既存 router / inference stack ではない理由
-
-gpucall は、すべての LLM gateway、Kubernetes inference stack、GPU provisioner を置き換えようとしているわけではありません。gpucall が埋めるのは、より狭い control-plane の隙間です。つまり、heterogeneous leased GPU surface をまたいで、gateway が recipe selection、tuple routing、validation evidence、price freshness、cleanup、audit を所有する policy-enforced execution です。
-
-隣接システムは別のレイヤーを解いています。
-
-| Category | Examples | 得意なこと | gpucall の境界 |
-| :--- | :--- | :--- | :--- |
-| LLM API gateways | [LiteLLM](https://docs.litellm.ai/), [Portkey AI Gateway](https://portkey.ai/docs/product/ai-gateway) | 多数の hosted model provider への unified API、virtual keys、fallback、cost tracking、guardrails、observability | gpucall は hosted API provider selection だけでなく、leased GPU execution surface と production tuple promotion を管理します |
-| Model/provider marketplaces | [OpenRouter](https://openrouter.ai/docs/guides/routing/provider-selection) | SaaS API 背後の model provider routing | gpucall は recipe、tuple、validation artifact、object-store DataRef、provider lifecycle に対する operator-owned governance を前提にしています |
-| Kubernetes inference stacks | [llm-d](https://llm-d.ai/) と Kubernetes inference-gateway patterns | Kubernetes 内の高性能 distributed inference、KV-cache-aware routing、prefill/decode separation、cluster-native operations | gpucall はすべての実行面が単一 Kubernetes cluster 内にあることを要求しません。Modal functions、RunPod endpoints、Hyperstack VMs、local runtimes を同一 governance contract で正規化します |
-| GPU provisioning tools | GPU cloud provisioners and cluster schedulers | GPU capacity の取得や scheduling | gpucall は capacity を deterministic routing の入力の1つとして扱い、そこに recipe fit、model/engine compatibility、security policy、validation evidence、cost freshness、cleanup/audit contracts を加えます |
-
-意図的に重ならない部分があります。gpucall の差別化された surface は、次の組み合わせです。
-
-- **Heterogeneous execution governance**: Modal serverless functions、RunPod managed endpoints、Hyperstack VMs、local runtimes を、呼び出し側が選んだ provider ではなく execution tuple として表現します。
-- **Deterministic four-catalog routing**: recipe、model、engine、execution tuple の compatibility を LLM-based routing なしで評価します。
-- **Validation evidence before production**: YAML entry があるだけでは tuple を信用しません。review、endpoint configuration、billable validation、activation gate を通じて production 昇格します。
-- **Price freshness as policy input**: configured price と live price evidence を分離します。strict budget mode では stale / unknown price data に対して fail closed できます。
-- **Data-plane-less integration**: 外部システムは gateway に raw payload bytes や provider choice を渡さず、`DataRef` と sanitized recipe request を提出できます。
-
-## LLM 境界
-
-gateway runtime は deterministic governance runtime です。recipe、tuple、provider、GPU、model、price、stock state、fallback order、cleanup action、production promotion の選択に LLM を使ってはいけません。
-
-LLM inference が許されるのは、deterministic routing が production tuple を選択し、worker payload を選ばれた execution surface に渡した後だけです。その時点で provider worker は、呼び出し側の task を処理するために vLLM、Transformers、worker-vLLM、または宣言済み model engine を実行できます。
-
-呼び出し側補助ツールと管理側補助ツールは boundary tools です。呼び出し側補助ツールは deterministic のままで、sanitized intake だけを作ります。仮に LLM-assisted recipe authoring を使う場合でも、それは sanitized intake に対する audited 管理側 workflow に限定されます。production activation には、なお deterministic materialization、validation evidence、launch checks、deployment が必要です。
+- **v2（infer / vision）: production稼働中。** 作者のニュース分析パイプ
+  ラインが毎日これで回っている — 90Kトークン級のランキング、新聞紙面の
+  vision OCR、JSON抽出。このパイプラインが永続カナリアであり、全リリースが
+  その回帰スイートを通過する。
+- **メンテナは1人。** AI支援開発を全面的に使い、品質ゲートは決定論的テスト
+  （CIで1,000件超）。その前提でレビューせよ。
+- **APIはpre-1.0。** マイナーバージョンで契約が壊れることがある（リリース
+  ノートに記載）。
+- プロバイダ: Modalが推奨happy path。RunPod/Hyperstackはアダプタ+非生成
+  probe+供給プランまで。ローカルランタイム（Ollama/OpenAI互換/vLLM）は
+  第一級。
+- v2.5のagent-native層（estimate・failure taxonomy・MCPサーバ）は出荷済み。
+  training/artifactライフサイクル（v3）は設計段階（`tasks/*-plan.md`）。
 
 ## Quickstart
 
-初回導入では、まず operator CLI をインストールします。
+CLIをインストール（`uv`が無ければ入れる。固定するなら `GPUCALL_REF=<ref> sh`）:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/noiehoie/gpucall/main/install.sh | sh
 ```
 
-この one-liner は公開 `main` の製品を入れます。branch / tag / release
-candidate を検証する場合は、raw installer と package archive に同じ ref を使います。
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/noiehoie/gpucall/<ref>/install.sh | GPUCALL_REF=<ref> sh
-```
-
-checkout 済みの repository から導入する場合:
-
-```bash
-./install.sh
-```
-
-installer は dependency preflight を実行し、`uv` がなければ bootstrap し、
-`uv tool` 経由で provider extras 付きの `gpucall` CLI を入れ、次に実行すべき
-setup command を表示します。install 後に operator setup journey を起動します。
+ガイド付きセットアップ — 初回は**クラウド認証情報ゼロ**で動く（local trial）:
 
 ```bash
 gpucall setup
-gpucall setup status
-gpucall setup next
-```
-
-初見の場合は local trial から始めます。provider credentials、endpoint ID、
-object storage、tenant handoff、billable generation は不要です。
-
-```bash
-gpucall setup starter-plan --profile local-trial
-gpucall setup apply --file gpucall.setup.yml --dry-run
+gpucall setup starter-plan --profile local-trial --output gpucall.setup.yml
 gpucall setup apply --file gpucall.setup.yml --yes
+gpucall serve --config-dir ~/.config/gpucall --port 18088
 ```
 
-local trial が通った後に Modal happy-path cloud plan を作ります。
+課金前に見積る（ルートをコンパイルするだけ。予算確保も実行もしない）:
 
 ```bash
-gpucall setup starter-plan --profile internal-team --provider modal --output gpucall.modal.setup.yml
-gpucall setup apply --file gpucall.modal.setup.yml --dry-run
-gpucall setup apply --file gpucall.modal.setup.yml --accept-plan-hash <plan_hash>
-# 非対話 apply:
-gpucall setup apply --file gpucall.modal.setup.yml --yes --accept-plan-hash <plan_hash>
+curl -s localhost:18088/v2/estimate -X POST -H 'content-type: application/json' \
+  -d '{"task":"infer","mode":"sync","intent":"summarize_text",
+       "inline_inputs":{"prompt":{"value":"...", "content_type":"text/plain"}}}'
 ```
 
-dry-run が必要な `plan_hash` を表示します。Modal worker deploy は provider
-側 mutation なので、最後の apply には `--accept-plan-hash <plan_hash>` が必要です。
-`MODAL_TOKEN_ID` と `MODAL_TOKEN_SECRET` が環境変数にある場合、setup はそれを
-gpucall credential store に取り込み、plan YAML には secret を書きません。
-非対話 apply では、同じ `--accept-plan-hash <plan_hash>` コマンドに `--yes` を
-追加します。`credentials.source: prompt` のままでは `--yes` は拒否されます。
-
-Linux systemd user install では、setup が `gpucall-panopticon.service` と
-`gpucall-recipe-admin-watch.service` を起動します。
-
-Modal apply step では Modal token ID と token secret を入力します。値は
-repository YAML ではなく gpucall credentials store に保存され、同時に bundled
-`gpucall-worker-json` Modal worker、gateway caller auth、recipe inbox、
-bounded demand-to-supply automation が作成されます。まだ cloud GPU provider
-契約がない operator には、`gpucall setup next` が Modal を案内します。
-provider credentials がなければ cloud routing は有効化されず、fail-closed のままです。
-
-caller-side onboarding を setup 時に準備したい場合は、apply 前に setup plan
-へ external system を追加します。
-
-```yaml
-external_systems:
-  - name: example-system
-    expected_workloads: [infer, vision]
-```
-
-`external_systems` がある場合、`gpucall setup apply` は concrete な handoff
-package を `$XDG_DATA_HOME/gpucall/handoffs/<system-name>/` に書きます。
-その `caller-ai-onboarding-prompt.md` を caller 側 coding AI CLI に渡します。
-
-setup-as-code で導入する場合:
-
-```bash
-gpucall setup apply --file gpucall.setup.yml --dry-run
-gpucall setup apply --file gpucall.setup.yml --yes
-```
-
-setup layer は最初に運用 profile を聞き、その後 gateway auth、GPU
-execution surfaces、object-store DataRefs、tenant handoff、recipe inbox
-automation、launch checks、external-system onboarding を案内します。低レイヤーコマンドである
-`gpucall init`、`gpucall configure`、`gpucall admin ...`、
-`gpucall validate-config`、`gpucall launch-check` は automation と debug
-用に残ります。`gpucall setup status` は非対話で、現在の check と次コマンドだけを表示します。
-`gpucall validate-config` は既定で count/sample の bounded summary だけを表示し、
-全 catalog 名が必要なときだけ `gpucall validate-config --verbose` を使います。
-`gpucall setup apply` は適用後チェックを表示し、`--yes`
-指定時の interactive な `credentials.source: prompt` を拒否します。setup
-plan の文法は [docs/SETUP_PLAN.md](docs/SETUP_PLAN.md) にあります。
-
-production-like runtime layout は XDG に従います。
-
-- Config: `$XDG_CONFIG_HOME/gpucall` または `~/.config/gpucall`
-- State: `$XDG_STATE_HOME/gpucall` または `~/.local/state/gpucall`
-- Cache: `$XDG_CACHE_HOME/gpucall` または `~/.cache/gpucall`
-
-## MVP Scope
-
-v2.0 で production-supported なタスク:
-
-- Tasks: `infer`, `vision`
-- Draft control-plane recipe contracts: `transcribe`, `convert`, `train`, `fine-tune`, `split-infer`
-- Modes: `sync`, `async`, `stream`
-- Object store: Cloudflare R2 endpoint override を含む S3-compatible API
-- Deployment: production-like run では Postgres service 付き Docker Compose
-- State: Docker Compose では gateway jobs/idempotency に Postgres を使う。`GPUCALL_DATABASE_URL` 未設定時の SQLite WAL は dev/test fallback
-- Optional deployment manifests: Helm、systemd、Postgres DDL、Prometheus alerts、Grafana dashboard
-
-v2.0 で production-supported ではないもの:
-
-- TEE / sovereign execution のための high-confidential provider live connections
-
-## Secrets
-
-secret は YAML に入れてはいけません。`gpucall configure`、environment variables、または deployment secret manager を使います。
-
-```bash
-gpucall security scan-secrets
-```
-
-Provider YAML には resource shape と routing metadata だけを置くべきです。
-
-## License
-
-Copyright (c) 2026 Sugano Tamotsu. All rights reserved.
-
-この repository は evaluation、integration review、security discussion のために public です。別途書面による license がない限り、open source ではありません。
-
-## SaaS v1 Operations
-
-外部 SaaS operation は、tenant quota YAML と credentials-managed tenant API keys を使います。詳しくは [docs/SAAS_V1_OPERATIONS.md](docs/SAAS_V1_OPERATIONS.md) と [docs/GATEWAY_API_KEYS.md](docs/GATEWAY_API_KEYS.md) を参照してください。
-
-## Python SDK
+Pythonから:
 
 ```python
 from gpucall_sdk import GPUCallClient
 
 with GPUCallClient("http://127.0.0.1:18088") as client:
-    print(client.infer(prompt="hello"))
+    print(client.estimate(prompt="hello", intent="summarize_text"))
+    print(client.infer(prompt="hello", intent="summarize_text"))
 ```
 
-async polling はデフォルトで隠蔽されます。
+SDKは別配布（Apache-2.0）:
+[`gpucall_sdk-2.0.69-py3-none-any.whl`](https://github.com/noiehoie/gpucall/releases/download/v2.0.69/gpucall_sdk-2.0.69-py3-none-any.whl)
+— caller側アプリはgatewayパッケージを一切importしない。
 
-```python
-from gpucall_sdk import AsyncGPUCallClient
+## 中核概念
 
-async with AsyncGPUCallClient("http://127.0.0.1:18088") as client:
-    job = await client.infer(mode="async", prompt="hello")
-```
+| 概念 | 意味 |
+| --- | --- |
+| **recipe** | ワークロード契約: intent・予算・モード |
+| **tuple** | 実行可能ルート1本: GPU × モデル × 実行面 |
+| **route validation evidence** | 「この正確なルートが動いた」証明 |
+| **Provider Panopticon** | 実行パス外のプロバイダ監視 |
+| **fail closed** | 不明・鮮度切れ・価格不明 → 拒否 |
 
-file は presigned PUT で configured object store に upload され、gateway には `DataRef` として渡されます。SDK は separate `gpucall-sdk` package として配布されます。gateway wheel には SDK package は含まれません。
+正式な文法は [docs/PRODUCT_NORTH_STAR.md](docs/PRODUCT_NORTH_STAR.md) と
+[docs/OOB_USER_EXPERIENCE_PRODUCT_SPEC.md](docs/OOB_USER_EXPERIENCE_PRODUCT_SPEC.md)。
 
-## TypeScript SDK (source-only, npm 未公開)
+## 何が違うか
 
-TypeScript client は source build と API review 用にこの repository にあります。`@gpucall/sdk` としてはまだ npm publish していません。
+- **証跡ゲート付きルーティング**: 新鮮なprovider証跡と、recipe・tuple・
+  mode・config hash単位のルート検証証跡が両方揃って初めて本番ルートになる。
+  configが変わると証跡は無効化され、admin serviceが明示予算内で自動再検証。
+- **予算はハード上限**: dispatch前にatomicなreserve/commit/releaseで強制。
+  請求書が来てから眺めるダッシュボードではない。
+- **cleanupは証跡**: ownership tag付きプロバイダ資源、cleanup manifest、
+  lease回収、監査記録（`gpucall cleanup-audit`）。
+- **AIエージェントが第一級caller**: 非課金 `POST /v2/estimate`、決定論的
+  `GET /v2/failure-taxonomy`、polling/cancel付き非同期ジョブ、MCP stdio
+  サーバ（`gpucall-mcp`）— [docs/AGENT_NATIVE_EXECUTION.md](docs/AGENT_NATIVE_EXECUTION.md)。
+- **需要が供給を作る（統治付き）**: 未知のワークロードは拒否で終わらない。
+  callerはサニタイズ済みintake（生プロンプトは送らない）を提出し、admin
+  パイプラインがrecipe draft化→供給の選定・プロビジョニング→予算内のbillable検証
+  →ルート有効化まで進める。全ステップが artifact を残す。
+- **プロバイダ適合性はテスト可能**: `gpucall provider-conformance` が
+  組込み13アダプタ全部に、将来のプラグインと同じ契約チェックを課す。
 
-```ts
-import { GPUCallClient } from "@gpucall/sdk";
+## これは何ではないか
 
-const client = GPUCallClient.fromEnv("http://127.0.0.1:18088");
-const result = await client.infer({ prompt: "hello" });
-```
+- hosted プロバイダ向けLLM APIゲートウェイではない — OpenAI/Anthropic/
+  Bedrockの前段なら LiteLLM / Portkey を使え。
+- 汎用GPUオーケストレータでも学習スケジューラでもない — 対話的クラスタや
+  スイープなら SkyPilot / dstack を使え。
+- モデルマーケットプレイスでもhostedサービスでもない。プロバイダ契約は
+  あんたが持ち込み、gpucallは「その使われ方」を統治する。
 
-## External System Migration
-
-gpucall は、外部システムに渡すための受容パッケージを配布物として含みます。移行対象アプリケーションを担当する team または coding agent には、まずこの package を渡します。
-
-- [docs/EXTERNAL_SYSTEM_ONBOARDING_PROMPT.md](docs/EXTERNAL_SYSTEM_ONBOARDING_PROMPT.md): 外部システム側の coding agent にそのまま貼る reusable prompt です。LLM / Vision / GPU 呼び出しの棚卸し、preflight intake、wrapper 移行、failure classification、canary、検証済み報告まで指示します。
-- [docs/EXTERNAL_SYSTEM_ONBOARDING_MANUAL.md](docs/EXTERNAL_SYSTEM_ONBOARDING_MANUAL.md): operator / implementer 向けの詳細 migration manual です。
-- [docs/EXTERNAL_SYSTEM_ADAPTATION_PROMPT.md](docs/EXTERNAL_SYSTEM_ADAPTATION_PROMPT.md): 小規模移行向けの compact な one-shot prompt です。
-
-GitHub 上の文書は汎用テンプレートです。各環境の gateway base URL、tenant key delivery policy、recipe inbox、private SDK mirror、trusted bootstrap scope は知りません。実際の受容作業では、gpucall 管理者がその環境の値を入れた prompt / handoff を生成または編集して渡します。外部システム側は、operator-provided handoff と稼働中 gateway の OpenAPI schema を authoritative とし、public GitHub URL は参考資料として扱います。
-
-この onboarding package は意図的に厳格です。direct hosted-AI fallback はデフォルト無効、generated-only preflight は submitted preflight ではない、live canary skipped は `No-Go`、`Conditional Go` は最終判定として禁止です。画像・ファイル workflow には DataRef production path が必須で、OpenAI-facade base64 画像/ファイル payload は production onboarding として認めません。
-
-この repository の外で動く AI CLI には、汎用 reference / template として raw URL を渡せます。
-
-```text
-https://raw.githubusercontent.com/noiehoie/gpucall/main/docs/EXTERNAL_SYSTEM_ONBOARDING_PROMPT.md
-https://raw.githubusercontent.com/noiehoie/gpucall/main/docs/EXTERNAL_SYSTEM_ONBOARDING_MANUAL.md
-```
-
-外部システム側の agent は、operator が明示しない限り、gpucall gateway repository を clone / install / modify / vendor してはいけません。作業対象 worktree は移行対象アプリケーションだけです。受容開始前に、operator-provided handoff には実際の `GPUCALL_BASE_URL`、`GPUCALL_RECIPE_INBOX`、API key delivery route、SDK/helper wheel URL が含まれていなければいけません。
-
-呼び出し側補助ツールが未導入の場合は、SDK helper wheel だけを導入します。
+## 開発
 
 ```bash
-uv tool install https://github.com/noiehoie/gpucall/releases/download/v2.0.69/gpucall_sdk-2.0.69-py3-none-any.whl
-gpucall-recipe-draft --help
+uv sync
+uv run pytest
+uv run gpucall validate-config --config-dir config
+uv run gpucall security scan-secrets
+uv run gpucall provider-conformance
 ```
 
-これは `gpucall-recipe-draft` と `gpucall_sdk` だけを入れます。gateway router は入れません。`gpucall-migrate` は optional で、すでに使える場合だけ使います。
-wheel checksum は GitHub Release asset として公開します。本番 automation に入れる前に、download した wheel を同じ release の checksum で検証してください。
-
-外部システムは通常、`task`、`mode`、input data または `DataRef` だけを送ります。recipe と provider selection は gateway の責任です。
-local embedding model や private local OpenAI-compatible runtime など、意図的に local で完結しており gateway governance を必要としない経路は local のまま残します。long-context、batch/long-running、high-cold-start、image/file、大きな DataRef workload は、async または queueing と cold start を正直に含めた timeout budget を前提にします。
-
-DataRef を手実装する場合は、稼働中 gateway の OpenAPI schema を優先してください。v2 の upload handshake は
-`POST /v2/objects/presign-put` に `name`、`bytes`、`sha256`、`content_type` を渡し、返却された `upload_url` に
-`PUT` し、返却された `data_ref` object をそのまま `input_refs` に入れる形です。`input_refs` は `uri` field を持つ
-object の list であり、string list ではありません。
-
-productized migration には deterministic migration kit を使います。
-
-```bash
-gpucall-migrate assess /path/to/project --source example-caller-app
-gpucall-migrate preflight /path/to/project --source example-caller-app
-gpucall-migrate canary /path/to/project --command "uv run python -m src.pipeline.main"
-gpucall-migrate patch /path/to/project
-gpucall-migrate onboard /path/to/project --source example-caller-app
-```
-
-migration kit は source files を scan し、direct OpenAI / Anthropic paths を分類し、呼び出し側 routing selectors を検出し、sanitized preflight commands を生成し、optional canaries を実行し、`.gpucall-migration` に JSON / Markdown reports を書きます。これは deterministic で、LLM を呼びません。
-
-呼び出し側 workload が installed recipe catalog と production tuples に存在しない場合、gpucall は推測や弱い model への routing をせず fail closed します。gpucall が `200 OK` を返しても、呼び出し側 business validator が output を拒否した場合、それは low-quality success feedback として扱います。どちらの場合も、SDK に同梱された `gpucall-recipe-draft` helper で sanitize し、gpucall 管理者に recipe intent request を提出します。詳しくは [docs/RECIPE_DRAFT_TOOL.md](docs/RECIPE_DRAFT_TOOL.md) を参照してください。
-
-unknown workload は silent routing ではなく structured governance error を返します。
-
-- `422 NO_AUTO_SELECTABLE_RECIPE`: request を正直に記述する installed recipe がありません。
-- `503 no eligible tuple after policy, recipe, and circuit constraints`: recipe は存在しますが、現在実行可能な eligible provider がありません。
-
-response には、redacted request metadata、rejection reasons、`caller_action`、redaction guarantee を含む `failure_artifact` が入ります。
-
-この場合は independent helper を実行します。
-
-```bash
-gpucall-recipe-draft preflight --task vision --intent understand_document_image --content-type image/png --bytes 2000000 --output preflight-intake.json
-gpucall-recipe-draft intake --error gpucall-error.json --intent <calling-app-intent> --output intake.json --remote-inbox admin@gateway.example.internal:/opt/gpucall/state/recipe_requests/inbox
-gpucall-recipe-draft quality --task vision --intent understand_document_image --quality-failure-kind insufficient_ocr --remote-inbox admin@gateway.example.internal:/opt/gpucall/state/recipe_requests/inbox
-gpucall-recipe-draft compare --preflight preflight-intake.json --failure intake.json --output drift-report.json
-gpucall-recipe-draft draft --input intake.json --output recipe-draft.json
-gpucall-recipe-draft submit --intake intake.json --draft recipe-draft.json --remote-inbox admin@gateway.example.internal:/opt/gpucall/state/recipe_requests/inbox
-```
-
-呼び出し側補助ツールは deterministic で、LLM を呼びません。sanitized intake と optional local draft summary を作り、gpucall 管理者が workload class を supported recipe にすべきか判断できるようにします。`--inbox-dir` または `--remote-inbox` を使うと、helper は sanitized intake を approved operator inbox に直接提出します。remote submission は SSH を使い、gateway API は呼びません。管理側が accept-all policy を採用する場合、gateway 側の `gpucall-recipe-admin materialize --accept-all --config-dir <config>` helper は sanitized intake を canonical recipe YAML に変換できます。materialization は installed catalog と deterministic policy を参照します。long-context、batch/long-running、high-cold-start tuple candidate は、呼び出し側の sync request をそのまま継承せず async-only recipe になります。ただし、draft または materialized recipe は、その後も `validate-config`、tests、launch checks、deployment を通らなければ subsequent requests には使えません。
-
-gateway API を追加せず、file-based automation だけで運用する場合、管理側は次を実行できます。
-
-```bash
-gpucall-recipe-admin watch --inbox-dir /path/to/inbox --output-dir config/recipes --config-dir config --accept-all
-```
-
-persistent operator host では、per-command flag ではなく config で同じ route を開けます。これはデフォルトでは disabled です。
-
-```yaml
-# config/admin.yml
-recipe_inbox_auto_materialize: true
-```
-
-この file が存在すると、`gpucall-recipe-admin watch` と `process-inbox` は `--accept-all` なしで sanitized 呼び出し側 submissions を materialize できます。この route は reviewed recipe YAML と static catalog-readiness report だけを書きます。billable smoke validation と production activation は別の明示的 promotion step です。provider cost を発生させたり active routing を変更したりする可能性があるためです。
-
-Inbox processing は、提出された original JSON を audit source of truth として `inbox/processed` または `inbox/failed` に保存します。また、`inbox/recipe_requests.db` に SQLite WAL index を維持します。そこには request id、source、task、intent、status、file paths、SHA-256、timestamps が入り、operator は database を canonical payload store として扱わずに request history を query できます。
-
-operator inbox と runtime readiness は、billable validation なしで query できます。
-
-```bash
-gpucall-recipe-admin inbox list --inbox-dir /path/to/inbox
-gpucall-recipe-admin inbox status --inbox-dir /path/to/inbox --request-id rr-...
-gpucall-recipe-admin inbox materialize --inbox-dir /path/to/inbox --output-dir config/recipes --config-dir config --accept-all
-gpucall-recipe-admin inbox readiness --inbox-dir /path/to/inbox --config-dir config
-gpucall readiness --config-dir config --intent translate_text
-```
-
-## Routing
-
-gpucall は deterministic governance router であり、Modal-only proxy ではありません。Recipe と provider selection rules は [docs/ROUTING_POLICY.md](docs/ROUTING_POLICY.md) にあります。
-Recipe / model / engine / provider matching の capability catalog rules は [docs/CAPABILITY_CATALOG.md](docs/CAPABILITY_CATALOG.md) にあります。
-Controlled Runtime configuration は [docs/CONTROLLED_RUNTIMES.md](docs/CONTROLLED_RUNTIMES.md) にあります。
-RunPod Flash production validation は [docs/RUNPOD_FLASH.md](docs/RUNPOD_FLASH.md) にあります。
-
-## Controlled Runtimes
-
-gpucall は、operator-controlled runtime で十分かつ policy が許す場合、private execution に routing できます。これは意図的な設計です。誠実な routing は、gateway host、VPN/LAN 内の host、site-local GPU で足りる仕事に cloud GPU cost を発生させません。
-
-製品概念は **Controlled Runtime** です。「caller がたまたま動いている machine」ではありません。Controlled Runtime は gpucall operator が `config/runtimes/*.yml` に宣言し、surface/worker tuple から `controlled_runtime_ref` で参照し、validation evidence 後に production routing へ昇格する実行面です。境界は `gateway_host`、`private_network`、`site_network` として明示します。
-
-既存の OpenAI-compatible endpoint は、ds4 を gpucall が自動 install しなくても登録できます。
-
-```bash
-gpucall runtime add-openai \
-  --name site-gpu-ds4 \
-  --endpoint http://site-gpu-01.internal:18181 \
-  --dataref-worker
-gpucall runtime validate --name site-gpu-ds4
-gpucall validate-config
-```
-
-既存の Ollama endpoint も同じ窓口で登録できます。
-
-```bash
-gpucall runtime add-ollama \
-  --name local-author-ollama \
-  --endpoint http://127.0.0.1:11434 \
-  --model qwen2.5-32b:latest \
-  --max-model-len 32768
-gpucall runtime validate --name local-author-ollama
-gpucall validate-config
-```
-
-Controlled Runtime 登録は model を download / install しません。operator が
-Ollama の model store、ds4 の model directory、llama.cpp の model path、local
-vLLM cache など、runtime 側の store/cache に model を用意します。gpucall は
-endpoint、model name、model catalog reference、trust profile、validation
-evidence を記録し、policy と recipe constraints が一致した場合だけ routing します。
-
-組み込みの `local-openai-compatible` adapter は、ds4-server、llama.cpp server、local vLLM など、operator が管理下と認めた OpenAI-compatible chat server を対象にします。inline text/chat workload 用で、`DataRef` は dereference しません。gateway は data-byte-less のまま維持するためです。
-
-local text `DataRef` workload には、別アダプタ `local-dataref-openai-worker` と `gpucall.local_dataref_worker` の worker process を使います。gateway adapter は worker-readable plan と DataRef metadata だけを local worker endpoint に渡します。実バイトの fetch、size/SHA256 検証、local OpenAI-compatible server 呼び出し、`TupleResult` 返却は worker 側の責任です。設定例は `gpucall/config_templates/surfaces/local-dataref-openai.example` と `gpucall/config_templates/workers/local-dataref-openai.example` にあります。
-
-```bash
-GPUCALL_LOCAL_OPENAI_BASE_URL=http://127.0.0.1:8000/v1 \
-GPUCALL_LOCAL_OPENAI_MODEL=deepseek-v4-flash \
-uv run uvicorn gpucall.local_dataref_worker:app --host 127.0.0.1 --port 18181
-```
-RunPod Serverless catalog expansion rules は [docs/RUNPOD_SERVERLESS_CATALOG.md](docs/RUNPOD_SERVERLESS_CATALOG.md) にあります。
-Provider Panopticon の file/HTTP communication contract は [docs/PROVIDER_PANOPTICON_CONTRACT.md](docs/PROVIDER_PANOPTICON_CONTRACT.md) にあります。
-
-## Zero-Trust Contracts
-
-Provider definitions は recipe compute requirements とは別に `trust_profile` を宣言します。restricted workloads は dedicated GPU providers、または attestation support を持つ `confidential_tee` や `split_learning` などの approved security tiers にだけ route されます。shared GPU providers は execution 前に reject されます。Governance hash は request、policy、recipe、provider contract、worker-readable DataRef set に対して deterministic に計算され、runtime IDs は除外されます。
-
-Workers はデフォルトで gateway-presigned HTTP(S) DataRefs を consume します。ambient `s3://` worker credentials は、non-default worker environment で明示 opt-in されない限り disabled です。Chained artifacts は append-only Artifact Registry に encrypted `ArtifactManifest` entries として記録されます。gateway は lineage、version、checksums、key ids、attestation references を保存し、plaintext artifact bytes は保存しません。
-
-Provider-independent v2.1 control-plane contracts は `train`、`fine-tune`、`split-infer` について実装済みです。explicit artifact export versions、key-release requirements、attestation-bound execution gates、split-learning activation refs、artifact manifest validation を含みます。Azure / GCP sovereign TEE と split-learning workers の provider adapters は別の実装作業として残っています。
-
-## Object Lifecycle
-
-Cloudflare R2 または S3-compatible buckets では、gpucall prefix に lifecycle expiration を設定してください。MVP としては次が保守的な設定です。
-
-- Prefix: `gpucall/`
-- Expire objects after: 1-7 days
-- Keep public access disabled
-- Limit API token permission to object read/write for the bucket
-
-## Provider Failures
-
-Provider outages、remote capacity exhaustion、authentication failures、provider-side queueing は gateway SLA の外です。gateway は retryability を記録し、circuit breakers を開き、deterministic fallback chain を進みます。
-
-Static catalog eligibility と live executability は別物です。tuple が recipe
-上は有効でも、今この瞬間には in-flight、provider family cooldown、workload
-scope concurrency limit によって実行不能な場合があります。そのため gateway は
-tuple 起動前に admission control を適用します。
-
-- tuple 単位: `GPUCALL_TUPLE_CONCURRENCY_LIMIT`
-- provider family 単位: `GPUCALL_PROVIDER_FAMILY_CONCURRENCY_LIMIT`
-- task/intent/mode workload scope 単位: `GPUCALL_WORKLOAD_SCOPE_CONCURRENCY_LIMIT`
-- provider temporary cooldown: `GPUCALL_PROVIDER_TEMPORARY_COOLDOWN_SECONDS`
-- request 内 fallback 上限: `GPUCALL_MAX_FALLBACK_ATTEMPTS`
-- request 内 provider-family attempt 上限: `GPUCALL_MAX_PROVIDER_FAMILY_ATTEMPTS`
-
-provider temporary failure は失敗した tuple を必ず cooldown します。
-provider family cooldown は maintenance、upstream/control-plane unavailable、
-rate limit、account quota exhausted など family-wide condition を表す error
-class にだけ適用されます。tuple-local capacity miss は同じ provider family の
-全 tuple をデフォルトでは抑制しません。
-
-`GPUCALL_DATABASE_URL` が Postgres を指している場合、gateway jobs、
-idempotency、admission leases/suppressions は Postgres で共有されます。
-これにより multi-process / multi-container gateway が同じ in-flight と
-cooldown state を見ます。未設定時は local dev/test 用の SQLite/in-memory
-fallback です。
-
-`GET /readyz` は process readiness だけを返します。本番 routing readiness は
-`GET /v2/readiness/intents/{intent}` を使います。この endpoint は static
-eligible tuples、live-ready tuples、live-blocked tuples、suppressed provider
-families、inflight counts、recommended mode、caller action を返します。
-
-provider 側の一時実行不能は application error ではなく routing evidence
-です。tuple が `PROVIDER_RESOURCE_EXHAUSTED`,
-`PROVIDER_CAPACITY_UNAVAILABLE`, `PROVIDER_PROVISION_UNAVAILABLE`,
-`PROVIDER_QUEUE_SATURATED`, `PROVIDER_WORKER_INITIALIZING`,
-`PROVIDER_WORKER_THROTTLED`, `PROVIDER_TIMEOUT`,
-`PROVIDER_POLL_TIMEOUT`, `PROVIDER_JOB_FAILED`, `PROVIDER_CANCELLED`,
-`PROVIDER_UNHEALTHY`, `PROVIDER_BOOTING`, `PROVIDER_PREEMPTED`,
-`PROVIDER_MAINTENANCE`, `PROVIDER_UPSTREAM_UNAVAILABLE`,
-`PROVIDER_RATE_LIMITED`, `PROVIDER_QUOTA_EXCEEDED`,
-`PROVIDER_REGION_UNAVAILABLE`, `PROVIDER_IMAGE_PULL_DELAY`,
-`PROVIDER_MODEL_LOADING`, `PROVIDER_CONCURRENCY_LIMIT`,
-`PROVIDER_LEASE_EXPIRED`, `PROVIDER_STALE_JOB`, `PROVIDER_ERROR` の
-いずれかを返した場合、gpucall はその tuple での実行継続を止め、
-remote handle の cleanup/cancel を実行し、routing evidence に記録して、
-deterministic chain の次の eligible tuple へ即座に進みます。全候補が失敗した場合、
-caller には provider code と fallback/cancel metadata を含む redacted
-`failure_artifact` が `provider_temporary_unavailable` として返ります。
-
-## Launch Checks
-
-```bash
-gpucall validate-config
-gpucall doctor
-gpucall tuple-audit
-gpucall cost-audit
-gpucall cleanup-audit
-gpucall launch-check --profile static
-gpucall seed-liveness text-infer-standard --count 100 --budget-usd 0.10
-gpucall registry show
-gpucall smoke
-gpucall cost-audit --live
-gpucall cleanup-audit
-gpucall launch-check --profile production --config-dir config --url http://127.0.0.1:18088
-gpucall audit verify
-gpucall post-launch-report
-```
-
-Production launch checks には gateway auth、object-store credentials、live gateway smoke result、complete provider cost metadata、live provider cost/resource audit access、cleanup audit success、provider-validation JSON artifacts が必要です。Static launch checks は local config validation 用に残っています。
-
-`launch-check` は full report を `$XDG_STATE_HOME/gpucall/launch/launch-check.json` に保存し、標準出力には bounded summary を出します。full JSON を stdout に出す場合は `--json`、summary stdout のまま明示パスにも保存する場合は `--output-json <path>` を使います。
-
-Netcup やベアメタル環境で Tailscale を利用し、明示的な設定ディレクトリを運用する手順については、[docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) を参照してください。
-
-## 将来の Security / Sovereignty 技術トラック
-
-製品ロードマップは [docs/PRODUCT_NORTH_STAR.md](docs/PRODUCT_NORTH_STAR.md) を正とします。以下は将来の security、sovereignty、TEE、KMS、hardened deployment 技術トラックであり、v3 以降に段階的に入る可能性がある作業です。
-
-### Provider 対応一覧
-
-gpucall が対応済み、または対応予定の cloud GPU provider の全体像です。
-
-| カテゴリ | Provider | v2.0 | Future | 備考 |
-| :--- | :--- | :---: | :---: | :--- |
-| サーバーレス / PaaS | Modal | 実装済 | — | Serverless function 型 |
-| サーバーレス / PaaS | RunPod Serverless / Flash | 実装済 | — | Managed endpoint 型 |
-| ベアメタル / IaaS | Hyperstack | 実装済 | — | VM 型、SSH provisioning |
-| ベアメタル / IaaS | Oracle Cloud Infrastructure | — | 対応予定 | BM.GPU + FastConnect |
-| ベアメタル / IaaS | CoreWeave | — | 対応予定 | AI 特化 IaaS、SOC 2 |
-| ベアメタル / IaaS | Lambda Labs | — | 対応予定 | H100 / A100 専有ベアメタル |
-| ベアメタル / IaaS | RunPod Secure Cloud | — | 対応予定 | Serverless からの専有 GPU upgrade path |
-| ハイパースケーラー / TEE | Microsoft Azure Confidential VMs | — | 対応予定 | H100 CC Mode、TEE 大本命 |
-| ハイパースケーラー / TEE | Google Cloud Confidential Space | — | 対応予定 | AMD SEV-SNP |
-| ハイパースケーラー / TEE | AWS | — | 対応予定 | 閉域網は強いが GPU TEE 対応は限定的 |
-| ソブリン・クラウド | Scaleway | — | 対応予定 | フランス、ベアメタル GPU |
-| ソブリン・クラウド | OVHcloud | — | 対応予定 | フランス、SecNumCloud |
-| ソブリン・クラウド | Hetzner / IONOS / Northern Data Taiga Cloud | — | 対応予定 | ドイツ系、EU-GDPR native |
-| オンプレミス / エッジ | Local (Ollama / vLLM) | 実装済 | — | ローカル runtime |
-
-将来の security / sovereignty 機能セクションで言及される provider は、原則としてこの一覧に含まれます。一覧にない provider の追加は別途検討します。
-
-### TEE Provider Adapters
-
-将来の security work では、現在の Modal、RunPod、Hyperstack、local runtime に加え、Trusted Execution Environment を提供する provider の adapter を実装します。
-
-- **Microsoft Azure Confidential VMs (H100 CC Mode)**: NVIDIA H100 の Confidential Computing mode を利用します。GPU memory は hardware-level で暗号化され、host operator からも読めません。adapter は VM provisioning、CC mode の有効化確認、attestation report の取得を担います。
-- **Google Cloud Confidential Space (AMD SEV-SNP)**: AMD SEV-SNP による memory encryption を利用します。adapter は Confidential Space workload identity token の検証、attestation report の取得、workload container の integrity verification を担います。
-- **Attestation verification gate**: gateway は worker に payload を渡す前に、provider が返す attestation report を検証します。attestation が invalid、expired、または未取得の場合は fail closed します。attestation evidence は audit hash chain に含めます。
-
-### Sovereignty Routing
-
-将来の sovereignty work では provider 定義に法管轄 metadata を追加し、tenant policy で routing 先の法管轄を制約できるようにします。
-
-- **Provider jurisdiction field**: 各 provider 定義に `us`、`eu-fr`、`eu-de`、`jp` などの jurisdiction を宣言します。どの国の法律が当該 provider のデータアクセス権限を支配するかを示します。
-- **Tenant sovereignty policy**: tenant policy に `allowed_jurisdictions` と `denied_jurisdictions` を追加します。CLOUD Act 回避が必要な EU tenant は `denied_jurisdictions: [us]` を設定し、US 法管轄 provider への routing を deterministic に遮断できます。
-- **Sovereign cloud provider adapters**: Scaleway、OVHcloud、Hetzner、IONOS、Northern Data Taiga Cloud は IaaS VM 型 adapter として計画します。Hyperstack adapter と同系統の lifecycle に、jurisdiction metadata と EU compliance evidence を追加します。
-
-### IaaS Provider Adapters
-
-TEE / sovereignty 対応と並行して、execution surface を拡張する非 TEE IaaS provider adapter を追加します。
-
-- **Oracle Cloud Infrastructure**: BM.GPU shape + FastConnect。専有ベアメタルと強い network isolation を狙います。
-- **CoreWeave**: AI 特化 IaaS、SOC 2 posture。gpucall は Kubernetes を control plane として必須にせず、VM / container execution boundary で統合します。
-- **Lambda Labs**: H100 / A100 専有ベアメタルをシンプルな API で provisioning します。
-- **RunPod Secure Cloud**: 既存 RunPod Serverless support の上位として、専有 GPU instance execution を追加します。同一 provider 内で serverless から dedicated への upgrade path を提供します。
-
-### 外部 KMS 連携
-
-将来の artifact security work では、artifact encryption の鍵管理を gateway-local な実装から外部 KMS に委譲します。
-
-- **対応 KMS**: Azure Key Vault、Google Cloud KMS、AWS KMS、HashiCorp Vault。provider-agnostic な KMS adapter interface を定義し、個別 KMS を plug します。
-- **Key-release gate**: TEE attestation report が valid な場合にのみ、KMS が decryption key を release します。gateway は attestation -> key release -> artifact decrypt の chain を orchestrate し、Azure Secure Key Release や GCP EKM with Confidential Space など、KMS 側の conditional access policy を活用します。
-- **Encrypted ArtifactManifest**: v2 の append-only Artifact Registry を拡張し、各 manifest entry に `key_id`、`kms_provider`、`key_release_condition` を追加します。plaintext artifact bytes は引き続き gateway に保存しません。
-
-### Chained LoRA Export
-
-将来の artifact lifecycle work では、TEE 内で fine-tuning した LoRA adapter を暗号化した状態で組織側に回収し、次回 inference に再利用可能にします。
-
-- **Export**: base model weight は public または provider-local のままにします。fine-tuning の成果は小さな LoRA adapter に集約し、TEE 内で KMS 管理の鍵により暗号化して、組織の object store に export します。
-- **Reuse**: 次回 inference 時、gateway は encrypted adapter を TEE worker に渡します。worker は KMS key release を経て TEE 内で復号し、base model に merge して inference を実行します。adapter が組織外に plaintext で出ることはありません。
-- **Artifact lineage**: 各 adapter の training source hash、training recipe、training tuple、timestamp、parent adapter を artifact manifest に記録します。lineage が途切れた adapter は reject します。
-
-### Split-Learning Execution
-
-将来の secure execution work では、TEE が使えない、または適さない場合のために split-learning execution を実装します。
-
-- **目的**: model または forward pass の一部を組織側に残し、activation tensor だけを trust boundary の外へ渡します。
-- **Execution gate**: split-learning route は `trust_profile: split_learning` を持つ execution surface に限定します。split ratio、activation transfer protocol、組織側 forward-pass endpoint を execution contract に含めます。
-- **制約**: split learning は latency overhead が大きいため、recipe が split-learning eligibility を明示した場合にだけ候補にします。
-
-### Hardened Deployment Profile
-
-将来の deployment work では、v2 の Docker Compose / Postgres profile に加えて production hardened profile を追加します。
-
-- **Standard profile**: Docker Compose、Postgres-backed gateway jobs/idempotency、single-node。PoC と production 初期に適します。
-- **Hardened profile**: Helm chart、PostgreSQL HA、multi-replica gateway。governance logic は Standard と完全に共通で、infrastructure layer だけが異なります。
-- **Profile selection**: `gpucall init --profile hardened` または `deployment_profile: hardened` で選択します。`gpucall migrate-profile` のような profile migration tool を提供します。
+リリースゲートは [docs/PUBLIC_RELEASE_CHECKLIST.md](docs/PUBLIC_RELEASE_CHECKLIST.md)。
+実カナリア運用のレポートは失敗も含めて `tasks/` にコミットしてある。
+[CONTRIBUTING.md](CONTRIBUTING.md) / [SECURITY.md](SECURITY.md) も参照。
+
+## ライセンス
+
+- Gateway（本リポジトリ）: [AGPL-3.0-only](LICENSE)。ネットワーク越しの
+  提供も頒布に含まれるため、hostedな派生物はソース公開義務を負う。
+- Python SDK（`sdk/python/`）: [Apache-2.0](sdk/python/LICENSE)。caller側
+  アプリにcopyleft義務は及ばない。
+- 商用ライセンスはissueで相談。
