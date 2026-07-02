@@ -2059,7 +2059,10 @@ def test_doctor_supports_live_tuple_catalog_flag_without_credentials(tmp_path) -
         capture_output=True,
         text=True,
         env=env,
-        timeout=10,
+        # Proves the command stays bounded without credentials (a live-probe
+        # hang would run for minutes). Cold interpreter start plus the 3,233
+        # tuple catalog load can exceed 10s on slow shared CI runners.
+        timeout=60,
     )
 
     assert '"live_tuple_catalog"' in result.stdout
