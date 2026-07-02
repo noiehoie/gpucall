@@ -219,8 +219,8 @@ def test_endpoint_info_does_not_turn_missing_validation_into_endpoint_stale() ->
             {
                 "dimension": "endpoint",
                 "severity": "info",
-                "source": "https://api.runpod.ai/v2/30g7ze5wb2n3xw/health",
-                "details": {"endpoint_id": "30g7ze5wb2n3xw", "http_status": 200},
+                "source": "https://api.runpod.ai/v2/example/health",
+                "details": {"endpoint_id": "example00xyz", "http_status": 200},
             }
         ],
     }

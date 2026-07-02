@@ -1,0 +1,36 @@
+name: local-author-ollama
+kind: controlled_runtime
+runtime_boundary: gateway_host
+network_scope: localhost
+operator_controlled: true
+endpoint: http://127.0.0.1:11434
+adapter: local-ollama
+model: qwen2.5-32b:latest
+max_model_len: 32768
+input_contracts:
+- text
+- chat_messages
+max_data_classification: restricted
+trust_profile:
+  security_tier: local
+  sovereign_jurisdiction: local
+  dedicated_gpu: true
+  requires_attestation: false
+  supports_key_release: false
+  allows_worker_s3_credentials: false
+routing:
+  enabled: true
+  preference: prefer_when_eligible
+  allowed_tasks:
+  - infer
+  allowed_modes:
+  - sync
+  - async
+  require_validation_evidence: true
+health:
+  check_url: http://127.0.0.1:11434/api/tags
+  timeout_seconds: 2
+  failure_policy: disable_runtime
+discovery:
+  source: manual
+  last_verified_at: '2026-05-10T13:27:09.681588+00:00'

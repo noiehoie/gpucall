@@ -8,8 +8,8 @@ Sanitization: no API keys, raw prompts, presigned URLs, DataRef URIs, or provide
 
 - Public release artifacts v2.0.68 and v2.0.69 (both cut, published, and
   deployed during this session)
-- Clean-room install + local trial on netcup2 with a fresh HOME/XDG tree
-- Production-configured netcup2 gateway upgraded v2.0.67 → v2.0.68 → v2.0.69
+- Clean-room install + local trial on the gateway host with a fresh HOME/XDG tree
+- Production-configured gateway upgraded v2.0.67 → v2.0.68 → v2.0.69
 - Re-audit of the v2.0.67 Go decision ("trust nothing, re-audit"), which
   found and fixed three product defects (see below)
 
@@ -34,7 +34,7 @@ scripts/check_product_contamination.sh -> ok
 scripts/check_provider_parity.py -> ok
 ```
 
-## Clean-room install evidence (netcup2, fresh HOME)
+## Clean-room install evidence (<gateway-host>, fresh HOME)
 
 ```text
 GPUCALL_REF=v2.0.69 sh -c 'curl -fsSL .../v2.0.69/install.sh | sh'
@@ -56,7 +56,7 @@ The 2026-06-20 Go was real but did not survive twelve days of production:
 1. `onboarding-ready` degraded to `onboarding-blocked` within an hour of every
    setup because nothing maintained the synthetic dry-run evidence
    (TTL 3600s). Fixed in v2.0.68 (watch-service refresh); verified live —
-   netcup2 recovered to `onboarding-ready` and has held it across two
+   the gateway recovered to `onboarding-ready` and has held it across two
    upgrades and service restarts.
 2. Light/vision route validation evidence was silently invalidated by a
    config change on 2026-06-29; four text routes and one vision route were
@@ -81,7 +81,7 @@ The 2026-06-20 Go was real but did not survive twelve days of production:
 
 ## Caller evidence
 
-See `tasks/news-system-canary-report.md`: caller tests 32/32, 5-intent canary
+See `tasks/example-caller-canary-report.md`: caller tests 32/32, 5-intent canary
 5/5 GO, production rank workload re-run on the fixed worker.
 
 ## Decision

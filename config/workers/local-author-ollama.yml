@@ -1,0 +1,18 @@
+worker_ref: local-author-ollama
+account_ref: local
+adapter: local-ollama
+execution_surface: local_runtime
+model_ref: qwen2.5-32b-ollama-local
+engine_ref: local-ollama
+modes:
+- sync
+- async
+input_contracts:
+- text
+- chat_messages
+output_contract: ollama-generate
+stream_contract: none
+target: null
+stream_target: null
+endpoint_contract: ollama-generate
+model: qwen2.5-32b:latest

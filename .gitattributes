@@ -1,0 +1,12 @@
+# The provider catalog (surfaces/workers) is deterministically generated from
+# provider price/spec matrices by scripts/materialize_provider_catalog.py and
+# kept in-tree so validate-config and launch checks stay hermetic.
+# Mark it generated so diffs collapse and language stats reflect the code.
+config/surfaces/** linguist-generated=true
+config/workers/** linguist-generated=true
+config/tuple_candidates/** linguist-generated=true
+gpucall/config_templates/surfaces/** linguist-generated=true
+gpucall/config_templates/workers/** linguist-generated=true
+gpucall/config_templates/tuple_candidates/** linguist-generated=true
+uv.lock linguist-generated=true
+sdk/python/uv.lock linguist-generated=true

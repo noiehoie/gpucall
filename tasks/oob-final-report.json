@@ -16,7 +16,7 @@
     "provider_parity_guard": true
   },
   "clean_room": {
-    "host": "netcup2",
+    "host": "<gateway-host>",
     "ref": "v2.0.69",
     "installer_bootstraps_uv": true,
     "version_output": "gpucall 2.0.69",
@@ -37,7 +37,7 @@
     "unauthenticated_fail_closed": true
   },
   "production_gateway": {
-    "host": "netcup2",
+    "host": "<gateway-host>",
     "version": "2.0.69",
     "oob_readiness": "onboarding-ready",
     "panopticon": "service-running/evidence-fresh",

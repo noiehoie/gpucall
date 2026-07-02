@@ -16,7 +16,7 @@
   },
   "clean_room_install": {
     "status": "pass",
-    "host": "netcup2",
+    "host": "<gateway-host>",
     "sandbox_home": "/tmp/gpucall-oob-v2067-20260620T201656",
     "uv_initial_state": "missing",
     "installed_version": "gpucall 2.0.67",
@@ -26,10 +26,10 @@
   },
   "production_setup": {
     "status": "pass",
-    "host": "netcup2",
+    "host": "<gateway-host>",
     "readiness": "onboarding-ready",
     "gateway_health": "ok",
-    "handoff_path": "/home/admin/.local/share/gpucall/handoffs/news-system/caller-ai-onboarding-prompt.md",
+    "handoff_path": "<gateway-home>/.local/share/gpucall/handoffs/example-caller/caller-ai-onboarding-prompt.md",
     "handoff_sdk_version": "2.0.67",
     "caller_contracts": {
       "no_default_max_tokens": true,
@@ -37,9 +37,9 @@
       "vision_input_refs_contract": true
     }
   },
-  "news_system_canary": {
+  "example_caller_canary": {
     "status": "pass",
-    "host": "macmini",
+    "host": "<caller-host>",
     "caller_tests": "32 passed",
     "intents": {
       "extract_json": "pass",

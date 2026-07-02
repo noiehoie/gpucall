@@ -1,8 +1,8 @@
-# news-system Production Canary Report
+# example-caller Production Canary Report
 
 Date: 2026-07-02 JST
-Caller: news-system on macmini (`/Users/admin/Developer/news-system`, `LLM_BACKEND=gpucall`)
-Gateway: netcup2 `100.93.87.4:18088` (v2.0.67 → v2.0.68 → v2.0.69 during this session)
+Caller: example-caller on <caller-host> (`<caller-repo>`, `LLM_BACKEND=gpucall`)
+Gateway: <gateway-host> `<gateway-ip>:18088` (v2.0.67 → v2.0.68 → v2.0.69 during this session)
 Sanitization: no API keys, raw prompts, presigned URLs, DataRef URIs, or provider raw outputs.
 
 ## Executive summary
@@ -21,14 +21,14 @@ relay. Final state: caller tests 32/32 PASS, 5-intent canary 5/5 PASS
 | 12:18 JST + 14:09 JST `502 PROVIDER_ERROR` on rank analysis | product defect: catalog/worker context contract mismatch (surface declared 131072, deployed Modal worker capped Qwen2.5 at 32768; actual prompt 88,049 tokens per Modal vLLM logs) | gpucall product | fixed in v2.0.69: worker honors 131072 via Qwen2.5 model-card YaRN config; Modal worker redeployed through the consent-gated setup flow (plan hash `12d4aa43d17ed1f3`) |
 | Canary intents extract_json / translate_text / summarize_text / vision failing `NO_ELIGIBLE_TUPLE` | environment defect: route validation evidence for light/vision routes invalidated by a 2026-06-29 config-hash change; silently unroutable for 9 days | gpucall operator (product gap) | 5 routes re-validated via `tuple-smoke` (canary 1 → fanout 4); product fix in v2.0.69 adds automatic re-validation of drift-invalidated routes to the admin watch service |
 | Translate stage `503 PROVIDER_CAPACITY_UNAVAILABLE` ×20 and overseas-vision 21/21 failures during pipeline runs | gateway admission working as designed: default per-tuple concurrency limit is 1 and per-provider-family limit is 2 (`GPUCALL_TUPLE_CONCURRENCY_LIMIT` / `GPUCALL_PROVIDER_FAMILY_CONCURRENCY_LIMIT`), so a 20-21-way parallel caller stage is deterministically shed | operator decision | bounded, classified, retryable. Raising the limits multiplies concurrent GPU billing, so this stays an explicit operator budget decision, not an autonomous change. Recommended operator action: set `GPUCALL_TUPLE_CONCURRENCY_LIMIT=4` and family limit accordingly in the gateway environment if parallel vision/translate stages should run hot, or throttle caller-side parallelism |
-| `[DB永続化] connection to 100.90.56.23:5432 refused` in the successful morning run | caller-side infrastructure, outside gpucall scope | news-system operator | reported only; not a gpucall blocker (fleet reference lists news-system-postgres on netcup:5434 — target IP mismatch worth an operator look) |
+| `[DB永続化] connection to <db-host>:5432 refused` in the successful morning run | caller-side infrastructure, outside gpucall scope | example-caller operator | reported only; not a gpucall blocker (fleet reference lists the caller database on a different fleet host — target IP mismatch worth an operator look) |
 
 ## Evidence
 
 ### Caller tests
 
 ```text
-ssh macmini 'cd /Users/admin/Developer/news-system && uv run pytest tests/test_gpucall_v2.py -q'
+ssh <caller-host> 'cd <caller-repo> && uv run pytest tests/test_gpucall_v2.py -q'
 32 passed in 0.03s
 ```
 
@@ -56,7 +56,7 @@ Surface catalog for the selected tuple declared `max_model_len: 131072`; the
 deterministic router correctly trusted the catalog; the worker contract was
 wrong. This is exactly the class of drift the North Star's worker-contract
 evidence is meant to catch — recorded as a product requirement, not a
-news-system special case.
+example-caller special case.
 
 ### Morning production run (same day, pre-incident)
 
@@ -70,10 +70,10 @@ dependent, which is why it escaped the 2026-06-20 acceptance run.
 
 ### Production rank workload re-run (gateway v2.0.69, YaRN worker)
 
-See `tasks/news-system-canary-report.json` for the machine-readable result of
+See `tasks/example-caller-canary-report.json` for the machine-readable result of
 the post-fix production pipeline re-run.
 
 ## Go / No-Go
 
-Recorded in `tasks/news-system-canary-report.json` (`decision` field) after
+Recorded in `tasks/example-caller-canary-report.json` (`decision` field) after
 the post-fix production re-run.

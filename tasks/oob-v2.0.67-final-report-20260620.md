@@ -7,9 +7,9 @@ Decision: Go
 Scope:
 
 - Public release artifact: v2.0.67
-- Clean-room install on netcup2 with a fresh HOME/XDG tree
-- Production-configured netcup2 gateway/handoff
-- macmini news-system external caller canary
+- Clean-room install on the gateway host with a fresh HOME/XDG tree
+- Production-configured gateway/handoff
+- <caller-host> example-caller external caller canary
 
 Sanitization:
 
@@ -20,10 +20,10 @@ Sanitization:
 - Public v2.0.67 release assets are present.
 - Clean-room install from the public install script succeeds even when `uv` is absent.
 - Clean-room local trial reaches `local-trial-ready` and prints the next Modal happy-path commands.
-- Production netcup2 setup reaches `onboarding-ready`.
+- Production the gateway host setup reaches `onboarding-ready`.
 - Generated handoff points to the v2.0.67 SDK wheel and includes the corrected `max_tokens` / `timeout_seconds` contract.
-- news-system caller-side tests pass.
-- news-system external canary passes all 5 intents:
+- example-caller caller-side tests pass.
+- example-caller external canary passes all 5 intents:
   - extract_json
   - translate_text
   - summarize_text
@@ -162,8 +162,8 @@ Clean-room conclusion:
 Command:
 
 ```bash
-ssh netcup2 '/home/admin/.local/bin/gpucall setup apply --file /home/admin/.local/state/gpucall/setup/oob-reapply-20260620.yml --config-dir /home/admin/.config/gpucall --yes'
-ssh netcup2 '/home/admin/.local/bin/gpucall setup status --config-dir /home/admin/.config/gpucall'
+ssh <gateway-host> '<gateway-home>/.local/bin/gpucall setup apply --file <gateway-home>/.local/state/gpucall/setup/oob-reapply-20260620.yml --config-dir <gateway-home>/.config/gpucall --yes'
+ssh <gateway-host> '<gateway-home>/.local/bin/gpucall setup status --config-dir <gateway-home>/.config/gpucall'
 ```
 
 Key output:
@@ -178,9 +178,9 @@ Admin automation synthetic dry-run:
   [ok] synthetic intake parsed and classified without provider mutation or billable work
 
 Caller handoff packages:
-  [ok] news-system: Caller handoff package generated.
-    package: /home/admin/.local/share/gpucall/handoffs/news-system
-    give to caller-side AI CLI: /home/admin/.local/share/gpucall/handoffs/news-system/caller-ai-onboarding-prompt.md
+  [ok] example-caller: Caller handoff package generated.
+    package: <gateway-home>/.local/share/gpucall/handoffs/example-caller
+    give to caller-side AI CLI: <gateway-home>/.local/share/gpucall/handoffs/example-caller/caller-ai-onboarding-prompt.md
 
 Post-apply checks:
   [ok] validate-config: 32 recipes, 3233 tuples
@@ -197,7 +197,7 @@ Gateway restart evidence:
 stopping_gateway_pid=1357409
 started_gateway_pid=1357498
 {"status":"ok"}
-LISTEN 0      2048                   100.93.87.4:18088      0.0.0.0:*    users:(("gpucall",pid=1357498,fd=19))
+LISTEN 0      2048                   <gateway-ip>:18088      0.0.0.0:*    users:(("gpucall",pid=1357498,fd=19))
 ```
 
 Handoff verification:
@@ -214,7 +214,7 @@ Handoff verification:
 Command:
 
 ```bash
-ssh macmini 'cd /Users/admin/Developer/news-system && uv run pytest tests/test_gpucall_v2.py -q'
+ssh <caller-host> 'cd <caller-repo> && uv run pytest tests/test_gpucall_v2.py -q'
 ```
 
 Output:
@@ -227,7 +227,7 @@ Output:
 Command:
 
 ```bash
-ssh macmini 'cd /Users/admin/Developer/news-system && set -a && . ./.env >/dev/null 2>&1 && set +a && export LLM_BACKEND=gpucall && uv run python <sanitized_canary_script>'
+ssh <caller-host> 'cd <caller-repo> && set -a && . ./.env >/dev/null 2>&1 && set +a && export LLM_BACKEND=gpucall && uv run python <sanitized_canary_script>'
 ```
 
 Output:

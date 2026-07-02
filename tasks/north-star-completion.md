@@ -2,7 +2,7 @@
 
 Date: 2026-07-02 JST
 Session scope: autonomous completion loop per `NORTH_STAR_AUTONOMOUS_COMPLETION_PROMPT.md`
-Releases produced: v2.0.68, v2.0.69 (tagged, signed, published with SHA256SUMS, deployed to the production netcup2 gateway)
+Releases produced: v2.0.68, v2.0.69 (tagged, signed, published with SHA256SUMS, deployed to the production gateway)
 
 ## North Star position
 
@@ -17,15 +17,15 @@ groundwork shipped".
 
 | Condition (from the prompt) | State | Evidence |
 | --- | --- | --- |
-| First-time user: README → install → setup → config → first run | **met** | clean-room v2.0.69 install on netcup2, `local-trial-ready` (oob-final-report) |
+| First-time user: README → install → setup → config → first run | **met** | clean-room v2.0.69 install on the gateway host, `local-trial-ready` (oob-final-report) |
 | Provider credentials zero → bounded explanation | **met** | `[warn] no cloud providers configured`, no hang, fail-closed |
-| Modal happy path after credentials | **met** | netcup2 production path; worker redeploy via consent flow (plan hash `12d4aa43d17ed1f3`) |
+| Modal happy path after credentials | **met** | production gateway path; worker redeploy via consent flow (plan hash `12d4aa43d17ed1f3`) |
 | Provider endpoint zero → supply provisioning | **met (plan), gated (apply)** | RunPod tuples `blocked` with provisioning plans generated; apply intentionally requires consent |
 | Panopticon updates evidence continuously | **met** | `service-running` / `evidence-fresh`; 1391 tuples observed, refresh loop live |
 | Validation gates auto-created | **met + hardened** | intake→materialize→billable-validate→activate chain live; v2.0.69 adds automatic re-validation of drift-invalidated routes |
 | Route activation deterministic | **met** | existing-tuple activation path, `EXISTING_RECIPE_ALREADY_ACTIVE` dedup observed |
-| Caller handoff fully generated | **met** | handoff package regenerated on every setup apply (news-system package on netcup2) |
-| news-system canary without human relay | **met** | this session: SSH-only diagnosis, repair, re-validation, canary 5/5 GO, production pipeline re-run (news-system-canary-report) |
+| Caller handoff fully generated | **met** | handoff package regenerated on every setup apply (example-caller package on the gateway host) |
+| example-caller canary without human relay | **met** | this session: SSH-only diagnosis, repair, re-validation, canary 5/5 GO, production pipeline re-run (example-caller-canary-report) |
 | Real workload incl. contract expansion | **met** | 88K-token rank workload: root-caused (worker 32K cap vs catalog 131K), fixed via YaRN, route re-validated; contract-expansion loop exercised for real |
 | DataRef / inline / text / vision end-to-end | **met** | canary intents + vision PASS; DataRef fix (2a80f0a) regression 22 tests green |
 | Contract-外 workload → new recipe/supply loop | **met** | inbox automation chain live with budget gates (provider-loop-report) |
@@ -94,4 +94,4 @@ real registry inconsistency during its first run.
 | RunPod endpoint zero | operator | generated provisioning plan | apply gated on consent (`recipe_inbox_auto_apply_supply`) |
 | Hyperstack SSH prerequisites | operator | provider-config-blocker record | none until key/CIDR supplied |
 | Worker-redeploy invalidates route evidence (official_contract_hash drift not auto-revalidated yet) | gpucall dev | extend v2.0.69 drift re-validation to contract-hash drift | manual re-smoke works today |
-| news-system DB persistence target (100.90.56.23:5432 refused) | news-system operator | fleet DB endpoint check | outside gpucall scope, reported |
+| example-caller DB persistence target (<db-host>:5432 refused) | example-caller operator | fleet DB endpoint check | outside gpucall scope, reported |
