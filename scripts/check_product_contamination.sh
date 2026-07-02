@@ -9,6 +9,11 @@ if ! git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
   exit 2
 fi
 
+if ! command -v rg >/dev/null 2>&1; then
+  echo "product contamination guard requires ripgrep (rg) on PATH" >&2
+  exit 3
+fi
+
 scan_files() {
   git ls-files -z | while IFS= read -r -d '' path; do
     case "$path" in

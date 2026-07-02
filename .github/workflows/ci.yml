@@ -26,6 +26,8 @@ jobs:
         with:
           python-version: ${{ matrix.python-version }}
           enable-cache: true
+      - name: Install ripgrep (used by the release-audit tests)
+        run: sudo apt-get update -q && sudo apt-get install -y -q ripgrep
       - name: Sync dependencies (all extras)
         run: uv sync --all-extras
       - name: Run full test suite
