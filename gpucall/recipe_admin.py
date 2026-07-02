@@ -389,9 +389,9 @@ def _refresh_watch_route_validation(
 
     Route validation evidence is invalidated by config-hash or commit drift even
     when the route itself is healthy. Without maintenance, such routes silently
-    fall out of production routing (observed on netcup2 on 2026-07-02: light and
-    vision routes were rejected for nine days after a config change). The watch
-    service closes that loop: when the operator has already consented to
+    fall out of production routing (observed in production on 2026-07-02: light
+    and vision routes were rejected for nine days after a config change). The
+    watch service closes that loop: when the operator has already consented to
     automatic billable validation, at most one stale previously-validated route
     is re-smoked per check window, within the configured validation budget.
     """

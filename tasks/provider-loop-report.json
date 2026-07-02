@@ -2,7 +2,7 @@
   "schema_version": 1,
   "phase": "provider-demand-to-supply-loop-report",
   "date": "2026-07-02",
-  "gateway_host": "netcup2",
+  "gateway_host": "<gateway-host>",
   "gateway_versions": ["2.0.67", "2.0.68", "2.0.69"],
   "loop_config": {
     "auto_materialize": true,
@@ -29,7 +29,7 @@
       "id": "synthetic-dry-run-no-maintainer",
       "class": "product",
       "fixed_in": "2.0.68",
-      "verified": "netcup2 returned to onboarding-ready after upgrade; watch journal shows synthetic_dry_run_refreshed"
+      "verified": "the gateway returned to onboarding-ready after upgrade; watch journal shows synthetic_dry_run_refreshed"
     },
     {
       "id": "route-validation-config-drift-silent-loss",

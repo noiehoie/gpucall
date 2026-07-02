@@ -1,10 +1,10 @@
 {
   "schema_version": 1,
-  "phase": "news-system-production-canary",
+  "phase": "example-caller-production-canary",
   "date": "2026-07-02",
-  "caller_host": "macmini",
-  "caller_repo": "/Users/admin/Developer/news-system",
-  "gateway": "netcup2:18088",
+  "caller_host": "<caller-host>",
+  "caller_repo": "<caller-repo>",
+  "gateway": "<gateway-host>:18088",
   "gateway_versions": ["2.0.67", "2.0.68", "2.0.69"],
   "caller_tests": "32 passed",
   "intent_canary": {
@@ -28,14 +28,14 @@
       "2026-07-02 16:01:15 Analysis call completed (attempt 2.1): response_len=11939; analysis_failed=False",
       "2026-07-02 16:14:41 Analysis call completed (attempt 1.1): response_len=22922; analysis_failed=False (clean full re-run, first attempt)"
     ],
-    "full_pipeline_rerun": "clean re-run (pid 16588) reached analysis_failed=False on its first analysis attempt at 16:14:41 JST; downstream persistence/output stages continue under normal news-system operation"
+    "full_pipeline_rerun": "clean re-run (pid 16588) reached analysis_failed=False on its first analysis attempt at 16:14:41 JST; downstream persistence/output stages continue under normal example-caller operation"
   },
   "failure_classification": [
     {"failure": "400 inline exceeds (12:12)", "class": "caller", "resolution": "caller-side fix 12:13:21 (pre-existing session)"},
     {"failure": "502 PROVIDER_ERROR (12:18, 14:09)", "class": "product", "resolution": "v2.0.69 YaRN + output budget"},
     {"failure": "NO_ELIGIBLE_TUPLE on light/vision intents", "class": "environment+product", "resolution": "revalidation + v2.0.69 automatic drift revalidation"},
     {"failure": "503 PROVIDER_CAPACITY_UNAVAILABLE on 20-21-way parallel stages", "class": "operator-decision", "resolution": "admission limits working as designed; raising them is a billing decision left to the operator"},
-    {"failure": "DB persist to 100.90.56.23:5432 refused", "class": "caller-infrastructure", "resolution": "outside gpucall scope; reported"}
+    {"failure": "DB persist to <db-host>:5432 refused", "class": "caller-infrastructure", "resolution": "outside gpucall scope; reported"}
   ],
   "decision": "Go",
   "decision_basis": "caller tests green, 5-intent canary GO, production rank analysis completes through gpucall post-fix without caller changes or human relay"

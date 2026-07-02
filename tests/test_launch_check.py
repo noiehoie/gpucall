@@ -95,7 +95,7 @@ def test_production_placeholder_gate_respects_policy_allowlist() -> None:
             "runpod-real": SimpleNamespace(
                 adapter="runpod-vllm-serverless",
                 endpoint="https://api.runpod.ai/v2",
-                target="vllm-realendpoint",
+                target="vllm-example",
             ),
             "runpod-placeholder": SimpleNamespace(
                 adapter="runpod-vllm-serverless",
