@@ -222,3 +222,22 @@ def test_modal_t4_worker_forces_float16_dtype() -> None:
     assert 'def run_inference_on_modal_t4(payload: dict[str, Any], workload: str = "infer", **kwargs) -> str:' in source
     assert 'dtype=kwargs.get("dtype") or "float16"' in source
     assert 'kwargs["dtype"] = dtype' in source
+
+
+def test_modal_worker_qwen25_yarn_long_context_configuration() -> None:
+    source = __import__("pathlib").Path("gpucall/worker_contracts/modal.py").read_text(encoding="utf-8")
+
+    # Qwen2.5 7B/14B/32B must honor the catalog 131072 declaration through the
+    # model-card YaRN configuration instead of silently capping at 32768 and
+    # letting large governed requests die in the worker (2026-07-02 incident:
+    # an 88K-token rank workload was routed to a tuple declaring 131072 while
+    # the worker enforced 32768).
+    assert '_QWEN25_YARN_MAX_MODEL_LEN = 131072' in source
+    assert '"Qwen/Qwen2.5-7B-Instruct",' in source
+    assert '"rope_type": "yarn",' in source
+    assert '"factor": 4.0,' in source
+    assert 'if model_id in _QWEN25_YARN_MODELS:' in source
+    assert 'return min(max_model_len, _QWEN25_YARN_MAX_MODEL_LEN)' in source
+    # The engine cache must consider the loaded context length so a 32K-loaded
+    # engine is never reused for a 131K request.
+    assert '_TOP_LEVEL_LOADED_LEN >= bounded_len' in source

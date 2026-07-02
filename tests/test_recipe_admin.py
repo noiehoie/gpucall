@@ -2360,3 +2360,138 @@ def test_review_uses_existing_template_vision_tuple_before_candidate_promotion()
 def test_promotion_validation_mode_follows_recipe_allowed_modes() -> None:
     assert _validation_mode("text-infer-standard", Path("gpucall/config_templates")) == "sync"
     assert _validation_mode("infer-rank-text-items-draft", Path("gpucall/config_templates")) == "sync"
+
+
+def test_watch_route_validation_refresh_revalidates_stale_evidence(tmp_path, monkeypatch) -> None:
+    from gpucall.recipe_admin import _refresh_watch_route_validation
+
+    monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path / "state"))
+    monkeypatch.delenv("GPUCALL_STATE_DIR", raising=False)
+    monkeypatch.setenv("GPUCALL_ALLOW_FAKE_AUTO_TUPLES", "1")
+    config_dir = tmp_path / "config"
+    shutil.copytree("tests/fixtures/config", config_dir)
+    (config_dir / "admin.yml").write_text(
+        "recipe_inbox_auto_materialize: true\n"
+        "recipe_inbox_auto_promote_candidates: true\n"
+        "recipe_inbox_auto_billable_validation: true\n"
+        "recipe_inbox_auto_validation_budget_usd: 0.05\n",
+        encoding="utf-8",
+    )
+    validation_dir = tmp_path / "tuple-validation"
+    validation_dir.mkdir()
+    # A previously PASSED artifact invalidated by commit/config drift: the
+    # class of staleness the watch service must repair automatically.
+    (validation_dir / "old.json").write_text(
+        json.dumps(
+            {
+                "tuple": "local-echo",
+                "recipe": "text-infer-standard",
+                "mode": "sync",
+                "started_at": "2026-06-20T00:00:00+00:00",
+                "ended_at": "2026-06-20T00:00:10+00:00",
+                "commit": "0000000000000000000000000000000000000000",
+                "config_hash": "stale-config-hash",
+                "governance_hash": "gh",
+                "official_contract": {"adapter": "echo"},
+                "official_contract_hash": "och",
+                "validation_schema_version": 1,
+                "passed": True,
+                "cleanup": {},
+                "cost": {},
+                "audit": {},
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    ran: dict[str, object] = {}
+
+    def fake_validation(**kwargs):
+        ran.update(kwargs)
+        return {"passed": True, "returncode": 0, "artifact_path": str(validation_dir / "new.json")}
+
+    monkeypatch.setattr("gpucall.recipe_admin._run_existing_tuple_validation", fake_validation)
+
+    result = _refresh_watch_route_validation(str(config_dir), str(validation_dir))
+
+    assert result is not None
+    assert result["phase"] == "route-validation-refresh"
+    assert result["tuple"] == "local-echo"
+    assert result["recipe"] == "text-infer-standard"
+    assert result["passed"] is True
+    assert ran["budget_usd"] == 0.05
+
+    # Second call within the check interval must be a no-op (throttled).
+    ran.clear()
+    assert _refresh_watch_route_validation(str(config_dir), str(validation_dir)) is None
+    assert not ran
+
+
+def test_watch_route_validation_refresh_requires_billable_consent(tmp_path, monkeypatch) -> None:
+    from gpucall.recipe_admin import _refresh_watch_route_validation
+
+    monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path / "state"))
+    monkeypatch.delenv("GPUCALL_STATE_DIR", raising=False)
+    monkeypatch.setenv("GPUCALL_ALLOW_FAKE_AUTO_TUPLES", "1")
+    config_dir = tmp_path / "config"
+    shutil.copytree("tests/fixtures/config", config_dir)
+    (config_dir / "admin.yml").write_text("recipe_inbox_auto_materialize: true\n", encoding="utf-8")
+    validation_dir = tmp_path / "tuple-validation"
+    validation_dir.mkdir()
+    (validation_dir / "old.json").write_text(
+        json.dumps({"tuple": "local-echo", "recipe": "text-infer-standard", "mode": "sync"}),
+        encoding="utf-8",
+    )
+
+    def fail_validation(**kwargs):
+        raise AssertionError("billable validation must not run without operator consent")
+
+    monkeypatch.setattr("gpucall.recipe_admin._run_existing_tuple_validation", fail_validation)
+
+    assert _refresh_watch_route_validation(str(config_dir), str(validation_dir)) is None
+
+
+def test_watch_route_validation_refresh_skips_failed_smokes(tmp_path, monkeypatch) -> None:
+    from gpucall.recipe_admin import _refresh_watch_route_validation
+
+    monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path / "state"))
+    monkeypatch.delenv("GPUCALL_STATE_DIR", raising=False)
+    monkeypatch.setenv("GPUCALL_ALLOW_FAKE_AUTO_TUPLES", "1")
+    config_dir = tmp_path / "config"
+    shutil.copytree("tests/fixtures/config", config_dir)
+    (config_dir / "admin.yml").write_text(
+        "recipe_inbox_auto_materialize: true\n"
+        "recipe_inbox_auto_promote_candidates: true\n"
+        "recipe_inbox_auto_billable_validation: true\n",
+        encoding="utf-8",
+    )
+    validation_dir = tmp_path / "tuple-validation"
+    validation_dir.mkdir()
+    # A complete artifact whose smoke FAILED: must never be auto-retried.
+    (validation_dir / "failed.json").write_text(
+        json.dumps(
+            {
+                "tuple": "local-echo",
+                "recipe": "text-infer-standard",
+                "mode": "sync",
+                "started_at": "2026-07-01T00:00:00+00:00",
+                "ended_at": "2026-07-01T00:00:10+00:00",
+                "commit": None,
+                "config_hash": "match-not-checked-here",
+                "governance_hash": "gh",
+                "official_contract": {"adapter": "echo"},
+                "official_contract_hash": "och",
+                "validation_schema_version": 1,
+                "passed": False,
+                "error": {"code": "PROVIDER_JOB_FAILED"},
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    def fail_validation(**kwargs):
+        raise AssertionError("failed smokes must not be auto-retried")
+
+    monkeypatch.setattr("gpucall.recipe_admin._run_existing_tuple_validation", fail_validation)
+
+    assert _refresh_watch_route_validation(str(config_dir), str(validation_dir)) is None

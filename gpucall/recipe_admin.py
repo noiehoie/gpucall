@@ -291,6 +291,10 @@ def main(argv: list[str] | None = None) -> int:
             if refreshed is not None:
                 sys.stderr.write(json.dumps({"synthetic_dry_run_refreshed": refreshed}, ensure_ascii=False, sort_keys=True) + "\n")
                 sys.stderr.flush()
+            revalidated = _refresh_watch_route_validation(args.config_dir, args.validation_dir)
+            if revalidated is not None:
+                sys.stderr.write(json.dumps({"route_validation_refreshed": revalidated}, ensure_ascii=False, sort_keys=True) + "\n")
+                sys.stderr.flush()
             iterations += 1
             if args.max_iterations is not None and iterations >= args.max_iterations:
                 return 0
@@ -361,6 +365,113 @@ def _refresh_watch_synthetic_dry_run(inbox_dir: str, config_dir: str | Path | No
         "fresh": refreshed.get("fresh"),
         "expires_at": refreshed.get("expires_at"),
         "reason": refreshed.get("reason"),
+    }
+
+
+ROUTE_VALIDATION_REFRESH_CHECK_INTERVAL_SECONDS = 600.0
+ROUTE_VALIDATION_REFRESH_RETRY_SECONDS = 3600.0
+# Only evidence invalidated by environment drift is re-validated automatically.
+# A route whose latest billable smoke actually FAILED is not retried here; that
+# stays an operator decision so a broken route cannot burn budget in a loop.
+_ROUTE_VALIDATION_REFRESH_REASONS = (
+    "validation_config_hash_mismatch",
+    "validation_commit_mismatch",
+)
+
+
+def _refresh_watch_route_validation(
+    config_dir: str | Path | None,
+    validation_dir: str | Path | None,
+    *,
+    now: float | None = None,
+) -> dict[str, Any] | None:
+    """Re-validate previously validated routes whose evidence became stale.
+
+    Route validation evidence is invalidated by config-hash or commit drift even
+    when the route itself is healthy. Without maintenance, such routes silently
+    fall out of production routing (observed on netcup2 on 2026-07-02: light and
+    vision routes were rejected for nine days after a config change). The watch
+    service closes that loop: when the operator has already consented to
+    automatic billable validation, at most one stale previously-validated route
+    is re-smoked per check window, within the configured validation budget.
+    """
+    if not config_dir:
+        return None
+    try:
+        automation = load_admin_automation(Path(config_dir))
+    except Exception:
+        return None
+    if not automation.recipe_inbox_auto_billable_validation:
+        return None
+    from gpucall.validation_evidence import load_route_validation_statuses
+
+    current = time.time() if now is None else now
+    state_path = default_state_dir() / "tuple-validation-refresh-state.json"
+    try:
+        state = json.loads(state_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        state = {}
+    if current - float(state.get("last_check") or 0) < ROUTE_VALIDATION_REFRESH_CHECK_INTERVAL_SECONDS:
+        return None
+    state["last_check"] = current
+
+    def _write_state() -> None:
+        try:
+            state_path.parent.mkdir(parents=True, exist_ok=True)
+            state_path.write_text(json.dumps(state, ensure_ascii=False, sort_keys=True) + "\n", encoding="utf-8")
+        except OSError:
+            pass
+
+    try:
+        statuses = load_route_validation_statuses(config_dir=config_dir, validation_dir=validation_dir)
+        config = load_config(Path(config_dir))
+    except Exception as exc:
+        _write_state()
+        return {"status": "failed", "reason": f"route validation refresh scan failed: {type(exc).__name__}"}
+    attempts = dict(state.get("attempts") or {})
+    target: tuple[str, str, str, str] | None = None
+    for key in sorted(statuses):
+        status = statuses[key]
+        if status.accepted:
+            continue
+        reason = status.reason or ""
+        if not reason.startswith(_ROUTE_VALIDATION_REFRESH_REASONS):
+            continue
+        if status.data.get("passed") is not True:
+            # Only routes whose latest smoke actually passed are maintained;
+            # environment drift on a proven-good route, never failure retry.
+            continue
+        tuple_name, recipe_name, mode = key
+        if recipe_name not in config.recipes or tuple_name not in config.tuples:
+            continue
+        attempt_key = f"{tuple_name}|{recipe_name}|{mode}"
+        if current - float(attempts.get(attempt_key) or 0) < ROUTE_VALIDATION_REFRESH_RETRY_SECONDS:
+            continue
+        target = (attempt_key, tuple_name, recipe_name, reason)
+        break
+    if target is None:
+        _write_state()
+        return None
+    attempt_key, tuple_name, recipe_name, stale_reason = target
+    attempts[attempt_key] = current
+    state["attempts"] = attempts
+    _write_state()
+    validation = _run_existing_tuple_validation(
+        tuple_name=tuple_name,
+        recipe_name=recipe_name,
+        config_dir=Path(config_dir).expanduser(),
+        validation_dir=Path(validation_dir).expanduser() if validation_dir else None,
+        budget_usd=float(automation.recipe_inbox_auto_validation_budget_usd),
+        poll_timeout_seconds=float(automation.recipe_inbox_auto_validation_poll_timeout_seconds),
+    )
+    return {
+        "phase": "route-validation-refresh",
+        "tuple": tuple_name,
+        "recipe": recipe_name,
+        "stale_reason": stale_reason,
+        "budget_usd": float(automation.recipe_inbox_auto_validation_budget_usd),
+        "passed": validation.get("passed"),
+        "returncode": validation.get("returncode"),
     }
 
 

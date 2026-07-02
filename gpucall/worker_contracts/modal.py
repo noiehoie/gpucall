@@ -431,8 +431,22 @@ if modal is not None:
     )
     _TOP_LEVEL_LLM: Any = None
     _TOP_LEVEL_LOADED_ID: str | None = None
+    _TOP_LEVEL_LOADED_LEN: int = 0
     _TOP_LEVEL_VISION: tuple[Any, Any, str] | None = None
     _STREAMING_MODELS: dict[str, tuple[Any, Any]] = {}
+
+    # Qwen2.5 7B/14B/32B Instruct support 131072-token contexts through the
+    # model-card YaRN configuration (factor 4.0 over the native 32768). The
+    # 0.5B/1.5B variants and the DeepSeek distills stay at their native 32768.
+    _QWEN25_YARN_MODELS = frozenset(
+        {
+            "Qwen/Qwen2.5-7B-Instruct",
+            "Qwen/Qwen2.5-14B-Instruct",
+            "Qwen/Qwen2.5-32B-Instruct",
+        }
+    )
+    _QWEN25_YARN_MAX_MODEL_LEN = 131072
+    _QWEN25_NATIVE_MAX_MODEL_LEN = 32768
 
     def _load_top_level_llm(
         model_id: str,
@@ -443,14 +457,16 @@ if modal is not None:
         trust_remote_code: bool = False,
         dtype: str | None = None,
     ) -> Any:
-        global _TOP_LEVEL_LLM, _TOP_LEVEL_LOADED_ID
+        global _TOP_LEVEL_LLM, _TOP_LEVEL_LOADED_ID, _TOP_LEVEL_LOADED_LEN
         if model_id not in _ALLOWED_MODELS:
             raise ValueError(f"model {model_id} is not allowed")
-        if _TOP_LEVEL_LOADED_ID == model_id and _TOP_LEVEL_LLM is not None:
+        bounded_len = _bounded_model_len(model_id, max_model_len)
+        if _TOP_LEVEL_LOADED_ID == model_id and _TOP_LEVEL_LLM is not None and _TOP_LEVEL_LOADED_LEN >= bounded_len:
             return _TOP_LEVEL_LLM
         if _TOP_LEVEL_LLM is not None:
             _TOP_LEVEL_LLM = None
             _TOP_LEVEL_LOADED_ID = None
+            _TOP_LEVEL_LOADED_LEN = 0
             try:
                 import gc
                 import torch
@@ -461,10 +477,9 @@ if modal is not None:
                 pass
         from vllm import LLM
 
-        max_model_len = _bounded_model_len(model_id, max_model_len)
         kwargs: dict[str, Any] = {
             "model": model_id,
-            "max_model_len": max_model_len,
+            "max_model_len": bounded_len,
             "gpu_memory_utilization": float(os.getenv("GPUCALL_MODAL_GPU_MEMORY_UTILIZATION", "0.85" if long_context else "0.90")),
             "trust_remote_code": trust_remote_code,
             "tensor_parallel_size": tensor_parallel_size,
@@ -472,6 +487,14 @@ if modal is not None:
         }
         if dtype:
             kwargs["dtype"] = dtype
+        if model_id in _QWEN25_YARN_MODELS and bounded_len > _QWEN25_NATIVE_MAX_MODEL_LEN:
+            kwargs["hf_overrides"] = {
+                "rope_scaling": {
+                    "rope_type": "yarn",
+                    "factor": 4.0,
+                    "original_max_position_embeddings": _QWEN25_NATIVE_MAX_MODEL_LEN,
+                }
+            }
         if long_context:
             kwargs.update(
                 {
@@ -482,6 +505,7 @@ if modal is not None:
             )
         _TOP_LEVEL_LLM = LLM(**kwargs)
         _TOP_LEVEL_LOADED_ID = model_id
+        _TOP_LEVEL_LOADED_LEN = bounded_len
         return _TOP_LEVEL_LLM
 
     def _bounded_model_len(model_id: str, max_model_len: int) -> int:
@@ -491,6 +515,8 @@ if modal is not None:
             return min(max_model_len, 2048)
         if model_id == "Qwen/Qwen2.5-14B-Instruct-1M":
             return min(max_model_len, 1010000)
+        if model_id in _QWEN25_YARN_MODELS:
+            return min(max_model_len, _QWEN25_YARN_MAX_MODEL_LEN)
         if model_id.startswith("Qwen/") or model_id.startswith("deepseek-ai/DeepSeek-R1-Distill-Qwen-"):
             return min(max_model_len, 32768)
         return min(max_model_len, 8192)
@@ -559,7 +585,13 @@ if modal is not None:
         requested_model = model or os.getenv("GPUCALL_MODAL_VLLM_MODEL", "facebook/opt-125m")
         tokenizer, model_obj = _load_streaming_model(requested_model, trust_remote_code=bool(payload.get("trust_remote_code")))
         prompt = _format_prompt_for_model(types.SimpleNamespace(tokenizer=tokenizer), requested_model, payload)
-        inputs = tokenizer(prompt, return_tensors="pt", truncation=True, max_length=_bounded_model_len(requested_model, max_model_len))
+        # The streaming path loads the plain Transformers model without the
+        # YaRN rope-scaling override, so it stays at the native context bound
+        # even for models whose vLLM sync path supports 131072.
+        stream_model_len = _bounded_model_len(requested_model, max_model_len)
+        if requested_model in _QWEN25_YARN_MODELS:
+            stream_model_len = min(stream_model_len, _QWEN25_NATIVE_MAX_MODEL_LEN)
+        inputs = tokenizer(prompt, return_tensors="pt", truncation=True, max_length=stream_model_len)
         try:
             device = next(model_obj.parameters()).device
             inputs = {key: value.to(device) for key, value in inputs.items()}
