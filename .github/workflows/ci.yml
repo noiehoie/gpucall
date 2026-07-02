@@ -26,6 +26,8 @@ jobs:
         with:
           python-version: ${{ matrix.python-version }}
           enable-cache: true
+      - name: Sync dependencies (all extras)
+        run: uv sync --all-extras
       - name: Run full test suite
         run: uv run pytest -q
 
@@ -39,9 +41,12 @@ jobs:
         with:
           python-version: "3.11"
           enable-cache: true
+      - name: Sync SDK dependencies
+        working-directory: sdk/python
+        run: uv sync --extra dev
       - name: Run SDK test suite
         working-directory: sdk/python
-        run: uv run --with-editable . pytest -q
+        run: uv run pytest -q
 
   product-gates:
     name: config, secrets, conformance
@@ -53,6 +58,8 @@ jobs:
         with:
           python-version: "3.11"
           enable-cache: true
+      - name: Sync dependencies (all extras)
+        run: uv sync --all-extras
       - name: Validate shipped configuration
         run: uv run gpucall validate-config --config-dir config
       - name: Scan for committed secrets
