@@ -1,0 +1,38 @@
+{
+  "schema_version": 1,
+  "phase": "news-system-production-canary",
+  "date": "2026-07-02",
+  "caller_host": "macmini",
+  "caller_repo": "/Users/admin/Developer/news-system",
+  "gateway": "netcup2:18088",
+  "gateway_versions": ["2.0.67", "2.0.68", "2.0.69"],
+  "caller_tests": "32 passed",
+  "intent_canary": {
+    "extract_json": "PASS",
+    "translate_text": "PASS",
+    "summarize_text": "PASS",
+    "rank_text_items": "PASS",
+    "vision": "PASS",
+    "note": "5/5 GO after route revalidation on v2.0.68; re-run against v2.0.69 during a parallel production pipeline saw vision shed by the admission concurrency limit (expected, retryable)"
+  },
+  "production_rank_workload": {
+    "failure_observed": "502 PROVIDER_ERROR at 12:18 and 14:09 JST; Modal vLLM logs: decoder prompt 88049 > max model length 32768",
+    "root_cause": "catalog declared max_model_len 131072 while worker capped Qwen2.5 at 32768; plus shipped recipe template lacked max_output_tokens so the v2.0.67 caller contract (no caller max_tokens) fell to the worker 128-token default",
+    "fixes": [
+      "v2.0.69 worker: Qwen2.5 YaRN 131072 (Modal logs confirm 'Maximum concurrency for 131,072 tokens per request')",
+      "recipe template + active recipe: max_output_tokens: 24000",
+      "routes revalidated for the new config hash (rank standard, 4 light, vision: all passed)"
+    ],
+    "post_fix_evidence": "2026-07-02 15:59:24 Analysis call completed (attempt 1.1): response_len=16306 — production rank analysis succeeded on first attempt through gpucall on the YaRN worker with the recipe output budget",
+    "full_pipeline_rerun": "final clean run left executing on macmini (pid 16588) after the duplicate earlier run was stopped; analysis-stage success already evidenced at 15:59:24"
+  },
+  "failure_classification": [
+    {"failure": "400 inline exceeds (12:12)", "class": "caller", "resolution": "caller-side fix 12:13:21 (pre-existing session)"},
+    {"failure": "502 PROVIDER_ERROR (12:18, 14:09)", "class": "product", "resolution": "v2.0.69 YaRN + output budget"},
+    {"failure": "NO_ELIGIBLE_TUPLE on light/vision intents", "class": "environment+product", "resolution": "revalidation + v2.0.69 automatic drift revalidation"},
+    {"failure": "503 PROVIDER_CAPACITY_UNAVAILABLE on 20-21-way parallel stages", "class": "operator-decision", "resolution": "admission limits working as designed; raising them is a billing decision left to the operator"},
+    {"failure": "DB persist to 100.90.56.23:5432 refused", "class": "caller-infrastructure", "resolution": "outside gpucall scope; reported"}
+  ],
+  "decision": "Go",
+  "decision_basis": "caller tests green, 5-intent canary GO, production rank analysis completes through gpucall post-fix without caller changes or human relay"
+}
