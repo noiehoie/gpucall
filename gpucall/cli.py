@@ -158,6 +158,11 @@ def main() -> None:
     jobs.add_argument("--expire-stale", action="store_true")
     registry = sub.add_parser("registry")
     registry.add_argument("action", choices=["show"])
+    provider_conformance = sub.add_parser(
+        "provider-conformance",
+        help="run non-generation registry-level conformance checks for registered provider adapters",
+    )
+    provider_conformance.add_argument("--adapter", default=None, help="check a single adapter instead of all registered adapters")
     catalog = sub.add_parser("catalog")
     catalog.add_argument("action", choices=["build", "show"])
     catalog.add_argument("--config-dir", type=Path, default=default_config_dir())
@@ -390,6 +395,8 @@ def main() -> None:
         lease_reaper_command(args.manifest, apply=args.apply)
     elif args.command == "registry":
         registry_command(args.action)
+    elif args.command == "provider-conformance":
+        provider_conformance_command(args.adapter)
     elif args.command == "catalog":
         catalog_command(args.action, args.config_dir, args.db)
     elif args.command == "execution-catalog":
@@ -2574,6 +2581,15 @@ def registry_command(action: str) -> None:
     registry = ObservedRegistry(path=default_state_dir() / "registry.db")
     if action == "show":
         print(json.dumps(registry.snapshot(), indent=2, sort_keys=True))
+
+
+def provider_conformance_command(adapter: str | None) -> None:
+    from gpucall.provider_conformance import run_provider_conformance
+
+    report = run_provider_conformance(adapter)
+    print(json.dumps(report, indent=2, sort_keys=True))
+    if not report["passed"]:
+        raise SystemExit(1)
 
 
 def catalog_command(action: str, config_dir: Path, db: Path | None) -> None:
