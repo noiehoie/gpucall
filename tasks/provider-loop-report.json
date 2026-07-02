@@ -1,0 +1,58 @@
+{
+  "schema_version": 1,
+  "phase": "provider-demand-to-supply-loop-report",
+  "date": "2026-07-02",
+  "gateway_host": "netcup2",
+  "gateway_versions": ["2.0.67", "2.0.68", "2.0.69"],
+  "loop_config": {
+    "auto_materialize": true,
+    "auto_validate_existing_tuples": true,
+    "auto_activate_existing_validated_recipe": true,
+    "auto_promote_candidates": true,
+    "auto_provision_supply": true,
+    "auto_apply_supply": false,
+    "auto_billable_validation": true,
+    "auto_validation_budget_usd": 0.16,
+    "auto_activate_validated": true
+  },
+  "panopticon": {
+    "service_state": "service-running",
+    "evidence_state": "evidence-fresh",
+    "tuple_count": 1391,
+    "live_revalidated": 77,
+    "blocked_fail_closed": 1311,
+    "unknown_local": 3
+  },
+  "provider_conformance": {"adapters": 13, "passed": true},
+  "defects_fixed": [
+    {
+      "id": "synthetic-dry-run-no-maintainer",
+      "class": "product",
+      "fixed_in": "2.0.68",
+      "verified": "netcup2 returned to onboarding-ready after upgrade; watch journal shows synthetic_dry_run_refreshed"
+    },
+    {
+      "id": "route-validation-config-drift-silent-loss",
+      "class": "product",
+      "fixed_in": "2.0.69",
+      "environment_repair": "5 routes revalidated via tuple-smoke, canary 1 then fanout 4, 0.16 USD budget each",
+      "verified": "caller canary 5/5 PASS after revalidation"
+    },
+    {
+      "id": "catalog-worker-context-contract-mismatch",
+      "class": "product",
+      "fixed_in": "2.0.69",
+      "detail": "surface declared 131072, worker capped 32768; 88049-token production request failed as 502 PROVIDER_ERROR"
+    }
+  ],
+  "fail_closed_verified": [
+    "1311 unconfigured provider tuples blocked with bounded reasons",
+    "billable validation inside explicit 0.16 USD budgets",
+    "supply provisioning plan/apply separation preserved"
+  ],
+  "remaining_blockers": [
+    {"blocker": "runpod-endpoint-zero", "owner": "gpucall_operator", "next_artifact": "supply provisioning plan", "automatic_next_action": "apply requires consent"},
+    {"blocker": "hyperstack-ssh-prerequisites", "owner": "gpucall_operator", "next_artifact": "provider-config-blocker record", "automatic_next_action": "none until operator supplies SSH key/CIDR"}
+  ],
+  "decision": "Go"
+}

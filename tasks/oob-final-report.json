@@ -1,0 +1,54 @@
+{
+  "schema_version": 1,
+  "phase": "oob-final-report",
+  "date": "2026-07-02",
+  "release": "v2.0.69",
+  "releases_cut_this_session": ["v2.0.68", "v2.0.69"],
+  "decision": "Go",
+  "release_gates": {
+    "pytest": "1008 passed, 1 skipped",
+    "sdk_pytest": "65 passed",
+    "scan_secrets": true,
+    "validate_config": true,
+    "static_launch_check": true,
+    "release_check_go": true,
+    "product_contamination_guard": true,
+    "provider_parity_guard": true
+  },
+  "clean_room": {
+    "host": "netcup2",
+    "ref": "v2.0.69",
+    "installer_bootstraps_uv": true,
+    "version_output": "gpucall 2.0.69",
+    "local_trial": "local-trial-ready",
+    "zero_credential_bounded": true
+  },
+  "reaudit_findings_fixed": [
+    {"id": "synthetic-dry-run-no-maintainer", "fixed_in": "2.0.68"},
+    {"id": "route-validation-config-drift-silent-loss", "fixed_in": "2.0.69"},
+    {"id": "catalog-worker-context-contract-mismatch", "fixed_in": "2.0.69"}
+  ],
+  "agent_native_surface": {
+    "estimate_endpoint": true,
+    "failure_taxonomy_endpoint": true,
+    "mcp_server": true,
+    "sdk_estimate": true,
+    "provider_conformance_cli": true,
+    "unauthenticated_fail_closed": true
+  },
+  "production_gateway": {
+    "host": "netcup2",
+    "version": "2.0.69",
+    "oob_readiness": "onboarding-ready",
+    "panopticon": "service-running/evidence-fresh",
+    "admin_automation": "service-running",
+    "modal_worker_redeployed": true,
+    "modal_worker_context": 131072,
+    "consent_plan_hash": "12d4aa43d17ed1f3"
+  },
+  "remaining_operational_dependencies": [
+    "Modal provider funding and availability",
+    "RunPod endpoint provisioning (plans generated, apply gated on consent)",
+    "Hyperstack SSH prerequisites"
+  ]
+}
