@@ -361,6 +361,8 @@ def configure_admin_automation(
         recipe_inbox_auto_apply_supply=auto_apply_supply,
         recipe_inbox_auto_billable_validation=auto_billable_validation,
         recipe_inbox_auto_validation_budget_usd=validation_budget,
+        recipe_inbox_auto_validation_poll_timeout_seconds=current.recipe_inbox_auto_validation_poll_timeout_seconds,
+        recipe_inbox_auto_validation_max_attempts=current.recipe_inbox_auto_validation_max_attempts,
         recipe_inbox_auto_activate_validated=auto_activate,
         recipe_inbox_auto_require_auto_select_safe=require_auto_select_safe,
         recipe_inbox_auto_set_auto_select=auto_set_auto_select,

@@ -1309,3 +1309,23 @@ handoff_assets:
     assert "https://assets.example/docs/prompt.md" in prompt
     assert "https://assets.example/docs/manual.md" in prompt
     assert "https://assets.example/sdk/gpucall_sdk-2.0.17-py3-none-any.whl" in prompt
+
+
+def test_configure_admin_automation_preserves_validation_settings(tmp_path) -> None:
+    from gpucall.admin_automation import configure_admin_automation
+    from gpucall.config import load_admin_automation
+
+    config_dir = tmp_path / "config"
+    config_dir.mkdir()
+    (config_dir / "admin.yml").write_text(
+        "recipe_inbox_auto_validation_poll_timeout_seconds: 900\n"
+        "recipe_inbox_auto_validation_max_attempts: 7\n",
+        encoding="utf-8",
+    )
+
+    configure_admin_automation(config_dir, recipe_inbox_auto_materialize=True)
+    updated = load_admin_automation(config_dir)
+
+    assert updated.recipe_inbox_auto_materialize is True
+    assert updated.recipe_inbox_auto_validation_poll_timeout_seconds == 900
+    assert updated.recipe_inbox_auto_validation_max_attempts == 7
