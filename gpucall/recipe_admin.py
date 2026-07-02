@@ -287,6 +287,10 @@ def main(argv: list[str] | None = None) -> int:
             if results:
                 sys.stdout.write(json.dumps({"processed": results}, ensure_ascii=False, indent=2, sort_keys=True) + "\n")
                 sys.stdout.flush()
+            refreshed = _refresh_watch_synthetic_dry_run(args.inbox_dir, args.config_dir)
+            if refreshed is not None:
+                sys.stderr.write(json.dumps({"synthetic_dry_run_refreshed": refreshed}, ensure_ascii=False, sort_keys=True) + "\n")
+                sys.stderr.flush()
             iterations += 1
             if args.max_iterations is not None and iterations >= args.max_iterations:
                 return 0
@@ -335,6 +339,29 @@ def main(argv: list[str] | None = None) -> int:
         sys.stdout.write(json.dumps(result, ensure_ascii=False, indent=2, sort_keys=True) + "\n")
         return 0
     raise AssertionError(args.command)
+
+
+def _refresh_watch_synthetic_dry_run(inbox_dir: str, config_dir: str | Path | None) -> dict[str, Any] | None:
+    """Keep the setup synthetic dry-run evidence fresh from the watch service.
+
+    Returns a bounded summary when a refresh ran, or None when the existing
+    evidence is still fresh. Failures are reported, not raised, so a transient
+    refresh problem cannot kill the watch loop.
+    """
+    from gpucall.admin_automation import refresh_admin_automation_synthetic_dry_run_if_needed
+
+    try:
+        refreshed = refresh_admin_automation_synthetic_dry_run_if_needed(str(inbox_dir), config_dir=config_dir)
+    except Exception as exc:
+        return {"status": "failed", "reason": f"synthetic dry-run refresh failed: {type(exc).__name__}"}
+    if refreshed is None:
+        return None
+    return {
+        "status": refreshed.get("status"),
+        "fresh": refreshed.get("fresh"),
+        "expires_at": refreshed.get("expires_at"),
+        "reason": refreshed.get("reason"),
+    }
 
 
 def review_artifact(

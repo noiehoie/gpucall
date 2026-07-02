@@ -207,6 +207,31 @@ def run_admin_automation_synthetic_dry_run(
     return evidence
 
 
+def refresh_admin_automation_synthetic_dry_run_if_needed(
+    recipe_inbox: str | None,
+    *,
+    config_dir: str | Path | None = None,
+    now: datetime | None = None,
+    refresh_margin_seconds: int = ADMIN_SYNTHETIC_DRY_RUN_TTL_SECONDS // 2,
+) -> dict[str, object] | None:
+    """Keep synthetic dry-run evidence fresh while the admin automation service runs.
+
+    Returns the refreshed evidence, or None when the existing evidence still has
+    more than refresh_margin_seconds of lifetime left.
+    """
+    current = now or datetime.now(timezone.utc)
+    existing = load_admin_automation_synthetic_dry_run(now=current)
+    if existing.get("status") == "missing":
+        # First creation belongs to `gpucall setup`; the watch service only
+        # maintains freshness of evidence that setup has already produced.
+        return None
+    if existing.get("fresh") is True:
+        expires_at = _parse_datetime(str(existing.get("expires_at") or ""))
+        if expires_at is not None and (expires_at - current).total_seconds() > refresh_margin_seconds:
+            return None
+    return run_admin_automation_synthetic_dry_run(recipe_inbox, config_dir=config_dir, now=current)
+
+
 def admin_automation_synthetic_dry_run_path() -> Path:
     return default_state_dir() / "setup" / "admin-automation-synthetic-dry-run.json"
 

@@ -2064,6 +2064,103 @@ def test_admin_cli_watch_one_iteration(tmp_path, capsys) -> None:
     assert output["processed"][0]["ok"] is True
 
 
+def test_admin_cli_watch_refreshes_synthetic_dry_run_evidence(tmp_path, capsys, monkeypatch) -> None:
+    monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path / "state"))
+    monkeypatch.delenv("GPUCALL_STATE_DIR", raising=False)
+    inbox = tmp_path / "inbox"
+    output_dir = tmp_path / "recipes"
+    inbox.mkdir()
+
+    from gpucall.admin_automation import (
+        admin_automation_synthetic_dry_run_path,
+        load_admin_automation_synthetic_dry_run,
+    )
+
+    # Missing evidence is owned by `gpucall setup`; watch must not invent it.
+    assert load_admin_automation_synthetic_dry_run()["status"] == "missing"
+    assert (
+        main(
+            [
+                "watch",
+                "--inbox-dir",
+                str(inbox),
+                "--output-dir",
+                str(output_dir),
+                "--accept-all",
+                "--max-iterations",
+                "1",
+                "--interval-seconds",
+                "0",
+            ]
+        )
+        == 0
+    )
+    first = capsys.readouterr()
+    assert "synthetic_dry_run_refreshed" not in first.err
+    assert not admin_automation_synthetic_dry_run_path().exists()
+
+    # Stale evidence produced earlier by setup must be refreshed by watch.
+    evidence_path = admin_automation_synthetic_dry_run_path()
+    evidence_path.parent.mkdir(parents=True, exist_ok=True)
+    evidence_path.write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "phase": "admin-automation-synthetic-dry-run",
+                "status": "processed",
+                "created_at": "2026-01-01T00:00:00+00:00",
+                "expires_at": "2026-01-01T01:00:00+00:00",
+            }
+        ),
+        encoding="utf-8",
+    )
+    assert load_admin_automation_synthetic_dry_run()["status"] == "stale"
+
+    assert (
+        main(
+            [
+                "watch",
+                "--inbox-dir",
+                str(inbox),
+                "--output-dir",
+                str(output_dir),
+                "--accept-all",
+                "--max-iterations",
+                "1",
+                "--interval-seconds",
+                "0",
+            ]
+        )
+        == 0
+    )
+    second = capsys.readouterr()
+    assert "synthetic_dry_run_refreshed" in second.err
+    evidence = load_admin_automation_synthetic_dry_run()
+    assert evidence["fresh"] is True
+    assert evidence["status"] == "processed"
+
+    # Fresh evidence must not be refreshed again on the next iteration.
+    assert (
+        main(
+            [
+                "watch",
+                "--inbox-dir",
+                str(inbox),
+                "--output-dir",
+                str(output_dir),
+                "--accept-all",
+                "--max-iterations",
+                "1",
+                "--interval-seconds",
+                "0",
+            ]
+        )
+        == 0
+    )
+    third = capsys.readouterr()
+    assert "synthetic_dry_run_refreshed" not in third.err
+
+
 def test_admin_cli_status(tmp_path, capsys) -> None:
     inbox = tmp_path / "inbox"
     inbox.mkdir()
