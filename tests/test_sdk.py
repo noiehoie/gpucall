@@ -751,3 +751,45 @@ async def test_async_python_sdk_streams_chunks() -> None:
         chunks = [chunk async for chunk in client.stream(prompt="hi")]
 
     assert chunks == [": heartbeat\n\ndata: hello\n\n"]
+
+
+def test_python_sdk_estimate_hits_estimate_endpoint_without_upload() -> None:
+    seen_path = None
+    sent_payload = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal seen_path, sent_payload
+        seen_path = request.url.path
+        sent_payload = json.loads(request.read())
+        return httpx.Response(
+            200,
+            json={
+                "phase": "estimate",
+                "billable": False,
+                "budget_reserved": False,
+                "plan": {"recipe_name": "echo-recipe", "tuple_chain": ["echo-tuple"]},
+                "budget_reservation_usd": 0.0,
+            },
+        )
+
+    client = GPUCallClient("http://gpucall.test", transport=httpx.MockTransport(handler))
+    result = client.estimate(prompt="hello", intent="summarize_text")
+
+    assert seen_path == "/v2/estimate"
+    assert result["phase"] == "estimate"
+    assert result["billable"] is False
+    assert sent_payload["task"] == "infer"
+    assert sent_payload["intent"] == "summarize_text"
+    assert "recipe" not in sent_payload
+    assert "requested_tuple" not in sent_payload
+
+
+async def test_async_python_sdk_estimate() -> None:
+    async def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.path == "/v2/estimate"
+        return httpx.Response(200, json={"phase": "estimate", "billable": False})
+
+    async with AsyncGPUCallClient("http://gpucall.test", transport=httpx.MockTransport(handler)) as client:
+        result = await client.estimate(prompt="hello")
+
+    assert result["phase"] == "estimate"

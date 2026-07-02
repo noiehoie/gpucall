@@ -428,6 +428,42 @@ class GPUCallClient:
             time.sleep(interval)
         raise GPUCallColdStartTimeout(f"job {job_id} did not finish within {timeout}s")
 
+    def estimate(
+        self,
+        *,
+        prompt: str | None = None,
+        task: str = "infer",
+        mode: str = "sync",
+        messages: list[dict[str, Any]] | None = None,
+        intent: str | None = None,
+        metadata: dict[str, Any] | None = None,
+        response_format: dict[str, Any] | None = None,
+        max_tokens: int | None = None,
+        request_timeout: float | None = None,
+    ) -> dict[str, Any]:
+        """Non-billable pre-execution estimate: compiled route and cost, no execution, no upload."""
+        _validate_non_stream_mode(mode)
+        payload = self._task_payload(
+            task=task,
+            mode=mode,
+            prompt=prompt,
+            files=None,
+            response_format=response_format,
+            max_tokens=max_tokens,
+            temperature=None,
+            messages=messages,
+            intent=intent,
+            metadata=metadata,
+            auto_upload=False,
+        )
+        request_kwargs: dict[str, Any] = {}
+        if request_timeout is not None:
+            request_kwargs["timeout"] = request_timeout
+        response = self.client.post("/v2/estimate", json=payload, **request_kwargs)
+        self._emit_warnings(response)
+        self._raise_for_status(response)
+        return response.json()
+
     def _task_payload(
         self,
         *,
@@ -778,6 +814,42 @@ class AsyncGPUCallClient:
                 return job
             await _sleep(interval)
         raise GPUCallColdStartTimeout(f"job {job_id} did not finish within {timeout}s")
+
+    async def estimate(
+        self,
+        *,
+        prompt: str | None = None,
+        task: str = "infer",
+        mode: str = "sync",
+        messages: list[dict[str, Any]] | None = None,
+        intent: str | None = None,
+        metadata: dict[str, Any] | None = None,
+        response_format: dict[str, Any] | None = None,
+        max_tokens: int | None = None,
+        request_timeout: float | None = None,
+    ) -> dict[str, Any]:
+        """Non-billable pre-execution estimate: compiled route and cost, no execution, no upload."""
+        _validate_non_stream_mode(mode)
+        payload = await self._task_payload(
+            task=task,
+            mode=mode,
+            prompt=prompt,
+            files=None,
+            response_format=response_format,
+            max_tokens=max_tokens,
+            temperature=None,
+            messages=messages,
+            intent=intent,
+            metadata=metadata,
+            auto_upload=False,
+        )
+        request_kwargs: dict[str, Any] = {}
+        if request_timeout is not None:
+            request_kwargs["timeout"] = request_timeout
+        response = await self.client.post("/v2/estimate", json=payload, **request_kwargs)
+        _emit_warnings(response)
+        _raise_for_status(response)
+        return response.json()
 
     def _maybe_submit_recipe_intake(self, exc: GPUCallHTTPError, *, task: str, mode: str, intent: str | None) -> None:
         if not self.auto_submit_recipe_intake:

@@ -21,6 +21,7 @@ from fastapi.responses import JSONResponse, PlainTextResponse, StreamingResponse
 from pydantic import BaseModel, Field
 
 from gpucall import __version__
+from gpucall.agent_surface import estimate_summary, failure_taxonomy
 from gpucall.app_helpers import (
     _allow_unauthenticated_gateway,
     _public_metrics_enabled,
@@ -61,6 +62,7 @@ from gpucall.artifacts import build_artifact_registry
 from gpucall.audit import AuditTrail
 from gpucall.caller_auth_registry import record_caller_auth
 from gpucall.compiler import GovernanceCompiler, GovernanceError
+from gpucall.costing import budget_reservation_usd
 from gpucall.config import ConfigError, default_config_dir, default_state_dir, load_config
 from gpucall.credentials import credentials_path, load_credentials, save_credentials
 from gpucall.admission import AdmissionController, PostgresAdmissionController
@@ -1148,6 +1150,32 @@ def create_app(config_dir: Path | None = None) -> FastAPI:
         runtime.dispatcher.cancel_job(job_id)
         updated = await runtime.jobs.get(job_id)
         return JSONResponse({"job_id": job.job_id, "state": updated.state if updated else job.state, "cancelled": True})
+
+    @app.post("/v2/estimate")
+    async def task_estimate(
+        request: TaskRequest, http_request: Request, runtime: Runtime = Depends(runtime_dep)
+    ) -> JSONResponse:
+        """Non-billable pre-execution estimate: compile only, no budget reservation, no dispatch."""
+        try:
+            enforce_gateway_owned_routing(request)
+            _refresh_runtime_governance_inputs(runtime, root)
+            plan = runtime.compiler.compile(request)
+            cost = plan.attestations.get("cost_estimate", {}) if plan.attestations else {}
+            content = estimate_summary(
+                plan,
+                plan_summary=public_plan_summary(plan, runtime.compiler.tuples),
+                budget_reservation=budget_reservation_usd(cost),
+            )
+            return JSONResponse(status_code=200, content=content, headers=tenant_headers({}, http_request))
+        except GovernanceError as exc:
+            record_error_code(runtime, exc.code)
+            return governance_error_response(exc, request=request)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    @app.get("/v2/failure-taxonomy")
+    async def get_failure_taxonomy() -> JSONResponse:
+        return JSONResponse(status_code=200, content=failure_taxonomy())
 
     @app.post("/v2/objects/presign-put")
     async def presign_put(request: PresignPutRequest, http_request: Request, runtime: Runtime = Depends(runtime_dep)) -> PresignPutResponse:

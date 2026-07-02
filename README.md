@@ -275,6 +275,14 @@ async with AsyncGPUCallClient("http://127.0.0.1:18088") as client:
 
 Files are uploaded to the configured object store with presigned PUT and sent to the gateway as `DataRef`. The SDK is distributed as the separate `gpucall-sdk` package; the gateway wheel does not include the SDK package.
 
+## Agent-Native Execution (v2.5)
+
+AI agents are first-class callers. The gateway exposes a non-billable
+`POST /v2/estimate`, a deterministic `GET /v2/failure-taxonomy`, async job
+polling/cancellation, and an MCP stdio tool server (`gpucall-mcp`) so agent
+runtimes can estimate, submit, poll, cancel, and classify failures without
+human relay. See [docs/AGENT_NATIVE_EXECUTION.md](docs/AGENT_NATIVE_EXECUTION.md).
+
 ## TypeScript SDK (source-only, not published to npm)
 
 The TypeScript client lives in this repository for source builds and API
