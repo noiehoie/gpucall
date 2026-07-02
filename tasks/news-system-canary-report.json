@@ -23,8 +23,12 @@
       "recipe template + active recipe: max_output_tokens: 24000",
       "routes revalidated for the new config hash (rank standard, 4 light, vision: all passed)"
     ],
-    "post_fix_evidence": "2026-07-02 15:59:24 Analysis call completed (attempt 1.1): response_len=16306 — production rank analysis succeeded on first attempt through gpucall on the YaRN worker with the recipe output budget",
-    "full_pipeline_rerun": "final clean run left executing on macmini (pid 16588) after the duplicate earlier run was stopped; analysis-stage success already evidenced at 15:59:24"
+    "post_fix_evidence": [
+      "2026-07-02 15:59:24 Analysis call completed (attempt 1.1): response_len=16306",
+      "2026-07-02 16:01:15 Analysis call completed (attempt 2.1): response_len=11939; analysis_failed=False",
+      "2026-07-02 16:14:41 Analysis call completed (attempt 1.1): response_len=22922; analysis_failed=False (clean full re-run, first attempt)"
+    ],
+    "full_pipeline_rerun": "clean re-run (pid 16588) reached analysis_failed=False on its first analysis attempt at 16:14:41 JST; downstream persistence/output stages continue under normal news-system operation"
   },
   "failure_classification": [
     {"failure": "400 inline exceeds (12:12)", "class": "caller", "resolution": "caller-side fix 12:13:21 (pre-existing session)"},
