@@ -105,7 +105,7 @@ with GPUCallClient("http://127.0.0.1:18088") as client:
 ```
 
 The SDK ships separately (Apache-2.0):
-[`gpucall_sdk-2.0.70-py3-none-any.whl`](https://github.com/noiehoie/gpucall/releases/download/v2.0.70/gpucall_sdk-2.0.70-py3-none-any.whl)
+[`gpucall_sdk-2.0.71-py3-none-any.whl`](https://github.com/noiehoie/gpucall/releases/download/v2.0.71/gpucall_sdk-2.0.71-py3-none-any.whl)
 — caller applications never import the gateway package.
 
 ## Core concepts (five words each)
