@@ -70,7 +70,7 @@ def load_route_validation_evidence(
             candidates.append((path.stat().st_mtime, path))
         except OSError:
             continue
-    for mtime, path in sorted(candidates, key=lambda item: item[0], reverse=True):
+    for mtime, path in sorted(candidates, key=lambda item: (item[0], item[1].name), reverse=True):
         try:
             data = json.loads(path.read_text(encoding="utf-8"))
         except Exception:
@@ -119,7 +119,7 @@ def load_route_validation_statuses(
             candidates.append((path.stat().st_mtime, path))
         except OSError:
             continue
-    for mtime, path in sorted(candidates, key=lambda item: item[0], reverse=True):
+    for mtime, path in sorted(candidates, key=lambda item: (item[0], item[1].name), reverse=True):
         try:
             data = json.loads(path.read_text(encoding="utf-8"))
         except Exception:

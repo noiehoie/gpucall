@@ -952,7 +952,13 @@ def _tuple_validation_evidence(config_dir: Path) -> dict[str, dict[str, Any]]:
 
 
 def _validation_summary(rows: list[dict[str, Any]]) -> dict[str, Any]:
-    rows = sorted(rows, key=lambda item: str(item.get("ended_at") or item.get("started_at") or ""))
+    rows = sorted(
+        rows,
+        key=lambda item: (
+            str(item.get("ended_at") or item.get("started_at") or ""),
+            str(item.get("_path") or ""),
+        ),
+    )
     seconds = [_observed_seconds(row) for row in rows]
     seconds = [value for value in seconds if value is not None]
     passed = [row for row in rows if row.get("passed") is True]

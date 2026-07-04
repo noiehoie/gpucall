@@ -434,7 +434,7 @@ def _find_validation_for_promotion(
     expected_hash = _config_hash(config_dir)
     expected_commit = _git_commit(Path.cwd())
     matched: list[dict[str, Any]] = []
-    for path in sorted(root.glob("*.json"), key=lambda item: item.stat().st_mtime, reverse=True):
+    for path in sorted(root.glob("*.json"), key=lambda item: (item.stat().st_mtime, item.name), reverse=True):
         try:
             data = json.loads(path.read_text(encoding="utf-8"))
         except Exception:
