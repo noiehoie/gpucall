@@ -163,6 +163,25 @@ def main() -> None:
         help="run non-generation registry-level conformance checks for registered provider adapters",
     )
     provider_conformance.add_argument("--adapter", default=None, help="check a single adapter instead of all registered adapters")
+    sovereignty = sub.add_parser(
+        "sovereignty",
+        help="data-sovereignty evidence: object-store inventory, reclamation with receipts, residue model",
+    )
+    sovereignty.add_argument("action", choices=["report", "reap", "reclaim-artifact"])
+    sovereignty.add_argument("--config-dir", type=Path, default=default_config_dir())
+    sovereignty.add_argument("--prefix", default=None, help="limit to keys under this prefix (e.g. gpucall/tenants/<tenant>)")
+    sovereignty.add_argument("--older-than-days", type=float, default=7.0, help="reap: minimum object age in days")
+    sovereignty.add_argument("--apply", action="store_true", help="reap: actually delete (default is dry-run)")
+    sovereignty.add_argument("--manifest", type=Path, default=None, help="reclaim-artifact: artifact manifest JSON path")
+    sovereignty.add_argument("--output", type=Path, default=None, help="reclaim-artifact: local plaintext destination")
+    sovereignty.add_argument("--dek-file", default=None, help="reclaim-artifact: operator master key file (raw or hex AES-256)")
+    sovereignty.add_argument("--delete-remote", action="store_true", help="reclaim-artifact: purge the cloud ciphertext after local recovery")
+    sovereignty.add_argument(
+        "--allow-bucket",
+        action="append",
+        default=None,
+        help="reclaim-artifact: additional s3 bucket the manifest may reference (defaults to the configured object-store and artifact buckets)",
+    )
     catalog = sub.add_parser("catalog")
     catalog.add_argument("action", choices=["build", "show"])
     catalog.add_argument("--config-dir", type=Path, default=default_config_dir())
@@ -397,6 +416,19 @@ def main() -> None:
         registry_command(args.action)
     elif args.command == "provider-conformance":
         provider_conformance_command(args.adapter)
+    elif args.command == "sovereignty":
+        sovereignty_command(
+            args.action,
+            args.config_dir,
+            prefix=args.prefix,
+            older_than_days=args.older_than_days,
+            apply=args.apply,
+            manifest=args.manifest,
+            output=args.output,
+            dek_file=args.dek_file,
+            delete_remote=args.delete_remote,
+            allow_buckets=args.allow_bucket,
+        )
     elif args.command == "catalog":
         catalog_command(args.action, args.config_dir, args.db)
     elif args.command == "execution-catalog":
@@ -2589,6 +2621,62 @@ def provider_conformance_command(adapter: str | None) -> None:
     report = run_provider_conformance(adapter)
     print(json.dumps(report, indent=2, sort_keys=True))
     if not report["passed"]:
+        raise SystemExit(1)
+
+
+def sovereignty_command(
+    action: str,
+    config_dir: Path,
+    *,
+    prefix: str | None,
+    older_than_days: float,
+    apply: bool,
+    manifest: Path | None = None,
+    output: Path | None = None,
+    dek_file: str | None = None,
+    delete_remote: bool = False,
+    allow_buckets: list[str] | None = None,
+) -> None:
+    from gpucall.config import load_object_store
+    from gpucall.object_store import ObjectStore
+    from gpucall.sovereignty import reap_objects, sovereignty_report
+
+    if action == "reclaim-artifact":
+        from gpucall.artifact_reclaim import load_reclaim_master_key, reclaim_artifact
+
+        if manifest is None:
+            raise SystemExit("reclaim-artifact requires --manifest")
+        manifest_data = json.loads(manifest.read_text(encoding="utf-8"))
+        buckets: set[str] = set(allow_buckets or [])
+        artifact_bucket = os.getenv("GPUCALL_WORKER_ARTIFACT_BUCKET", "").strip()
+        if artifact_bucket:
+            buckets.add(artifact_bucket)
+        scope_store = load_object_store(config_dir)
+        if scope_store is not None:
+            buckets.add(scope_store.bucket)
+        destination = output or Path.cwd() / f"artifact-{manifest_data.get('artifact_chain_id')}-{manifest_data.get('version')}.bin"
+        receipt = reclaim_artifact(
+            manifest_data,
+            master_key=load_reclaim_master_key(dek_file=dek_file),
+            output_path=destination,
+            delete_remote=delete_remote,
+            allowed_buckets=buckets,
+        )
+        print(json.dumps(receipt, ensure_ascii=False, indent=2, sort_keys=True))
+        if delete_remote and receipt.get("remote_verified_absent") is not True:
+            raise SystemExit(1)
+        return
+
+    store_config = load_object_store(config_dir)
+    store = ObjectStore(store_config) if store_config is not None else None
+    if action == "report":
+        print(json.dumps(sovereignty_report(store, prefix=prefix), ensure_ascii=False, indent=2, sort_keys=True))
+        return
+    if store is None:
+        raise SystemExit("sovereignty reap requires a configured object store")
+    report = reap_objects(store, older_than_days=older_than_days, prefix=prefix, apply=apply)
+    print(json.dumps(report, ensure_ascii=False, indent=2, sort_keys=True))
+    if apply and report["receipts"] and report.get("all_verified_absent") is not True:
         raise SystemExit(1)
 
 
