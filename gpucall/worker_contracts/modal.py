@@ -42,6 +42,15 @@ def _format_prompt_for_model(llm: Any, model_id: str, payload: dict[str, Any]) -
     tokenizer = _get_tokenizer(llm)
     template = getattr(tokenizer, "apply_chat_template", None)
     if callable(template):
+        if model_id.startswith("Qwen/Qwen3-"):
+            # Qwen3 chat templates default to thinking mode; governed
+            # structured tasks need the final answer only.
+            try:
+                return template(messages, tokenize=False, add_generation_prompt=True, enable_thinking=False)
+            except TypeError:
+                pass
+            except Exception:
+                pass
         try:
             return template(messages, tokenize=False, add_generation_prompt=True)
         except Exception:
@@ -417,6 +426,9 @@ if modal is not None:
             "Qwen/Qwen2.5-14B-Instruct",
             "Qwen/Qwen2.5-32B-Instruct",
             "Qwen/Qwen2.5-14B-Instruct-1M",
+            "Qwen/Qwen3-32B",
+            "Qwen/Qwen3-30B-A3B",
+            "Qwen/Qwen3-235B-A22B-FP8",
             "deepseek-ai/DeepSeek-R1-Distill-Qwen-1.5B",
             "deepseek-ai/DeepSeek-R1-Distill-Qwen-7B",
             "deepseek-ai/DeepSeek-R1-Distill-Qwen-14B",
@@ -435,14 +447,18 @@ if modal is not None:
     _TOP_LEVEL_VISION: tuple[Any, Any, str] | None = None
     _STREAMING_MODELS: dict[str, tuple[Any, Any]] = {}
 
-    # Qwen2.5 7B/14B/32B Instruct support 131072-token contexts through the
-    # model-card YaRN configuration (factor 4.0 over the native 32768). The
-    # 0.5B/1.5B variants and the DeepSeek distills stay at their native 32768.
+    # Qwen2.5 7B/14B/32B and the Qwen3 32B/30B-A3B/235B-A22B generation support
+    # 131072-token contexts through the model-card YaRN configuration
+    # (factor 4.0 over the native 32768). The 0.5B/1.5B variants and the
+    # DeepSeek distills stay at their native 32768.
     _QWEN25_YARN_MODELS = frozenset(
         {
             "Qwen/Qwen2.5-7B-Instruct",
             "Qwen/Qwen2.5-14B-Instruct",
             "Qwen/Qwen2.5-32B-Instruct",
+            "Qwen/Qwen3-32B",
+            "Qwen/Qwen3-30B-A3B",
+            "Qwen/Qwen3-235B-A22B-FP8",
         }
     )
     _QWEN25_YARN_MAX_MODEL_LEN = 131072

@@ -112,7 +112,10 @@ def _artifact_dek(payload: dict[str, Any], export: dict[str, Any]) -> bytes:
     raw = _artifact_dek_bytes()
     chain_id = str(export.get("artifact_chain_id") or "")
     version = str(export.get("version") or "")
-    plan_hash = str((payload.get("attestations") or {}).get("governance_hash") or payload.get("plan_id") or "")
+    # Must stay derivable from the manifest alone: producer_plan_hash records
+    # only the governance hash, so the KDF salt must not fall back to values
+    # (like plan_id) that the operator-side reclaimer cannot reconstruct.
+    plan_hash = str((payload.get("attestations") or {}).get("governance_hash") or "")
     try:
         from cryptography.hazmat.primitives import hashes
         from cryptography.hazmat.primitives.kdf.hkdf import HKDF

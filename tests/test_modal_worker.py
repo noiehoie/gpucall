@@ -241,3 +241,63 @@ def test_modal_worker_qwen25_yarn_long_context_configuration() -> None:
     # The engine cache must consider the loaded context length so a 32K-loaded
     # engine is never reused for a 131K request.
     assert '_TOP_LEVEL_LOADED_LEN >= bounded_len' in source
+
+
+def test_modal_worker_qwen3_generation_support() -> None:
+    source = __import__("pathlib").Path("gpucall/worker_contracts/modal.py").read_text(encoding="utf-8")
+
+    # The Qwen3 generation must be allowlisted, carry the YaRN 131072 context
+    # configuration, and render prompts with thinking disabled so structured
+    # outputs contain the final answer only.
+    assert '"Qwen/Qwen3-32B",' in source
+    assert '"Qwen/Qwen3-30B-A3B",' in source
+    assert '"Qwen/Qwen3-235B-A22B-FP8",' in source
+    yarn_block = source.split("_QWEN25_YARN_MODELS = frozenset(")[1].split(")")[0]
+    for model in ("Qwen/Qwen3-32B", "Qwen/Qwen3-30B-A3B", "Qwen/Qwen3-235B-A22B-FP8"):
+        assert model in yarn_block, model
+    assert 'if model_id.startswith("Qwen/Qwen3-"):' in source
+    assert "enable_thinking=False" in source
+
+
+def test_format_prompt_disables_thinking_for_qwen3() -> None:
+    from gpucall.worker_contracts.modal import _format_prompt_for_model
+    import types
+
+    captured: dict[str, object] = {}
+
+    class Qwen3Tokenizer:
+        chat_template = "present"
+
+        def apply_chat_template(self, messages, *, tokenize, add_generation_prompt, enable_thinking=None):
+            captured["enable_thinking"] = enable_thinking
+            return "<rendered>"
+
+    llm = types.SimpleNamespace(tokenizer=Qwen3Tokenizer(), get_tokenizer=lambda: Qwen3Tokenizer())
+    payload = {"inline_inputs": {"prompt": {"value": "hello"}}, "task": "infer"}
+    rendered = _format_prompt_for_model(llm, "Qwen/Qwen3-32B", payload)
+
+    assert rendered == "<rendered>"
+    assert captured["enable_thinking"] is False
+
+
+def test_format_prompt_qwen3_falls_back_when_kwarg_unsupported() -> None:
+    from gpucall.worker_contracts.modal import _format_prompt_for_model
+    import types
+
+    calls: list[dict] = []
+
+    class LegacyTokenizer:
+        chat_template = "present"
+
+        def apply_chat_template(self, messages, *, tokenize, add_generation_prompt, **kwargs):
+            if kwargs:
+                calls.append(kwargs)
+                raise TypeError("unexpected keyword argument 'enable_thinking'")
+            return "<legacy>"
+
+    llm = types.SimpleNamespace(tokenizer=LegacyTokenizer(), get_tokenizer=lambda: LegacyTokenizer())
+    payload = {"inline_inputs": {"prompt": {"value": "hello"}}, "task": "infer"}
+    rendered = _format_prompt_for_model(llm, "Qwen/Qwen3-32B", payload)
+
+    assert rendered == "<legacy>"
+    assert calls and calls[0] == {"enable_thinking": False}

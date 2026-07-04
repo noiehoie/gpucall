@@ -2083,3 +2083,29 @@ def test_doctor_live_tuple_catalog_lookup_is_bounded(monkeypatch) -> None:
     assert findings
     assert findings[0]["dimension"] == "live_tuple_catalog"
     assert "timed out" in findings[0]["reason"]
+
+
+def test_rank_standard_routes_to_qwen3_frontier_tier(tmp_path) -> None:
+    root = copy_config(tmp_path)
+    config = load_config(root)
+    compiler = GovernanceCompiler(
+        policy=config.policy,
+        recipes=config.recipes,
+        tuples=config.tuples,
+        registry=ObservedRegistry(),
+        models=config.models,
+        engines=config.engines,
+    )
+    plan = compiler.compile(
+        TaskRequest(
+            task="infer",
+            mode=ExecutionMode.SYNC,
+            intent="rank_text_items",
+            input_refs=[DataRef(uri="s3://bucket/rank.txt", sha256="a" * 64, bytes=250_000, content_type="text/plain")],
+        )
+    )
+
+    assert plan.recipe_name == "infer-rank-text-items-standard"
+    assert plan.tuple_chain[0] == "modal-h100-qwen3-32b"
+    # frontier_reasoning gates the old 7B tier out of the production rank path
+    assert "modal-a100-qwen25-7b" not in plan.tuple_chain

@@ -1,0 +1,17 @@
+name: qwen3-235b-a22b-fp8
+provider_model_id: Qwen/Qwen3-235B-A22B-FP8
+capabilities: [chat, instruction_following, summarization, translation, classification, reasoning, frontier_reasoning, structured_output]
+max_model_len: 131072
+min_vram_gb: 320
+supported_engines: [modal-vllm]
+input_contracts: [text, chat_messages, data_refs]
+output_contracts: [plain-text, json_object, json_schema]
+supports_vision: false
+supports_guided_decoding: true
+supports_streaming: true
+trust_remote_code: false
+source: https://huggingface.co/Qwen/Qwen3-235B-A22B-FP8
+evidence:
+  - Qwen3-235B-A22B-FP8 is the official FP8 checkpoint of the 235B-total / 22B-active MoE flagship; model card states 32,768-token native context and 131,072 tokens with YaRN.
+  - FP8 weights (~235GB) plus 131K KV cache fit tensor-parallel-4 on H200-class GPUs (564GB total).
+production_ready: false
