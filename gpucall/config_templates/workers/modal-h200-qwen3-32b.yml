@@ -1,8 +1,8 @@
-worker_ref: modal-h100-qwen3-30b-a3b
+worker_ref: modal-h200-qwen3-32b
 account_ref: modal
 adapter: modal
 execution_surface: function_runtime
-model_ref: qwen3-30b-a3b
+model_ref: qwen3-32b
 engine_ref: modal-vllm
 modes:
 - sync
@@ -13,9 +13,9 @@ input_contracts:
 - data_refs
 output_contract: plain-text
 stream_contract: none
-target: gpucall-worker-json:run_inference_on_modal_h100
+target: gpucall-worker-json:run_inference_on_modal_h200
 stream_target: null
 endpoint_contract: modal-function
-model: Qwen/Qwen3-30B-A3B
+model: Qwen/Qwen3-32B
 provider_params: {}
 declared_model_max_len: 131072

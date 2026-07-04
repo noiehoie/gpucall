@@ -2106,6 +2106,6 @@ def test_rank_standard_routes_to_qwen3_frontier_tier(tmp_path) -> None:
     )
 
     assert plan.recipe_name == "infer-rank-text-items-standard"
-    assert plan.tuple_chain[0] == "modal-h100-qwen3-32b"
+    assert plan.tuple_chain[0] == "modal-h200-qwen3-32b"
     # frontier_reasoning gates the old 7B tier out of the production rank path
     assert "modal-a100-qwen25-7b" not in plan.tuple_chain

@@ -1,12 +1,12 @@
-surface_ref: modal-h100-qwen3-32b
-worker_ref: modal-h100-qwen3-32b
+surface_ref: modal-h200-qwen3-32b
+worker_ref: modal-h200-qwen3-32b
 account_ref: modal
 adapter: modal
 execution_surface: function_runtime
-gpu: H100
-vram_gb: 80
+gpu: H200
+vram_gb: 141
 max_model_len: 131072
-cost_per_second: 0.001098
+cost_per_second: 0.001263
 configured_price_source: https://modal.com/pricing + model_overhead_rank_adjustment
 configured_price_observed_at: '2026-07-04T00:00:00+00:00'
 configured_price_ttl_seconds: 604800
