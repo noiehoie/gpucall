@@ -182,13 +182,71 @@ def test_routing_prefers_cloud_over_local_even_when_explicitly_allowed(base_poli
         tuples={cloud_tuple.name: cloud_tuple, local_tuple.name: local_tuple},
         registry=registry,
     )
-    
+
     request = TaskRequest(
         task="infer",
         mode=ExecutionMode.SYNC,
         messages=[{"role": "user", "content": "x" * 2000}],
         max_tokens=100,
     )
-    
+
     plan = compiler.compile(request)
     assert plan.tuple_chain[0] == "cloud-h100"
+
+
+def test_stream_required_field_rejection_is_identical_explicit_and_inferred():
+    # A tuple missing a required stream field must be rejected identically whether
+    # STREAM mode is passed explicitly or inferred from mode=None with STREAM in
+    # both tuple.modes and recipe.allowed_modes (the deduplicated helper path).
+    from gpucall.routing import tuple_route_rejection_reason
+
+    policy = Policy(
+        version="1.0",
+        inline_bytes_limit=1024,
+        default_lease_ttl_seconds=300,
+        max_lease_ttl_seconds=3600,
+        max_timeout_seconds=600,
+        local_large_context_threshold=1000,
+        tuples=TuplePolicy(allow=["modal-stream"]),
+    )
+
+    modal_tuple = ExecutionTupleSpec(
+        name="modal-stream",
+        adapter="modal",
+        execution_surface=ExecutionSurface.FUNCTION_RUNTIME,
+        gpu="A10G",
+        vram_gb=24,
+        max_model_len=8192,
+        cost_per_second=0.001,
+        target="app::fn",
+        model="gemma3",
+        endpoint_contract="modal-function",
+        input_contracts=["text"],
+        output_contract="plain-text",
+        stream_contract="sse",
+        modes=[ExecutionMode.SYNC, ExecutionMode.STREAM],
+        # stream_target intentionally omitted -> required stream field is missing
+    )
+    recipe = Recipe(
+        name="stream-infer",
+        task="infer",
+        allowed_modes=[ExecutionMode.SYNC, ExecutionMode.STREAM],
+        context_budget_tokens=8192,
+        timeout_seconds=60,
+        lease_ttl_seconds=300,
+        auto_select=True,
+    )
+
+    common = dict(
+        policy=policy,
+        recipe=recipe,
+        tuple=modal_tuple,
+        required_len=8192,
+        required_input_contracts={"text"},
+        required_output_contract="plain-text",
+    )
+    explicit = tuple_route_rejection_reason(mode=ExecutionMode.STREAM, **common)
+    inferred = tuple_route_rejection_reason(mode=None, **common)
+
+    assert explicit == "modal stream mode requires explicit stream_target"
+    assert explicit == inferred

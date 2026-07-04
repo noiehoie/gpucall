@@ -216,6 +216,18 @@ def production_route_rejection_reason(
     return None
 
 
+def _stream_required_field_rejection(descriptor, tuple: ExecutionTupleSpec) -> str | None:
+    required_fields = descriptor.stream_required_fields if descriptor is not None else {}
+    for field, reason in required_fields.items():
+        value = getattr(tuple, field, None)
+        if field in {"target", "stream_target"}:
+            if not is_configured_target(value):
+                return reason
+        elif not value:
+            return reason
+    return None
+
+
 def tuple_route_rejection_reason(
     *,
     policy: Policy,
@@ -304,29 +316,18 @@ def tuple_route_rejection_reason(
         if mode not in tuple.modes:
             return "tuple does not support requested mode"
         if mode is ExecutionMode.STREAM:
-            descriptor = adapter_descriptor(tuple)
-            required_fields = descriptor.stream_required_fields if descriptor is not None else {}
-            for field, reason in required_fields.items():
-                value = getattr(tuple, field, None)
-                if field in {"target", "stream_target"}:
-                    if not is_configured_target(value):
-                        return reason
-                elif not value:
-                    return reason
+            stream_reason = _stream_required_field_rejection(adapter_descriptor(tuple), tuple)
+            if stream_reason is not None:
+                return stream_reason
         if mode is ExecutionMode.STREAM and tuple.stream_contract == "none":
             return "tuple does not declare a streaming contract"
     elif not any(candidate in tuple.modes for candidate in recipe.allowed_modes):
         return "tuple modes do not intersect recipe allowed_modes"
     descriptor = adapter_descriptor(tuple)
-    stream_required_fields = descriptor.stream_required_fields if descriptor is not None else {}
     if ExecutionMode.STREAM in tuple.modes and ExecutionMode.STREAM in recipe.allowed_modes:
-        for field, reason in stream_required_fields.items():
-            value = getattr(tuple, field, None)
-            if field in {"target", "stream_target"}:
-                if not is_configured_target(value):
-                    return reason
-            elif not value:
-                return reason
+        stream_reason = _stream_required_field_rejection(descriptor, tuple)
+        if stream_reason is not None:
+            return stream_reason
     return None
 
 
