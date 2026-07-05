@@ -174,3 +174,45 @@ def registered_conformance_matrix() -> dict[str, Any]:
         name: _descriptor_summary(descriptor)
         for name, descriptor in registered_adapter_descriptors().items()
     }
+
+
+def catalog_worker_vision_conformance(models_dir) -> dict[str, Any]:
+    """Flag catalog models that declare vision support but are absent from the
+    worker's vision allowlist.
+
+    Such a model is eligible to be selected by the deterministic router yet would
+    be rejected by the worker at runtime ("vision model X is not allowed"). Because
+    routing is fail-closed the request fails safely, but the mismatch is only
+    discovered when a caller happens to hit it — this check surfaces it statically
+    from the catalog, with no provider calls and no spend.
+    """
+    import pathlib
+
+    import yaml
+
+    from .worker_contracts.modal import WORKER_ALLOWED_VISION_MODELS
+
+    findings: list[dict[str, Any]] = []
+    for path in sorted(pathlib.Path(models_dir).glob("*.yml")):
+        try:
+            data = yaml.safe_load(path.read_text(encoding="utf-8"))
+        except Exception:
+            continue
+        if not isinstance(data, dict) or not data.get("supports_vision"):
+            continue
+        provider_model_id = data.get("provider_model_id")
+        if provider_model_id and provider_model_id not in WORKER_ALLOWED_VISION_MODELS:
+            findings.append(
+                {
+                    "model": data.get("name", path.stem),
+                    "provider_model_id": provider_model_id,
+                    "issue": "declares supports_vision but is absent from the modal worker vision allowlist",
+                }
+            )
+    return {
+        "schema_version": CONFORMANCE_SCHEMA_VERSION,
+        "phase": "catalog-worker-vision-conformance",
+        "non_generation_probe_only": True,
+        "findings": sorted(findings, key=lambda f: f["model"]),
+        "passed": not findings,
+    }
