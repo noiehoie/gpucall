@@ -178,7 +178,7 @@ class GovernanceCompiler:
                 },
             )
 
-        timeout = min(request.timeout_seconds or recipe.timeout_seconds, self.policy.max_timeout_seconds)
+        timeout = self._effective_timeout(request, recipe)
         ttl = min(
             request.lease_ttl_seconds or recipe.lease_ttl_seconds or self.policy.default_lease_ttl_seconds,
             self.policy.max_lease_ttl_seconds,
@@ -487,7 +487,7 @@ class GovernanceCompiler:
         )
 
     def _tuple_budget_reservation(self, tuple: ExecutionTupleSpec, request: TaskRequest, recipe: Recipe) -> float:
-        timeout = min(request.timeout_seconds or recipe.timeout_seconds, self.policy.max_timeout_seconds)
+        timeout = self._effective_timeout(request, recipe)
         return budget_reservation_usd(self._cost_estimate(tuple, request, recipe, timeout))
 
     def _route_quality_penalty(self, name: str, request: TaskRequest, recipe: Recipe) -> int:
@@ -632,6 +632,9 @@ class GovernanceCompiler:
     def _required_model_len(self, request: TaskRequest, recipe: Recipe) -> int:
         return required_model_len(request, recipe, self.policy)
 
+    def _effective_timeout(self, request: TaskRequest, recipe: Recipe) -> int:
+        return min(request.timeout_seconds or recipe.timeout_seconds, self.policy.max_timeout_seconds)
+
     def _tuple_cost_rejection_reason(
         self,
         *,
@@ -642,7 +645,7 @@ class GovernanceCompiler:
     ) -> str | None:
         if not auto_selected:
             return None
-        timeout = min(request.timeout_seconds or recipe.timeout_seconds, self.policy.max_timeout_seconds)
+        timeout = self._effective_timeout(request, recipe)
         required_len = self._required_model_len(request, recipe)
         output_tokens = output_context_tokens(request)
         reason, _estimate = tuple_cost_policy_rejection_reason(
