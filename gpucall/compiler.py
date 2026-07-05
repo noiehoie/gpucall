@@ -126,6 +126,20 @@ def _request_text_fragments(request: TaskRequest) -> list[str]:
     return fragments
 
 
+def _first_disallowed_mime(content_types, allowed_prefixes) -> str | None:
+    # Single source of MIME-prefix matching for both recipe selection and request
+    # validation. Returns the first content_type that matches no allowed prefix,
+    # or None if every content_type is allowed (or there is nothing to check).
+    if not allowed_prefixes:
+        return None
+    for content_type in content_types:
+        if not content_type:
+            continue
+        if not any(content_type.startswith(prefix) for prefix in allowed_prefixes):
+            return content_type
+    return None
+
+
 class GovernanceCompiler:
     SUPPORTED_TASKS = {"infer", "vision", "transcribe", "convert", "train", "fine-tune", "split-infer"}
     DEFAULT_AUTO_INTENTS = {
@@ -345,15 +359,13 @@ class GovernanceCompiler:
         for ref in request.input_refs:
             if recipe.max_input_bytes is not None and ref.bytes is not None and ref.bytes > recipe.max_input_bytes:
                 return f"input data_ref exceeds max_input_bytes {recipe.max_input_bytes}"
-            if recipe.allowed_mime_prefixes and ref.content_type:
-                if not any(ref.content_type.startswith(prefix) for prefix in recipe.allowed_mime_prefixes):
-                    return f"content_type {ref.content_type!r} is not allowed"
+            disallowed = _first_disallowed_mime([ref.content_type], recipe.allowed_mime_prefixes)
+            if disallowed is not None:
+                return f"content_type {disallowed!r} is not allowed"
         inline_types = [item.content_type for item in request.inline_inputs.values() if item.content_type]
-        inline_allowed = self._inline_mime_prefixes(recipe)
-        if inline_allowed and inline_types:
-            for content_type in inline_types:
-                if not any(content_type.startswith(prefix) for prefix in inline_allowed):
-                    return f"inline content_type {content_type!r} is not allowed"
+        disallowed_inline = _first_disallowed_mime(inline_types, self._inline_mime_prefixes(recipe))
+        if disallowed_inline is not None:
+            return f"inline content_type {disallowed_inline!r} is not allowed"
         return None
 
     def _recipe_selection_key(self, recipe: Recipe, request: TaskRequest) -> tuple[int, int, int, int, str]:
@@ -405,19 +417,18 @@ class GovernanceCompiler:
         inline_bytes = sum(len(item.value.encode("utf-8")) for item in request.inline_inputs.values())
         if inline_bytes > self.policy.inline_bytes_limit:
             raise GovernanceError("inline input exceeds policy limit; use signed object references")
-        inline_allowed = self._inline_mime_prefixes(recipe)
-        if inline_allowed:
-            for item in request.inline_inputs.values():
-                if item.content_type and not any(item.content_type.startswith(prefix) for prefix in inline_allowed):
-                    raise GovernanceError(f"inline content_type {item.content_type!r} is not allowed for recipe {recipe.name}")
+        inline_types = [item.content_type for item in request.inline_inputs.values()]
+        disallowed_inline = _first_disallowed_mime(inline_types, self._inline_mime_prefixes(recipe))
+        if disallowed_inline is not None:
+            raise GovernanceError(f"inline content_type {disallowed_inline!r} is not allowed for recipe {recipe.name}")
         for ref in request.input_refs:
             if ref.expires_at is not None and ref.expires_at <= datetime.now(timezone.utc):
                 raise GovernanceError("input data_ref is expired")
             if recipe.max_input_bytes is not None and ref.bytes is not None and ref.bytes > recipe.max_input_bytes:
                 raise GovernanceError(f"input data_ref exceeds recipe max_input_bytes {recipe.max_input_bytes}")
-            if recipe.allowed_mime_prefixes and ref.content_type:
-                if not any(ref.content_type.startswith(prefix) for prefix in recipe.allowed_mime_prefixes):
-                    raise GovernanceError(f"input content_type {ref.content_type!r} is not allowed for recipe {recipe.name}")
+            disallowed = _first_disallowed_mime([ref.content_type], recipe.allowed_mime_prefixes)
+            if disallowed is not None:
+                raise GovernanceError(f"input content_type {disallowed!r} is not allowed for recipe {recipe.name}")
 
     def _tuple_chain(self, request: TaskRequest, recipe: Recipe, *, auto_selected: bool) -> list[str]:
         if request.requested_tuple:

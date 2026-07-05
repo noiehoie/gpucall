@@ -1691,3 +1691,23 @@ def test_observed_registry_caps_observations_per_tuple(tmp_path) -> None:
 
     assert loaded.score("p1").samples == 3
     assert [row.latency_ms for row in loaded.observations["p1"]] == [2, 3, 4]
+
+
+def test_mime_prefix_violation_rejected_at_selection_and_validation() -> None:
+    # A request whose input data_ref content_type violates allowed_mime_prefixes
+    # must be rejected both at recipe selection and at request validation, via the
+    # single shared _first_disallowed_mime helper.
+    compiler = build_compiler()
+    recipe = compiler.recipes["r1"].model_copy(update={"allowed_mime_prefixes": ["text/"]})
+    request = TaskRequest(
+        task="infer",
+        mode="sync",
+        input_refs=[DataRef(uri="s3://bucket/x.bin", sha256="a" * 64, bytes=10, content_type="application/octet-stream")],
+    )
+
+    selection_reason = compiler._recipe_rejection_reason(request, recipe)
+    assert selection_reason == "content_type 'application/octet-stream' is not allowed"
+
+    with pytest.raises(GovernanceError) as exc_info:
+        compiler._validate_request_against_recipe(request, recipe)
+    assert "input content_type 'application/octet-stream' is not allowed" in str(exc_info.value)
