@@ -1,5 +1,9 @@
 # gpucall
 
+**2026-09-05: 新しい決定論カーネルは [`next/`](next/README.md)。**
+フルスクラッチの独立実装の手順は同ディレクトリを参照してください。
+以下は旧v2実装の記録であり、現在の稼働状況を示しません。
+
 [![CI](https://github.com/noiehoie/gpucall/actions/workflows/ci.yml/badge.svg)](https://github.com/noiehoie/gpucall/actions/workflows/ci.yml)
 [![License: AGPL-3.0](https://img.shields.io/badge/license-AGPL--3.0-blue)](LICENSE)
 [![SDK License: Apache-2.0](https://img.shields.io/badge/SDK-Apache--2.0-green)](sdk/python/LICENSE)

@@ -1,0 +1,210 @@
+{
+  "verified_ms": 1788588781546,
+  "version": "3.0.0.dev0",
+  "modal_sdk": "1.5.5",
+  "tests": {
+    "python_3_11": "45 passed, 2 dependency deprecation warnings",
+    "python_3_13": "45 passed, 2 dependency deprecation warnings"
+  },
+  "installed_cli": "/Users/tamotsu/.local/bin/gpucall",
+  "installed_cli_demo": "succeeded; replay=true; audit=true",
+  "wheel_sha256": "c9a2e9339b1501289e6ccedaf27bbefad1d4f4e8eec746b2177668628eb79070",
+  "active_sandboxes": 0,
+  "account": {
+    "ceiling_microusd": 1000000,
+    "reserved_microusd": 0,
+    "charged_microusd": 972000,
+    "available_microusd": 28000,
+    "overrun": false
+  },
+  "audit": {
+    "valid": true,
+    "events": 45,
+    "head": "8ceebd7ac87940ff5b185f267df7086f5cdd9e8613d88d8ce1836702bad71104"
+  },
+  "jobs": [
+    {
+      "id": "4e462da462695e981ba6cb221acc9ba887797435670a49c057426e8f5891771d",
+      "status": "failed",
+      "task": "infer",
+      "validation": true,
+      "error": "verified_not_started:app_attribute_error",
+      "resource": null,
+      "provider_exit_code": null,
+      "charged_microusd": 0,
+      "receipts": [],
+      "replay": {
+        "job": "4e462da462695e981ba6cb221acc9ba887797435670a49c057426e8f5891771d",
+        "matches": true,
+        "plan_hash": "3a9ad5a2b2753a16ca70ad6cc83287dbca6b9cde9eb4a4a7d01646fcaa8376ee"
+      }
+    },
+    {
+      "id": "a819c2420acae207a40666b8acd0d2d46c8cfcd7e6809774c9032e50679e56b5",
+      "status": "failed",
+      "task": "infer",
+      "validation": true,
+      "error": "verified_not_started:invalid_resource_name",
+      "resource": null,
+      "provider_exit_code": null,
+      "charged_microusd": 0,
+      "receipts": [],
+      "replay": {
+        "job": "a819c2420acae207a40666b8acd0d2d46c8cfcd7e6809774c9032e50679e56b5",
+        "matches": true,
+        "plan_hash": "2a1556df32de7e56056e498106cf0af546df22c1d220510658e298574fa974f5"
+      }
+    },
+    {
+      "id": "5ae25ba507caa7f23c98e57f3a93af2f225c40259523a36356a892fb526623fc",
+      "status": "succeeded",
+      "task": "infer",
+      "validation": true,
+      "error": null,
+      "resource": "sb-g1qx1bp2jXojZ7guSlAmGg",
+      "provider_exit_code": 137,
+      "charged_microusd": 114000,
+      "receipts": [
+        {
+          "at_ms": 1788587575073,
+          "attempt": 0,
+          "charged_microusd": 114000,
+          "cost_basis": "reserved_upper_bound",
+          "proof": "provider_terminated",
+          "stopped": true
+        }
+      ],
+      "replay": {
+        "job": "5ae25ba507caa7f23c98e57f3a93af2f225c40259523a36356a892fb526623fc",
+        "matches": true,
+        "plan_hash": "f57bc69bc59004260e71dcdf99cd5aa3389afd588e5c1656642af476bf438dc7"
+      },
+      "output": "GPUCALL_OK",
+      "output_sha256": "dc06e595978224a0cffad95cb598efb8a68f2a5e4fc30678fe9fac8fbb442c3d"
+    },
+    {
+      "id": "f3b232fa361229ff1efa4dd892300386d5df489e6c94e5a70b9ec414fa69230c",
+      "status": "succeeded",
+      "task": "infer",
+      "validation": false,
+      "error": null,
+      "resource": "sb-ac1jfEHUJzyZlXsnm6mqDs",
+      "provider_exit_code": 137,
+      "charged_microusd": 114000,
+      "receipts": [
+        {
+          "at_ms": 1788587600340,
+          "attempt": 0,
+          "charged_microusd": 114000,
+          "cost_basis": "reserved_upper_bound",
+          "proof": "provider_terminated",
+          "stopped": true
+        }
+      ],
+      "replay": {
+        "job": "f3b232fa361229ff1efa4dd892300386d5df489e6c94e5a70b9ec414fa69230c",
+        "matches": true,
+        "plan_hash": "8b0080a791204d790d659192fb3fef9082db99d95f8a1e98518d555f7b867dec"
+      },
+      "output": "GPUCALL_OK",
+      "output_sha256": "dc06e595978224a0cffad95cb598efb8a68f2a5e4fc30678fe9fac8fbb442c3d"
+    },
+    {
+      "id": "d09991c90f160c3113735b2dcd2bbb423d1d4c3cb1fc0aa9cae47180d2f43572",
+      "status": "failed",
+      "task": "vision",
+      "validation": true,
+      "error": "worker_failed",
+      "resource": "sb-E8y82sPDsKG1rvRxuY6l9J",
+      "provider_exit_code": 137,
+      "charged_microusd": 248000,
+      "receipts": [
+        {
+          "at_ms": 1788587791538,
+          "attempt": 0,
+          "charged_microusd": 248000,
+          "cost_basis": "reserved_upper_bound",
+          "proof": "provider_terminated",
+          "stopped": true
+        }
+      ],
+      "replay": {
+        "job": "d09991c90f160c3113735b2dcd2bbb423d1d4c3cb1fc0aa9cae47180d2f43572",
+        "matches": true,
+        "plan_hash": "f2d7731abc5b1861a83f1f7686bfed8d8f3b4654fa662fb2008784f3a86f65c1"
+      }
+    },
+    {
+      "id": "bb4ac7638d07a5b6ffbdc6cf44bf4667c8da362c707d1dc687451a1b81cb9b9c",
+      "status": "succeeded",
+      "task": "vision",
+      "validation": true,
+      "error": null,
+      "resource": "sb-weIamMsuGnPzkPaFwCfW0p",
+      "provider_exit_code": 137,
+      "charged_microusd": 248000,
+      "receipts": [
+        {
+          "at_ms": 1788588663668,
+          "attempt": 0,
+          "charged_microusd": 248000,
+          "cost_basis": "reserved_upper_bound",
+          "proof": "provider_terminated",
+          "stopped": true
+        }
+      ],
+      "replay": {
+        "job": "bb4ac7638d07a5b6ffbdc6cf44bf4667c8da362c707d1dc687451a1b81cb9b9c",
+        "matches": true,
+        "plan_hash": "29b24d0c921162ae84422a454c52fe7752ecf41ac75fe8443bd507c338ba9665"
+      },
+      "output": "BLUE",
+      "output_sha256": "24a866f4940f1b00083a71ba4df7323bac1486f28dc81d500bbc4bb02c6e0e16"
+    },
+    {
+      "id": "a6f9fc424f3d88b3858b6f628c1185596903003dd770f3c186d522dc67612966",
+      "status": "succeeded",
+      "task": "vision",
+      "validation": false,
+      "error": null,
+      "resource": "sb-ATZn4zNIbwsyD0rylOMmyq",
+      "provider_exit_code": 137,
+      "charged_microusd": 248000,
+      "receipts": [
+        {
+          "at_ms": 1788588713066,
+          "attempt": 0,
+          "charged_microusd": 248000,
+          "cost_basis": "reserved_upper_bound",
+          "proof": "provider_terminated",
+          "stopped": true
+        }
+      ],
+      "replay": {
+        "job": "a6f9fc424f3d88b3858b6f628c1185596903003dd770f3c186d522dc67612966",
+        "matches": true,
+        "plan_hash": "64c7657b7c14fd3a33f5759019e860f62b33d78e44de2718c72dce04fdd8ede0"
+      },
+      "output": "BLUE",
+      "output_sha256": "24a866f4940f1b00083a71ba4df7323bac1486f28dc81d500bbc4bb02c6e0e16"
+    }
+  ],
+  "cost_note": "Conservative reservation accounting, not actual provider invoices. Image builds and CPU diagnostic are outside the job ledger.",
+  "source_sha256": {
+    "src/gpucall/__init__.py": "d02383c9d3adb276ccae54081f6f781f165bca0d1f84dd97402c92281a1029a6",
+    "src/gpucall/api.py": "9911a74e55d7aee2d328b1f22747e02e461fb09ebe58607825d914f8d8bf8d9c",
+    "src/gpucall/cli.py": "b1512407abefd8338253079dd57b0e9944d7a123822f37342c6d0314a15eef32",
+    "src/gpucall/fixtures.py": "7e206ae23e59444c448dd3bdc3692ce19d48a6a0dd6b6908b68f2b42354593b8",
+    "src/gpucall/image_builder.py": "45b7dc8abdb36cdf1facb62e9a26b659c1a741dc2af27389088e7e20521c1da5",
+    "src/gpucall/kernel.py": "9bc9718f2bfb68091f8de5c23e739cc23899e415598ea63feae50cfd4578baaf",
+    "src/gpucall/modal_provider.py": "8036a789a57abe68dab37a377ae7d9a9df876d6a429641e58aba1aefa7d3bc60",
+    "src/gpucall/models.py": "9f5b436b83ac4058899509af7b2a53b1141f49eaf89a2834ca02869b3cd5ec02",
+    "src/gpucall/runtime.py": "a833332d592ad47b0a8237b84b7204597537d45ca64b7f007d1f03cf9d71371d",
+    "src/gpucall/store.py": "019af41b9887039cee74185d862070c96706689641e1fe28e4a771159cb1459f",
+    "uv.lock": "231361cf1a0bc8885fb57e4a63b4be402edff7cfb013e9ee5687f24abac979b2",
+    "worker/download.py": "d16c0a7f32b4356593e1e0507eea467e570d52126b55c25b41b5ec0322dabdbf",
+    "worker/preflight.py": "d3bc1a637b40147f7f19949b8d017065e67f61455c20d889c0db56e3c78312bd",
+    "worker/uv.lock": "b2adf03ed29421f6285c36160d7069492ab2cae80f82a43c1bcb27c94c13296d",
+    "worker/worker.py": "c6f3a9fb803f0044e416edf7a318fa4cd6c105e7ca6a6ef56c7be10f7903cd84"
+  }
+}

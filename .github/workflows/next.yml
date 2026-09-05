@@ -1,0 +1,28 @@
+name: Deterministic kernel
+
+on:
+  push:
+    paths: ["next/**", ".github/workflows/next.yml"]
+  pull_request:
+    paths: ["next/**", ".github/workflows/next.yml"]
+  workflow_dispatch:
+
+jobs:
+  kernel:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    strategy:
+      matrix:
+        python: ["3.11", "3.13"]
+    defaults:
+      run:
+        working-directory: next
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          python-version: ${{ matrix.python }}
+      - run: uv sync --locked --extra dev --extra modal
+      - run: uv run pytest -q
+      - run: uv run gpucall demo
+      - run: uv build
