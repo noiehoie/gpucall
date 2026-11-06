@@ -176,6 +176,10 @@ def _rounded_billable_seconds(tuple_spec: ExecutionTupleSpec, raw_seconds: float
     return billable_seconds
 
 
+# Single source of truth for adapter/surface -> billing-model classification.
+# Coverage is frozen by
+# tests/test_costing.py::test_every_registered_adapter_has_explicit_billing_model:
+# adding a production-eligible adapter without teaching this classifier fails CI.
 def _billing_model(tuple_spec: ExecutionTupleSpec) -> str:
     adapter = str(tuple_spec.adapter or "").lower()
     surface = tuple_spec.execution_surface

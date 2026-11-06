@@ -190,7 +190,7 @@ def catalog_worker_vision_conformance(models_dir) -> dict[str, Any]:
 
     import yaml
 
-    from .worker_contracts.modal import WORKER_ALLOWED_VISION_MODELS
+    from .worker_contracts.allowlists import WORKER_ALLOWED_VISION_MODELS
 
     findings: list[dict[str, Any]] = []
     for path in sorted(pathlib.Path(models_dir).glob("*.yml")):

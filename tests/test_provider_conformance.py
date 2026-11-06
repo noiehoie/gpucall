@@ -79,3 +79,31 @@ async def test_execution_cycle_conformance_on_owned_local_adapter() -> None:
     failing = [check["name"] for check in report["checks"] if not check["ok"]]
     assert not failing, failing
     assert report["passed"] is True
+
+
+def test_catalog_worker_vision_conformance_flags_missing_vision_model(tmp_path):
+    from gpucall.provider_conformance import catalog_worker_vision_conformance
+
+    (tmp_path / "good.yml").write_text(
+        "name: good\nprovider_model_id: Qwen/Qwen2.5-VL-7B-Instruct\nsupports_vision: true\n"
+    )
+    (tmp_path / "bad.yml").write_text(
+        "name: bad\nprovider_model_id: meta-llama/Llama-3.2-11B-Vision-Instruct\nsupports_vision: true\n"
+    )
+    (tmp_path / "text.yml").write_text(
+        "name: text\nprovider_model_id: some/text-only\nsupports_vision: false\n"
+    )
+    result = catalog_worker_vision_conformance(tmp_path)
+    assert result["passed"] is False
+    assert {f["model"] for f in result["findings"]} == {"bad"}
+
+
+def test_catalog_worker_vision_conformance_passes_when_all_in_allowlist(tmp_path):
+    from gpucall.provider_conformance import catalog_worker_vision_conformance
+
+    (tmp_path / "ok.yml").write_text(
+        "name: ok\nprovider_model_id: Qwen/Qwen2.5-VL-3B-Instruct\nsupports_vision: true\n"
+    )
+    result = catalog_worker_vision_conformance(tmp_path)
+    assert result["passed"] is True
+    assert result["findings"] == []

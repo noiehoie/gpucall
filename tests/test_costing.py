@@ -59,3 +59,29 @@ def test_safe_request_summary_accepts_openai_multimodal_and_tool_messages() -> N
 
     assert summary["message_count"] == 2
     assert summary["message_total_bytes"] > 0
+
+
+def test_every_registered_adapter_has_explicit_billing_model() -> None:
+    # Freeze the _billing_model coverage: any production-eligible adapter must map
+    # to an explicit billing model, never fall through to generic_request_runtime.
+    from gpucall.costing import _billing_model
+    from gpucall.domain import ExecutionTupleSpec
+    from gpucall.execution.registry import adapter_descriptor, registered_adapter_names
+
+    for adapter in registered_adapter_names():
+        descriptor = adapter_descriptor(adapter)
+        if descriptor is None or not descriptor.production_eligible:
+            continue
+        spec = ExecutionTupleSpec(
+            name=f"probe-{adapter}",
+            adapter=adapter,
+            execution_surface=descriptor.execution_surface,
+            gpu="L4",
+            vram_gb=24,
+            max_model_len=1024,
+            cost_per_second=0.001,
+        )
+        assert _billing_model(spec) != "generic_request_runtime", (
+            f"adapter {adapter!r} is production_eligible but _billing_model falls through "
+            "to generic_request_runtime; teach _billing_model about it"
+        )
